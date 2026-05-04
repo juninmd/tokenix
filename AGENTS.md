@@ -4,121 +4,164 @@ This file provides guidance for AI coding agents (Claude Code, Copilot, Cursor, 
 
 ## Project Overview
 
-tokenix is a Rust CLI that intercepts AI coding assistant file reads and replaces them with compact semantic context, reducing token usage by 60–90%. It uses Ollama for local embeddings and SQLite for storage.
+tokenix is a Rust CLI that intercepts AI coding assistant file reads and replaces them with compact semantic context, reducing token usage by 60–90%. It supports **Claude Code**, **GitHub Copilot**, and **OpenAI Codex CLI** on **Windows**, **macOS**, and **Linux**.
 
 ## Codebase Structure
 
 ```
 src/
-├── main.rs       CLI entry (clap). Contains all command implementations (cmd_index, cmd_query, etc.)
-├── chunker.rs    AST-based code chunking. Core algorithm for splitting code into semantically meaningful pieces.
-├── embed.rs      Ollama HTTP client. Thin wrapper — get_embedding() and check_ollama().
-├── store.rs      SQLite layer. All DB interactions: files, chunks, embeddings (BLOB), hook log.
-├── indexer.rs    File walker + indexing pipeline. Calls chunker → embed → store in sequence.
-├── query.rs      Cosine similarity search. Fetches all embeddings, scores, ranks, applies token budget.
-├── hook.rs       PreToolUse hook logic. Reads JSON from stdin, decides intercept or pass-through.
-└── gain.rs       Analytics. Reads .tokenix/hook.log and computes savings statistics.
+├── main.rs       CLI entry (clap). All cmd_* functions + install-hook/remove-hook for all tools.
+├── chunker.rs    AST-based code chunking per language + generate_outline(). Token approximation.
+├── embed.rs      Ollama HTTP client — get_embedding() and check_ollama().
+├── store.rs      SQLite layer — schema, CRUD, cosine similarity search, hook log NDJSON I/O.
+├── indexer.rs    File walker (WalkDir + .gitignore via pathspec) + incremental index pipeline.
+├── query.rs      Cosine similarity ranking + token-budget selection + result formatting.
+├── hook.rs       PreToolUse handler — stdin JSON (Claude Code) or env vars (Copilot agent mode).
+└── gain.rs       Analytics from .tokenix/hook.log.
 ```
+
+## Tool Integration Model
+
+### Claude Code
+- Hook: `PreToolUse` entry in `~/.claude/settings.json` (global) or `.claude/settings.json` (local)
+- Protocol: Claude Code pipes JSON to hook stdin; hook exits `0` (pass) or `2` (intercept)
+- Input format: `{"tool_name": "Read", "tool_input": {"file_path": "..."}}`
+
+### GitHub Copilot
+- Hook: `.github/hooks/hooks.json` — `preToolUse` with `bash` and `powershell` command fields
+- Instructions: `.github/copilot-instructions.md` — injected into every Copilot chat (VS Code)
+- Protocol: Copilot may set `COPILOT_TOOL_NAME` / `COPILOT_TOOL_INPUT` env vars (agent mode)
+- Both files must be committed to the repo; they apply to all contributors
+
+### OpenAI Codex CLI
+- Instructions: `~/.codex/instructions.md` — injected into every Codex session
+- Shell helpers: `~/.codex/tokenix-init.sh` (bash/zsh) and `tokenix-init.ps1` (PowerShell)
+- No native hook protocol — relies on LLM following instructions to call `tokenix read` / `tokenix query`
 
 ## Key Design Decisions
 
 ### Cosine similarity in Rust (no sqlite-vec)
-Embeddings are stored as raw `BLOB` (float32 LE bytes) in SQLite. At query time, all embeddings are loaded into memory and cosine similarity is computed in Rust. This avoids the `sqlite-vec` extension dependency (which requires native compilation) at the cost of O(n) query time. Acceptable for repos up to ~100k chunks; add HNSW index if needed beyond that.
+Embeddings are stored as raw `BLOB` (float32 LE bytes) in SQLite. At query time, all embeddings are loaded into memory and cosine similarity is computed in Rust. No sqlite-vec extension needed — avoids native compilation issues across platforms.
 
 ### Token counting approximation
-`count_tokens()` in `chunker.rs` uses `(len + 3) / 4` — a fast approximation (~4 chars/token for English/code). This is intentional: shipping tiktoken in Rust adds significant compile time and binary size for marginal accuracy improvement in budget decisions.
+`count_tokens()` in `chunker.rs` uses `(len + 3) / 4`. Fast, no tiktoken dep. Accurate enough for budget decisions.
 
-### Hook exit codes
-- Exit `0` → pass through (Claude Code runs the original tool)
-- Exit `2` → block (Claude Code uses hook's stdout as the tool result)
-Never exit with `1` — that signals an error and may confuse Claude Code.
+### Hook exit codes (Claude Code + Copilot agent mode)
+- Exit `0` → pass through (AI tool runs original tool)
+- Exit `2` → block (hook's stdout replaces tool result)
+- Never exit `1` — that signals an error and may break the session
 
-### Fallback behavior is non-negotiable
-The hook MUST silently pass through (`exit 0`) when:
+### Fallback is non-negotiable
+`run_hook()` MUST silently `exit(0)` when:
 - `.tokenix/index.db` doesn't exist
 - Index is older than `MAX_INDEX_AGE_SECS` (3600s)
 - Any internal error occurs
 
-Breaking the hook means breaking the entire Claude Code session. Fail safe always.
+Breaking the hook breaks the AI coding session. Fail safe always.
 
-### File filtering
-`should_index()` in `chunker.rs` has two jobs: (1) filter out ignored dirs like `node_modules`, `target`; (2) allow only files with extensions in `INDEXED_EXTS`. In `indexer.rs`, the `filter_entry` callback for directories must NOT use `should_index()` directly — it would block traversal into dirs without extensions (like `src/`). Use only the `IGNORED_DIRS` check for directories.
+### Hook input source detection (`hook.rs`)
+```
+1. Check env vars: COPILOT_TOOL_NAME / COPILOT_TOOL_INPUT  →  Copilot agent mode
+2. Fall back to stdin JSON parsing                          →  Claude Code / Codex
+3. If neither, exit 0 silently
+```
+
+### File filtering in indexer (critical — do not change)
+`filter_entry` for directories checks ONLY `IGNORED_DIRS`. Do NOT call `should_index()` on directories — it returns false for dirs without file extensions (like `src/`) and breaks traversal. This was a real bug.
+
+### Cross-platform paths
+- `tokenix_bin_path()` in `main.rs` normalizes the exe path to forward slashes for config files — works in bash, PowerShell, and JSON strings on all platforms
+- `dirs::home_dir()` resolves `~` correctly on all platforms (`C:\Users\<user>` on Windows, `/home/<user>` on Linux/macOS)
+- `~/.claude/settings.json` path is the same on all platforms (Claude Code uses `dirs::home_dir()` internally)
 
 ## Development Commands
 
 ```bash
 cargo build                   # debug build
-cargo build --release         # release build
+cargo build --release         # optimized release build
 cargo install --path .        # install to ~/.cargo/bin
-cargo test                    # run tests
-cargo clippy                  # linter
 
-# Re-index after code changes
-tokenix index . --force
+# Test multi-tool install
+tokenix install-hook --tool all
+tokenix install-hook --tool claude-code --local
+tokenix install-hook --tool copilot     # writes .github/ files
+tokenix install-hook --tool codex       # writes ~/.codex/ files
 
-# Test hook manually (pipe JSON to stdin)
+# Test hook — Claude Code format (stdin JSON)
 echo '{"tool_name":"Read","tool_input":{"file_path":"src/main.rs"}}' | tokenix hook
-echo "Exit: $?"               # should be 0 (pass) or 2 (intercepted)
+echo "Exit: $?"   # 2 = intercepted, 0 = pass through
+
+# Test hook — Copilot format (env vars)
+COPILOT_TOOL_NAME=Read COPILOT_TOOL_INPUT='{"file_path":"src/main.rs"}' tokenix hook
+echo "Exit: $?"
+
+# Check savings
+tokenix gain --history
 ```
 
 ## Adding a New Language
 
 1. Add extensions to `INDEXED_EXTS` in `chunker.rs`
-2. Add a new variant to the `Lang` enum
-3. Add the extension mapping in `detect_lang()`
-4. Implement a `chunk_<lang>()` function following the same pattern as `chunk_rust()`
-5. Add it to the `match lang` in `chunk_file()`
+2. Add variant to `Lang` enum, add extension mapping to `detect_lang()`
+3. Implement `chunk_<lang>(lines, path)` → `Vec<Chunk>` following `chunk_rust()` pattern
+4. Add match arm in `chunk_file()`
 
-The chunking pattern: walk lines, detect definition starts (fn/class/etc.), track brace depth, flush when depth returns to 0. Fall back to `chunk_by_lines()` if no symbols found.
+The chunking pattern: scan for definition starts → track brace/indent depth → flush when block closes → fall back to `chunk_by_lines()` if no symbols found.
 
-## Adding a New Hook Tool
+## Adding a New Tool Integration
 
-Currently only `Read` and `Grep` are intercepted. To add `Write` or another tool:
-
-1. In `hook.rs`, add the tool name to the matcher check at the top of `run_hook()`
-2. Implement a `handle_<tool>()` function returning `(bool, String)` — `(true, output)` to intercept
-3. Add the match arm in `run_hook()`
-4. Update `settings.json` matcher regex in `cmd_install_hook()` in `main.rs`
+1. Add variant to `Tool` enum in `main.rs`
+2. Implement `install_<tool>()` and `remove_<tool>()` functions
+3. Add match arm in `cmd_install_hook()` and `cmd_remove_hook()`
+4. Update `hook.rs` if the tool uses a different input format (env vars, CLI args, etc.)
+5. Document in README.md under "Setup by Tool"
 
 ## Storage Schema
 
 ```sql
-files(id, path, mtime, content_hash)           -- one row per indexed file
+files(id, path TEXT UNIQUE, mtime REAL, content_hash TEXT)
 chunks(id, file_id, path, start_line, end_line, symbol, kind, content, token_count)
-embeddings(chunk_id, embedding BLOB)           -- float32 LE, 768 dims = 3072 bytes
-meta(key, value)                               -- stores 'indexed_at' timestamp
+embeddings(chunk_id PK, embedding BLOB)   -- float32 LE, 768 dims = 3072 bytes/chunk
+meta(key PK, value)                       -- 'indexed_at' = unix timestamp as string
 ```
 
-Hook events are logged as NDJSON to `.tokenix/hook.log` — one JSON object per line.
+Hook log: `.tokenix/hook.log` — NDJSON, one `HookEvent` struct per line.
 
-## Testing the Hook Integration
+## Cross-Platform Notes
+
+- **Windows paths in config files**: always use forward slashes (handled by `tokenix_bin_path()`)
+- **Binary extension**: `tokenix` on Unix, `tokenix.exe` on Windows — `current_exe()` returns the correct name
+- **Copilot hooks.json**: has separate `bash` and `powershell` command fields for cross-platform
+- **Shell helpers**: separate `.sh` and `.ps1` files for different shells
+
+## Testing the Full Integration
 
 ```bash
-# Index current repo
+# 1. Index
 tokenix index .
 
-# Test Read interception (file must be >200 lines)
-echo '{"tool_name":"Read","tool_input":{"file_path":"src/main.rs"}}' | tokenix hook
-# Expected: exit 2, stdout = symbol outline
+# 2. Claude Code hook — should intercept large file (exit 2)
+echo '{"tool_name":"Read","tool_input":{"file_path":"src/main.rs"}}' | tokenix hook; echo "Exit: $?"
 
-# Test Read pass-through (small file)
-echo '{"tool_name":"Read","tool_input":{"file_path":"Cargo.toml"}}' | tokenix hook
-# Expected: exit 0, no stdout
+# 3. Claude Code hook — should pass small file (exit 0)
+echo '{"tool_name":"Read","tool_input":{"file_path":"Cargo.toml"}}' | tokenix hook; echo "Exit: $?"
 
-# Test Grep interception (semantic query)
-echo '{"tool_name":"Grep","tool_input":{"pattern":"how does embedding generation work"}}' | tokenix hook
-# Expected: exit 2, stdout = relevant chunks
+# 4. Copilot hook — env var format (exit 2)
+COPILOT_TOOL_NAME=Read COPILOT_TOOL_INPUT='{"file_path":"src/main.rs"}' tokenix hook; echo "Exit: $?"
 
-# Test Grep pass-through (regex pattern)
-echo '{"tool_name":"Grep","tool_input":{"pattern":"fn main"}}' | tokenix hook
-# Expected: exit 0
+# 5. Semantic Grep interception (exit 2)
+echo '{"tool_name":"Grep","tool_input":{"pattern":"how does embedding generation work"}}' | tokenix hook; echo "Exit: $?"
 
-# View savings
+# 6. Short Grep — should pass (exit 0)
+echo '{"tool_name":"Grep","tool_input":{"pattern":"fn main"}}' | tokenix hook; echo "Exit: $?"
+
+# 7. Analytics
 tokenix gain --history
 ```
 
 ## What Not to Change
 
-- The `should_index` / `filter_entry` separation — changing this broke indexing once already (only `Cargo.toml` was indexed)
-- Hook exit codes — must be 0 or 2, never 1
-- The NDJSON format of `.tokenix/hook.log` — `gain.rs` parses it with `serde_json::from_str` per line
+- **`should_index` / `filter_entry` separation** — changing this broke indexing once (only Cargo.toml was indexed)
+- **Hook exit codes** — must be 0 or 2, never 1
+- **NDJSON format of `.tokenix/hook.log`** — `gain.rs` parses it line-by-line with `serde_json`
+- **Forward slashes in config paths** — Windows paths with backslashes break bash commands inside JSON

@@ -11,10 +11,34 @@ const MAX_INDEX_AGE_SECS: f64 = 3600.0;
 const MIN_LINES_FOR_OUTLINE: usize = 200;
 const MIN_QUERY_WORDS: usize = 3;
 
-#[derive(Deserialize, Debug)]
+/// Claude Code sends JSON on stdin.
+/// Copilot sets COPILOT_TOOL_NAME + COPILOT_TOOL_INPUT env vars (agent mode).
+/// We support both.
+#[derive(Deserialize, Debug, Default)]
 pub struct HookInput {
+    #[serde(default)]
     pub tool_name: String,
+    #[serde(default)]
     pub tool_input: serde_json::Value,
+}
+
+impl HookInput {
+    fn from_env() -> Option<Self> {
+        let tool_name = std::env::var("COPILOT_TOOL_NAME")
+            .or_else(|_| std::env::var("TOOL_NAME"))
+            .ok()?;
+        let tool_input_raw = std::env::var("COPILOT_TOOL_INPUT")
+            .or_else(|_| std::env::var("TOOL_INPUT"))
+            .unwrap_or_default();
+        let tool_input = serde_json::from_str(&tool_input_raw).unwrap_or(serde_json::Value::Null);
+        Some(HookInput { tool_name, tool_input })
+    }
+
+    fn from_stdin(raw: &str) -> Option<Self> {
+        let clean = raw.trim_start_matches('\u{feff}').trim();
+        if clean.is_empty() { return None; }
+        serde_json::from_str(clean).ok()
+    }
 }
 
 fn find_repo_root() -> PathBuf {
@@ -32,10 +56,7 @@ fn find_repo_root() -> PathBuf {
 }
 
 fn now_ts() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64()
 }
 
 fn is_semantic_query(pattern: &str) -> bool {
@@ -48,7 +69,7 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         None => return (false, String::new()),
     };
 
-    // If offset/limit specified, let Claude read normally
+    // Let targeted reads through (offset or limit already specified)
     if !tool_input["offset"].is_null() || !tool_input["limit"].is_null() {
         return (false, String::new());
     }
@@ -84,7 +105,9 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         .replace('\\', "/");
 
     let msg = format!(
-        "{}\n\n[tokenix] File has {} lines. Showing symbol outline above.\nTo read a specific symbol: tokenix read {} --symbol <name>\nTo read specific lines: use Read with offset/limit parameters.",
+        "{}\n\n[tokenix] File has {} lines. Showing symbol outline above.\n\
+        To read a specific symbol: tokenix read {} --symbol <name>\n\
+        To read specific lines:   use Read with offset/limit parameters.",
         outline, line_count, rel
     );
     (true, msg)
@@ -122,18 +145,14 @@ fn estimate_original_tokens(tool_name: &str, tool_input: &serde_json::Value, rep
 }
 
 pub fn run_hook() -> Result<()> {
-    let raw = std::io::read_to_string(std::io::stdin())?;
-    let raw = raw.trim_start_matches('\u{feff}').trim();
+    // Read input: prefer env vars (Copilot), fall back to stdin (Claude Code / Codex)
+    let raw_stdin = std::io::read_to_string(std::io::stdin()).unwrap_or_default();
 
-    if raw.is_empty() {
-        std::process::exit(0);
-    }
+    let input = HookInput::from_env()
+        .or_else(|| HookInput::from_stdin(&raw_stdin))
+        .unwrap_or_default();
 
-    let input: HookInput = match serde_json::from_str(raw) {
-        Ok(v) => v,
-        Err(_) => std::process::exit(0),
-    };
-
+    // Unknown or unsupported tool — pass through silently
     if input.tool_name != "Read" && input.tool_name != "Grep" {
         std::process::exit(0);
     }
@@ -145,7 +164,11 @@ pub fn run_hook() -> Result<()> {
     let index_stale = age.map(|a| a > MAX_INDEX_AGE_SECS).unwrap_or(false);
 
     if index_missing || index_stale {
-        let reason = if index_missing { "missing".to_string() } else { format!("stale ({}s old)", age.unwrap() as i64) };
+        let reason = if index_missing {
+            "missing".to_string()
+        } else {
+            format!("stale ({}s old)", age.unwrap() as i64)
+        };
         let _ = log_hook_event(&repo_root, &HookEvent {
             ts: now_ts(), tool: input.tool_name, action: "pass".to_string(),
             reason, saved_tokens: 0, actual_tokens: 0, original_estimate: 0,
@@ -157,7 +180,7 @@ pub fn run_hook() -> Result<()> {
     let (intercepted, output) = match input.tool_name.as_str() {
         "Read" => handle_read(&input.tool_input, &repo_root),
         "Grep" => handle_grep(&input.tool_input, &repo_root),
-        _ => (false, String::new()),
+        _      => (false, String::new()),
     };
 
     if !intercepted {
@@ -182,7 +205,7 @@ pub fn run_hook() -> Result<()> {
         saved_tokens: saved,
         actual_tokens,
         original_estimate: original_tokens,
-        input_preview: raw.chars().take(200).collect(),
+        input_preview: raw_stdin.chars().take(200).collect(),
     });
 
     println!("{}", output);
