@@ -6,6 +6,135 @@ use crate::chunker::count_tokens;
 use crate::store::{log_hook_event, HookEvent};
 
 const POST_HOOK_TOOLS: &[&str] = &["Bash", "ListDirectory"];
+const BASH_MAX_LINES: usize = 100;
+const BASH_HEAD_LINES: usize = 40;
+const BASH_TAIL_LINES: usize = 15;
+
+/// Bash-aware compression: applies common transforms then cargo/git/generic truncation.
+pub fn compress_bash_output(s: &str) -> String {
+    let base = compress_output(s);
+    let lines: Vec<&str> = base.lines().collect();
+
+    // Cargo: always try (it filters signal from noise regardless of total length)
+    if is_cargo_output(&lines) {
+        let cargo_out = compress_cargo(&lines);
+        if cargo_out.len() < base.len() {
+            return cargo_out;
+        }
+    }
+
+    if lines.len() <= BASH_MAX_LINES {
+        return base;
+    }
+
+    if is_git_log(&lines) {
+        return compress_git_log(&lines);
+    }
+
+    truncate_head_tail(&lines, BASH_HEAD_LINES, BASH_TAIL_LINES)
+}
+
+fn is_cargo_output(lines: &[&str]) -> bool {
+    lines.iter().take(50).any(|l| {
+        let t = l.trim();
+        t.starts_with("Compiling ")
+            || t.starts_with("Finished ")
+            || t.starts_with("error[E")
+            || t.contains("test result:")
+    })
+}
+
+fn compress_cargo(lines: &[&str]) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_diagnostic = false;
+    let mut warning_count: u32 = 0;
+    const MAX_WARNINGS: u32 = 5;
+
+    for line in lines {
+        let t = line.trim();
+        let is_error = (t.starts_with("error[") || t == "error" || t.starts_with("error: "))
+            && !t.starts_with("error_");
+        let is_warning = t.starts_with("warning[") || t.starts_with("warning: ");
+        let is_context = t.starts_with("-->")
+            || (t.starts_with('|') && t.len() > 1)
+            || t.starts_with("= note:")
+            || t.starts_with("= help:")
+            || t.starts_with("help:");
+        let is_summary = t.starts_with("Finished ")
+            || t.starts_with("error: aborting")
+            || t.contains("test result:")
+            || t.starts_with("running ")
+            || t.starts_with("FAILED")
+            || (t.starts_with("test ") && (t.ends_with("ok") || t.ends_with("FAILED")));
+
+        if is_error {
+            out.push(line);
+            in_diagnostic = true;
+        } else if is_warning && warning_count < MAX_WARNINGS {
+            out.push(line);
+            in_diagnostic = true;
+            warning_count += 1;
+        } else if is_context && in_diagnostic {
+            out.push(line);
+        } else if is_summary {
+            out.push(line);
+            in_diagnostic = false;
+        } else {
+            in_diagnostic = false;
+        }
+    }
+
+    if warning_count >= MAX_WARNINGS {
+        out.push("  ... (additional warnings omitted)");
+    }
+
+    out.join("\n")
+}
+
+fn is_git_log(lines: &[&str]) -> bool {
+    lines.iter().take(5).any(|l| l.starts_with("commit "))
+}
+
+fn compress_git_log(lines: &[&str]) -> String {
+    const MAX_COMMITS: usize = 20;
+    let mut commit_count: usize = 0;
+    let mut keep_until: usize = 0;
+
+    for (i, line) in lines.iter().enumerate() {
+        if line.starts_with("commit ") {
+            commit_count += 1;
+            if commit_count > MAX_COMMITS {
+                break;
+            }
+        }
+        keep_until = i + 1;
+    }
+
+    if keep_until >= lines.len() {
+        return lines.join("\n");
+    }
+    let omitted = lines.len() - keep_until;
+    format!(
+        "{}\n[... {} more lines omitted (>{} commits)]",
+        lines[..keep_until].join("\n"),
+        omitted,
+        MAX_COMMITS
+    )
+}
+
+fn truncate_head_tail(lines: &[&str], head: usize, tail: usize) -> String {
+    let total = lines.len();
+    if total <= head + tail {
+        return lines.join("\n");
+    }
+    let omitted = total - head - tail;
+    format!(
+        "{}\n[... {} lines omitted ...]\n{}",
+        lines[..head].join("\n"),
+        omitted,
+        lines[total - tail..].join("\n")
+    )
+}
 
 pub fn compress_output(s: &str) -> String {
     // JSON compaction first: if output is pure JSON or NDJSON, compact and return early.
@@ -268,7 +397,11 @@ pub fn run_hook_post() -> Result<()> {
         _ => std::process::exit(0),
     };
 
-    let compressed = compress_output(&text);
+    let compressed = if tool_name == "Bash" {
+        compress_bash_output(&text)
+    } else {
+        compress_output(&text)
+    };
 
     if compressed == text {
         std::process::exit(0);
@@ -391,7 +524,51 @@ mod tests {
         assert!(!output.contains("\x1b["));
         assert!(!output.contains('🚀'));
         assert!(output.contains("[repeated"));
-        // no triple blank lines
         assert!(!output.contains("\n\n\n"));
+    }
+
+    #[test]
+    fn bash_short_output_passes_through() {
+        let input = "hello\nworld\n";
+        assert_eq!(compress_bash_output(input), input);
+    }
+
+    #[test]
+    fn bash_generic_truncation_over_100_lines() {
+        let lines: String = (1..=150).map(|i| format!("line {}\n", i)).collect();
+        let out = compress_bash_output(&lines);
+        assert!(out.contains("lines omitted"), "should truncate: {}", out);
+        assert!(out.contains("line 1\n"));
+        assert!(out.contains("line 150"));
+    }
+
+    #[test]
+    fn bash_cargo_extracts_errors() {
+        let mut input = String::new();
+        for i in 0..60 {
+            input.push_str(&format!("Compiling crate{} v0.1.0\n", i));
+        }
+        input.push_str("error[E0425]: cannot find value `foo`\n");
+        input.push_str("  --> src/main.rs:3:5\n");
+        input.push_str("   |\n");
+        input.push_str("3  |     foo();\n");
+        input.push_str("error: aborting due to 1 previous error\n");
+        input.push_str("Finished dev in 1.23s\n");
+
+        let out = compress_bash_output(&input);
+        assert!(out.contains("error[E0425]"), "should keep error: {}", out);
+        assert!(out.contains("Finished"), "should keep summary: {}", out);
+        assert!(!out.contains("Compiling crate0"), "should strip Compiling lines");
+    }
+
+    #[test]
+    fn bash_git_log_truncated_after_20_commits() {
+        let mut input = String::new();
+        for i in 0..30 {
+            input.push_str(&format!("commit {:040}\n", i));
+            input.push_str("Author: Test\nDate: Today\n\n    message\n\n");
+        }
+        let out = compress_bash_output(&input);
+        assert!(out.contains("lines omitted"), "should truncate: {}", out);
     }
 }

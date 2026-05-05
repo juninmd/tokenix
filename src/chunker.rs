@@ -235,7 +235,12 @@ fn extract_rust_name(line: &str) -> String {
     for (i, &t) in tokens.iter().enumerate() {
         if t == "fn" || t == "struct" || t == "enum" || t == "trait" || t == "mod" || t == "impl" {
             if let Some(next) = tokens.get(i + 1) {
-                let name = next.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+                // Strip generic params, paren args, and non-identifier chars
+                let name = next
+                    .split(['(', '<', '{', ';'])
+                    .next()
+                    .unwrap_or(next)
+                    .trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
                 return name.to_string();
             }
         }
@@ -533,6 +538,71 @@ pub fn chunk_by_lines(lines: &[&str], path: &str) -> Vec<Chunk> {
     out
 }
 
+/// Extract the full declaration signature up to (but not including) the body opening.
+/// Joins multi-line parameter lists and normalizes whitespace.
+fn extract_full_signature(content: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        parts.push(trimmed);
+        // Body starts at `{` on its own or at end of line, or Python `:` ending the def
+        if trimmed.ends_with('{') || trimmed == "{" {
+            break;
+        }
+        if trimmed.ends_with(':')
+            && !trimmed.starts_with("//")
+            && !trimmed.starts_with('#')
+            && !trimmed.contains("=>")
+        {
+            break;
+        }
+        if trimmed.ends_with(';') {
+            break;
+        }
+    }
+    let joined = parts.join(" ");
+    // Strip trailing `{` or `:` left by the loop-break line
+    let sig = joined
+        .trim_end_matches('{')
+        .trim_end_matches(':')
+        .trim();
+    // Collapse internal whitespace runs
+    let sig: String = sig.split_whitespace().collect::<Vec<_>>().join(" ");
+    if sig.chars().count() > 200 {
+        let truncated: String = sig.chars().take(197).collect();
+        format!("{}…", truncated)
+    } else {
+        sig
+    }
+}
+
+/// Look for a single-line doc comment on the line immediately before the chunk.
+fn extract_doc_comment(lines: &[&str], chunk_start_line: usize) -> Option<String> {
+    // chunk_start_line is 1-based; the line before is index chunk_start_line - 2
+    let idx = chunk_start_line.checked_sub(2)?;
+    let t = lines.get(idx)?.trim();
+    if let Some(doc) = t.strip_prefix("///") {
+        let d = doc.trim();
+        if !d.is_empty() {
+            return Some(d.to_string());
+        }
+    }
+    if let Some(doc) = t.strip_prefix("//") {
+        let d = doc.trim();
+        if !d.is_empty() && !d.starts_with('/') {
+            return Some(d.to_string());
+        }
+    }
+    // Python / shell `#` comment
+    if let Some(doc) = t.strip_prefix('#') {
+        let d = doc.trim();
+        if !d.is_empty() && !d.starts_with('!') {
+            return Some(d.to_string());
+        }
+    }
+    None
+}
+
 pub fn generate_outline(content: &str, path: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let chunks = chunk_file(path, content);
@@ -554,20 +624,17 @@ pub fn generate_outline(content: &str, path: &str) -> String {
     )];
 
     for c in &chunks {
-        let sig = c
-            .content
-            .lines()
-            .next()
-            .unwrap_or("")
-            .chars()
-            .take(120)
-            .collect::<String>();
+        let sig = extract_full_signature(&c.content);
+        let doc = extract_doc_comment(&lines, c.start_line);
+        let doc_suffix = doc
+            .map(|d| format!("  // {}", d))
+            .unwrap_or_default();
         let label = if c.symbol.is_empty() {
-            format!("  L{}-{} [{}]: {}", c.start_line, c.end_line, c.kind, sig)
+            format!("  L{}-{} [{}]: {}{}", c.start_line, c.end_line, c.kind, sig, doc_suffix)
         } else {
             format!(
-                "  L{}-{} [{}] {}: {}",
-                c.start_line, c.end_line, c.kind, c.symbol, sig
+                "  L{}-{} [{}] {}: {}{}",
+                c.start_line, c.end_line, c.kind, c.symbol, sig, doc_suffix
             )
         };
         parts.push(label);

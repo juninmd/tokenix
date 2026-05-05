@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunker::count_tokens;
 use crate::query::{format_results, get_file_outline, query_index};
-use crate::store::{get_index_age, log_hook_event, HookEvent};
+use crate::store::{get_index_age, log_hook_event, search_by_symbol, HookEvent};
 
 const MAX_INDEX_AGE_SECS: f64 = 3600.0;
 const MIN_LINES_FOR_OUTLINE: usize = 200;
@@ -130,6 +130,39 @@ fn is_semantic_query(pattern: &str) -> bool {
     pattern.split_whitespace().count() >= MIN_QUERY_WORDS
 }
 
+/// True if `s` looks like a plain identifier (no regex metacharacters).
+fn looks_like_identifier(s: &str) -> bool {
+    s.len() >= 2
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | ':' | '.'))
+}
+
+fn symbol_lookup(pattern: &str, repo_root: &Path) -> Option<String> {
+    let conn = crate::store::open_db(repo_root, false).ok()??;
+    let matches = search_by_symbol(&conn, pattern).ok()?;
+    if matches.is_empty() {
+        return None;
+    }
+    let mut lines = vec![format!(
+        "<!-- tokenix: {} symbol match(es) for '{}' -->",
+        matches.len(),
+        pattern
+    )];
+    lines.push(String::new());
+    for m in &matches {
+        lines.push(format!(
+            "{}:{} [{}] {}",
+            m.path, m.start_line, m.kind, m.symbol
+        ));
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "[Use Read with offset/limit or tokenix read --symbol {} to see content]",
+        pattern
+    ));
+    Some(lines.join("\n"))
+}
+
 fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String) {
     let file_path = match tool_input["file_path"].as_str() {
         Some(p) => p,
@@ -190,7 +223,13 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         None => return (false, String::new()),
     };
 
+    // Short identifier-like patterns: try index symbol lookup before falling through
     if !is_semantic_query(pattern) {
+        if looks_like_identifier(pattern) {
+            if let Some(output) = symbol_lookup(pattern, repo_root) {
+                return (true, output);
+            }
+        }
         return (false, String::new());
     }
 

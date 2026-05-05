@@ -206,6 +206,39 @@ pub fn search_similar(conn: &Connection, query_vec: &[f32], k: usize) -> Result<
     Ok(scored.into_iter().take(k).map(|(_, r)| r).collect())
 }
 
+#[allow(dead_code)]
+pub struct SymbolMatch {
+    pub path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub kind: String,
+    pub symbol: String,
+}
+
+/// Find chunks whose symbol name contains `pattern` (case-insensitive substring).
+/// Returns up to 20 matches ordered by path + start_line.
+pub fn search_by_symbol(conn: &Connection, pattern: &str) -> Result<Vec<SymbolMatch>> {
+    let like = format!("%{}%", pattern.to_lowercase());
+    let mut stmt = conn.prepare(
+        "SELECT path, start_line, end_line, kind, symbol FROM chunks
+         WHERE lower(symbol) LIKE ?1 AND symbol != ''
+         ORDER BY path, start_line LIMIT 20",
+    )?;
+    let results = stmt
+        .query_map(params![like], |row| {
+            Ok(SymbolMatch {
+                path: row.get(0)?,
+                start_line: row.get::<_, i64>(1)? as usize,
+                end_line: row.get::<_, i64>(2)? as usize,
+                kind: row.get(3)?,
+                symbol: row.get(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(results)
+}
+
 pub fn get_file_info(conn: &Connection, path: &str) -> Result<Option<(i64, f64, String)>> {
     let mut stmt = conn.prepare("SELECT id, mtime, content_hash FROM files WHERE path=?1")?;
     let res = stmt.query_row(params![path], |r| {
