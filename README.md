@@ -80,7 +80,8 @@ ollama pull nomic-embed-text   # one-time model download
 | **Semantic search** | Find relevant code by meaning, not just keywords |
 | **Symbol-aware chunking** | Heuristic parsers for Rust, Python, TypeScript, JavaScript, Go |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
-| **Hook-based interception** | Transparently intercepts large reads in supported AI tools |
+| **Hook-based interception** | `PreToolUse` intercepts large reads; `PostToolUse` compresses Bash/ListDirectory output |
+| **Output compression** | Strips ANSI codes, emojis, blank lines, groups repeated lines, compacts JSON |
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `3000`) |
 | **Savings analytics** | `tokenix gain` shows real estimated savings from hook events |
@@ -92,7 +93,7 @@ ollama pull nomic-embed-text   # one-time model download
 
 | Tool | Integration |
 |---|---|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `PreToolUse` hook in `~/.claude/settings.json` |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `PreToolUse` + `PostToolUse` hooks in `~/.claude/settings.json` |
 | [GitHub Copilot](https://docs.github.com/en/copilot) | `.github/copilot-instructions.md` + `.github/hooks/hooks.json` |
 | [OpenAI Codex CLI](https://help.openai.com/en/articles/11096431-openai-codex-cli-getting-started) | Shell helpers + `~/.codex/instructions.md` |
 
@@ -285,7 +286,8 @@ tokenix install-hook --tool all
 | `tokenix stats` | Index statistics |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
-| `tokenix hook` | Hook handler (called by AI tools via stdin) |
+| `tokenix hook` | `PreToolUse` handler — intercepts large reads (called by AI tools) |
+| `tokenix hook-post` | `PostToolUse` handler — compresses Bash/ListDirectory output (called by AI tools) |
 
 <details>
 <summary>Flag reference</summary>
