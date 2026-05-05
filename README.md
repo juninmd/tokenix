@@ -100,17 +100,37 @@ ollama pull nomic-embed-text   # one-time model download
 
 ## 🚀 How It Works
 
+### Indexing pipeline
+
+```mermaid
+flowchart LR
+    A[Your repo] -->|tokenix index .| B[File walker]
+    B -->|Symbol-aware chunker| C[Chunks\nRust · TS · Py · Go · JS]
+    C -->|get_embedding| D[Ollama\nnomic-embed-text]
+    D -->|float32 vectors| E[(".tokenix/index.db\nSQLite")]
 ```
-AI assistant (Claude Code / Copilot / Codex)
-  │
-  │ Read(src/auth/middleware.rs)           ← large file, no offset
-  ▼
-tokenix hook (PreToolUse)
-  │
-  │ file ≥ 200 lines?  →  intercept (exit 2)
-  │ file < 200 lines?  →  pass through (exit 0)
-  ▼
-compact symbol outline                    ← ~180 tokens instead of ~2,400
+
+### Hook interception flow
+
+```mermaid
+flowchart TD
+    A["🤖 AI Assistant\nClaude Code · Copilot · Codex"] -->|Read or Grep tool call| B["⚡ tokenix hook\nPreToolUse"]
+
+    B --> C{Index missing\nor stale > 1h?}
+    C -->|Yes| Z["exit 0\n▶ original tool runs"]
+
+    C -->|No| D{Tool type?}
+
+    D -->|Read| E{file < 200 lines\nor offset / limit set?}
+    E -->|Yes| Z
+    E -->|No ≥ 200 lines| G["exit 2 — intercept\n📄 symbol outline\n~180 tok vs ~2,400 tok"]
+
+    D -->|Grep| H{pattern\n< 3 words?}
+    H -->|Yes — likely regex| Z
+    H -->|No ≥ 3 words| I["exit 2 — intercept\n🔍 semantic results\ncosine similarity search"]
+
+    G --> R["✅ AI receives\ncompact structured context"]
+    I --> R
 ```
 
 1. **`tokenix index .`** — walks your repo, chunks files, generates embeddings via Ollama, stores in `.tokenix/index.db`
