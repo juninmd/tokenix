@@ -77,9 +77,17 @@ enum Commands {
     },
     /// Install hook for one or more AI coding tools
     InstallHook {
-        #[arg(long, value_enum, default_value = "all", help = "Target tool: claude-code | copilot | codex | all")]
+        #[arg(
+            long,
+            value_enum,
+            default_value = "all",
+            help = "Target tool: claude-code | copilot | codex | all"
+        )]
         tool: Tool,
-        #[arg(long = "local", help = "For claude-code: install in .claude/settings.json instead of global")]
+        #[arg(
+            long = "local",
+            help = "For claude-code: install in .claude/settings.json instead of global"
+        )]
         local: bool,
     },
     /// Remove tokenix hooks
@@ -116,7 +124,7 @@ fn find_repo_root(start: &PathBuf) -> PathBuf {
 /// On Windows returns forward-slash path so shell scripts work cross-platform.
 fn tokenix_bin_path() -> Result<String> {
     let exe = std::env::current_exe()?;
-    // Normalize to forward slashes — works on all platforms in shell contexts
+    // Normalize to forward slashes so generated shell and JSON configs work on Windows too.
     Ok(exe.to_string_lossy().replace('\\', "/"))
 }
 
@@ -125,12 +133,20 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Index { path, model, force } => cmd_index(&path, &model, force),
-        Commands::Query { text, budget, k, model, file, path } => {
-            cmd_query(&text, budget, k, &model, file.as_deref(), &path)
-        }
-        Commands::Read { file, symbol, lines, path } => {
-            cmd_read(&file, symbol.as_deref(), lines.as_deref(), &path)
-        }
+        Commands::Query {
+            text,
+            budget,
+            k,
+            model,
+            file,
+            path,
+        } => cmd_query(&text, budget, k, &model, file.as_deref(), &path),
+        Commands::Read {
+            file,
+            symbol,
+            lines,
+            path,
+        } => cmd_read(&file, symbol.as_deref(), lines.as_deref(), &path),
         Commands::Gain { path, history } => cmd_gain(&path, history),
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
         Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),
@@ -141,7 +157,11 @@ fn main() -> Result<()> {
 
 fn cmd_index(path: &PathBuf, model: &str, force: bool) -> Result<()> {
     let repo_root = path.canonicalize().unwrap_or_else(|_| path.clone());
-    println!("{} indexing {}", "tokenix".bold(), repo_root.display().to_string().cyan());
+    println!(
+        "{} indexing {}",
+        "tokenix".bold(),
+        repo_root.display().to_string().cyan()
+    );
 
     embed::check_ollama(model, OLLAMA_URL)?;
 
@@ -150,13 +170,31 @@ fn cmd_index(path: &PathBuf, model: &str, force: bool) -> Result<()> {
         println!("  {}", msg);
     })?;
 
-    println!("\n{} in {:.1}s", "Done".green().bold(), start.elapsed().as_secs_f64());
-    println!("  Files: {} indexed, {} skipped, {} errors", result.indexed, result.skipped, result.errors);
-    println!("  Index: {} chunks, {} tokens stored", stats.chunks, format_num(stats.total_tokens));
+    println!(
+        "\n{} in {:.1}s",
+        "Done".green().bold(),
+        start.elapsed().as_secs_f64()
+    );
+    println!(
+        "  Files: {} indexed, {} skipped, {} errors",
+        result.indexed, result.skipped, result.errors
+    );
+    println!(
+        "  Index: {} chunks, {} tokens stored",
+        stats.chunks,
+        format_num(stats.total_tokens)
+    );
     Ok(())
 }
 
-fn cmd_query(text: &str, budget: usize, k: usize, model: &str, file: Option<&str>, path: &PathBuf) -> Result<()> {
+fn cmd_query(
+    text: &str,
+    budget: usize,
+    k: usize,
+    model: &str,
+    file: Option<&str>,
+    path: &PathBuf,
+) -> Result<()> {
     let repo_root = find_repo_root(path);
     let results = query::query_index(&repo_root, text, budget, k, model, file)?
         .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))?;
@@ -164,11 +202,20 @@ fn cmd_query(text: &str, budget: usize, k: usize, model: &str, file: Option<&str
     Ok(())
 }
 
-fn cmd_read(file: &str, symbol: Option<&str>, lines_range: Option<&str>, path: &PathBuf) -> Result<()> {
+fn cmd_read(
+    file: &str,
+    symbol: Option<&str>,
+    lines_range: Option<&str>,
+    path: &PathBuf,
+) -> Result<()> {
     let repo_root = find_repo_root(path);
     let fp = {
         let p = std::path::Path::new(file);
-        if p.exists() { p.to_path_buf() } else { repo_root.join(file) }
+        if p.exists() {
+            p.to_path_buf()
+        } else {
+            repo_root.join(file)
+        }
     };
 
     if !fp.exists() {
@@ -192,11 +239,16 @@ fn cmd_read(file: &str, symbol: Option<&str>, lines_range: Option<&str>, path: &
         std::process::exit(1);
     }
 
-    let rel = fp.strip_prefix(&repo_root).unwrap_or(&fp).to_string_lossy().replace('\\', "/");
+    let rel = fp
+        .strip_prefix(&repo_root)
+        .unwrap_or(&fp)
+        .to_string_lossy()
+        .replace('\\', "/");
 
     if let Some(sym) = symbol {
         let chunks = chunker::chunk_file(&rel, &content);
-        let found: Vec<_> = chunks.iter()
+        let found: Vec<_> = chunks
+            .iter()
             .filter(|c| c.symbol.to_lowercase().contains(&sym.to_lowercase()))
             .collect();
         if found.is_empty() {
@@ -204,7 +256,10 @@ fn cmd_read(file: &str, symbol: Option<&str>, lines_range: Option<&str>, path: &
             std::process::exit(1);
         }
         for c in found {
-            println!("# L{}-{} [{}] {}", c.start_line, c.end_line, c.kind, c.symbol);
+            println!(
+                "# L{}-{} [{}] {}",
+                c.start_line, c.end_line, c.kind, c.symbol
+            );
             println!("{}", c.content);
         }
         return Ok(());
@@ -225,9 +280,15 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
 
     println!("\n{} -- {}\n", "tokenix gain".bold(), repo_root.display());
     println!("  Total hook calls   {}", stats.total_calls);
-    println!("  Intercepted        {}", stats.intercepted.to_string().green());
+    println!(
+        "  Intercepted        {}",
+        stats.intercepted.to_string().green()
+    );
     println!("  Passed through     {}", stats.passed);
-    println!("  Tokens saved       {}", format_num(stats.tokens_saved).green().bold());
+    println!(
+        "  Tokens saved       {}",
+        format_num(stats.tokens_saved).green().bold()
+    );
     println!("  Tokens used        {}", format_num(stats.tokens_used));
     println!("  Reduction          {:.1}%", stats.pct_saved);
     println!("  Cost saved (est.)  ${:.4}", stats.cost_saved_usd);
@@ -235,7 +296,12 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
     if !stats.by_tool.is_empty() {
         println!("\n{}", "By tool:".bold());
         for (tool, count, saved) in &stats.by_tool {
-            println!("  {}: {} calls, {} tokens saved", tool, count, format_num(*saved));
+            println!(
+                "  {}: {} calls, {} tokens saved",
+                tool,
+                count,
+                format_num(*saved)
+            );
         }
     }
 
@@ -256,14 +322,14 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
     Ok(())
 }
 
-// ── install-hook ────────────────────────────────────────────────────────────
+// install-hook
 
 fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
     match tool {
         Tool::ClaudeCode => install_claude_code(local)?,
-        Tool::Copilot    => install_copilot()?,
-        Tool::Codex      => install_codex()?,
-        Tool::All        => {
+        Tool::Copilot => install_copilot()?,
+        Tool::Codex => install_codex()?,
+        Tool::All => {
             install_claude_code(local)?;
             install_copilot()?;
             install_codex()?;
@@ -304,13 +370,20 @@ fn install_claude_code(local: bool) -> Result<()> {
     });
 
     if settings["hooks"]["PreToolUse"].is_array() {
-        settings["hooks"]["PreToolUse"].as_array_mut().unwrap().push(new_hook);
+        settings["hooks"]["PreToolUse"]
+            .as_array_mut()
+            .unwrap()
+            .push(new_hook);
     } else {
         settings["hooks"]["PreToolUse"] = serde_json::json!([new_hook]);
     }
 
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-    println!("{} Claude Code  →  {}", "✓".green(), settings_path.display());
+    println!(
+        "{} Claude Code  ->  {}",
+        "ok".green(),
+        settings_path.display()
+    );
     println!("  Command: {}", tokenix_cmd);
     Ok(())
 }
@@ -320,55 +393,60 @@ fn install_copilot() -> Result<()> {
     let github_dir = cwd.join(".github");
     std::fs::create_dir_all(&github_dir)?;
 
-    // 1. copilot-instructions.md — injected into every Copilot chat request
+    // 1. copilot-instructions.md - repository custom instructions
     let instructions_path = github_dir.join("copilot-instructions.md");
     let tokenix_bin = tokenix_bin_path()?;
     let instructions = format!(
-        r#"# tokenix — Semantic Context Tool
+        r#"# tokenix - Semantic Context Tool
 
 This repository is indexed by **tokenix** for token-efficient code understanding.
 
-## Before reading large files
+## Required workflow before reading files
 
-Instead of reading a full file, use tokenix to get a compact symbol outline:
+Use tokenix first whenever you need code context:
 
 ```bash
-tokenix read <file>                        # symbol outline (large files)
-tokenix read <file> --symbol <name>        # extract a specific function/struct
-tokenix read <file> --lines N-M            # specific line range
+tokenix query "what you need to understand"
+tokenix read <file>
+tokenix read <file> --symbol <name>
+tokenix read <file> --lines N-M
 ```
 
-## Semantic search
+Only read a full file directly after tokenix shows that the file is small, or after a targeted `--symbol` / `--lines` read is not enough.
 
-Instead of grep, use tokenix for natural-language queries:
+## High-signal examples
 
 ```bash
 tokenix query "how does authentication work"
 tokenix query "where is JWT validated" --budget 2000
+tokenix read src/auth/middleware.rs --symbol validate_token
 ```
 
-## Token savings analytics
-
-```bash
-tokenix gain
-```
+Use `tokenix gain --history` to inspect estimated savings from hook events.
 
 tokenix binary: `{tokenix_bin}`
 Index location: `.tokenix/index.db` (auto-generated, gitignored)
 
-**Always prefer `tokenix read` and `tokenix query` over reading entire files when the file has more than 200 lines.**
 "#
     );
 
     let already_instructions = instructions_path.exists();
     std::fs::write(&instructions_path, &instructions)?;
     if already_instructions {
-        println!("{} Copilot instructions updated  →  {}", "✓".green(), instructions_path.display());
+        println!(
+            "{} Copilot instructions updated  ->  {}",
+            "ok".green(),
+            instructions_path.display()
+        );
     } else {
-        println!("{} Copilot instructions  →  {}", "✓".green(), instructions_path.display());
+        println!(
+            "{} Copilot instructions  ->  {}",
+            "ok".green(),
+            instructions_path.display()
+        );
     }
 
-    // 2. hooks/hooks.json — preToolUse hook for Copilot agent/workspace mode
+    // 2. hooks/hooks.json - preToolUse hook for Copilot agent/workspace mode
     let hooks_dir = github_dir.join("hooks");
     std::fs::create_dir_all(&hooks_dir)?;
     let hooks_path = hooks_dir.join("hooks.json");
@@ -392,9 +470,17 @@ Index location: `.tokenix/index.db` (auto-generated, gitignored)
     let already_hooks = hooks_path.exists();
     std::fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_json)?)?;
     if already_hooks {
-        println!("{} Copilot hooks updated         →  {}", "✓".green(), hooks_path.display());
+        println!(
+            "{} Copilot hooks updated         ->  {}",
+            "ok".green(),
+            hooks_path.display()
+        );
     } else {
-        println!("{} Copilot hooks                 →  {}", "✓".green(), hooks_path.display());
+        println!(
+            "{} Copilot hooks                 ->  {}",
+            "ok".green(),
+            hooks_path.display()
+        );
     }
 
     println!("  Note: commit .github/ to enable for all contributors.");
@@ -408,7 +494,7 @@ fn install_codex() -> Result<()> {
 
     let tokenix_bin = tokenix_bin_path()?;
 
-    // ~/.codex/instructions.md — injected into every Codex session
+    // ~/.codex/instructions.md - compatibility instructions for older setups.
     let instructions_path = codex_dir.join("instructions.md");
     let existing = if instructions_path.exists() {
         std::fs::read_to_string(&instructions_path).unwrap_or_default()
@@ -419,16 +505,18 @@ fn install_codex() -> Result<()> {
     let marker = "<!-- tokenix -->";
     let block = format!(
         r#"{marker}
-## tokenix — Semantic Context Tool
+## tokenix - Semantic Context Tool
 
-This repo is indexed by tokenix. Use these commands instead of reading full files:
+This repo is indexed by tokenix. Use tokenix before reading full files:
 
 ```bash
-tokenix read <file>                    # symbol outline for large files (>200 lines)
-tokenix read <file> --symbol <name>    # extract specific symbol
-tokenix read <file> --lines N-M        # specific line range
-tokenix query "natural language query" # semantic search across the codebase
+tokenix query "natural language query"
+tokenix read <file>
+tokenix read <file> --symbol <name>
+tokenix read <file> --lines N-M
 ```
+
+Only read full files directly after tokenix shows that the file is small, or after a targeted symbol/line read is insufficient.
 
 tokenix binary: `{tokenix_bin}`
 {marker}
@@ -438,7 +526,8 @@ tokenix binary: `{tokenix_bin}`
     let new_content = if existing.contains(marker) {
         // Replace existing tokenix block
         let start = existing.find(marker).unwrap();
-        let end = existing[start + marker.len()..].find(marker)
+        let end = existing[start + marker.len()..]
+            .find(marker)
             .map(|i| start + marker.len() + i + marker.len())
             .unwrap_or(existing.len());
         format!("{}{}{}", &existing[..start], block, &existing[end..])
@@ -447,13 +536,17 @@ tokenix binary: `{tokenix_bin}`
     };
 
     std::fs::write(&instructions_path, new_content)?;
-    println!("{} Codex instructions  →  {}", "✓".green(), instructions_path.display());
+    println!(
+        "{} Codex instructions  ->  {}",
+        "ok".green(),
+        instructions_path.display()
+    );
 
     // Shell wrappers: ~/.codex/tokenix-init.sh (bash/zsh) and tokenix-init.ps1 (PowerShell)
     let sh_path = codex_dir.join("tokenix-init.sh");
     let sh_content = format!(
         r#"#!/usr/bin/env sh
-# tokenix shell helpers — source this in your shell profile
+# tokenix shell helpers - source this in your shell profile
 # Add to ~/.bashrc or ~/.zshrc: source ~/.codex/tokenix-init.sh
 
 # tx-read: smart file reader (outline for large files, full content for small)
@@ -468,7 +561,11 @@ tx-query() {{
 "#
     );
     std::fs::write(&sh_path, &sh_content)?;
-    println!("{} Codex shell helpers →  {}", "✓".green(), sh_path.display());
+    println!(
+        "{} Codex shell helpers ->  {}",
+        "ok".green(),
+        sh_path.display()
+    );
 
     let ps1_path = codex_dir.join("tokenix-init.ps1");
     let ps1_content = format!(
@@ -480,7 +577,11 @@ function tx-query {{ & "{tokenix_bin}" query @args }}
 "#
     );
     std::fs::write(&ps1_path, &ps1_content)?;
-    println!("{} Codex PS1 helpers   →  {}", "✓".green(), ps1_path.display());
+    println!(
+        "{} Codex PS1 helpers   ->  {}",
+        "ok".green(),
+        ps1_path.display()
+    );
 
     println!("  To activate shell helpers:");
     println!("    bash/zsh:   echo 'source ~/.codex/tokenix-init.sh' >> ~/.bashrc");
@@ -488,14 +589,14 @@ function tx-query {{ & "{tokenix_bin}" query @args }}
     Ok(())
 }
 
-// ── remove-hook ─────────────────────────────────────────────────────────────
+// remove-hook
 
 fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
     match tool {
         Tool::ClaudeCode => remove_claude_code(local)?,
-        Tool::Copilot    => remove_copilot()?,
-        Tool::Codex      => remove_codex()?,
-        Tool::All        => {
+        Tool::Copilot => remove_copilot()?,
+        Tool::Codex => remove_codex()?,
+        Tool::All => {
             remove_claude_code(local)?;
             remove_copilot()?;
             remove_codex()?;
@@ -516,7 +617,11 @@ fn remove_claude_code(local: bool) -> Result<()> {
         arr.retain(|h| !h.to_string().contains("tokenix"));
     }
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-    println!("{} Claude Code hook removed from {}", "✓".green(), settings_path.display());
+    println!(
+        "{} Claude Code hook removed from {}",
+        "ok".green(),
+        settings_path.display()
+    );
     Ok(())
 }
 
@@ -527,7 +632,7 @@ fn remove_copilot() -> Result<()> {
     for path in [&instructions, &hooks] {
         if path.exists() {
             std::fs::remove_file(path)?;
-            println!("{} Removed {}", "✓".green(), path.display());
+            println!("{} Removed {}", "ok".green(), path.display());
         }
     }
     Ok(())
@@ -540,26 +645,32 @@ fn remove_codex() -> Result<()> {
     if instructions.exists() {
         let content = std::fs::read_to_string(&instructions)?;
         if let Some(start) = content.find(marker) {
-            let end = content[start + marker.len()..].find(marker)
+            let end = content[start + marker.len()..]
+                .find(marker)
                 .map(|i| start + marker.len() + i + marker.len())
                 .unwrap_or(content.len());
             let new = format!("{}{}", &content[..start], &content[end..]);
             std::fs::write(&instructions, new)?;
-            println!("{} Codex instructions cleaned", "✓".green());
+            println!("{} Codex instructions cleaned", "ok".green());
         }
     }
     for helper in ["tokenix-init.sh", "tokenix-init.ps1"] {
         let p = home.join(".codex").join(helper);
-        if p.exists() { std::fs::remove_file(&p)?; println!("{} Removed {}", "✓".green(), p.display()); }
+        if p.exists() {
+            std::fs::remove_file(&p)?;
+            println!("{} Removed {}", "ok".green(), p.display());
+        }
     }
     Ok(())
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// helpers
 
 fn claude_settings_path(local: bool) -> Result<PathBuf> {
     if local {
-        Ok(std::env::current_dir()?.join(".claude").join("settings.json"))
+        Ok(std::env::current_dir()?
+            .join(".claude")
+            .join("settings.json"))
     } else {
         Ok(dirs::home_dir()
             .ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?
@@ -574,9 +685,15 @@ fn cmd_stats(path: &PathBuf) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No index found. Run: tokenix index"))?;
     let stats = store::count_stats(&conn)?;
     let age = store::get_index_age(&repo_root);
-    let age_str = age.map(|a| format!("{}s ago", a as i64)).unwrap_or_else(|| "unknown".to_string());
+    let age_str = age
+        .map(|a| format!("{}s ago", a as i64))
+        .unwrap_or_else(|| "unknown".to_string());
 
-    println!("\n{} {}", "Index:".bold(), repo_root.join(".tokenix/index.db").display());
+    println!(
+        "\n{} {}",
+        "Index:".bold(),
+        repo_root.join(".tokenix/index.db").display()
+    );
     println!("  Files:  {}", stats.files);
     println!("  Chunks: {}", stats.chunks);
     println!("  Tokens: {}", format_num(stats.total_tokens));
@@ -588,7 +705,9 @@ fn format_num(n: i64) -> String {
     let s = n.to_string();
     let mut result = String::new();
     for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 { result.push(','); }
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
         result.push(c);
     }
     result.chars().rev().collect()

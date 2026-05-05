@@ -5,18 +5,29 @@ pub const MAX_CHUNK_TOKENS: usize = 400;
 pub const MIN_CHUNK_TOKENS: usize = 10;
 
 pub const IGNORED_DIRS: &[&str] = &[
-    ".git", ".tokenix", "node_modules", "__pycache__", ".venv", "venv",
-    "dist", "build", "target", ".next", ".nuxt", "coverage", ".cargo",
+    ".git",
+    ".tokenix",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    "target",
+    ".next",
+    ".nuxt",
+    "coverage",
+    ".cargo",
 ];
 
 pub const INDEXED_EXTS: &[&str] = &[
-    ".rs", ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
-    ".go", ".java", ".c", ".cpp", ".h", ".hpp", ".cs", ".rb",
-    ".swift", ".kt", ".scala", ".sh", ".bash", ".toml", ".yaml",
-    ".yml", ".json", ".md", ".txt",
+    ".rs", ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".go", ".java", ".c", ".cpp", ".h",
+    ".hpp", ".cs", ".rb", ".swift", ".kt", ".scala", ".sh", ".bash", ".toml", ".yaml", ".yml",
+    ".json", ".md", ".txt",
 ];
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Chunk {
     pub path: String,
     pub start_line: usize,
@@ -69,7 +80,11 @@ enum Lang {
 }
 
 fn detect_lang(path: &Path) -> Lang {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
     match ext.as_str() {
         "rs" => Lang::Rust,
         "py" => Lang::Python,
@@ -94,7 +109,14 @@ pub fn chunk_file(path: &str, content: &str) -> Vec<Chunk> {
     }
 }
 
-fn make_chunk(lines: &[&str], path: &str, start: usize, end: usize, symbol: &str, kind: &str) -> Option<Chunk> {
+fn make_chunk(
+    lines: &[&str],
+    path: &str,
+    start: usize,
+    end: usize,
+    symbol: &str,
+    kind: &str,
+) -> Option<Chunk> {
     let content: String = lines[start..=end.min(lines.len().saturating_sub(1))]
         .join("\n")
         .trim_end()
@@ -114,7 +136,15 @@ fn make_chunk(lines: &[&str], path: &str, start: usize, end: usize, symbol: &str
     })
 }
 
-fn flush_chunk(lines: &[&str], path: &str, start: usize, end: usize, symbol: &str, kind: &str, out: &mut Vec<Chunk>) {
+fn flush_chunk(
+    lines: &[&str],
+    path: &str,
+    start: usize,
+    end: usize,
+    symbol: &str,
+    kind: &str,
+    out: &mut Vec<Chunk>,
+) {
     let total = end.saturating_sub(start) + 1;
     if total * 4 > MAX_CHUNK_TOKENS * 4 {
         // Split large chunk
@@ -161,12 +191,20 @@ fn chunk_rust(lines: &[&str], path: &str) -> Vec<Chunk> {
             if is_def {
                 block_start = Some(i);
                 block_symbol = extract_rust_name(trimmed);
-                block_kind = if trimmed.contains(" fn ") { "function" }
-                    else if trimmed.contains("struct ") { "struct" }
-                    else if trimmed.contains("enum ") { "enum" }
-                    else if trimmed.contains("impl") { "impl" }
-                    else if trimmed.contains("trait ") { "trait" }
-                    else { "module" }.to_string();
+                block_kind = if trimmed.contains(" fn ") {
+                    "function"
+                } else if trimmed.contains("struct ") {
+                    "struct"
+                } else if trimmed.contains("enum ") {
+                    "enum"
+                } else if trimmed.contains("impl") {
+                    "impl"
+                } else if trimmed.contains("trait ") {
+                    "trait"
+                } else {
+                    "module"
+                }
+                .to_string();
                 in_block = true;
                 brace_depth = 0;
             }
@@ -219,16 +257,37 @@ fn chunk_python(lines: &[&str], path: &str) -> Vec<Chunk> {
 
         if is_def {
             if let Some(start) = block_start.take() {
-                flush_chunk(lines, path, start, i.saturating_sub(1), &block_symbol, &block_kind, &mut out);
+                flush_chunk(
+                    lines,
+                    path,
+                    start,
+                    i.saturating_sub(1),
+                    &block_symbol,
+                    &block_kind,
+                    &mut out,
+                );
             }
             block_start = Some(i);
             block_symbol = extract_python_name(trimmed);
-            block_kind = if trimmed.starts_with("class ") { "class" } else { "function" }.to_string();
+            block_kind = if trimmed.starts_with("class ") {
+                "class"
+            } else {
+                "function"
+            }
+            .to_string();
         }
     }
 
     if let Some(start) = block_start {
-        flush_chunk(lines, path, start, lines.len().saturating_sub(1), &block_symbol, &block_kind, &mut out);
+        flush_chunk(
+            lines,
+            path,
+            start,
+            lines.len().saturating_sub(1),
+            &block_symbol,
+            &block_kind,
+            &mut out,
+        );
     }
 
     if out.is_empty() {
@@ -239,11 +298,21 @@ fn chunk_python(lines: &[&str], path: &str) -> Vec<Chunk> {
 }
 
 fn extract_python_name(line: &str) -> String {
-    let after_kw = if let Some(s) = line.strip_prefix("async def ") { s }
-        else if let Some(s) = line.strip_prefix("def ") { s }
-        else if let Some(s) = line.strip_prefix("class ") { s }
-        else { line };
-    after_kw.split(['(', ':']).next().unwrap_or("").trim().to_string()
+    let after_kw = if let Some(s) = line.strip_prefix("async def ") {
+        s
+    } else if let Some(s) = line.strip_prefix("def ") {
+        s
+    } else if let Some(s) = line.strip_prefix("class ") {
+        s
+    } else {
+        line
+    };
+    after_kw
+        .split(['(', ':'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 fn chunk_ts_js(lines: &[&str], path: &str) -> Vec<Chunk> {
@@ -269,16 +338,26 @@ fn chunk_ts_js(lines: &[&str], path: &str) -> Vec<Chunk> {
                 || trimmed.starts_with("export interface ")
                 || trimmed.starts_with("type ")
                 || trimmed.starts_with("export type ")
-                || (trimmed.contains("= function") || trimmed.contains("= async function") || trimmed.contains("=> {"))
-                    && (trimmed.contains("const ") || trimmed.contains("let ") || trimmed.contains("var "));
+                || (trimmed.contains("= function")
+                    || trimmed.contains("= async function")
+                    || trimmed.contains("=> {"))
+                    && (trimmed.contains("const ")
+                        || trimmed.contains("let ")
+                        || trimmed.contains("var "));
 
             if is_def {
                 block_start = Some(i);
                 block_symbol = extract_ts_name(trimmed);
-                block_kind = if trimmed.contains("class ") { "class" }
-                    else if trimmed.contains("interface ") { "interface" }
-                    else if trimmed.starts_with("type ") || trimmed.starts_with("export type ") { "type" }
-                    else { "function" }.to_string();
+                block_kind = if trimmed.contains("class ") {
+                    "class"
+                } else if trimmed.contains("interface ") {
+                    "interface"
+                } else if trimmed.starts_with("type ") || trimmed.starts_with("export type ") {
+                    "type"
+                } else {
+                    "function"
+                }
+                .to_string();
                 in_block = true;
                 brace_depth = 0;
             }
@@ -329,7 +408,12 @@ fn extract_ts_name(line: &str) -> String {
         .trim_start_matches("const ")
         .trim_start_matches("let ")
         .trim_start_matches("var ");
-    after_decl.split(['=', ':', ' ']).next().unwrap_or("").trim().to_string()
+    after_decl
+        .split(['=', ':', ' '])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 fn chunk_go(lines: &[&str], path: &str) -> Vec<Chunk> {
@@ -344,12 +428,16 @@ fn chunk_go(lines: &[&str], path: &str) -> Vec<Chunk> {
         let trimmed = line.trim();
 
         if !in_block {
-            let is_def = trimmed.starts_with("func ")
-                || trimmed.starts_with("type ");
+            let is_def = trimmed.starts_with("func ") || trimmed.starts_with("type ");
             if is_def {
                 block_start = Some(i);
                 block_symbol = extract_go_name(trimmed);
-                block_kind = if trimmed.starts_with("type ") { "type" } else { "function" }.to_string();
+                block_kind = if trimmed.starts_with("type ") {
+                    "type"
+                } else {
+                    "function"
+                }
+                .to_string();
                 in_block = true;
                 brace_depth = 0;
             }
@@ -379,7 +467,11 @@ fn extract_go_name(line: &str) -> String {
     if let Some(s) = line.strip_prefix("func ") {
         // func (recv) Name( or func Name(
         let after = if s.starts_with('(') {
-            s.splitn(2, ')').nth(1).unwrap_or(s).trim().trim_start_matches(' ')
+            s.splitn(2, ')')
+                .nth(1)
+                .unwrap_or(s)
+                .trim()
+                .trim_start_matches(' ')
         } else {
             s
         };
@@ -447,22 +539,36 @@ pub fn generate_outline(content: &str, path: &str) -> String {
 
     if chunks.is_empty() {
         let preview: Vec<&str> = lines.iter().take(30).copied().collect();
-        return format!("[{} lines — no symbols detected]\n{}", lines.len(), preview.join("\n"));
+        return format!(
+            "[{} lines - no symbols detected]\n{}",
+            lines.len(),
+            preview.join("\n")
+        );
     }
 
     let mut parts = vec![format!(
-        "[{}] — {} lines, {} symbols\n",
+        "[{}] - {} lines, {} symbols\n",
         path,
         lines.len(),
         chunks.len()
     )];
 
     for c in &chunks {
-        let sig = c.content.lines().next().unwrap_or("").chars().take(120).collect::<String>();
+        let sig = c
+            .content
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(120)
+            .collect::<String>();
         let label = if c.symbol.is_empty() {
             format!("  L{}-{} [{}]: {}", c.start_line, c.end_line, c.kind, sig)
         } else {
-            format!("  L{}-{} [{}] {}: {}", c.start_line, c.end_line, c.kind, c.symbol, sig)
+            format!(
+                "  L{}-{} [{}] {}: {}",
+                c.start_line, c.end_line, c.kind, c.symbol, sig
+            )
         };
         parts.push(label);
     }

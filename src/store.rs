@@ -82,7 +82,9 @@ pub fn upsert_file(conn: &Connection, path: &str, mtime: f64, hash: &str) -> Res
          ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, content_hash=excluded.content_hash",
         params![path, mtime, hash],
     )?;
-    let id: i64 = conn.query_row("SELECT id FROM files WHERE path=?1", params![path], |r| r.get(0))?;
+    let id: i64 = conn.query_row("SELECT id FROM files WHERE path=?1", params![path], |r| {
+        r.get(0)
+    })?;
     Ok(id)
 }
 
@@ -110,7 +112,16 @@ pub fn insert_chunk(
     conn.execute(
         "INSERT INTO chunks(file_id,path,start_line,end_line,symbol,kind,content,token_count)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
-        params![file_id, path, start as i64, end as i64, symbol, kind, content, token_count as i64],
+        params![
+            file_id,
+            path,
+            start as i64,
+            end as i64,
+            symbol,
+            kind,
+            content,
+            token_count as i64
+        ],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -125,6 +136,7 @@ pub fn insert_embedding(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> 
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SearchResult {
     pub id: i64,
     pub path: String,
@@ -141,7 +153,11 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
 }
 
 pub fn search_similar(conn: &Connection, query_vec: &[f32], k: usize) -> Result<Vec<SearchResult>> {
@@ -150,30 +166,41 @@ pub fn search_similar(conn: &Connection, query_vec: &[f32], k: usize) -> Result<
          FROM embeddings e JOIN chunks c ON c.id = e.chunk_id"
     )?;
 
-    let mut scored: Vec<(f32, SearchResult)> = stmt.query_map([], |row| {
-        let blob: Vec<u8> = row.get(8)?;
-        Ok((blob, row.get::<_, i64>(0)?, row.get::<_, String>(1)?,
-            row.get::<_, i64>(2)?, row.get::<_, i64>(3)?,
-            row.get::<_, String>(4)?, row.get::<_, String>(5)?,
-            row.get::<_, String>(6)?, row.get::<_, i64>(7)?))
-    })?
-    .filter_map(|r| r.ok())
-    .map(|(blob, id, path, sl, el, symbol, kind, content, tc)| {
-        let emb = deserialize_vec(&blob);
-        let sim = cosine_similarity(query_vec, &emb);
-        (sim, SearchResult {
-            id,
-            path,
-            start_line: sl as usize,
-            end_line: el as usize,
-            symbol,
-            kind,
-            content,
-            token_count: tc as usize,
-            distance: 1.0 - sim,
+    let mut scored: Vec<(f32, SearchResult)> = stmt
+        .query_map([], |row| {
+            let blob: Vec<u8> = row.get(8)?;
+            Ok((
+                blob,
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        })?
+        .filter_map(|r| r.ok())
+        .map(|(blob, id, path, sl, el, symbol, kind, content, tc)| {
+            let emb = deserialize_vec(&blob);
+            let sim = cosine_similarity(query_vec, &emb);
+            (
+                sim,
+                SearchResult {
+                    id,
+                    path,
+                    start_line: sl as usize,
+                    end_line: el as usize,
+                    symbol,
+                    kind,
+                    content,
+                    token_count: tc as usize,
+                    distance: 1.0 - sim,
+                },
+            )
         })
-    })
-    .collect();
+        .collect();
 
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     Ok(scored.into_iter().take(k).map(|(_, r)| r).collect())
@@ -182,7 +209,11 @@ pub fn search_similar(conn: &Connection, query_vec: &[f32], k: usize) -> Result<
 pub fn get_file_info(conn: &Connection, path: &str) -> Result<Option<(i64, f64, String)>> {
     let mut stmt = conn.prepare("SELECT id, mtime, content_hash FROM files WHERE path=?1")?;
     let res = stmt.query_row(params![path], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?, r.get::<_, String>(2)?))
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, f64>(1)?,
+            r.get::<_, String>(2)?,
+        ))
     });
     match res {
         Ok(v) => Ok(Some(v)),
@@ -200,17 +231,29 @@ pub struct IndexStats {
 pub fn count_stats(conn: &Connection) -> Result<IndexStats> {
     let files: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
     let chunks: i64 = conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?;
-    let tokens: i64 = conn.query_row("SELECT COALESCE(SUM(token_count),0) FROM chunks", [], |r| r.get(0))?;
-    Ok(IndexStats { files, chunks, total_tokens: tokens })
+    let tokens: i64 =
+        conn.query_row("SELECT COALESCE(SUM(token_count),0) FROM chunks", [], |r| {
+            r.get(0)
+        })?;
+    Ok(IndexStats {
+        files,
+        chunks,
+        total_tokens: tokens,
+    })
 }
 
 pub fn get_index_age(repo_root: &Path) -> Option<f64> {
     let conn = open_db(repo_root, false).ok()??;
     let val: String = conn
-        .query_row("SELECT value FROM meta WHERE key='indexed_at'", [], |r| r.get(0))
+        .query_row("SELECT value FROM meta WHERE key='indexed_at'", [], |r| {
+            r.get(0)
+        })
         .ok()?;
     let indexed_at: f64 = val.parse().ok()?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs_f64();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs_f64();
     Some(now - indexed_at)
 }
 
@@ -232,7 +275,10 @@ pub fn log_hook_event(repo_root: &Path, event: &HookEvent) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     use std::io::Write;
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&log)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)?;
     writeln!(f, "{}", serde_json::to_string(event)?)?;
     Ok(())
 }

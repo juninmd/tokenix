@@ -12,6 +12,7 @@ use crate::store::{
 
 const OLLAMA_URL: &str = "http://localhost:11434";
 
+#[allow(dead_code)]
 pub struct IndexResult {
     pub total: usize,
     pub indexed: usize,
@@ -65,12 +66,20 @@ where
 
         let raw = match std::fs::read(abs_path) {
             Ok(b) => b,
-            Err(e) => { errors += 1; progress_cb(&format!("ERR {}: {}", rel, e)); continue; }
+            Err(e) => {
+                errors += 1;
+                progress_cb(&format!("ERR {}: {}", rel, e));
+                continue;
+            }
         };
 
         let stat = match std::fs::metadata(abs_path) {
             Ok(m) => m,
-            Err(e) => { errors += 1; progress_cb(&format!("ERR {}: {}", rel, e)); continue; }
+            Err(e) => {
+                errors += 1;
+                progress_cb(&format!("ERR {}: {}", rel, e));
+                continue;
+            }
         };
 
         let mtime = stat
@@ -94,7 +103,11 @@ where
         let content = String::from_utf8_lossy(&raw).into_owned();
         let file_id = match upsert_file(&conn, rel, mtime, &chash) {
             Ok(id) => id,
-            Err(e) => { errors += 1; progress_cb(&format!("ERR {}: {}", rel, e)); continue; }
+            Err(e) => {
+                errors += 1;
+                progress_cb(&format!("ERR {}: {}", rel, e));
+                continue;
+            }
         };
 
         let _ = delete_chunks_for_file(&conn, file_id);
@@ -102,10 +115,15 @@ where
 
         for chunk in &chunks {
             let chunk_id = match insert_chunk(
-                &conn, file_id, rel,
-                chunk.start_line, chunk.end_line,
-                &chunk.symbol, &chunk.kind,
-                &chunk.content, chunk.token_count,
+                &conn,
+                file_id,
+                rel,
+                chunk.start_line,
+                chunk.end_line,
+                &chunk.symbol,
+                &chunk.kind,
+                &chunk.content,
+                chunk.token_count,
             ) {
                 Ok(id) => id,
                 Err(_) => continue,
@@ -113,8 +131,12 @@ where
 
             let embed_text = format!("file:{}\n{}", rel, chunk.content);
             match get_embedding(&embed_text, model, OLLAMA_URL) {
-                Ok(emb) => { let _ = insert_embedding(&conn, chunk_id, &emb); }
-                Err(e) => { progress_cb(&format!("EMBED ERR {}: {}", rel, e)); }
+                Ok(emb) => {
+                    let _ = insert_embedding(&conn, chunk_id, &emb);
+                }
+                Err(e) => {
+                    progress_cb(&format!("EMBED ERR {}: {}", rel, e));
+                }
             }
         }
 
@@ -131,5 +153,13 @@ where
     )?;
 
     let stats = count_stats(&conn)?;
-    Ok((IndexResult { total, indexed, skipped, errors }, stats))
+    Ok((
+        IndexResult {
+            total,
+            indexed,
+            skipped,
+            errors,
+        },
+        stats,
+    ))
 }

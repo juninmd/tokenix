@@ -11,15 +11,25 @@ const MAX_INDEX_AGE_SECS: f64 = 3600.0;
 const MIN_LINES_FOR_OUTLINE: usize = 200;
 const MIN_QUERY_WORDS: usize = 3;
 
-/// Claude Code sends JSON on stdin.
-/// Copilot sets COPILOT_TOOL_NAME + COPILOT_TOOL_INPUT env vars (agent mode).
-/// We support both.
+/// Normalized hook input used by tokenix.
+///
+/// Claude Code sends `tool_name` and `tool_input` on stdin.
+/// GitHub Copilot hooks currently send `toolName` and `toolArgs` on stdin.
+/// Older Copilot-like runners may set TOOL_NAME/TOOL_INPUT environment vars.
 #[derive(Deserialize, Debug, Default)]
 pub struct HookInput {
     #[serde(default)]
     pub tool_name: String,
     #[serde(default)]
     pub tool_input: serde_json::Value,
+}
+
+#[derive(Deserialize, Debug)]
+struct CopilotHookInput {
+    #[serde(rename = "toolName")]
+    tool_name: String,
+    #[serde(rename = "toolArgs", default)]
+    tool_args: serde_json::Value,
 }
 
 impl HookInput {
@@ -31,14 +41,68 @@ impl HookInput {
             .or_else(|_| std::env::var("TOOL_INPUT"))
             .unwrap_or_default();
         let tool_input = serde_json::from_str(&tool_input_raw).unwrap_or(serde_json::Value::Null);
-        Some(HookInput { tool_name, tool_input })
+        Some(HookInput {
+            tool_name,
+            tool_input,
+        })
     }
 
     fn from_stdin(raw: &str) -> Option<Self> {
         let clean = raw.trim_start_matches('\u{feff}').trim();
-        if clean.is_empty() { return None; }
-        serde_json::from_str(clean).ok()
+        if clean.is_empty() {
+            return None;
+        }
+        if let Ok(input) = serde_json::from_str::<HookInput>(clean) {
+            if !input.tool_name.is_empty() {
+                return Some(input);
+            }
+        }
+        serde_json::from_str::<CopilotHookInput>(clean)
+            .ok()
+            .map(|input| normalize_copilot_input(&input.tool_name, &input.tool_args))
     }
+}
+
+fn normalize_copilot_input(tool_name: &str, tool_args: &serde_json::Value) -> HookInput {
+    let args = if let Some(raw) = tool_args.as_str() {
+        serde_json::from_str(raw).unwrap_or(serde_json::Value::Null)
+    } else {
+        tool_args.clone()
+    };
+
+    match tool_name.to_ascii_lowercase().as_str() {
+        "view" | "read" => HookInput {
+            tool_name: "Read".to_string(),
+            tool_input: normalize_read_args(args),
+        },
+        "grep" => HookInput {
+            tool_name: "Grep".to_string(),
+            tool_input: args,
+        },
+        _ => HookInput {
+            tool_name: tool_name.to_string(),
+            tool_input: args,
+        },
+    }
+}
+
+fn normalize_read_args(mut args: serde_json::Value) -> serde_json::Value {
+    if args.get("file_path").and_then(|v| v.as_str()).is_some() {
+        return args;
+    }
+
+    let path = args
+        .get("path")
+        .or_else(|| args.get("file"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    if let Some(path) = path {
+        if let Some(obj) = args.as_object_mut() {
+            obj.insert("file_path".to_string(), serde_json::Value::String(path));
+        }
+    }
+    args
 }
 
 fn find_repo_root() -> PathBuf {
@@ -56,7 +120,10 @@ fn find_repo_root() -> PathBuf {
 }
 
 fn now_ts() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64()
 }
 
 fn is_semantic_query(pattern: &str) -> bool {
@@ -76,7 +143,11 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
 
     let full_path = {
         let p = Path::new(file_path);
-        if p.exists() { p.to_path_buf() } else { repo_root.join(file_path) }
+        if p.exists() {
+            p.to_path_buf()
+        } else {
+            repo_root.join(file_path)
+        }
     };
 
     if !full_path.exists() {
@@ -131,11 +202,19 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     (true, format_results(&results, pattern))
 }
 
-fn estimate_original_tokens(tool_name: &str, tool_input: &serde_json::Value, repo_root: &Path) -> i64 {
+fn estimate_original_tokens(
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    repo_root: &Path,
+) -> i64 {
     if tool_name == "Read" {
         if let Some(fp) = tool_input["file_path"].as_str() {
             let p = Path::new(fp);
-            let full = if p.exists() { p.to_path_buf() } else { repo_root.join(fp) };
+            let full = if p.exists() {
+                p.to_path_buf()
+            } else {
+                repo_root.join(fp)
+            };
             if let Ok(content) = std::fs::read_to_string(&full) {
                 return count_tokens(&content) as i64;
             }
@@ -152,7 +231,7 @@ pub fn run_hook() -> Result<()> {
         .or_else(|| HookInput::from_stdin(&raw_stdin))
         .unwrap_or_default();
 
-    // Unknown or unsupported tool — pass through silently
+    // Unknown or unsupported tool: pass through silently.
     if input.tool_name != "Read" && input.tool_name != "Grep" {
         std::process::exit(0);
     }
@@ -169,27 +248,42 @@ pub fn run_hook() -> Result<()> {
         } else {
             format!("stale ({}s old)", age.unwrap() as i64)
         };
-        let _ = log_hook_event(&repo_root, &HookEvent {
-            ts: now_ts(), tool: input.tool_name, action: "pass".to_string(),
-            reason, saved_tokens: 0, actual_tokens: 0, original_estimate: 0,
-            input_preview: String::new(),
-        });
+        let _ = log_hook_event(
+            &repo_root,
+            &HookEvent {
+                ts: now_ts(),
+                tool: input.tool_name,
+                action: "pass".to_string(),
+                reason,
+                saved_tokens: 0,
+                actual_tokens: 0,
+                original_estimate: 0,
+                input_preview: String::new(),
+            },
+        );
         std::process::exit(0);
     }
 
     let (intercepted, output) = match input.tool_name.as_str() {
         "Read" => handle_read(&input.tool_input, &repo_root),
         "Grep" => handle_grep(&input.tool_input, &repo_root),
-        _      => (false, String::new()),
+        _ => (false, String::new()),
     };
 
     if !intercepted {
-        let _ = log_hook_event(&repo_root, &HookEvent {
-            ts: now_ts(), tool: input.tool_name, action: "pass".to_string(),
-            reason: "not intercepted".to_string(),
-            saved_tokens: 0, actual_tokens: 0, original_estimate: 0,
-            input_preview: String::new(),
-        });
+        let _ = log_hook_event(
+            &repo_root,
+            &HookEvent {
+                ts: now_ts(),
+                tool: input.tool_name,
+                action: "pass".to_string(),
+                reason: "not intercepted".to_string(),
+                saved_tokens: 0,
+                actual_tokens: 0,
+                original_estimate: 0,
+                input_preview: String::new(),
+            },
+        );
         std::process::exit(0);
     }
 
@@ -197,17 +291,41 @@ pub fn run_hook() -> Result<()> {
     let actual_tokens = count_tokens(&output) as i64;
     let saved = (original_tokens - actual_tokens).max(0);
 
-    let _ = log_hook_event(&repo_root, &HookEvent {
-        ts: now_ts(),
-        tool: input.tool_name.clone(),
-        action: "intercepted".to_string(),
-        reason: String::new(),
-        saved_tokens: saved,
-        actual_tokens,
-        original_estimate: original_tokens,
-        input_preview: raw_stdin.chars().take(200).collect(),
-    });
+    let _ = log_hook_event(
+        &repo_root,
+        &HookEvent {
+            ts: now_ts(),
+            tool: input.tool_name.clone(),
+            action: "intercepted".to_string(),
+            reason: String::new(),
+            saved_tokens: saved,
+            actual_tokens,
+            original_estimate: original_tokens,
+            input_preview: raw_stdin.chars().take(200).collect(),
+        },
+    );
 
     println!("{}", output);
     std::process::exit(2);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HookInput;
+
+    #[test]
+    fn parses_claude_input() {
+        let raw = r#"{"tool_name":"Read","tool_input":{"file_path":"src/main.rs"}}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Read");
+        assert_eq!(input.tool_input["file_path"], "src/main.rs");
+    }
+
+    #[test]
+    fn parses_copilot_view_input() {
+        let raw = r#"{"toolName":"view","toolArgs":"{\"path\":\"src/main.rs\"}"}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Read");
+        assert_eq!(input.tool_input["file_path"], "src/main.rs");
+    }
 }

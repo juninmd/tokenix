@@ -1,8 +1,9 @@
-use std::path::Path;
 use crate::store::read_hook_log;
+use std::path::Path;
 
 const COST_PER_1K_INPUT: f64 = 0.003;
 
+#[allow(dead_code)]
 pub struct GainStats {
     pub total_calls: usize,
     pub intercepted: usize,
@@ -17,7 +18,10 @@ pub struct GainStats {
 
 pub fn compute_gain(repo_root: &Path) -> GainStats {
     let events = read_hook_log(repo_root);
-    let intercepted_events: Vec<_> = events.iter().filter(|e| e.action == "intercepted").collect();
+    let intercepted_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.action == "intercepted")
+        .collect();
     let passed_events: Vec<_> = events.iter().filter(|e| e.action == "pass").collect();
 
     let tokens_saved: i64 = intercepted_events.iter().map(|e| e.saved_tokens).sum();
@@ -31,7 +35,8 @@ pub fn compute_gain(repo_root: &Path) -> GainStats {
     };
     let cost_saved_usd = (tokens_saved as f64 / 1000.0) * COST_PER_1K_INPUT;
 
-    let mut by_tool_map: std::collections::HashMap<String, (usize, i64)> = std::collections::HashMap::new();
+    let mut by_tool_map: std::collections::HashMap<String, (usize, i64)> =
+        std::collections::HashMap::new();
     for e in &intercepted_events {
         let entry = by_tool_map.entry(e.tool.clone()).or_default();
         entry.0 += 1;

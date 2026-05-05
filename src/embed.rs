@@ -1,9 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
-const OLLAMA_URL: &str = "http://localhost:11434";
-pub const DEFAULT_MODEL: &str = "nomic-embed-text";
-
 #[derive(Serialize)]
 struct EmbedRequest<'a> {
     model: &'a str,
@@ -44,13 +41,14 @@ pub fn check_ollama(model: &str, base_url: &str) -> Result<()> {
     let data: serde_json::Value = resp.json()?;
     let models = data["models"].as_array().cloned().unwrap_or_default();
     let model_base = model.split(':').next().unwrap_or(model);
-    let found = models.iter().any(|m| {
-        m["name"].as_str().unwrap_or("").contains(model_base)
-    });
+    let found = models
+        .iter()
+        .any(|m| m["name"].as_str().unwrap_or("").contains(model_base));
     if !found {
         return Err(anyhow!(
             "Model '{}' not found in Ollama. Run: ollama pull {}",
-            model, model
+            model,
+            model
         ));
     }
     Ok(())

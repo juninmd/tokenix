@@ -1,6 +1,6 @@
 use anyhow::Result;
-use std::path::Path;
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::chunker::count_tokens;
 use crate::embed::get_embedding;
@@ -32,7 +32,11 @@ pub fn query_index(
     let mut used_tokens = 0usize;
 
     for r in results {
-        let tokens = if r.token_count > 0 { r.token_count } else { count_tokens(&r.content) };
+        let tokens = if r.token_count > 0 {
+            r.token_count
+        } else {
+            count_tokens(&r.content)
+        };
         if used_tokens + tokens > budget {
             continue;
         }
@@ -48,7 +52,11 @@ pub fn format_results(results: &[SearchResult], query: &str) -> String {
         return format!("No relevant context found for: {}", query);
     }
 
-    let mut parts = vec![format!("<!-- tokenix: {} chunks for '{}' -->", results.len(), query)];
+    let mut parts = vec![format!(
+        "<!-- tokenix: {} chunks for '{}' -->",
+        results.len(),
+        query
+    )];
     let mut by_file: HashMap<&str, Vec<&SearchResult>> = HashMap::new();
 
     for r in results {
