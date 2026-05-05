@@ -8,10 +8,74 @@ use crate::store::{log_hook_event, HookEvent};
 const POST_HOOK_TOOLS: &[&str] = &["Bash", "ListDirectory"];
 
 pub fn compress_output(s: &str) -> String {
+    // JSON compaction first: if output is pure JSON or NDJSON, compact and return early.
+    // The other transforms (ANSI, emoji, blank lines) don't apply to JSON.
+    let compacted = compact_json(s);
+    if compacted != s {
+        return compacted;
+    }
     let s = strip_ansi(s);
     let s = remove_emojis(&s);
     let s = collapse_blank_lines(&s);
     group_repeated_lines(&s)
+}
+
+/// Compact pretty-printed JSON (pure JSON or NDJSON) into single-line form.
+/// Returns the original string unchanged if not JSON or if already compact.
+fn compact_json(s: &str) -> String {
+    let trimmed = s.trim();
+
+    // Case 1: entire output is a JSON object or array
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Ok(compact) = serde_json::to_string(&v) {
+                if compact.len() < trimmed.len() {
+                    return if s.ends_with('\n') {
+                        compact + "\n"
+                    } else {
+                        compact
+                    };
+                }
+            }
+        }
+    }
+
+    // Case 2: NDJSON — every non-empty line is a JSON object
+    let lines: Vec<&str> = trimmed.lines().collect();
+    if lines.len() > 1
+        && lines.iter().all(|l| {
+            let t = l.trim();
+            t.is_empty()
+                || (t.starts_with('{')
+                    && serde_json::from_str::<serde_json::Value>(t).is_ok())
+        })
+    {
+        let compacted: String = lines
+            .iter()
+            .filter_map(|l| {
+                let t = l.trim();
+                if t.is_empty() {
+                    return None;
+                }
+                Some(
+                    serde_json::from_str::<serde_json::Value>(t)
+                        .and_then(|v| serde_json::to_string(&v))
+                        .unwrap_or_else(|_| t.to_string()),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = if s.ends_with('\n') {
+            compacted + "\n"
+        } else {
+            compacted
+        };
+        if result.len() < s.len() {
+            return result;
+        }
+    }
+
+    s.to_string()
 }
 
 /// Remove ANSI/VT100 escape sequences (CSI, OSC, and single-char sequences).
@@ -273,6 +337,44 @@ mod tests {
     fn does_not_group_two_identical_lines() {
         let input = "a\na\nb\n";
         assert_eq!(group_repeated_lines(input), "a\na\nb\n");
+    }
+
+    #[test]
+    fn compacts_pretty_json_object() {
+        let input = "{\n  \"status\": \"ok\",\n  \"count\": 42\n}\n";
+        let output = compact_json(input);
+        // key order is not guaranteed; verify it compacted (shorter) and parses to same value
+        assert!(output.len() < input.len(), "should be shorter");
+        assert!(output.ends_with('\n'));
+        let v_in: serde_json::Value = serde_json::from_str(input.trim()).unwrap();
+        let v_out: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(v_in, v_out);
+    }
+
+    #[test]
+    fn compacts_pretty_json_array() {
+        let input = "[\n  1,\n  2,\n  3\n]";
+        let output = compact_json(input);
+        assert_eq!(output, "[1,2,3]");
+    }
+
+    #[test]
+    fn passes_through_already_compact_json() {
+        let input = "{\"a\":1}\n";
+        assert_eq!(compact_json(input), input);
+    }
+
+    #[test]
+    fn compacts_ndjson() {
+        let input = "{ \"level\": \"info\", \"msg\": \"started\" }\n{ \"level\": \"error\", \"msg\": \"failed\" }\n";
+        let output = compact_json(input);
+        assert_eq!(output, "{\"level\":\"info\",\"msg\":\"started\"}\n{\"level\":\"error\",\"msg\":\"failed\"}\n");
+    }
+
+    #[test]
+    fn passes_through_plain_text() {
+        let input = "On branch main\nnothing to commit\n";
+        assert_eq!(compact_json(input), input);
     }
 
     #[test]
