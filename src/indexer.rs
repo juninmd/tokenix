@@ -1,9 +1,9 @@
 use anyhow::Result;
+use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use walkdir::WalkDir;
 
-use crate::chunker::{chunk_file, file_hash, should_index};
+use crate::chunker::{chunk_file, file_hash, should_index, IGNORED_DIRS};
 use crate::embed::get_embedding;
 use crate::store::{
     count_stats, delete_chunks_for_file, get_file_info, init_schema, insert_chunk,
@@ -32,18 +32,21 @@ where
     let conn = open_db(repo_root, true)?.unwrap();
     init_schema(&conn, 768)?;
 
-    let files: Vec<(PathBuf, String)> = WalkDir::new(repo_root)
-        .into_iter()
+    let files: Vec<(PathBuf, String)> = WalkBuilder::new(repo_root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
         .filter_entry(|e| {
-            // For directories: only skip explicitly ignored dirs
-            if e.file_type().is_dir() {
+            if e.file_type().map_or(false, |t| t.is_dir()) {
                 let name = e.file_name().to_string_lossy();
-                return !crate::chunker::IGNORED_DIRS.contains(&name.as_ref());
+                return !IGNORED_DIRS.contains(&name.as_ref());
             }
             true
         })
+        .build()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
+        .filter(|e| e.file_type().map_or(false, |t| t.is_file()))
         .filter(|e| should_index(e.path()))
         .map(|e| {
             let abs = e.into_path();
