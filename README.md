@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="tokenix-logo.png" alt="tokenix logo" width="180" />
+  <img src="tokenix-logo.png" alt="tokenix logo" width="450" />
 
   <h1>tokenix</h1>
 
