@@ -7,7 +7,7 @@ use crate::chunker::count_tokens;
 use crate::query::{format_results, get_file_outline, query_index};
 use crate::store::{get_index_age, log_hook_event, search_by_symbol, HookEvent};
 
-const MAX_INDEX_AGE_SECS: f64 = 3600.0;
+pub const MAX_INDEX_AGE_SECS: f64 = 3600.0;
 const MIN_LINES_FOR_OUTLINE: usize = 200;
 const MIN_QUERY_WORDS: usize = 3;
 

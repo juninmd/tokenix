@@ -44,6 +44,8 @@ enum Commands {
         model: String,
         #[arg(short, long, help = "Force reindex all files")]
         force: bool,
+        #[arg(long, help = "Skip if index is fresh (used by session hooks)")]
+        if_stale: bool,
     },
     /// Semantic search over the indexed repository
     Query {
@@ -126,7 +128,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Index { path, model, force } => cmd_index(&path, &model, force),
+        Commands::Index { path, model, force, if_stale } => cmd_index(&path, &model, force, if_stale),
         Commands::Query {
             text,
             budget,
@@ -150,8 +152,17 @@ fn main() -> Result<()> {
     }
 }
 
-fn cmd_index(path: &PathBuf, model: &str, force: bool) -> Result<()> {
+fn cmd_index(path: &PathBuf, model: &str, force: bool, if_stale: bool) -> Result<()> {
     let repo_root = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+    if if_stale && !force {
+        let age = store::get_index_age(&repo_root);
+        let stale = age.map(|a| a > hook::MAX_INDEX_AGE_SECS).unwrap_or(true);
+        if !stale {
+            return Ok(());
+        }
+    }
+
     println!(
         "{} indexing {}",
         "tokenix".bold(),
