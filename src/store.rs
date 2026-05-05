@@ -1,18 +1,70 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DB_FILE: &str = ".tokenix/index.db";
-const LOG_FILE: &str = ".tokenix/hook.log";
+// ---------------------------------------------------------------------------
+// Global storage: ~/.tokenix/{project_id}.{db,log}
+// ---------------------------------------------------------------------------
+
+fn global_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".tokenix"))
+}
+
+/// 16-char hex identifier derived from the canonical project root path.
+pub fn project_id(root: &Path) -> String {
+    let s = root.to_string_lossy();
+    let mut h = sha2::Sha256::new();
+    h.update(s.as_bytes());
+    hex::encode(&h.finalize()[..8])
+}
+
+/// Walk up from `start` looking for VCS/project-root markers.
+/// Falls back to `start` itself if nothing is found.
+pub fn find_project_root(start: &Path) -> PathBuf {
+    let abs = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+    let mut current = abs.as_path();
+    let markers: &[&str] = &[
+        ".git",
+        "Cargo.toml",
+        "package.json",
+        "pyproject.toml",
+        ".hg",
+    ];
+    loop {
+        if markers.iter().any(|m| current.join(m).exists()) {
+            return current.to_path_buf();
+        }
+        match current.parent() {
+            Some(p) => current = p,
+            None => return abs,
+        }
+    }
+}
 
 pub fn db_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(DB_FILE)
+    global_dir()
+        .map(|d| d.join(format!("{}.db", project_id(repo_root))))
+        .unwrap_or_else(|| repo_root.join(".tokenix/index.db"))
 }
 
 pub fn log_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(LOG_FILE)
+    global_dir()
+        .map(|d| d.join(format!("{}.log", project_id(repo_root))))
+        .unwrap_or_else(|| repo_root.join(".tokenix/hook.log"))
+}
+
+/// Persist a human-readable name (the absolute project path) alongside the DB.
+pub fn write_project_name(repo_root: &Path) -> Result<()> {
+    if let Some(dir) = global_dir() {
+        std::fs::create_dir_all(&dir)?;
+        let name_file = dir.join(format!("{}.name", project_id(repo_root)));
+        std::fs::write(name_file, repo_root.to_string_lossy().as_bytes())?;
+    }
+    Ok(())
 }
 
 pub fn open_db(repo_root: &Path, create: bool) -> Result<Option<Connection>> {
@@ -239,6 +291,26 @@ pub fn search_by_symbol(conn: &Connection, pattern: &str) -> Result<Vec<SymbolMa
     Ok(results)
 }
 
+/// Load all known file records into a HashMap for fast skip-detection during parallel indexing.
+pub fn load_all_file_info(conn: &Connection) -> Result<HashMap<String, (i64, f64, String)>> {
+    let mut stmt = conn.prepare("SELECT id, path, mtime, content_hash FROM files")?;
+    let mut map = HashMap::new();
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, f64>(2)?,
+            r.get::<_, String>(3)?,
+        ))
+    })?;
+    for row in rows.filter_map(|r| r.ok()) {
+        let (id, path, mtime, hash) = row;
+        map.insert(path, (id, mtime, hash));
+    }
+    Ok(map)
+}
+
+#[allow(dead_code)]
 pub fn get_file_info(conn: &Connection, path: &str) -> Result<Option<(i64, f64, String)>> {
     let mut stmt = conn.prepare("SELECT id, mtime, content_hash FROM files WHERE path=?1")?;
     let res = stmt.query_row(params![path], |r| {

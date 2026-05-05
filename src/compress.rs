@@ -331,16 +331,7 @@ fn group_repeated_lines(s: &str) -> String {
 
 fn find_repo_root() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut current = cwd.as_path();
-    loop {
-        if current.join(".tokenix").exists() {
-            return current.to_path_buf();
-        }
-        match current.parent() {
-            Some(p) => current = p,
-            None => return cwd,
-        }
-    }
+    crate::store::find_project_root(&cwd)
 }
 
 fn now_ts() -> f64 {

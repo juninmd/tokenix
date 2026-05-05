@@ -111,16 +111,7 @@ enum Commands {
 
 fn find_repo_root(start: &PathBuf) -> PathBuf {
     let abs = start.canonicalize().unwrap_or_else(|_| start.clone());
-    let mut current = abs.as_path();
-    loop {
-        if current.join(".tokenix").exists() {
-            return current.to_path_buf();
-        }
-        match current.parent() {
-            Some(p) => current = p,
-            None => return abs,
-        }
-    }
+    store::find_project_root(&abs)
 }
 
 /// Returns the tokenix binary path, normalized for use in config files.
@@ -463,7 +454,7 @@ tokenix read src/auth/middleware.rs --symbol validate_token
 Use `tokenix gain --history` to inspect estimated savings from hook events.
 
 tokenix binary: `{tokenix_bin}`
-Index location: `.tokenix/index.db` (auto-generated, gitignored)
+Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
 
 "#
     );
@@ -730,11 +721,11 @@ fn cmd_stats(path: &PathBuf) -> Result<()> {
         .map(|a| format!("{}s ago", a as i64))
         .unwrap_or_else(|| "unknown".to_string());
 
-    println!(
-        "\n{} {}",
-        "Index:".bold(),
-        repo_root.join(".tokenix/index.db").display()
-    );
+    let db = store::db_path(&repo_root);
+    let id = store::project_id(&repo_root);
+    println!("\n{} {}", "Project:".bold(), repo_root.display());
+    println!("  ID:     {}", id);
+    println!("  Index:  {}", db.display());
     println!("  Files:  {}", stats.files);
     println!("  Chunks: {}", stats.chunks);
     println!("  Tokens: {}", format_num(stats.total_tokens));
