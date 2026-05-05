@@ -267,6 +267,12 @@ pub struct HookEvent {
     pub actual_tokens: i64,
     pub original_estimate: i64,
     pub input_preview: String,
+    #[serde(default = "default_phase")]
+    pub phase: String,
+}
+
+fn default_phase() -> String {
+    "pre".to_string()
 }
 
 pub fn log_hook_event(repo_root: &Path, event: &HookEvent) -> Result<()> {

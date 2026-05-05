@@ -14,6 +14,7 @@ pub struct GainStats {
     pub pct_saved: f64,
     pub cost_saved_usd: f64,
     pub by_tool: Vec<(String, usize, i64)>,
+    pub by_phase: Vec<(String, usize, i64)>,
 }
 
 pub fn compute_gain(repo_root: &Path) -> GainStats {
@@ -47,6 +48,19 @@ pub fn compute_gain(repo_root: &Path) -> GainStats {
         .map(|(k, (c, s))| (k, c, s))
         .collect();
 
+    let mut by_phase_map: std::collections::HashMap<String, (usize, i64)> =
+        std::collections::HashMap::new();
+    for e in &intercepted_events {
+        let entry = by_phase_map.entry(e.phase.clone()).or_default();
+        entry.0 += 1;
+        entry.1 += e.saved_tokens;
+    }
+    let mut by_phase: Vec<(String, usize, i64)> = by_phase_map
+        .into_iter()
+        .map(|(k, (c, s))| (k, c, s))
+        .collect();
+    by_phase.sort_by(|a, b| a.0.cmp(&b.0));
+
     GainStats {
         total_calls: events.len(),
         intercepted: intercepted_events.len(),
@@ -57,5 +71,6 @@ pub fn compute_gain(repo_root: &Path) -> GainStats {
         pct_saved,
         cost_saved_usd,
         by_tool,
+        by_phase,
     }
 }

@@ -1,4 +1,5 @@
 mod chunker;
+mod compress;
 mod embed;
 mod gain;
 mod hook;
@@ -104,6 +105,8 @@ enum Commands {
     },
     /// Hook handler called by AI tools (not for direct use)
     Hook,
+    /// PostToolUse hook handler for output compression (not for direct use)
+    HookPost,
 }
 
 fn find_repo_root(start: &PathBuf) -> PathBuf {
@@ -152,6 +155,7 @@ fn main() -> Result<()> {
         Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),
         Commands::Stats { path } => cmd_stats(&path),
         Commands::Hook => hook::run_hook(),
+        Commands::HookPost => compress::run_hook_post(),
     }
 }
 
@@ -305,6 +309,18 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
         }
     }
 
+    if stats.by_phase.len() > 1 {
+        println!("\n{}", "By phase:".bold());
+        for (phase, count, saved) in &stats.by_phase {
+            let label = match phase.as_str() {
+                "pre" => "PreToolUse  (Read/Grep intercepts)",
+                "post" => "PostToolUse (Bash/ListDirectory compression)",
+                _ => phase.as_str(),
+            };
+            println!("  {}: {} calls, {} tokens saved", label, count, format_num(*saved));
+        }
+    }
+
     if history {
         let events = store::read_hook_log(&repo_root);
         let total = events.len();
@@ -345,7 +361,7 @@ fn install_claude_code(local: bool) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let tokenix_cmd = tokenix_bin_path()? + " hook";
+    let tokenix_bin = tokenix_bin_path()?;
 
     let mut settings: serde_json::Value = if settings_path.exists() {
         let raw = std::fs::read_to_string(&settings_path)?;
@@ -354,28 +370,49 @@ fn install_claude_code(local: bool) -> Result<()> {
         serde_json::json!({})
     };
 
-    let already = settings["hooks"]["PreToolUse"]
+    let pre_already = settings["hooks"]["PreToolUse"]
         .as_array()
         .map(|arr| arr.iter().any(|h| h.to_string().contains("tokenix")))
         .unwrap_or(false);
 
-    if already {
-        println!("{} Claude Code hook already installed.", "~".yellow());
+    let post_already = settings["hooks"]["PostToolUse"]
+        .as_array()
+        .map(|arr| arr.iter().any(|h| h.to_string().contains("tokenix")))
+        .unwrap_or(false);
+
+    if pre_already && post_already {
+        println!("{} Claude Code hooks already installed.", "~".yellow());
         return Ok(());
     }
 
-    let new_hook = serde_json::json!({
-        "matcher": "Read|Grep",
-        "hooks": [{"type": "command", "command": tokenix_cmd}]
-    });
+    if !pre_already {
+        let hook = serde_json::json!({
+            "matcher": "Read|Grep",
+            "hooks": [{"type": "command", "command": format!("{} hook", tokenix_bin)}]
+        });
+        if settings["hooks"]["PreToolUse"].is_array() {
+            settings["hooks"]["PreToolUse"]
+                .as_array_mut()
+                .unwrap()
+                .push(hook);
+        } else {
+            settings["hooks"]["PreToolUse"] = serde_json::json!([hook]);
+        }
+    }
 
-    if settings["hooks"]["PreToolUse"].is_array() {
-        settings["hooks"]["PreToolUse"]
-            .as_array_mut()
-            .unwrap()
-            .push(new_hook);
-    } else {
-        settings["hooks"]["PreToolUse"] = serde_json::json!([new_hook]);
+    if !post_already {
+        let hook = serde_json::json!({
+            "matcher": "Bash|ListDirectory",
+            "hooks": [{"type": "command", "command": format!("{} hook-post", tokenix_bin)}]
+        });
+        if settings["hooks"]["PostToolUse"].is_array() {
+            settings["hooks"]["PostToolUse"]
+                .as_array_mut()
+                .unwrap()
+                .push(hook);
+        } else {
+            settings["hooks"]["PostToolUse"] = serde_json::json!([hook]);
+        }
     }
 
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
@@ -384,7 +421,8 @@ fn install_claude_code(local: bool) -> Result<()> {
         "ok".green(),
         settings_path.display()
     );
-    println!("  Command: {}", tokenix_cmd);
+    println!("  PreToolUse:  {} hook", tokenix_bin);
+    println!("  PostToolUse: {} hook-post", tokenix_bin);
     Ok(())
 }
 
@@ -616,9 +654,12 @@ fn remove_claude_code(local: bool) -> Result<()> {
     if let Some(arr) = settings["hooks"]["PreToolUse"].as_array_mut() {
         arr.retain(|h| !h.to_string().contains("tokenix"));
     }
+    if let Some(arr) = settings["hooks"]["PostToolUse"].as_array_mut() {
+        arr.retain(|h| !h.to_string().contains("tokenix"));
+    }
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
     println!(
-        "{} Claude Code hook removed from {}",
+        "{} Claude Code hooks removed from {}",
         "ok".green(),
         settings_path.display()
     );
