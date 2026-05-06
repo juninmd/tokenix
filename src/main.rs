@@ -13,7 +13,6 @@ use colored::Colorize;
 use std::path::PathBuf;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const OLLAMA_URL: &str = "http://localhost:11434";
 
 #[derive(Parser)]
 #[command(name = "tokenix", version = VERSION, about = "Local semantic index for LLM token optimization")]
@@ -40,8 +39,6 @@ enum Commands {
     Index {
         #[arg(default_value = ".")]
         path: PathBuf,
-        #[arg(short, long, default_value = "nomic-embed-text")]
-        model: String,
         #[arg(short, long, help = "Force reindex all files")]
         force: bool,
         #[arg(long, help = "Skip if index is fresh (used by session hooks)")]
@@ -54,8 +51,6 @@ enum Commands {
         budget: usize,
         #[arg(long, default_value_t = 20)]
         k: usize,
-        #[arg(short, long, default_value = "nomic-embed-text")]
-        model: String,
         #[arg(short, long, help = "Filter to specific file path")]
         file: Option<String>,
         #[arg(short, long, default_value = ".")]
@@ -128,15 +123,14 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Index { path, model, force, if_stale } => cmd_index(&path, &model, force, if_stale),
+        Commands::Index { path, force, if_stale } => cmd_index(&path, force, if_stale),
         Commands::Query {
             text,
             budget,
             k,
-            model,
             file,
             path,
-        } => cmd_query(&text, budget, k, &model, file.as_deref(), &path),
+        } => cmd_query(&text, budget, k, file.as_deref(), &path),
         Commands::Read {
             file,
             symbol,
@@ -152,7 +146,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn cmd_index(path: &PathBuf, model: &str, force: bool, if_stale: bool) -> Result<()> {
+fn cmd_index(path: &PathBuf, force: bool, if_stale: bool) -> Result<()> {
     let repo_root = path.canonicalize().unwrap_or_else(|_| path.clone());
 
     if if_stale && !force {
@@ -169,10 +163,8 @@ fn cmd_index(path: &PathBuf, model: &str, force: bool, if_stale: bool) -> Result
         repo_root.display().to_string().cyan()
     );
 
-    embed::check_ollama(model, OLLAMA_URL)?;
-
     let start = std::time::Instant::now();
-    let (result, stats) = indexer::index_repo(&repo_root, model, force, |msg| {
+    let (result, stats) = indexer::index_repo(&repo_root, force, |msg| {
         println!("  {}", msg);
     })?;
 
@@ -197,12 +189,11 @@ fn cmd_query(
     text: &str,
     budget: usize,
     k: usize,
-    model: &str,
     file: Option<&str>,
     path: &PathBuf,
 ) -> Result<()> {
     let repo_root = find_repo_root(path);
-    let results = query::query_index(&repo_root, text, budget, k, model, file)?
+    let results = query::query_index(&repo_root, text, budget, k, file)?
         .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))?;
     println!("{}", query::format_results(&results, text));
     Ok(())

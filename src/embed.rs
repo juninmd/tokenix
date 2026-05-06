@@ -1,87 +1,98 @@
 use anyhow::{anyhow, Result};
-use serde::{Deserialize, Serialize};
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use once_cell::sync::OnceCell;
+use std::path::PathBuf;
 
-#[derive(Serialize)]
-struct EmbedRequest<'a> {
-    model: &'a str,
-    input: &'a [String],
+static MODEL: OnceCell<TextEmbedding> = OnceCell::new();
+
+fn model_cache_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+        .join("tokenix")
+        .join("models")
 }
 
-#[derive(Deserialize)]
-struct EmbedResponse {
-    embeddings: Vec<Vec<f32>>,
+fn model() -> Result<&'static TextEmbedding> {
+    MODEL
+        .get_or_try_init(|| {
+            let cache_dir = model_cache_dir();
+            std::fs::create_dir_all(&cache_dir).ok();
+            TextEmbedding::try_new(
+                InitOptions::new(EmbeddingModel::NomicEmbedTextV15Q)
+                    .with_cache_dir(cache_dir),
+            )
+        })
+        .map_err(|e| anyhow!("Embedding model init failed: {e}"))
 }
 
-const EMBED_TIMEOUT_SECS: u64 = 120;
-pub const MAX_BATCH_SIZE: usize = 64;
-
-/// Embed a batch of texts in a single Ollama request.
-/// Automatically splits batches larger than MAX_BATCH_SIZE.
-pub fn get_embeddings_batch(
-    texts: &[String],
-    model: &str,
-    base_url: &str,
-) -> Result<Vec<Vec<f32>>> {
+/// Embed a batch of document texts for indexing.
+/// Applies the "search_document:" prefix required by nomic-embed-text-v1.5.
+pub fn embed_documents(texts: &[String]) -> Result<Vec<Vec<f32>>> {
     if texts.is_empty() {
         return Ok(vec![]);
     }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(EMBED_TIMEOUT_SECS))
-        .build()?;
-
-    let mut all: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-    for batch in texts.chunks(MAX_BATCH_SIZE) {
-        let resp = client
-            .post(format!("{}/api/embed", base_url))
-            .json(&EmbedRequest {
-                model,
-                input: batch,
-            })
-            .send()?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("Ollama embed error: {}", resp.status()));
-        }
-        let data: EmbedResponse = resp.json()?;
-        if data.embeddings.len() != batch.len() {
-            return Err(anyhow!(
-                "Expected {} embeddings, got {}",
-                batch.len(),
-                data.embeddings.len()
-            ));
-        }
-        all.extend(data.embeddings);
-    }
-    Ok(all)
+    let prefixed: Vec<String> = texts
+        .iter()
+        .map(|t| format!("search_document: {t}"))
+        .collect();
+    model()?
+        .embed(prefixed, None)
+        .map_err(|e| anyhow!("{e}"))
 }
 
-/// Single embedding (thin wrapper around batch for backward compat).
-pub fn get_embedding(text: &str, model: &str, base_url: &str) -> Result<Vec<f32>> {
-    get_embeddings_batch(&[text.to_string()], model, base_url)?
+/// Embed a single query string for semantic search.
+/// Applies the "search_query:" prefix required by nomic-embed-text-v1.5.
+pub fn embed_query(text: &str) -> Result<Vec<f32>> {
+    let prefixed = format!("search_query: {text}");
+    model()?
+        .embed(vec![prefixed], None)
+        .map_err(|e| anyhow!("{e}"))?
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("Empty embeddings response"))
+        .ok_or_else(|| anyhow!("Empty embedding response"))
 }
 
-pub fn check_ollama(model: &str, base_url: &str) -> Result<()> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()?;
-    let resp = client.get(format!("{}/api/tags", base_url)).send()?;
-    if !resp.status().is_success() {
-        return Err(anyhow!("Ollama not responding: {}", resp.status()));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the fastembed model loads and returns 768-dim vectors.
+    /// Downloads ~130MB on first run; cached in %LOCALAPPDATA%\tokenix\models.
+    #[test]
+    fn embed_query_returns_768_dims() {
+        let vec = embed_query("hello world").expect("embed_query failed");
+        assert_eq!(vec.len(), 768, "nomic-embed-text-v1.5 produces 768-dim vectors");
     }
-    let data: serde_json::Value = resp.json()?;
-    let models = data["models"].as_array().cloned().unwrap_or_default();
-    let model_base = model.split(':').next().unwrap_or(model);
-    let found = models
-        .iter()
-        .any(|m| m["name"].as_str().unwrap_or("").contains(model_base));
-    if !found {
-        return Err(anyhow!(
-            "Model '{}' not found in Ollama. Run: ollama pull {}",
-            model,
-            model
-        ));
+
+    #[test]
+    fn embed_documents_empty_returns_empty() {
+        let result = embed_documents(&[]).expect("empty embed should succeed");
+        assert!(result.is_empty());
     }
-    Ok(())
+
+    #[test]
+    fn embed_documents_returns_correct_count() {
+        let texts = vec!["fn main() {}".to_string(), "struct Foo { x: i32 }".to_string()];
+        let vecs = embed_documents(&texts).expect("embed_documents failed");
+        assert_eq!(vecs.len(), 2);
+        for v in &vecs {
+            assert_eq!(v.len(), 768);
+        }
+    }
+
+    #[test]
+    fn similar_texts_have_higher_cosine_similarity() {
+        let q = embed_query("database connection pool").unwrap();
+        let doc_similar = embed_documents(&["database connection pooling strategy".to_string()]).unwrap();
+        let doc_different = embed_documents(&["sorting algorithms bubble sort".to_string()]).unwrap();
+
+        let dot = |a: &[f32], b: &[f32]| -> f32 { a.iter().zip(b).map(|(x, y)| x * y).sum() };
+        let norm = |a: &[f32]| -> f32 { a.iter().map(|x| x * x).sum::<f32>().sqrt() };
+        let cosine = |a: &[f32], b: &[f32]| dot(a, b) / (norm(a) * norm(b));
+
+        let sim_similar = cosine(&q, &doc_similar[0]);
+        let sim_different = cosine(&q, &doc_different[0]);
+        assert!(sim_similar > sim_different,
+            "similar={sim_similar:.3} should > different={sim_different:.3}");
+    }
 }

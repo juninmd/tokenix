@@ -224,7 +224,7 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         return (false, String::new());
     }
 
-    let results = match query_index(repo_root, pattern, 2500, 20, "nomic-embed-text", None) {
+    let results = match query_index(repo_root, pattern, 2500, 20, None) {
         Ok(Some(r)) if !r.is_empty() => r,
         _ => return (false, String::new()),
     };
@@ -344,7 +344,7 @@ pub fn run_hook() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::HookInput;
+    use super::*;
 
     #[test]
     fn parses_claude_input() {
@@ -360,5 +360,58 @@ mod tests {
         let input = HookInput::from_stdin(raw).unwrap();
         assert_eq!(input.tool_name, "Read");
         assert_eq!(input.tool_input["file_path"], "src/main.rs");
+    }
+
+    #[test]
+    fn empty_stdin_returns_none() {
+        assert!(HookInput::from_stdin("").is_none());
+        assert!(HookInput::from_stdin("   ").is_none());
+    }
+
+    #[test]
+    fn bom_prefix_stripped() {
+        let raw = "\u{feff}{\"tool_name\":\"Grep\",\"tool_input\":{\"pattern\":\"how does auth work\"}}";
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Grep");
+    }
+
+    #[test]
+    fn unknown_tool_parses_as_is() {
+        let raw = r#"{"tool_name":"Edit","tool_input":{"file_path":"x.rs"}}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Edit");
+    }
+
+    #[test]
+    fn is_semantic_query_requires_3_words() {
+        assert!(!is_semantic_query("fn main"));
+        assert!(!is_semantic_query("embed_query"));
+        assert!(is_semantic_query("how does embedding work"));
+        assert!(is_semantic_query("database connection pool"));
+    }
+
+    #[test]
+    fn looks_like_identifier_rules() {
+        assert!(looks_like_identifier("embed_query"));
+        assert!(looks_like_identifier("MyStruct::new"));
+        assert!(!looks_like_identifier("a")); // too short
+        assert!(!looks_like_identifier("foo bar")); // has space
+        assert!(!looks_like_identifier("fn.*main")); // regex meta
+    }
+
+    #[test]
+    fn copilot_grep_normalized() {
+        let raw = r#"{"toolName":"grep","toolArgs":{"pattern":"how does auth work"}}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Grep");
+        assert_eq!(input.tool_input["pattern"], "how does auth work");
+    }
+
+    #[test]
+    fn copilot_read_with_path_key() {
+        let raw = r#"{"toolName":"view","toolArgs":{"path":"src/lib.rs"}}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Read");
+        assert_eq!(input.tool_input["file_path"], "src/lib.rs");
     }
 }

@@ -3,17 +3,14 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::chunker::count_tokens;
-use crate::embed::get_embedding;
+use crate::embed::embed_query;
 use crate::store::{open_db, search_similar, SearchResult};
-
-const OLLAMA_URL: &str = "http://localhost:11434";
 
 pub fn query_index(
     repo_root: &Path,
     query_text: &str,
     budget: usize,
     k: usize,
-    model: &str,
     file_filter: Option<&str>,
 ) -> Result<Option<Vec<SearchResult>>> {
     let conn = match open_db(repo_root, false)? {
@@ -21,7 +18,7 @@ pub fn query_index(
         None => return Ok(None),
     };
 
-    let vec = get_embedding(query_text, model, OLLAMA_URL)?;
+    let vec = embed_query(query_text)?;
     let mut results = search_similar(&conn, &vec, k)?;
 
     if let Some(filter) = file_filter {
@@ -90,4 +87,60 @@ pub fn get_file_outline(file_path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(file_path).ok()?;
     let path_str = file_path.to_string_lossy().replace('\\', "/");
     Some(crate::chunker::generate_outline(&content, &path_str))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::SearchResult;
+
+    fn make_result(path: &str, start: usize, end: usize, symbol: &str, content: &str) -> SearchResult {
+        SearchResult {
+            id: 0,
+            path: path.to_string(),
+            start_line: start,
+            end_line: end,
+            symbol: symbol.to_string(),
+            kind: "fn".to_string(),
+            content: content.to_string(),
+            token_count: crate::chunker::count_tokens(content),
+            distance: 0.1,
+        }
+    }
+
+    #[test]
+    fn format_results_empty() {
+        let out = format_results(&[], "test query");
+        assert!(out.contains("No relevant context found"));
+        assert!(out.contains("test query"));
+    }
+
+    #[test]
+    fn format_results_groups_by_file() {
+        let results = vec![
+            make_result("src/auth.rs", 10, 30, "login", "fn login() {}"),
+            make_result("src/auth.rs", 50, 80, "logout", "fn logout() {}"),
+            make_result("src/db.rs", 1, 20, "connect", "fn connect() {}"),
+        ];
+        let out = format_results(&results, "auth flow");
+        assert!(out.contains("### src/auth.rs"));
+        assert!(out.contains("### src/db.rs"));
+        assert!(out.contains("[fn] login"));
+        assert!(out.contains("[fn] logout"));
+        assert!(out.contains("[fn] connect"));
+    }
+
+    #[test]
+    fn format_results_header_includes_chunk_count() {
+        let results = vec![make_result("src/x.rs", 1, 5, "foo", "fn foo() {}")];
+        let out = format_results(&results, "foo function");
+        assert!(out.contains("1 chunks"));
+    }
+
+    #[test]
+    fn format_results_line_range_shown() {
+        let results = vec![make_result("src/x.rs", 42, 60, "", "some code here")];
+        let out = format_results(&results, "q");
+        assert!(out.contains("L42-60"));
+    }
 }

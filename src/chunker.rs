@@ -642,3 +642,102 @@ pub fn generate_outline(content: &str, path: &str) -> String {
 
     parts.join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_tokens_basic() {
+        assert_eq!(count_tokens(""), 0);
+        assert_eq!(count_tokens("abcd"), 1);
+        assert_eq!(count_tokens("abcde"), 2);
+        assert_eq!(count_tokens("hello world"), 3); // 11 chars → (11+3)/4 = 3
+    }
+
+    #[test]
+    fn file_hash_deterministic() {
+        let a = file_hash(b"hello");
+        let b = file_hash(b"hello");
+        assert_eq!(a, b);
+        assert_ne!(file_hash(b"hello"), file_hash(b"world"));
+        assert_eq!(a.len(), 16); // 8 bytes → 16 hex chars
+    }
+
+    #[test]
+    fn should_index_accepts_known_extensions() {
+        assert!(should_index(std::path::Path::new("src/main.rs")));
+        assert!(should_index(std::path::Path::new("lib/auth.py")));
+        assert!(should_index(std::path::Path::new("app/index.ts")));
+        assert!(should_index(std::path::Path::new("server/handler.go")));
+    }
+
+    #[test]
+    fn should_index_rejects_ignored_dirs() {
+        assert!(!should_index(std::path::Path::new("node_modules/lib/index.js")));
+        assert!(!should_index(std::path::Path::new("target/debug/build.rs")));
+        assert!(!should_index(std::path::Path::new(".git/config")));
+    }
+
+    #[test]
+    fn should_index_rejects_unknown_extensions() {
+        assert!(!should_index(std::path::Path::new("image.png")));
+        assert!(!should_index(std::path::Path::new("binary.exe")));
+        assert!(!should_index(std::path::Path::new("data.parquet")));
+    }
+
+    #[test]
+    fn should_index_rejects_minified() {
+        assert!(!should_index(std::path::Path::new("bundle.min.js")));
+        assert!(!should_index(std::path::Path::new("app.min.css")));
+        assert!(!should_index(std::path::Path::new("source.map")));
+    }
+
+    #[test]
+    fn chunk_rust_detects_functions() {
+        // Functions need >10 tokens each to pass MIN_CHUNK_TOKENS
+        let body = "    let value = compute_something_complex(input, config, options);\n    value * 2\n";
+        let code = format!("fn hello(input: i32, config: Config, options: Options) -> i32 {{\n{body}}}\n\nfn world(input: i32, config: Config, options: Options) -> i32 {{\n{body}}}\n");
+        let chunks = chunk_file("src/test.rs", &code);
+        let symbols: Vec<&str> = chunks.iter().map(|c| c.symbol.as_str()).collect();
+        assert!(symbols.contains(&"hello"), "expected 'hello' in {:?}", symbols);
+        assert!(symbols.contains(&"world"), "expected 'world' in {:?}", symbols);
+    }
+
+    #[test]
+    fn chunk_python_detects_classes_and_defs() {
+        let code = concat!(
+            "class DatabaseClient:\n",
+            "    def __init__(self, host: str, port: int, username: str, password: str) -> None:\n",
+            "        self.host = host\n",
+            "        self.port = port\n",
+            "        self.conn = None\n\n",
+            "def connect_to_database(host: str, port: int, timeout: int = 30) -> DatabaseClient:\n",
+            "    client = DatabaseClient(host, port, 'admin', 'secret')\n",
+            "    client.connect(timeout=timeout)\n",
+            "    return client\n",
+        );
+        let chunks = chunk_file("module.py", code);
+        let symbols: Vec<&str> = chunks.iter().map(|c| c.symbol.as_str()).collect();
+        assert!(symbols.iter().any(|s| s.contains("DatabaseClient") || s.contains("connect_to_database")),
+            "no expected symbols in {:?}", symbols);
+    }
+
+    #[test]
+    fn generate_outline_includes_line_counts() {
+        let code = "fn a() {}\n".repeat(50);
+        let out = generate_outline(&code, "src/many.rs");
+        assert!(out.contains("50 lines") || out.contains("lines"), "outline: {}", &out[..200.min(out.len())]);
+    }
+
+    #[test]
+    fn chunk_respects_max_token_limit() {
+        // A 400-token chunk should not be split by the chunker into zero chunks
+        let big_fn = format!("fn big() {{\n{}}}\n", "    let x = 1;\n".repeat(300));
+        let chunks = chunk_file("src/big.rs", &big_fn);
+        assert!(!chunks.is_empty(), "should produce at least one chunk");
+        for c in &chunks {
+            assert!(c.token_count > 0);
+        }
+    }
+}

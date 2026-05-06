@@ -12,6 +12,7 @@
     <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust" alt="Built with Rust" /></a>
     <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platforms" />
     <img src="https://img.shields.io/badge/savings-up%20to%2090%25%20tokens-brightgreen?style=flat-square" alt="Token Savings" />
+    <img src="https://img.shields.io/badge/no%20Ollama-required-blue?style=flat-square" alt="No Ollama required" />
   </p>
 
   <p>
@@ -26,7 +27,7 @@
 
 ---
 
-> **tokenix** is a Rust CLI that builds a local semantic index of your codebase and intercepts AI assistant file reads — replacing 800-line file dumps with compact, structured outlines. Works with Claude Code, GitHub Copilot, and OpenAI Codex CLI.
+> **tokenix** is a Rust CLI that builds a local semantic index of your codebase and intercepts AI assistant file reads — replacing 800-line file dumps with compact, structured outlines. Works with Claude Code, GitHub Copilot, and OpenAI Codex CLI. **No Ollama or external server required.**
 
 ```
 Without tokenix:  Read(src/auth/middleware.rs) → 800 lines → ~2,400 tokens  ❌
@@ -65,11 +66,9 @@ cd tokenix
 cargo install --path .
 ```
 
-> **Requirements:** [Rust](https://www.rust-lang.org/tools/install) `>= 1.75` · [Ollama](https://ollama.com/download) running locally
+> **Requirements:** [Rust](https://www.rust-lang.org/tools/install) `>= 1.75` — that's all. No Ollama, no Python, no external services.
 
-```bash
-ollama pull nomic-embed-text   # one-time model download
-```
+The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatically on first use and cached locally.
 
 ---
 
@@ -85,7 +84,7 @@ ollama pull nomic-embed-text   # one-time model download
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `3000`) |
 | **Savings analytics** | `tokenix gain` shows real estimated savings from hook events |
-| **Local-first** | SQLite + local Ollama embeddings — no data leaves your machine |
+| **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
 
@@ -107,8 +106,8 @@ ollama pull nomic-embed-text   # one-time model download
 flowchart LR
     A[Your repo] -->|tokenix index .| B[File walker]
     B -->|Symbol-aware chunker| C[Chunks\nRust · TS · Py · Go · JS]
-    C -->|get_embedding| D[Ollama\nnomic-embed-text]
-    D -->|float32 vectors| E[(".tokenix/index.db\nSQLite")]
+    C -->|fastembed ONNX\nnomic-embed-text-v1.5-Q| D[float32 vectors\nin-process]
+    D -->|stored| E[~/.tokenix/index.db\nSQLite per project]
 ```
 
 ### Hook interception flow
@@ -134,7 +133,7 @@ flowchart TD
     I --> R
 ```
 
-1. **`tokenix index .`** — walks your repo, chunks files, generates embeddings via Ollama, stores in `.tokenix/index.db`
+1. **`tokenix index .`** — walks your repo, chunks files, generates embeddings via fastembed (ONNX, in-process), stores in `~/.tokenix/<project>.db`
 2. **`tokenix query "..."`** — embeds your query and returns the most relevant chunks within a token budget
 3. **`tokenix read FILE`** — returns a symbol outline for large files, full content for small ones
 4. **`tokenix install-hook`** — configures your AI tool to use tokenix automatically
@@ -149,25 +148,48 @@ flowchart TD
 
 | File | Lines | Without tokenix | With tokenix | Saved |
 |---|---|---|---|---|
-| `src/main.rs` | 723 | 5,412 tok | 412 tok | **92.4%** |
-| `src/chunker.rs` | 578 | 4,292 tok | 245 tok | **94.3%** |
-| `src/hook.rs` | 332 | 2,472 tok | 274 tok | **88.9%** |
-| `src/store.rs` | 297 | 2,192 tok | 512 tok | **76.6%** |
-| `samples/api_handler.go` | 322 | 2,266 tok | 649 tok | **71.4%** |
-| `samples/auth_middleware.py` | 284 | 2,385 tok | 643 tok | **73.0%** |
-| `samples/database_client.ts` | 358 | 2,805 tok | 332 tok | **88.2%** |
-| `samples/user_service.rs` | 377 | 3,135 tok | 235 tok | **92.5%** |
-| **TOTAL** | | **24,959 tok** | **3,302 tok** | **86.8%** |
+| `src/main.rs` | 757 | 5,793 tok | 459 tok | **92.1%** |
+| `src/chunker.rs` | 744 | 5,936 tok | 180 tok | **97.0%** |
+| `src/hook.rs` | 418 | 3,242 tok | 352 tok | **89.1%** |
+| `src/store.rs` | 408 | 3,118 tok | 781 tok | **75.0%** |
+| `samples/api_handler.go` | 322 | 2,266 tok | 672 tok | **70.3%** |
+| `samples/auth_middleware.py` | 284 | 2,385 tok | 687 tok | **71.2%** |
+| `samples/database_client.ts` | 358 | 2,805 tok | 335 tok | **88.1%** |
+| `samples/user_service.rs` | 377 | 3,135 tok | 304 tok | **90.3%** |
+| **TOTAL** | | **28,680 tok** | **3,770 tok** | **86.9%** |
+
+### Hook latency (wall clock, warm ONNX model)
+
+| Operation | Without tokenix | With tokenix | Notes |
+|---|---|---|---|
+| Read passthrough (small file) | ~1ms | ~33ms | ONNX startup; passes through unchanged |
+| Read intercept (>200 lines) | ~5ms | ~27ms | Returns symbol outline instead of full file |
+| Grep passthrough (<3 words) | ~1ms | ~24ms | Regex/symbol patterns pass through |
+| Grep intercept (semantic) | ~1ms¹ | ~558ms | Semantic search replaces grep |
+
+¹ Without tokenix the grep runs but may return 0-N results with no token savings.
+
+### Latency comparison: fastembed vs Ollama
+
+| Scenario | Ollama (warm) | Ollama (cold start) | fastembed ONNX |
+|---|---|---|---|
+| Grep intercept | ~394ms | ~1,413ms | **~430ms** |
+| Grep passthrough | ~55ms | ~55ms | **~62ms** |
+| Read intercept | ~55ms | ~55ms | **~94ms** |
+| Requires external server | Yes | Yes | **No** |
+| Requires model download | 274 MB | 274 MB | **130 MB** (auto) |
+
+fastembed is **58% faster on cold start** (no server startup) and requires no external process.
 
 ### Cost at scale — Claude Sonnet 4.6 ($3.00 / M input tokens)
 
 | Scenario | Tokens saved | Cost saved |
 |---|---|---|
-| 8 file reads (benchmark above) | 21,657 | $0.065 |
-| 100 reads / session | ~270,000 | **$0.81** |
-| 200 reads / day | ~540,000 | **$1.62** |
-| 22 working days / month | ~11.9 M | **$35.64 / dev** |
-| Team of 5 | — | **~$178 / month** |
+| 8 file reads (benchmark above) | 23,502 | $0.071 |
+| 100 reads / session | ~290,000 | **$0.87** |
+| 200 reads / day | ~580,000 | **$1.74** |
+| 22 working days / month | ~12.8 M | **$38.34 / dev** |
+| Team of 5 | — | **~$192 / month** |
 
 ### Reproduce it
 
@@ -192,11 +214,12 @@ tokenix index .
 
 ```
 tokenix indexing /home/user/my-project
-  [1/42] src/main.rs
-  [2/42] src/auth/middleware.rs
-  ...
-Done in 38.2s  ·  42 files  ·  318 chunks  ·  87,412 tokens stored
+  discovered 42 file(s) — chunking
+  embedding 318 chunks via fastembed (ONNX)...
+Done in 42.3s  ·  42 files indexed  ·  318 chunks  ·  87,412 tokens stored
 ```
+
+> **First run:** the model (~130 MB) is downloaded automatically. Subsequent runs use the local cache.
 
 ### 2. Semantic search
 
@@ -296,8 +319,8 @@ tokenix install-hook --tool all
 
 | Flag | Default | Description |
 |---|---|---|
-| `--model`, `-m` | `nomic-embed-text` | Ollama embedding model |
 | `--force`, `-f` | false | Reindex all files, ignoring cache |
+| `--if-stale` | false | Skip if index is fresh (used by session hooks) |
 
 **`tokenix query`**
 
@@ -306,7 +329,6 @@ tokenix install-hook --tool all
 | `--budget`, `-b` | 3000 | Max approximate tokens to return |
 | `--k` | 20 | Candidate chunks before budget filtering |
 | `--file`, `-f` | — | Filter results to a specific file |
-| `--model`, `-m` | `nomic-embed-text` | Ollama embedding model |
 | `--path`, `-p` | `.` | Repository/index path |
 
 **`tokenix install-hook` / `tokenix remove-hook`**
@@ -339,15 +361,27 @@ tokenix install-hook --tool all
 src/
 ├── main.rs       CLI entry (clap), command dispatch, install helpers
 ├── chunker.rs    Symbol-aware heuristic chunking + outline generation
-├── embed.rs      Ollama HTTP client: get_embedding(), check_ollama()
+├── embed.rs      fastembed ONNX: embed_documents(), embed_query() — no server needed
 ├── store.rs      SQLite schema, CRUD, cosine similarity, hook log NDJSON
-├── indexer.rs    File walker + incremental index pipeline
+├── indexer.rs    File walker + incremental index pipeline (parallel chunking + batch embedding)
 ├── query.rs      Ranking, token-budget selection, result formatting
 ├── hook.rs       Hook handler for Claude-style and Copilot-style JSON input
+├── compress.rs   PostToolUse compression (Bash/ListDirectory output)
 └── gain.rs       Analytics from .tokenix/hook.log
 ```
 
-Storage lives at `.tokenix/index.db`. Embeddings are stored as raw `float32` blobs. Cosine similarity is computed in Rust — no external vector database needed.
+Storage lives at `~/.tokenix/<project-id>.db` (global, one DB per project). Embeddings are stored as raw `float32` blobs. Cosine similarity is computed in Rust — no external vector database needed.
+
+### Embedding model
+
+| Property | Value |
+|---|---|
+| Model | `nomic-embed-text-v1.5` (quantized int8) |
+| Dimensions | 768 |
+| File size | ~130 MB |
+| Cache location | `%LOCALAPPDATA%\tokenix\models` (Windows) / `~/.cache/tokenix/models` (Linux/macOS) |
+| Download | Automatic on first run |
+| Runtime | fastembed (ONNX Runtime, in-process) |
 
 ---
 
@@ -361,4 +395,4 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get
 
 [MIT](LICENSE)
 
-<!-- GitHub Topics: rust cli llm token-optimization semantic-search embeddings ollama claude-code copilot ai-tools code-assistant developer-tools -->
+<!-- GitHub Topics: rust cli llm token-optimization semantic-search embeddings fastembed onnx claude-code copilot ai-tools code-assistant developer-tools no-ollama -->

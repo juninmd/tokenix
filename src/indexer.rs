@@ -8,13 +8,11 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunker::{chunk_file, file_hash, should_index, Chunk, IGNORED_DIRS};
-use crate::embed::get_embeddings_batch;
+use crate::embed::embed_documents;
 use crate::store::{
     count_stats, delete_chunks_for_file, init_schema, insert_chunk, insert_embedding,
     load_all_file_info, open_db, upsert_file, write_project_name, IndexStats,
 };
-
-const OLLAMA_URL: &str = "http://localhost:11434";
 
 #[allow(dead_code)]
 pub struct IndexResult {
@@ -24,11 +22,11 @@ pub struct IndexResult {
     pub errors: usize,
 }
 
-struct ProcessedFile {
+struct ChunkedFile {
     rel: String,
     mtime: f64,
     hash: String,
-    chunks: Vec<(Chunk, Vec<f32>)>,
+    chunks: Vec<Chunk>,
     skipped: bool,
     error: Option<String>,
 }
@@ -42,18 +40,16 @@ fn mtime_of(path: &Path) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn process_file(
+fn chunk_only(
     abs_path: &Path,
     rel: &str,
-    model: &str,
-    ollama_url: &str,
     force: bool,
     existing: &HashMap<String, (i64, f64, String)>,
-) -> ProcessedFile {
+) -> ChunkedFile {
     let raw = match std::fs::read(abs_path) {
         Ok(b) => b,
         Err(e) => {
-            return ProcessedFile {
+            return ChunkedFile {
                 rel: rel.to_string(),
                 mtime: 0.0,
                 hash: String::new(),
@@ -70,7 +66,7 @@ fn process_file(
     if !force {
         if let Some((_id, stored_mtime, stored_hash)) = existing.get(rel) {
             if (stored_mtime - mtime).abs() < 0.01 && stored_hash == &chash {
-                return ProcessedFile {
+                return ChunkedFile {
                     rel: rel.to_string(),
                     mtime,
                     hash: chash,
@@ -83,50 +79,18 @@ fn process_file(
     }
 
     let content = String::from_utf8_lossy(&raw).into_owned();
-    let chunks = chunk_file(rel, &content);
-
-    if chunks.is_empty() {
-        return ProcessedFile {
-            rel: rel.to_string(),
-            mtime,
-            hash: chash,
-            chunks: vec![],
-            skipped: false,
-            error: None,
-        };
-    }
-
-    let embed_texts: Vec<String> = chunks
-        .iter()
-        .map(|c| format!("file:{}\n{}", rel, c.content))
-        .collect();
-
-    match get_embeddings_batch(&embed_texts, model, ollama_url) {
-        Ok(embeddings) => {
-            let paired = chunks.into_iter().zip(embeddings).collect();
-            ProcessedFile {
-                rel: rel.to_string(),
-                mtime,
-                hash: chash,
-                chunks: paired,
-                skipped: false,
-                error: None,
-            }
-        }
-        Err(e) => ProcessedFile {
-            rel: rel.to_string(),
-            mtime,
-            hash: chash,
-            chunks: vec![],
-            skipped: false,
-            error: Some(format!("embed: {}", e)),
-        },
+    ChunkedFile {
+        rel: rel.to_string(),
+        mtime,
+        hash: chash,
+        chunks: chunk_file(rel, &content),
+        skipped: false,
+        error: None,
     }
 }
 
 pub fn index_repo<F>(
     repo_root: &Path,
-    model: &str,
     force: bool,
     mut progress_cb: F,
 ) -> Result<(IndexResult, IndexStats)>
@@ -169,16 +133,12 @@ where
         return Ok((IndexResult { total: 0, indexed: 0, skipped: 0, errors: 0 }, stats));
     }
 
-    // Pre-load existing file metadata for skip detection (read-only, shared across threads)
     let existing: Arc<HashMap<String, (i64, f64, String)>> =
         Arc::new(load_all_file_info(&conn)?);
 
-    progress_cb(&format!(
-        "discovered {} file(s) — embedding with batch size {}",
-        total,
-        crate::embed::MAX_BATCH_SIZE
-    ));
+    progress_cb(&format!("discovered {} file(s) — chunking", total));
 
+    // Phase 1: parallel file read + chunk (no embedding)
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
         ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} {msg}")
@@ -186,11 +146,10 @@ where
             .progress_chars("=>-"),
     );
 
-    // Parallel: read → chunk → batch-embed (one Ollama call per file)
-    let results: Vec<ProcessedFile> = files
+    let chunked: Vec<ChunkedFile> = files
         .par_iter()
         .map(|(abs, rel)| {
-            let r = process_file(abs, rel, model, OLLAMA_URL, force, &existing);
+            let r = chunk_only(abs, rel, force, &existing);
             pb.set_message(rel.to_string());
             pb.inc(1);
             r
@@ -199,38 +158,79 @@ where
 
     pb.finish_and_clear();
 
-    // Serial: write to SQLite
+    // Phase 2: collect all texts that need embedding
+    // Track which (file_idx, chunk_idx) each embed slot belongs to
+    let mut embed_texts: Vec<String> = Vec::new();
+    let mut embed_map: Vec<(usize, usize)> = Vec::new(); // (file_idx, chunk_idx)
+
+    for (fi, f) in chunked.iter().enumerate() {
+        if f.skipped || f.error.is_some() || f.chunks.is_empty() {
+            continue;
+        }
+        for (ci, chunk) in f.chunks.iter().enumerate() {
+            embed_texts.push(format!("{}\n{}", f.rel, chunk.content));
+            embed_map.push((fi, ci));
+        }
+    }
+
+    // Phase 3: batch embed all chunks in one call (model loads once)
+    let embeddings = if embed_texts.is_empty() {
+        vec![]
+    } else {
+        progress_cb(&format!("embedding {} chunks via fastembed (ONNX)...", embed_texts.len()));
+        embed_documents(&embed_texts)?
+    };
+
+    // Phase 4: pair embeddings back with files
+    // Build per-file embedding vecs
+    let mut file_embeddings: HashMap<usize, Vec<Vec<f32>>> = HashMap::new();
+    for (slot, (fi, _ci)) in embed_map.iter().enumerate() {
+        file_embeddings
+            .entry(*fi)
+            .or_default()
+            .push(embeddings[slot].clone());
+    }
+
+    // Phase 5: write to SQLite
     let mut indexed = 0usize;
     let mut skipped = 0usize;
     let mut errors = 0usize;
 
-    for result in results {
-        if result.skipped {
+    for (fi, f) in chunked.iter().enumerate() {
+        if f.skipped {
             skipped += 1;
             continue;
         }
-        if let Some(ref e) = result.error {
+        if let Some(ref e) = f.error {
             errors += 1;
-            progress_cb(&format!("ERR {}: {}", result.rel, e));
+            progress_cb(&format!("ERR {}: {}", f.rel, e));
+            continue;
+        }
+        if f.chunks.is_empty() {
             continue;
         }
 
-        let file_id = match upsert_file(&conn, &result.rel, result.mtime, &result.hash) {
+        let file_embs = match file_embeddings.get(&fi) {
+            Some(e) => e,
+            None => continue,
+        };
+
+        let file_id = match upsert_file(&conn, &f.rel, f.mtime, &f.hash) {
             Ok(id) => id,
             Err(e) => {
                 errors += 1;
-                progress_cb(&format!("ERR {}: {}", result.rel, e));
+                progress_cb(&format!("ERR {}: {}", f.rel, e));
                 continue;
             }
         };
 
         let _ = delete_chunks_for_file(&conn, file_id);
 
-        for (chunk, embedding) in &result.chunks {
+        for (chunk, embedding) in f.chunks.iter().zip(file_embs.iter()) {
             let chunk_id = match insert_chunk(
                 &conn,
                 file_id,
-                &result.rel,
+                &f.rel,
                 chunk.start_line,
                 chunk.end_line,
                 &chunk.symbol,
