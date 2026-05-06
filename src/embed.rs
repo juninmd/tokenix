@@ -15,6 +15,13 @@ fn model_cache_dir() -> PathBuf {
 fn model() -> Result<&'static TextEmbedding> {
     MODEL
         .get_or_try_init(|| {
+            // OMP_NUM_THREADS=1: limits OpenMP thread count for non-Windows ORT builds.
+            // On Windows, ORT prebuilt uses OpenMP; this var is set in main() before hook runs.
+            // Set here too as belt-and-suspenders for indexer and query paths.
+            #[allow(unused_unsafe)]
+            if std::env::var("OMP_NUM_THREADS").is_err() {
+                unsafe { std::env::set_var("OMP_NUM_THREADS", "1") };
+            }
             let cache_dir = model_cache_dir();
             std::fs::create_dir_all(&cache_dir).ok();
             TextEmbedding::try_new(

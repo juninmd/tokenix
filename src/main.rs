@@ -141,8 +141,23 @@ fn main() -> Result<()> {
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
         Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),
         Commands::Stats { path } => cmd_stats(&path),
-        Commands::Hook => hook::run_hook(),
-        Commands::HookPost => compress::run_hook_post(),
+        Commands::Hook => {
+            // Hook is a short-lived subprocess: limit thread pools before any init.
+            // OMP_NUM_THREADS controls ONNX Runtime threads on Windows (MS prebuilt uses OpenMP).
+            // RAYON_NUM_THREADS prevents rayon from spawning N_CPU worker threads.
+            // SAFETY: single-threaded here, no other threads spawned yet.
+            #[allow(unused_unsafe)]
+            unsafe {
+                std::env::set_var("OMP_NUM_THREADS", "1");
+                std::env::set_var("RAYON_NUM_THREADS", "1");
+            }
+            hook::run_hook()
+        }
+        Commands::HookPost => {
+            #[allow(unused_unsafe)]
+            unsafe { std::env::set_var("RAYON_NUM_THREADS", "1") };
+            compress::run_hook_post()
+        }
     }
 }
 

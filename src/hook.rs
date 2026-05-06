@@ -208,6 +208,56 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     (true, msg)
 }
 
+/// Returns a path to use as a soft lock file for concurrent embed protection.
+fn embed_lock_path() -> Option<std::path::PathBuf> {
+    Some(
+        dirs::cache_dir()?
+            .join("tokenix")
+            .join("embed.lock"),
+    )
+}
+
+/// Best-effort concurrency guard for the ONNX embed call.
+///
+/// The fastembed model uses ~293 MB per process (130 MB model + ORT runtime).
+/// If Claude Code fires parallel Grep hooks, each would load a separate model instance.
+/// This guard makes concurrent semantic Greps fall through (exit 0) so the original
+/// grep runs instead — limiting peak tokenix memory to one model instance at a time.
+///
+/// Implementation: timestamp file. Not atomically safe, but good enough for the
+/// typical pattern of a few concurrent hooks per second. Stale locks (>30s) are
+/// automatically overridden so a crashed process never permanently blocks the feature.
+fn try_acquire_embed_slot() -> bool {
+    let path = match embed_lock_path() {
+        Some(p) => p,
+        None => return true, // can't determine path → proceed anyway
+    };
+
+    if path.exists() {
+        let stale = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .map(|e| e.as_secs() >= 30)
+            .unwrap_or(true);
+
+        if !stale {
+            return false; // another embed is in progress
+        }
+    }
+
+    // Claim the slot (best-effort write — race window is tiny)
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(&path));
+    let _ = std::fs::write(&path, std::process::id().to_string());
+    true
+}
+
+fn release_embed_slot() {
+    if let Some(path) = embed_lock_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String) {
     let pattern = match tool_input["pattern"].as_str() {
         Some(p) => p,
@@ -224,11 +274,20 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         return (false, String::new());
     }
 
+    // Only one semantic embed at a time — prevents N×293MB peaks from parallel hooks.
+    if !try_acquire_embed_slot() {
+        return (false, String::new());
+    }
+
     let results = match query_index(repo_root, pattern, 2500, 20, None) {
         Ok(Some(r)) if !r.is_empty() => r,
-        _ => return (false, String::new()),
+        _ => {
+            release_embed_slot();
+            return (false, String::new());
+        }
     };
 
+    release_embed_slot();
     (true, format_results(&results, pattern))
 }
 
