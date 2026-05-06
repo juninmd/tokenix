@@ -81,6 +81,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
 | **Hook-based interception** | `PreToolUse` intercepts large reads; `PostToolUse` compresses Bash/ListDirectory output |
 | **Output compression** | Strips ANSI codes, emojis, blank lines, groups repeated lines, compacts JSON |
+| **In-memory daemon** | `tokenix serve` keeps model + index in RAM — warm Grep calls drop from ~430ms to ~80ms |
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `3000`) |
 | **Savings analytics** | `tokenix gain` shows real estimated savings from hook events |
@@ -158,16 +159,18 @@ flowchart TD
 | `samples/user_service.rs` | 377 | 3,135 tok | 304 tok | **90.3%** |
 | **TOTAL** | | **28,680 tok** | **3,770 tok** | **86.9%** |
 
-### Hook latency (wall clock, warm ONNX model)
+### Hook latency (wall clock)
 
-| Operation | Without tokenix | With tokenix | Notes |
-|---|---|---|---|
-| Read passthrough (small file) | ~1ms | ~33ms | ONNX startup; passes through unchanged |
-| Read intercept (>200 lines) | ~5ms | ~27ms | Returns symbol outline instead of full file |
-| Grep passthrough (<3 words) | ~1ms | ~24ms | Regex/symbol patterns pass through |
-| Grep intercept (semantic) | ~1ms¹ | ~558ms | Semantic search replaces grep |
+| Operation | Without tokenix | tokenix (no daemon) | tokenix (warm daemon) | Notes |
+|---|---|---|---|---|
+| Read passthrough (small file) | ~1ms | ~33ms | ~33ms | Passes through unchanged |
+| Read intercept (>200 lines) | ~5ms | ~27ms | ~27ms | Returns symbol outline |
+| Grep passthrough (<3 words) | ~1ms | ~24ms | ~24ms | Regex/symbol patterns pass through |
+| Grep intercept (semantic) | ~1ms¹ | ~430ms | **~80ms** | Daemon keeps model in RAM |
 
 ¹ Without tokenix the grep runs but may return 0-N results with no token savings.
+
+> **Daemon auto-starts** on first Grep call — no manual setup required. Subsequent calls in the same session benefit from the warm model and in-memory embedding cache.
 
 ### Latency comparison: fastembed vs Ollama
 
@@ -307,6 +310,8 @@ tokenix install-hook --tool all
 | `tokenix read FILE` | Smart reader — outline for large files, full for small |
 | `tokenix gain` | Estimated token savings analytics |
 | `tokenix stats` | Index statistics |
+| `tokenix serve [--port N]` | Start background embedding daemon (keeps model + index in RAM) |
+| `tokenix stop` | Stop the background daemon |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
 | `tokenix hook` | `PreToolUse` handler — intercepts large reads (called by AI tools) |
@@ -366,11 +371,23 @@ src/
 ├── indexer.rs    File walker + incremental index pipeline (parallel chunking + batch embedding)
 ├── query.rs      Ranking, token-budget selection, result formatting
 ├── hook.rs       Hook handler for Claude-style and Copilot-style JSON input
+├── daemon.rs     Background TCP server — holds model + in-memory embedding cache
 ├── compress.rs   PostToolUse compression (Bash/ListDirectory output)
 └── gain.rs       Analytics from .tokenix/hook.log
 ```
 
 Storage lives at `~/.tokenix/<project-id>.db` (global, one DB per project). Embeddings are stored as raw `float32` blobs. Cosine similarity is computed in Rust — no external vector database needed.
+
+### Daemon
+
+The background daemon (`tokenix serve`) keeps the 130 MB ONNX model and all project embeddings in RAM. Hook calls route over TCP loopback instead of re-loading the model each subprocess invocation:
+
+```
+Without daemon:  hook process → load model (293 MB) → embed → search SQLite → exit  ~430ms
+With daemon:     hook process → TCP → daemon (model already loaded) → search RAM →  ~80ms
+```
+
+The daemon **auto-starts** on the first Grep hook call — you don't need to run it manually. Multiple parallel hook calls share a single model instance, capping RAM at 293 MB regardless of concurrency.
 
 ### Embedding model
 
