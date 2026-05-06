@@ -199,12 +199,23 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         .to_string_lossy()
         .replace('\\', "/");
 
-    let msg = format!(
-        "{}\n\n[tokenix] File has {} lines. Showing symbol outline above.\n\
-        To read a specific symbol: tokenix read {} --symbol <name>\n\
-        To read specific lines:   use Read with offset/limit parameters.",
-        outline, line_count, rel
-    );
+    let ext = full_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let is_code = matches!(ext, "rs" | "py" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "go");
+
+    let msg = if is_code {
+        format!(
+            "{}\n\n[tokenix] File has {} lines. Showing symbol outline above.\n\
+            To read a specific symbol: tokenix read {} --symbol <name>\n\
+            To read specific lines:   use Read with offset/limit parameters.",
+            outline, line_count, rel
+        )
+    } else {
+        format!(
+            "{}\n\n[tokenix] File has {} lines. Content shown above (formatting stripped).\n\
+            To read specific lines: use Read with offset/limit parameters.",
+            outline, line_count
+        )
+    };
     (true, msg)
 }
 

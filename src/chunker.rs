@@ -603,7 +603,175 @@ fn extract_doc_comment(lines: &[&str], chunk_start_line: usize) -> Option<String
     None
 }
 
+/// Clean generic (non-code) file content: strip markdown formatting, emojis,
+/// and collapse whitespace. All text is preserved — nothing is dropped.
+pub fn clean_generic_text(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut in_fence = false;
+    let mut last_blank = true;
+
+    for raw in content.lines() {
+        let t = raw.trim();
+
+        if t.starts_with("```") || t.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue; // drop fence markers, keep content below
+        }
+
+        if in_fence {
+            let s = strip_emojis(t);
+            if s.is_empty() {
+                if !last_blank { out.push('\n'); last_blank = true; }
+            } else {
+                out.push_str(&s); out.push('\n'); last_blank = false;
+            }
+            continue;
+        }
+
+        // HTML comment (single-line)
+        if t.starts_with("<!--") { continue; }
+
+        // Horizontal rule: --- *** ___ (no alphanumeric content)
+        if t.len() >= 3
+            && t.chars().all(|c| matches!(c, '-' | '*' | '_' | '=' | ' '))
+            && !t.chars().any(|c| c.is_alphanumeric())
+        {
+            continue;
+        }
+
+        // Table separator: | --- | --- |
+        if t.starts_with('|')
+            && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
+        {
+            continue;
+        }
+
+        let s = clean_line(t);
+        let s = strip_emojis(&s);
+        let s = s.trim().to_string();
+
+        if s.is_empty() {
+            if !last_blank { out.push('\n'); last_blank = true; }
+        } else {
+            out.push_str(&s); out.push('\n'); last_blank = false;
+        }
+    }
+
+    out.trim_end().to_string()
+}
+
+fn clean_line(s: &str) -> String {
+    // Strip heading markers (# ## ### …)
+    let s = s.trim_start_matches('#').trim_start();
+    // Blockquote
+    let s = s.strip_prefix("> ").or_else(|| s.strip_prefix('>')).unwrap_or(s).trim_start();
+    // Unordered list marker
+    let s = s.strip_prefix("- ")
+        .or_else(|| s.strip_prefix("* "))
+        .or_else(|| s.strip_prefix("+ "))
+        .unwrap_or(s);
+    // Numbered list: "1. " "42. "
+    let s = {
+        let b = s.as_bytes();
+        let mut n = 0;
+        while n < b.len() && b[n].is_ascii_digit() { n += 1; }
+        if n > 0 && b.get(n) == Some(&b'.') && b.get(n + 1) == Some(&b' ') {
+            &s[n + 2..]
+        } else {
+            s
+        }
+    };
+    // Table row: | cell | cell | → "cell  cell"
+    let owned: String;
+    let s = if s.starts_with('|') {
+        owned = s.split('|')
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .collect::<Vec<_>>()
+            .join("  ");
+        owned.as_str()
+    } else {
+        s
+    };
+    strip_inline(s)
+}
+
+fn strip_inline(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    let mut out = String::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        match chars[i] {
+            // Image: ![alt](url) → remove entirely
+            '!' if chars.get(i + 1) == Some(&'[') => {
+                i += 2;
+                while i < n && chars[i] != ']' { i += 1; }
+                if i < n { i += 1; }
+                if chars.get(i) == Some(&'(') {
+                    i += 1;
+                    while i < n && chars[i] != ')' { i += 1; }
+                    if i < n { i += 1; }
+                }
+            }
+            // Link: [text](url) → text
+            '[' => {
+                i += 1;
+                let start = i;
+                while i < n && chars[i] != ']' { i += 1; }
+                let text: String = chars[start..i].iter().collect();
+                if i < n { i += 1; }
+                if chars.get(i) == Some(&'(') {
+                    i += 1;
+                    while i < n && chars[i] != ')' { i += 1; }
+                    if i < n { i += 1; }
+                }
+                out.push_str(&strip_inline(&text));
+            }
+            // Bold/italic markers: ** * __ _ → drop markers, keep text
+            '*' => { if chars.get(i+1) == Some(&'*') { i += 2; } else { i += 1; } }
+            '_' => { if chars.get(i+1) == Some(&'_') { i += 2; } else { i += 1; } }
+            // Strikethrough: ~~text~~ → drop markers
+            '~' if chars.get(i+1) == Some(&'~') => { i += 2; }
+            // Inline code: `text` → text (preserve content)
+            '`' => {
+                i += 1;
+                while i < n && chars[i] != '`' { out.push(chars[i]); i += 1; }
+                if i < n { i += 1; }
+            }
+            // HTML tag: <...> → drop
+            '<' => {
+                while i < n && chars[i] != '>' { i += 1; }
+                if i < n { i += 1; }
+            }
+            // Backslash escape: \* → *
+            '\\' if i + 1 < n => { i += 1; out.push(chars[i]); i += 1; }
+            c => { out.push(c); i += 1; }
+        }
+    }
+    out
+}
+
+pub fn strip_emojis(s: &str) -> String {
+    s.chars().filter(|&c| !is_emoji(c)).collect()
+}
+
+fn is_emoji(c: char) -> bool {
+    let u = c as u32;
+    (0x2600..=0x27BF).contains(&u)   // misc symbols & dingbats
+        || (0x1F000..=0x1FAFF).contains(&u) // main emoji block
+        || (0x1FB00..=0x1FBFF).contains(&u) // legacy computing symbols
+        || u == 0xFE0F  // variation selector-16
+        || u == 0x200D  // zero-width joiner
+}
+
 pub fn generate_outline(content: &str, path: &str) -> String {
+    // Generic files (md, txt, yaml, …) have no symbols.
+    // Return full cleaned text — never a truncated preview.
+    if matches!(detect_lang(Path::new(path)), Lang::Generic) {
+        return clean_generic_text(content);
+    }
+
     let lines: Vec<&str> = content.lines().collect();
     let chunks = chunk_file(path, content);
 

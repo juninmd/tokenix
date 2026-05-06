@@ -31,6 +31,8 @@ tokenix --help
 
 ## Critical Rules
 
+**Never lose content.** The chunker must store 100% of every indexed file. For the Read hook, generic files (.md, .txt, .yaml, .json, …) use `clean_generic_text()` — full content with markdown formatting stripped, emojis removed, whitespace trimmed. Truncated previews are forbidden. Only code files (Rust, Python, TS, Go, JS) use the symbol-based outline which preserves structure via named chunks stored in full in SQLite.
+
 **Never break hook fallback.** `hook.rs::run_hook()` must always `exit(0)` on any error — including missing index, stale index, parse failures, and embed errors. Exiting with non-zero breaks Claude Code sessions.
 
 **Daemon is optional.** If `tokenix serve` is not running, `handle_grep()` auto-starts it and retries once (800ms wait). If autostart fails, it falls back to direct in-process embed. Hook must never fail because the daemon is unavailable.
