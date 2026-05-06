@@ -32,7 +32,7 @@ tokenix --help
 
 **Never break hook fallback.** `hook.rs::run_hook()` must always `exit(0)` on any error — including missing index, stale index, parse failures, and Ollama errors. Exiting with non-zero breaks Claude Code sessions.
 
-**Hook exit codes:** `0` = pass through (original tool runs) · `2` = intercept (hook stdout replaces tool result). Never exit `1`.
+**Hook exit codes:** `0` = pass through (original tool runs) · `2` = block tool (hook **stderr** is sent to Claude as context). Never exit `1`. Note: Claude Code PreToolUse does NOT replace tool results with hook stdout — exit 2 blocks the tool and stderr becomes Claude's context.
 
 **Directory filtering in indexer:** `filter_entry` for directories uses ONLY `IGNORED_DIRS`. Do NOT call `should_index()` on directories — it returns false for dirs without extensions (like `src/`) and breaks traversal.
 

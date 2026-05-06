@@ -338,7 +338,7 @@ pub fn run_hook() -> Result<()> {
         },
     );
 
-    println!("{}", output);
+    eprintln!("{}", output);
     std::process::exit(2);
 }
 
