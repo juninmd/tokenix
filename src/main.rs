@@ -1,5 +1,6 @@
 mod chunker;
 mod compress;
+mod daemon;
 mod embed;
 mod gain;
 mod hook;
@@ -100,6 +101,13 @@ enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// Start the background embedding daemon (keeps model in memory)
+    Serve {
+        #[arg(long, help = "TCP port to listen on (default: 47392 or $TOKENIX_DAEMON_PORT)")]
+        port: Option<u16>,
+    },
+    /// Stop the background embedding daemon
+    Stop,
     /// Hook handler called by AI tools (not for direct use)
     Hook,
     /// PostToolUse hook handler for output compression (not for direct use)
@@ -141,6 +149,8 @@ fn main() -> Result<()> {
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
         Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),
         Commands::Stats { path } => cmd_stats(&path),
+        Commands::Serve { port } => daemon::run_serve(port),
+        Commands::Stop => daemon::run_stop(),
         Commands::Hook => {
             // Hook is a short-lived subprocess: limit thread pools before any init.
             // OMP_NUM_THREADS controls ONNX Runtime threads on Windows (MS prebuilt uses OpenMP).

@@ -405,3 +405,65 @@ pub fn read_hook_log(repo_root: &Path) -> Vec<HookEvent> {
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect()
 }
+
+// ---- Daemon helpers ---------------------------------------------------------
+
+pub struct EmbeddingEntry {
+    pub id: i64,
+    pub path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub symbol: String,
+    pub kind: String,
+    pub token_count: usize,
+    pub content: String,
+    pub embedding: Vec<f32>,
+}
+
+/// Load every embedding + chunk metadata into memory for the daemon cache.
+pub fn load_all_embeddings(conn: &Connection) -> Result<Vec<EmbeddingEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, \
+                c.token_count, c.content, e.embedding \
+         FROM embeddings e JOIN chunks c ON c.id = e.chunk_id",
+    )?;
+    let entries = stmt
+        .query_map([], |row| {
+            let blob: Vec<u8> = row.get(8)?;
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, String>(7)?,
+                blob,
+            ))
+        })?
+        .filter_map(|r| r.ok())
+        .map(|(id, path, sl, el, symbol, kind, tc, content, blob)| EmbeddingEntry {
+            id,
+            path,
+            start_line: sl as usize,
+            end_line: el as usize,
+            symbol,
+            kind,
+            token_count: tc as usize,
+            content,
+            embedding: deserialize_vec(&blob),
+        })
+        .collect();
+    Ok(entries)
+}
+
+/// Return the DB file's mtime as secs-since-epoch, or 0.0 on error.
+pub fn get_db_mtime(repo_root: &Path) -> f64 {
+    std::fs::metadata(db_path(repo_root))
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}

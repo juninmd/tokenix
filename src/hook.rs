@@ -274,11 +274,16 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         return (false, String::new());
     }
 
-    // Only one semantic embed at a time — prevents N×293MB peaks from parallel hooks.
+    // Try daemon first: model stays resident, ~30ms vs ~430ms cold embed.
+    if let Some(output) = crate::daemon::daemon_search_with_autostart(repo_root, pattern, 20, 2500) {
+        return (true, output);
+    }
+
+    // Fallback: direct embed (daemon not running or failed to start).
+    // Guard prevents N×293MB spikes from parallel hook processes.
     if !try_acquire_embed_slot() {
         return (false, String::new());
     }
-
     let results = match query_index(repo_root, pattern, 2500, 20, None) {
         Ok(Some(r)) if !r.is_empty() => r,
         _ => {
@@ -286,7 +291,6 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
             return (false, String::new());
         }
     };
-
     release_embed_slot();
     (true, format_results(&results, pattern))
 }
