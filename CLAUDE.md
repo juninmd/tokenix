@@ -24,12 +24,12 @@ tokenix --help
 | `src/embed.rs` | fastembed ONNX — `embed_documents()`, `embed_query()`. Model cached in `OnceCell`. |
 | `src/store.rs` | SQLite schema, CRUD, cosine similarity search, hook log I/O |
 | `src/indexer.rs` | File walk + incremental index pipeline. Embeds in batches of 512; wraps per-file inserts in transactions. |
-| `src/query.rs` | Search + result formatting |
+| `src/query.rs` | Hybrid semantic/lexical ranking + result formatting |
 | `src/hook.rs` | `run_hook()` — called by Claude Code's PreToolUse hook. Tries daemon first for Grep. |
 | `src/daemon.rs` | Background TCP server (port 47392). Holds model + embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads. |
 | `src/compress.rs` | `PostToolUse` compression pipeline: `compress_output()` (ANSI strip, emoji removal, blank-line collapse, repeat grouping, JSON compaction), `compress_bash_output()` (cargo heuristics, git-log truncation, generic head/tail), `run_hook_post()`. |
-| `src/filters.rs` | `FilterDef` (TOML schema), `load_user_filters()`, `load_bundled_filters()` (via `rust-embed`), `load_all_filters()`, `find_filter()`, `apply_filter()`. Fields: `match_output` short-circuit, `truncate_lines_at`, `strip_ansi`, `strip_lines_matching`, `keep_lines_matching`. |
-| `src/cmd_filter.rs` | `tokenix filter list` (tokens wasted by command) · `tokenix filter generate` (AI-assisted TOML via local CLI). |
+| `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (via `rust-embed`), `load_all_filters()`, `find_filter()`, `apply_filter()`. Fields: `match_output` short-circuit, `truncate_lines_at`, `strip_ansi`, `strip_lines_matching`, `keep_lines_matching`. |
+| `src/cmd_filter.rs` | `tokenix filter list` (tokens wasted by command) · `tokenix filter active` (user + bundled filters) · `tokenix filter generate` (AI-assisted TOML via local CLI). |
 | `src/gain.rs` | `compute_gain()`, `GainStats`, `MODELS` pricing table (Anthropic/OpenAI/Google, verified May 2026). |
 | `assets/filters/` | 59 RTK-compatible TOML filters embedded in the binary via `rust-embed`. User filters in `~/.tokenix/filters/` take priority. |
 

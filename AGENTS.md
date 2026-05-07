@@ -37,12 +37,14 @@ Only read a full file directly when tokenix shows it is small, or when targeted 
 src/
 |-- main.rs       CLI entry (clap), command dispatch, install/remove helpers
 |-- chunker.rs    Symbol-aware heuristic chunking and outline generation
-|-- embed.rs      Ollama HTTP client: get_embedding() and check_ollama()
+|-- embed.rs      fastembed ONNX: embed_documents() and embed_query()
 |-- store.rs      SQLite schema, CRUD, cosine similarity, hook log NDJSON I/O
 |-- indexer.rs    File walker plus incremental index pipeline
-|-- query.rs      Ranking, token-budget selection, and result formatting
+|-- query.rs      Hybrid semantic/lexical ranking, token-budget selection, and result formatting
 |-- hook.rs       Hook handler for Claude-style and Copilot-style input JSON
-`-- gain.rs       Analytics from .tokenix/hook.log
+|-- gain.rs       Analytics from .tokenix/hook.log
+|-- filters.rs    RTK-compatible TOML output filters, bundled + user filters
+`-- cmd_filter.rs filter list/active/generate subcommands
 ```
 
 ## Tool Integration Model

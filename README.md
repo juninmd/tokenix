@@ -161,10 +161,10 @@ Example live run on this repository:
 
 | Metric | Result |
 |---|---:|
-| Large-file read reduction | **89.0%** saved |
-| Targeted outline + symbol workflows | **72.1%** saved |
+| Large-file read reduction | **88.6%** saved |
+| Targeted outline + symbol workflows | **72.5%** saved |
 | Target symbols resolved | **6 / 6** |
-| Semantic search Hit@1 | **4 / 7** |
+| Semantic search Hit@1 | **6 / 7** |
 | Semantic search Hit@3 | **7 / 7** |
 
 The targeted workflow metric is the important one: it discounts the common follow-up read after an outline, so it is a closer estimate of real session savings than outline-only reduction.
@@ -431,12 +431,12 @@ src/
 ├── embed.rs       fastembed ONNX: embed_documents(), embed_query() — no server needed
 ├── store.rs       SQLite schema, CRUD, cosine similarity, hook log NDJSON
 ├── indexer.rs     File walker + incremental index pipeline (parallel chunking + batch embedding)
-├── query.rs       Ranking, token-budget selection, result formatting
+├── query.rs       Hybrid semantic/lexical ranking, token-budget selection, result formatting
 ├── hook.rs        PreToolUse handler — Claude-style and Copilot-style JSON input
 ├── daemon.rs      Background TCP server — holds model + in-memory embedding cache
 ├── compress.rs    PostToolUse compression pipeline (Bash/ListDirectory output)
-├── filters.rs     FilterDef, load_user_filters(), load_bundled_filters(), apply_filter()
-├── cmd_filter.rs  `tokenix filter` subcommands (list, generate, AI-assisted TOML creation)
+├── filters.rs     FilterDef, active filter listing, load_user_filters(), load_bundled_filters(), apply_filter()
+├── cmd_filter.rs  `tokenix filter` subcommands (list, active, generate)
 └── gain.rs        Analytics from .tokenix/hook.log — per-model cost table
 
 assets/
