@@ -1,3 +1,4 @@
+mod benchmark;
 mod chunker;
 mod cmd_filter;
 mod compress;
@@ -75,6 +76,19 @@ enum Commands {
         path: PathBuf,
         #[arg(long, help = "Show per-call history")]
         history: bool,
+    },
+    /// Run a reproducible token-savings and retrieval-quality benchmark
+    Benchmark {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+        #[arg(long, help = "Refresh index metadata before measuring")]
+        refresh_index: bool,
+        #[arg(
+            long,
+            default_value_t = 2500,
+            help = "Token budget for semantic queries"
+        )]
+        budget: usize,
     },
     /// Install hook for one or more AI coding tools
     InstallHook {
@@ -177,6 +191,14 @@ fn main() -> Result<()> {
             path,
         } => cmd_read(&file, symbol.as_deref(), lines.as_deref(), &path),
         Commands::Gain { path, history } => cmd_gain(&path, history),
+        Commands::Benchmark {
+            path,
+            refresh_index,
+            budget,
+        } => {
+            let repo_root = find_repo_root(&path);
+            benchmark::run_benchmark(&repo_root, refresh_index, budget)
+        }
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
         Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),
         Commands::Stats { path } => cmd_stats(&path),

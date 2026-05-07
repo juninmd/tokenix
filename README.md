@@ -145,60 +145,35 @@ flowchart TD
 
 ## 📊 Benchmark
 
-> Every number below comes from a **live run** on the tokenix source — no mock data.
+> Every number below comes from a live benchmark run on the tokenix source, using the actual index, chunking, and query code paths.
 
-### Token reduction by file
+### Methodology
 
-| File | Lines | Without tokenix | With tokenix | Saved |
-|---|---|---|---|---|
-| `src/main.rs` | 757 | 5,793 tok | 459 tok | **92.1%** |
-| `src/chunker.rs` | 744 | 5,936 tok | 180 tok | **97.0%** |
-| `src/hook.rs` | 418 | 3,242 tok | 352 tok | **89.1%** |
-| `src/store.rs` | 408 | 3,118 tok | 781 tok | **75.0%** |
-| `samples/api_handler.go` | 322 | 2,266 tok | 672 tok | **70.3%** |
-| `samples/auth_middleware.py` | 284 | 2,385 tok | 687 tok | **71.2%** |
-| `samples/database_client.ts` | 358 | 2,805 tok | 335 tok | **88.1%** |
-| `samples/user_service.rs` | 377 | 3,135 tok | 304 tok | **90.3%** |
-| **TOTAL** | | **28,680 tok** | **3,770 tok** | **86.9%** |
+`tokenix benchmark` runs a reproducible benchmark against the current checkout. It uses the production code paths: `indexer::index_repo`, `chunker::generate_outline`, targeted symbol chunking, and semantic `query_index`.
 
-### Hook latency (wall clock)
+It measures three things:
 
-| Operation | Without tokenix | tokenix (no daemon) | tokenix (warm daemon) | Notes |
-|---|---|---|---|---|
-| Read passthrough (small file) | ~1ms | ~33ms | ~33ms | Passes through unchanged |
-| Read intercept (>200 lines) | ~5ms | ~27ms | ~27ms | Returns symbol outline |
-| Grep passthrough (<3 words) | ~1ms | ~24ms | ~24ms | Regex/symbol patterns pass through |
-| Grep intercept (semantic) | ~1ms¹ | ~430ms | **~80ms** | Daemon keeps model in RAM |
+1. **Gross read savings** - full file tokens vs. large-file outline tokens.
+2. **Net targeted workflow savings** - full file tokens vs. outline + the target symbol chunk the assistant would read next.
+3. **Semantic search quality** - labeled queries with expected files, reported as Hit@1 and Hit@3.
 
-¹ Without tokenix the grep runs but may return 0-N results with no token savings.
+Example live run on this repository:
 
-> **Daemon auto-starts** on first Grep call — no manual setup required. Subsequent calls in the same session benefit from the warm model and in-memory embedding cache.
+| Metric | Result |
+|---|---:|
+| Large-file read reduction | **89.0%** saved |
+| Targeted outline + symbol workflows | **72.1%** saved |
+| Target symbols resolved | **6 / 6** |
+| Semantic search Hit@1 | **4 / 7** |
+| Semantic search Hit@3 | **7 / 7** |
 
-### Latency comparison: fastembed vs Ollama
-
-| Scenario | Ollama (warm) | Ollama (cold start) | fastembed ONNX |
-|---|---|---|---|
-| Grep intercept | ~394ms | ~1,413ms | **~430ms** |
-| Grep passthrough | ~55ms | ~55ms | **~62ms** |
-| Read intercept | ~55ms | ~55ms | **~94ms** |
-| Requires external server | Yes | Yes | **No** |
-| Requires model download | 274 MB | 274 MB | **130 MB** (auto) |
-
-fastembed is **58% faster on cold start** (no server startup) and requires no external process.
-
-### Cost at scale — Claude Sonnet 4.6 ($3.00 / M input tokens)
-
-| Scenario | Tokens saved | Cost saved |
-|---|---|---|
-| 8 file reads (benchmark above) | 23,502 | $0.071 |
-| 100 reads / session | ~290,000 | **$0.87** |
-| 200 reads / day | ~580,000 | **$1.74** |
-| 22 working days / month | ~12.8 M | **$38.34 / dev** |
-| Team of 5 | — | **~$192 / month** |
+The targeted workflow metric is the important one: it discounts the common follow-up read after an outline, so it is a closer estimate of real session savings than outline-only reduction.
 
 ### Reproduce it
 
 ```bash
+tokenix benchmark --refresh-index
+
 # Linux / macOS
 bash benchmark/bench.sh
 
@@ -335,6 +310,7 @@ tokenix install-hook --tool all
 | `tokenix read FILE` | Smart reader — outline for large files, full for small |
 | `tokenix gain` | Token savings analytics with per-model cost table |
 | `tokenix gain --history` | Same, plus last 20 hook events |
+| `tokenix benchmark` | Reproducible savings and semantic-quality benchmark |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix serve [--port N]` | Start background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
@@ -362,6 +338,14 @@ tokenix install-hook --tool all
 | `--budget`, `-b` | 3000 | Max approximate tokens to return |
 | `--k` | 20 | Candidate chunks before budget filtering |
 | `--file`, `-f` | — | Filter results to a specific file |
+| `--path`, `-p` | `.` | Repository/index path |
+
+**`tokenix benchmark`**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--refresh-index` | false | Refresh index metadata before measuring |
+| `--budget` | 2500 | Semantic query token budget |
 | `--path`, `-p` | `.` | Repository/index path |
 
 **`tokenix install-hook` / `tokenix remove-hook`**
