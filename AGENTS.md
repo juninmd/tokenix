@@ -146,6 +146,8 @@ embeddings(chunk_id PRIMARY KEY, embedding BLOB)
 meta(key PRIMARY KEY, value)
 ```
 
+`meta` stores `indexed_at` and a Git fingerprint built from worktree root, branch, and HEAD. `index --if-stale` and hooks must treat a different fingerprint as stale so branch switches do not reuse context from the previous branch.
+
 Hook log: `.tokenix/hook.log` is NDJSON, one `HookEvent` per line.
 
 ## What Not to Change Casually

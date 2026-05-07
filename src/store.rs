@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
@@ -333,6 +334,11 @@ pub struct IndexStats {
     pub total_tokens: i64,
 }
 
+pub struct IndexStaleness {
+    pub stale: bool,
+    pub reason: String,
+}
+
 pub fn count_stats(conn: &Connection) -> Result<IndexStats> {
     let files: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
     let chunks: i64 = conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?;
@@ -360,6 +366,105 @@ pub fn get_index_age(repo_root: &Path) -> Option<f64> {
         .ok()?
         .as_secs_f64();
     Some(now - indexed_at)
+}
+
+pub fn index_staleness(repo_root: &Path, max_age_secs: f64) -> IndexStaleness {
+    let conn = match open_db(repo_root, false) {
+        Ok(Some(c)) => c,
+        _ => {
+            return IndexStaleness {
+                stale: true,
+                reason: "missing".to_string(),
+            }
+        }
+    };
+
+    let indexed_at = meta_value(&conn, "indexed_at").and_then(|v| v.parse::<f64>().ok());
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs_f64());
+    let age_secs = indexed_at.and_then(|ts| now.map(|n| n - ts));
+
+    if indexed_at.is_none() {
+        return IndexStaleness {
+            stale: true,
+            reason: "missing indexed_at".to_string(),
+        };
+    }
+
+    if let Some(current) = git_fingerprint(repo_root) {
+        match meta_value(&conn, "git_fingerprint") {
+            Some(stored) if stored == current => {}
+            Some(_) => {
+                return IndexStaleness {
+                    stale: true,
+                    reason: "git HEAD changed".to_string(),
+                }
+            }
+            None => {
+                return IndexStaleness {
+                    stale: true,
+                    reason: "missing git fingerprint".to_string(),
+                }
+            }
+        }
+    }
+
+    if let Some(age) = age_secs {
+        if age > max_age_secs {
+            return IndexStaleness {
+                stale: true,
+                reason: format!("stale ({}s old)", age as i64),
+            };
+        }
+    }
+
+    IndexStaleness {
+        stale: false,
+        reason: "fresh".to_string(),
+    }
+}
+
+pub fn write_index_meta(conn: &Connection, repo_root: &Path, indexed_at: f64) -> Result<()> {
+    set_meta(conn, "indexed_at", &indexed_at.to_string())?;
+    if let Some(fp) = git_fingerprint(repo_root) {
+        set_meta(conn, "git_fingerprint", &fp)?;
+    }
+    Ok(())
+}
+
+fn meta_value(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row("SELECT value FROM meta WHERE key=?1", [key], |r| r.get(0))
+        .ok()
+}
+
+fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key,value) VALUES(?1,?2)",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+fn git_fingerprint(repo_root: &Path) -> Option<String> {
+    let head = git_output(repo_root, &["rev-parse", "HEAD"])?;
+    let branch = git_output(repo_root, &["branch", "--show-current"]).unwrap_or_default();
+    let worktree = git_output(repo_root, &["rev-parse", "--show-toplevel"])
+        .unwrap_or_else(|| repo_root.to_string_lossy().to_string());
+    Some(format!("{}:{}:{}", worktree.trim(), branch.trim(), head.trim()))
+}
+
+fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[derive(Debug, Serialize, Deserialize)]

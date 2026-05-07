@@ -259,10 +259,7 @@ where
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs_f64();
-    conn.execute(
-        "INSERT OR REPLACE INTO meta(key,value) VALUES('indexed_at',?1)",
-        rusqlite::params![now.to_string()],
-    )?;
+    crate::store::write_index_meta(&conn, repo_root, now)?;
 
     let _ = write_project_name(repo_root);
 

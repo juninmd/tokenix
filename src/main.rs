@@ -237,9 +237,8 @@ fn cmd_index(path: &PathBuf, force: bool, if_stale: bool) -> Result<()> {
     let repo_root = path.canonicalize().unwrap_or_else(|_| path.clone());
 
     if if_stale && !force {
-        let age = store::get_index_age(&repo_root);
-        let stale = age.map(|a| a > hook::MAX_INDEX_AGE_SECS).unwrap_or(true);
-        if !stale {
+        let staleness = store::index_staleness(&repo_root, hook::MAX_INDEX_AGE_SECS);
+        if !staleness.stale {
             return Ok(());
         }
     }

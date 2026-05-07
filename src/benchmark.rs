@@ -8,7 +8,7 @@ use crate::chunker::{count_tokens, generate_outline, should_index};
 use crate::hook::MAX_INDEX_AGE_SECS;
 use crate::indexer;
 use crate::query::query_index;
-use crate::store::get_index_age;
+use crate::store::index_staleness;
 
 struct ReadRow {
     path: String,
@@ -92,10 +92,7 @@ pub fn run_benchmark(repo_root: &Path, refresh_index: bool, query_budget: usize)
 }
 
 fn index_needs_refresh(repo_root: &Path) -> bool {
-    match get_index_age(repo_root) {
-        Some(age) => age > MAX_INDEX_AGE_SECS,
-        None => true,
-    }
+    index_staleness(repo_root, MAX_INDEX_AGE_SECS).stale
 }
 
 fn collect_benchmark_files(repo_root: &Path) -> Result<Vec<PathBuf>> {

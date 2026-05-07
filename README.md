@@ -327,7 +327,7 @@ tokenix install-hook --tool all
 | Flag | Default | Description |
 |---|---|---|
 | `--force`, `-f` | false | Reindex all files, ignoring cache |
-| `--if-stale` | false | Skip if index is fresh (used by session hooks) |
+| `--if-stale` | false | Skip if index is fresh for the current Git worktree/branch/HEAD |
 
 **`tokenix query`**
 

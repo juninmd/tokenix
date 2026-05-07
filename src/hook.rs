@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunker::count_tokens;
 use crate::query::{format_results, get_file_outline, query_index};
-use crate::store::{get_index_age, log_hook_event, search_by_symbol, HookEvent};
+use crate::store::{index_staleness, log_hook_event, search_by_symbol, HookEvent};
 
 pub const MAX_INDEX_AGE_SECS: f64 = 3600.0;
 const MIN_LINES_FOR_OUTLINE: usize = 200;
@@ -342,16 +342,9 @@ pub fn run_hook() -> Result<()> {
 
     let repo_root = find_repo_root();
 
-    let age = get_index_age(&repo_root);
-    let index_missing = age.is_none();
-    let index_stale = age.map(|a| a > MAX_INDEX_AGE_SECS).unwrap_or(false);
+    let staleness = index_staleness(&repo_root, MAX_INDEX_AGE_SECS);
 
-    if index_missing || index_stale {
-        let reason = if index_missing {
-            "missing".to_string()
-        } else {
-            format!("stale ({}s old)", age.unwrap() as i64)
-        };
+    if staleness.stale {
         let _ = log_hook_event(
             &repo_root,
             &HookEvent {
@@ -359,7 +352,7 @@ pub fn run_hook() -> Result<()> {
                 tool: input.tool_name,
                 action: "pass".to_string(),
                 phase: "pre".to_string(),
-                reason,
+                reason: staleness.reason,
                 saved_tokens: 0,
                 actual_tokens: 0,
                 original_estimate: 0,
