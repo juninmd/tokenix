@@ -313,6 +313,7 @@ tokenix install-hook --tool all
 | `tokenix serve [--port N]` | Start background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
 | `tokenix filter list` | Show top Bash commands by tokens wasted (no filter yet) |
+| `tokenix filter active` | Show active user and bundled output filters |
 | `tokenix filter generate [CMD]` | AI-generate a TOML output filter for a command |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
@@ -408,6 +409,9 @@ on_empty = "uv: ok"
 ```bash
 # See which commands waste the most tokens (no filter yet)
 tokenix filter list
+
+# Show all active user and bundled RTK-compatible filters
+tokenix filter active
 
 # Generate a TOML filter using a local AI CLI (claude, gh copilot, etc.)
 tokenix filter generate "cargo test"

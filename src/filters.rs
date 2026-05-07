@@ -40,6 +40,12 @@ struct FilterFile {
     filters: HashMap<String, FilterDef>,
 }
 
+pub struct ActiveFilter {
+    pub name: String,
+    pub source: &'static str,
+    pub filter: FilterDef,
+}
+
 #[derive(Embed)]
 #[folder = "assets/filters"]
 #[include = "*.toml"]
@@ -52,13 +58,20 @@ pub fn filters_dir() -> PathBuf {
         .join("filters")
 }
 
-fn parse_filter_file(content: &str) -> Vec<FilterDef> {
+fn parse_filter_file_named(content: &str) -> Vec<(String, FilterDef)> {
     toml::from_str::<FilterFile>(content)
-        .map(|f| f.filters.into_values().collect())
+        .map(|f| f.filters.into_iter().collect())
         .unwrap_or_default()
 }
 
 pub fn load_user_filters() -> Vec<FilterDef> {
+    load_user_filters_named()
+        .into_iter()
+        .map(|(_, f)| f)
+        .collect()
+}
+
+pub fn load_user_filters_named() -> Vec<(String, FilterDef)> {
     let dir = filters_dir();
     if !dir.exists() {
         return vec![];
@@ -69,7 +82,7 @@ pub fn load_user_filters() -> Vec<FilterDef> {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("toml") {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    result.extend(parse_filter_file(&content));
+                    result.extend(parse_filter_file_named(&content));
                 }
             }
         }
@@ -78,14 +91,42 @@ pub fn load_user_filters() -> Vec<FilterDef> {
 }
 
 pub fn load_bundled_filters() -> Vec<FilterDef> {
+    load_bundled_filters_named()
+        .into_iter()
+        .map(|(_, f)| f)
+        .collect()
+}
+
+pub fn load_bundled_filters_named() -> Vec<(String, FilterDef)> {
     BundledFilters::iter()
         .filter_map(|name| {
             let file = BundledFilters::get(&name)?;
             let content = std::str::from_utf8(file.data.as_ref()).ok()?;
-            Some(parse_filter_file(content))
+            Some(parse_filter_file_named(content))
         })
         .flatten()
         .collect()
+}
+
+pub fn load_active_filters() -> Vec<ActiveFilter> {
+    let mut result: Vec<ActiveFilter> = load_user_filters_named()
+        .into_iter()
+        .map(|(name, filter)| ActiveFilter {
+            name,
+            source: "user",
+            filter,
+        })
+        .collect();
+    result.extend(
+        load_bundled_filters_named()
+            .into_iter()
+            .map(|(name, filter)| ActiveFilter {
+                name,
+                source: "bundled",
+                filter,
+            }),
+    );
+    result
 }
 
 /// Returns user filters (priority) merged with bundled filters as fallback.

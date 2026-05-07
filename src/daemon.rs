@@ -466,7 +466,8 @@ fn search_handler(
         }
 
         let pc = &cache_lock.projects[&root_key];
-        pc.search_ids(&query_vec, k)
+        let candidate_k = (k.saturating_mul(5)).max(50);
+        pc.search_ids(&query_vec, candidate_k)
             .into_iter()
             .map(|(idx, sim)| (idx, sim, pc.entries[idx].id))
             .collect()
@@ -510,11 +511,14 @@ fn search_handler(
         .collect();
     drop(cache_lock);
 
+    crate::query::rerank_results(&mut results, query);
+
     let mut budget_left = budget;
     results.retain(|r| {
         let t = if r.token_count > 0 { r.token_count } else { count_tokens(&r.content) };
         if budget_left >= t { budget_left -= t; true } else { false }
     });
+    results.truncate(k);
 
     let output = format_results(&results, query);
     serde_json::to_string(&RespOk { ok: true, output }).unwrap()

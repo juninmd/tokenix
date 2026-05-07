@@ -19,16 +19,18 @@ pub fn query_index(
     };
 
     let vec = embed_query(query_text)?;
-    let mut results = search_similar(&conn, &vec, k)?;
+    let candidate_k = (k.saturating_mul(5)).max(50);
+    let mut results = search_similar(&conn, &vec, candidate_k)?;
 
     if let Some(filter) = file_filter {
         results.retain(|r| r.path.contains(filter));
     }
+    rerank_results(&mut results, query_text);
 
     let mut selected = Vec::new();
     let mut used_tokens = 0usize;
 
-    for r in results {
+    for r in results.into_iter().take(k) {
         let tokens = if r.token_count > 0 {
             r.token_count
         } else {
@@ -43,6 +45,84 @@ pub fn query_index(
 
     Ok(Some(selected))
 }
+
+pub fn rerank_results(results: &mut [SearchResult], query: &str) {
+    let terms = query_terms(query);
+    if terms.is_empty() {
+        return;
+    }
+
+    results.sort_by(|a, b| {
+        let sa = hybrid_score(a, &terms);
+        let sb = hybrid_score(b, &terms);
+        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
+fn hybrid_score(result: &SearchResult, terms: &[String]) -> f32 {
+    let semantic = 1.0 - result.distance;
+    semantic + lexical_boost(result, terms)
+}
+
+fn lexical_boost(result: &SearchResult, terms: &[String]) -> f32 {
+    let path = normalize_text(&result.path);
+    let symbol = normalize_text(&result.symbol);
+    let content = normalize_text(&result.content);
+    let mut boost = 0.0f32;
+
+    for term in terms {
+        if path.contains(term) {
+            boost += 0.12;
+        }
+        if !symbol.is_empty() && symbol.contains(term) {
+            boost += 0.16;
+        }
+        if content.contains(term) {
+            boost += 0.018;
+        }
+    }
+    boost += domain_boost(&path, &symbol, &content, terms);
+    boost.min(0.45)
+}
+
+fn domain_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f32 {
+    let has_db_query = terms.iter().any(|t| {
+        matches!(
+            t.as_str(),
+            "postgres" | "postgresql" | "sqlite" | "sql" | "transaction" | "pool"
+        )
+    });
+    if has_db_query
+        && (path.contains("database")
+            || path.contains("db")
+            || symbol.contains("pool")
+            || symbol.contains("transaction")
+            || content.contains("postgres")
+            || content.contains("from pg"))
+    {
+        return 0.18;
+    }
+    0.0
+}
+
+fn query_terms(query: &str) -> Vec<String> {
+    normalize_text(query)
+        .split_whitespace()
+        .filter(|s| s.len() >= 3 && !STOP_WORDS.contains(s))
+        .map(str::to_string)
+        .collect()
+}
+
+fn normalize_text(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { ' ' })
+        .collect::<String>()
+}
+
+const STOP_WORDS: &[&str] = &[
+    "the", "and", "for", "with", "how", "does", "are", "from", "when", "what", "where", "into",
+    "this", "that", "was", "were", "has", "have", "can", "should",
+];
 
 pub fn format_results(results: &[SearchResult], query: &str) -> String {
     if results.is_empty() {

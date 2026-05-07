@@ -139,6 +139,8 @@ enum Commands {
 enum FilterAction {
     /// List top Bash commands by tokens wasted (no custom filter yet)
     List,
+    /// List active user and bundled output filters
+    Active,
     /// Generate a TOML filter for a command using an AI CLI
     Generate {
         /// Base command name (e.g. cargo, git). Omit to select from the list.
@@ -208,6 +210,7 @@ fn main() -> Result<()> {
             let repo_root = find_repo_root(&PathBuf::from("."));
             match action {
                 FilterAction::List => cmd_filter::cmd_filter_list(&repo_root),
+                FilterAction::Active => cmd_filter::cmd_filter_active(),
                 FilterAction::Generate { command } => {
                     cmd_filter::cmd_filter_generate(command, &repo_root)
                 }

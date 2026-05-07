@@ -61,6 +61,35 @@ pub fn cmd_filter_list(repo_root: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+pub fn cmd_filter_active() -> Result<()> {
+    let filters = filters::load_active_filters();
+    if filters.is_empty() {
+        println!("{}", "No active filters found.".yellow());
+        return Ok(());
+    }
+
+    println!();
+    println!("{}", "ACTIVE OUTPUT FILTERS".bold().underline());
+    println!(
+        "  {:<28} {:<8} {:<52} {}",
+        "Name", "Source", "Match command", "Description"
+    );
+    println!("  {}", "-".repeat(118).bright_black());
+
+    for f in filters {
+        let desc = f.filter.description.unwrap_or_default();
+        println!(
+            "  {:<28} {:<8} {:<52} {}",
+            truncate(&f.name, 28),
+            f.source,
+            truncate(&f.filter.match_command, 52),
+            truncate(&desc, 42)
+        );
+    }
+    println!();
+    Ok(())
+}
+
 fn print_stats_table(stats: &[CmdStats]) {
     if stats.is_empty() {
         println!("No Bash hook events found. Run some commands to populate the log.");
@@ -82,6 +111,14 @@ fn print_stats_table(stats: &[CmdStats]) {
             format_num(s.total_saved),
         );
     }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    format!("{}~", s.chars().take(keep).collect::<String>())
 }
 
 pub fn cmd_filter_generate(command: Option<String>, repo_root: &PathBuf) -> Result<()> {
