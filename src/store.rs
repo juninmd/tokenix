@@ -416,20 +416,20 @@ pub struct EmbeddingEntry {
     pub symbol: String,
     pub kind: String,
     pub token_count: usize,
-    pub content: String,
     pub embedding: Vec<f32>,
 }
 
-/// Load every embedding + chunk metadata into memory for the daemon cache.
+/// Load embeddings + metadata (no chunk content) for the daemon cache.
+/// Content is fetched on-demand via fetch_chunks_content() for top-K results only.
 pub fn load_all_embeddings(conn: &Connection) -> Result<Vec<EmbeddingEntry>> {
     let mut stmt = conn.prepare(
         "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, \
-                c.token_count, c.content, e.embedding \
+                c.token_count, e.embedding \
          FROM embeddings e JOIN chunks c ON c.id = e.chunk_id",
     )?;
     let entries = stmt
         .query_map([], |row| {
-            let blob: Vec<u8> = row.get(8)?;
+            let blob: Vec<u8> = row.get(7)?;
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
@@ -438,12 +438,11 @@ pub fn load_all_embeddings(conn: &Connection) -> Result<Vec<EmbeddingEntry>> {
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, i64>(6)?,
-                row.get::<_, String>(7)?,
                 blob,
             ))
         })?
         .filter_map(|r| r.ok())
-        .map(|(id, path, sl, el, symbol, kind, tc, content, blob)| EmbeddingEntry {
+        .map(|(id, path, sl, el, symbol, kind, tc, blob)| EmbeddingEntry {
             id,
             path,
             start_line: sl as usize,
@@ -451,11 +450,32 @@ pub fn load_all_embeddings(conn: &Connection) -> Result<Vec<EmbeddingEntry>> {
             symbol,
             kind,
             token_count: tc as usize,
-            content,
             embedding: deserialize_vec(&blob),
         })
         .collect();
     Ok(entries)
+}
+
+/// Fetch chunk content for a set of IDs — used after cosine search to hydrate top-K results.
+pub fn fetch_chunks_content(
+    conn: &Connection,
+    ids: &[i64],
+) -> Result<std::collections::HashMap<i64, String>> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("SELECT id, content FROM chunks WHERE id IN ({placeholders})");
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<rusqlite::types::Value> =
+        ids.iter().map(|id| rusqlite::types::Value::Integer(*id)).collect();
+    let result = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(result)
 }
 
 /// Return the DB file's mtime as secs-since-epoch, or 0.0 on error.

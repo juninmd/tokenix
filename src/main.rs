@@ -1,7 +1,9 @@
 mod chunker;
+mod cmd_filter;
 mod compress;
 mod daemon;
 mod embed;
+mod filters;
 mod gain;
 mod hook;
 mod indexer;
@@ -108,10 +110,26 @@ enum Commands {
     },
     /// Stop the background embedding daemon
     Stop,
+    /// Generate and manage per-command output filters
+    Filter {
+        #[command(subcommand)]
+        action: FilterAction,
+    },
     /// Hook handler called by AI tools (not for direct use)
     Hook,
     /// PostToolUse hook handler for output compression (not for direct use)
     HookPost,
+}
+
+#[derive(Subcommand)]
+enum FilterAction {
+    /// List top Bash commands by tokens wasted (no custom filter yet)
+    List,
+    /// Generate a TOML filter for a command using an AI CLI
+    Generate {
+        /// Base command name (e.g. cargo, git). Omit to select from the list.
+        command: Option<String>,
+    },
 }
 
 fn find_repo_root(start: &PathBuf) -> PathBuf {
@@ -151,6 +169,15 @@ fn main() -> Result<()> {
         Commands::Stats { path } => cmd_stats(&path),
         Commands::Serve { port } => daemon::run_serve(port),
         Commands::Stop => daemon::run_stop(),
+        Commands::Filter { action } => {
+            let repo_root = find_repo_root(&PathBuf::from("."));
+            match action {
+                FilterAction::List => cmd_filter::cmd_filter_list(&repo_root),
+                FilterAction::Generate { command } => {
+                    cmd_filter::cmd_filter_generate(command, &repo_root)
+                }
+            }
+        }
         Commands::Hook => {
             // Hook is a short-lived subprocess: limit thread pools before any init.
             // OMP_NUM_THREADS controls ONNX Runtime threads on Windows (MS prebuilt uses OpenMP).

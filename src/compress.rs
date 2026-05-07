@@ -10,8 +10,14 @@ const BASH_MAX_LINES: usize = 100;
 const BASH_HEAD_LINES: usize = 40;
 const BASH_TAIL_LINES: usize = 15;
 
-/// Bash-aware compression: applies common transforms then cargo/git/generic truncation.
-pub fn compress_bash_output(s: &str) -> String {
+/// Bash-aware compression: checks user TOML filters first, then built-in heuristics.
+pub fn compress_bash_output(cmd: &str, s: &str) -> String {
+    // User-defined TOML filters take priority over built-in heuristics.
+    let user_filters = crate::filters::load_user_filters();
+    if let Some(f) = crate::filters::find_filter(cmd, &user_filters) {
+        return crate::filters::apply_filter(s, f);
+    }
+
     let base = compress_output(s);
     let lines: Vec<&str> = base.lines().collect();
 
@@ -208,7 +214,7 @@ fn compact_json(s: &str) -> String {
 }
 
 /// Remove ANSI/VT100 escape sequences (CSI, OSC, and single-char sequences).
-fn strip_ansi(s: &str) -> String {
+pub(crate) fn strip_ansi(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut result: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -388,8 +394,9 @@ pub fn run_hook_post() -> Result<()> {
         _ => std::process::exit(0),
     };
 
+    let bash_cmd = v["tool_input"]["command"].as_str().unwrap_or("").to_string();
     let compressed = if tool_name == "Bash" {
-        compress_bash_output(&text)
+        compress_bash_output(&bash_cmd, &text)
     } else {
         compress_output(&text)
     };
@@ -521,13 +528,13 @@ mod tests {
     #[test]
     fn bash_short_output_passes_through() {
         let input = "hello\nworld\n";
-        assert_eq!(compress_bash_output(input), input);
+        assert_eq!(compress_bash_output("", input), input);
     }
 
     #[test]
     fn bash_generic_truncation_over_100_lines() {
         let lines: String = (1..=150).map(|i| format!("line {}\n", i)).collect();
-        let out = compress_bash_output(&lines);
+        let out = compress_bash_output("", &lines);
         assert!(out.contains("lines omitted"), "should truncate: {}", out);
         assert!(out.contains("line 1\n"));
         assert!(out.contains("line 150"));
@@ -546,7 +553,7 @@ mod tests {
         input.push_str("error: aborting due to 1 previous error\n");
         input.push_str("Finished dev in 1.23s\n");
 
-        let out = compress_bash_output(&input);
+        let out = compress_bash_output("", &input);
         assert!(out.contains("error[E0425]"), "should keep error: {}", out);
         assert!(out.contains("Finished"), "should keep summary: {}", out);
         assert!(!out.contains("Compiling crate0"), "should strip Compiling lines");
@@ -559,7 +566,7 @@ mod tests {
             input.push_str(&format!("commit {:040}\n", i));
             input.push_str("Author: Test\nDate: Today\n\n    message\n\n");
         }
-        let out = compress_bash_output(&input);
+        let out = compress_bash_output("", &input);
         assert!(out.contains("lines omitted"), "should truncate: {}", out);
     }
 }

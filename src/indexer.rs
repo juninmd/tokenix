@@ -173,12 +173,18 @@ where
         }
     }
 
-    // Phase 3: batch embed all chunks in one call (model loads once)
+    // Phase 3: embed in batches of 512 to cap peak memory
+    const EMBED_BATCH: usize = 512;
     let embeddings = if embed_texts.is_empty() {
         vec![]
     } else {
         progress_cb(&format!("embedding {} chunks via fastembed (ONNX)...", embed_texts.len()));
-        embed_documents(&embed_texts)?
+        let mut all: Vec<Vec<f32>> = Vec::with_capacity(embed_texts.len());
+        for batch in embed_texts.chunks(EMBED_BATCH) {
+            let batch_embs = embed_documents(batch)?;
+            all.extend(batch_embs);
+        }
+        all
     };
 
     // Phase 4: pair embeddings back with files
@@ -226,6 +232,7 @@ where
 
         let _ = delete_chunks_for_file(&conn, file_id);
 
+        let _ = conn.execute_batch("BEGIN IMMEDIATE");
         for (chunk, embedding) in f.chunks.iter().zip(file_embs.iter()) {
             let chunk_id = match insert_chunk(
                 &conn,
@@ -243,6 +250,7 @@ where
             };
             let _ = insert_embedding(&conn, chunk_id, embedding);
         }
+        let _ = conn.execute_batch("COMMIT");
 
         indexed += 1;
     }
