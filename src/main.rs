@@ -149,7 +149,20 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Index { path, force, if_stale } => cmd_index(&path, force, if_stale),
+        Commands::Index { path, force, if_stale } => {
+            // Cap parallelism for indexing: rayon chunking + ONNX embedding.
+            // Without limits, large repos max out all CPU cores and freeze the PC.
+            #[allow(unused_unsafe)]
+            unsafe {
+                if std::env::var("RAYON_NUM_THREADS").is_err() {
+                    std::env::set_var("RAYON_NUM_THREADS", "4");
+                }
+                if std::env::var("OMP_NUM_THREADS").is_err() {
+                    std::env::set_var("OMP_NUM_THREADS", "2");
+                }
+            }
+            cmd_index(&path, force, if_stale)
+        }
         Commands::Query {
             text,
             budget,

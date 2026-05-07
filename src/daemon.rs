@@ -183,6 +183,14 @@ fn port_path() -> Option<PathBuf> {
 // ---- Server -----------------------------------------------------------------
 
 pub fn run_serve(port: Option<u16>) -> Result<()> {
+    // Must be set before ONNX Runtime initializes its thread pool (reads OMP_NUM_THREADS at init).
+    #[allow(unused_unsafe)]
+    unsafe {
+        if std::env::var("OMP_NUM_THREADS").is_err() {
+            std::env::set_var("OMP_NUM_THREADS", "2");
+        }
+    }
+
     let port = port.unwrap_or_else(daemon_port);
 
     if let Some(p) = pid_path() {
