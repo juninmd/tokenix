@@ -235,20 +235,18 @@ tokenix gain --history   # includes last 20 hook events
   Reduction                  72.3%  [█████████████░░░░░]
 
   COST ESTIMATE  (input tokens · USD)
-    Prices per 1M input tokens from public provider pricing pages.
+    Prices per 1M input tokens from public provider pricing pages. Collected: 2026-05-07.
 
       Model                          $/1M in       Without          With         Saved
       ───────────────────────────  ─────────  ────────────  ────────────  ────────────
       claude-haiku-4-5                 $1.00       $0.3321       $0.2146       $0.1174
       claude-sonnet-4.6 ★              $3.00       $0.9962       $0.6439       $0.3523
       claude-opus-4.7                  $5.00       $1.6603       $1.0732       $0.5871
-      gpt-4.1                          $2.00       $0.6641       $0.4293       $0.2348
-      gpt-5.5                          $5.00       $1.6603       $1.0732       $0.5871
-      o3                               $2.00       $0.6641       $0.4293       $0.2348
-      gemini-2.5-pro                   $1.25       $0.4151       $0.2683       $0.1468
+      gpt-5.4-mini                     $0.75       $0.2491       $0.1610       $0.0881
+      gpt-5.4                          $2.50       $0.8302       $0.5366       $0.2936
+      gemini-3.1-flash-preview         $0.25       $0.0830       $0.0537       $0.0294
       gemini-3.1-pro-preview           $2.00       $0.6641       $0.4293       $0.2348
-      ...
-      ★ reference model · prices from public provider pricing pages
+      ★ reference model · prices collected 2026-05-07
 
   BY TOOL
   Read    59 calls   228,974 ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░

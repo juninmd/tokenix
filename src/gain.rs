@@ -7,28 +7,17 @@ pub struct ModelPrice {
     pub reference: bool,
 }
 
+pub const PRICING_COLLECTED_AT: &str = "2026-05-07";
+
 pub const MODELS: &[ModelPrice] = &[
-    // Anthropic (source: docs.anthropic.com/pricing, May 2026)
+    // Anthropic (source: anthropic.com/pricing, collected 2026-05-07)
     ModelPrice { name: "claude-haiku-4-5",         input_per_1m: 1.00, reference: false },
     ModelPrice { name: "claude-sonnet-4.6",        input_per_1m: 3.00, reference: true  },
     ModelPrice { name: "claude-opus-4.7",          input_per_1m: 5.00, reference: false },
-    // OpenAI (source: openai.com/api/pricing, May 2026)
-    ModelPrice { name: "gpt-4.1-nano",             input_per_1m: 0.10, reference: false },
-    ModelPrice { name: "gpt-4.1-mini",             input_per_1m: 0.40, reference: false },
-    ModelPrice { name: "gpt-4.1",                  input_per_1m: 2.00, reference: false },
-    ModelPrice { name: "gpt-5.4-nano",             input_per_1m: 0.20,  reference: false },
+    // OpenAI (source: openai.com/api/pricing, collected 2026-05-07)
     ModelPrice { name: "gpt-5.4-mini",             input_per_1m: 0.75,  reference: false },
     ModelPrice { name: "gpt-5.4",                  input_per_1m: 2.50,  reference: false },
-    ModelPrice { name: "gpt-5.4-pro",              input_per_1m: 30.00, reference: false },
-    ModelPrice { name: "gpt-5.5",                  input_per_1m: 5.00,  reference: false },
-    ModelPrice { name: "gpt-5.5-pro",              input_per_1m: 30.00, reference: false },
-    ModelPrice { name: "o3",                       input_per_1m: 2.00,  reference: false },
-    ModelPrice { name: "o4-mini",                  input_per_1m: 1.10,  reference: false },
-    ModelPrice { name: "o3-pro",                   input_per_1m: 20.00, reference: false },
-    // Google (source: ai.google.dev/gemini-api/docs/pricing, May 2026)
-    ModelPrice { name: "gemini-2.5-flash-lite",    input_per_1m: 0.10, reference: false },
-    ModelPrice { name: "gemini-2.5-flash",         input_per_1m: 0.30, reference: false },
-    ModelPrice { name: "gemini-2.5-pro",           input_per_1m: 1.25, reference: false },
+    // Google (source: ai.google.dev/pricing, collected 2026-05-07)
     ModelPrice { name: "gemini-3.1-flash-preview", input_per_1m: 0.25, reference: false },
     ModelPrice { name: "gemini-3.1-pro-preview",   input_per_1m: 2.00, reference: false },
 ];

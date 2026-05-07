@@ -431,7 +431,11 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
     println!("  {}", "COST ESTIMATE  (input tokens · USD)".bold().underline());
     println!(
         "  {}",
-        "  Prices per 1M input tokens from public provider pricing pages.".dimmed()
+        format!(
+            "  Prices per 1M input tokens from public provider pricing pages. Collected: {}.",
+            gain::PRICING_COLLECTED_AT
+        )
+        .dimmed()
     );
     println!();
 
@@ -486,7 +490,11 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
     println!("  {}", sep.bright_black());
     println!(
         "  {}",
-        "    ★ reference model · prices from public provider pricing pages".dimmed()
+        format!(
+            "    ★ reference model · prices collected {}",
+            gain::PRICING_COLLECTED_AT
+        )
+        .dimmed()
     );
 
     // ── by tool / by phase ────────────────────────────────────────────────────
