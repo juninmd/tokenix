@@ -22,11 +22,13 @@ tokenix --help
 | `src/main.rs` | CLI commands (clap). All `cmd_*` functions live here. |
 | `src/chunker.rs` | AST chunking per language + `generate_outline()`. Token counting. |
 | `src/embed.rs` | fastembed ONNX — `embed_documents()`, `embed_query()`. Model cached in `OnceCell`. |
-| `src/store.rs` | SQLite schema, CRUD, cosine similarity search, hook log I/O, `load_all_embeddings()` |
-| `src/indexer.rs` | File walk + incremental index pipeline |
+| `src/store.rs` | SQLite schema, CRUD, cosine similarity search, hook log I/O |
+| `src/indexer.rs` | File walk + incremental index pipeline. Embeds in batches of 512; wraps per-file inserts in transactions. |
 | `src/query.rs` | Search + result formatting |
 | `src/hook.rs` | `run_hook()` — called by Claude Code's PreToolUse hook. Tries daemon first for Grep. |
-| `src/daemon.rs` | Background TCP server (port 47392). Holds model + in-memory embedding cache. |
+| `src/daemon.rs` | Background TCP server (port 47392). Holds model + embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads. |
+| `src/filters.rs` | Configurable output filter definitions (regex-based line keep/strip rules). |
+| `src/cmd_filter.rs` | `cmd_filter` command — lists per-command compression stats from hook log. |
 | `src/gain.rs` | Analytics from `.tokenix/hook.log` |
 
 ## Critical Rules
@@ -98,6 +100,11 @@ echo '{"type":"health"}' | nc 127.0.0.1 47392
 ```
 
 The daemon holds the ONNX model and all embeddings in RAM. Warm Grep calls via daemon take ~80ms vs ~430ms for cold in-process embed. The daemon auto-starts on first Grep hook call — manual `tokenix serve` is not required.
+
+**Resource limits (prevents PC freeze under parallel hooks):**
+- Max **4 concurrent handler threads** (rayon `ThreadPool`) — unbounded spawning was the primary Windows freeze trigger.
+- **Spawn lock** (`daemon.pid.spawning`) + PID liveness check — prevents N parallel hooks from each spawning a separate 130 MB daemon process.
+- **Content cache capped at 1000 entries** per project — evicted (cleared) when exceeded; hot entries repopulate on demand from SQLite.
 
 ## Common Tasks
 
