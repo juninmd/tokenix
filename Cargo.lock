@@ -2711,6 +2711,7 @@ dependencies = [
  "hex",
  "ignore",
  "indicatif",
+ "libc",
  "once_cell",
  "rayon",
  "regex",
