@@ -28,3 +28,4 @@ dirs = "5"
 rayon = "1"
 toml = "0.8"
 regex = "1"
+rust-embed = { version = "8", features = ["include-exclude"] }

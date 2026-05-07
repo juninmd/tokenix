@@ -27,9 +27,10 @@ tokenix --help
 | `src/query.rs` | Search + result formatting |
 | `src/hook.rs` | `run_hook()` — called by Claude Code's PreToolUse hook. Tries daemon first for Grep. |
 | `src/daemon.rs` | Background TCP server (port 47392). Holds model + embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads. |
-| `src/filters.rs` | Configurable output filter definitions (regex-based line keep/strip rules). |
+| `src/filters.rs` | Filter definitions (`FilterDef`), `load_user_filters()`, `load_bundled_filters()`, `load_all_filters()`, `apply_filter()`. Supports `match_output` short-circuit, `truncate_lines_at`, `strip_ansi`. |
 | `src/cmd_filter.rs` | `cmd_filter` command — lists per-command compression stats from hook log. |
-| `src/gain.rs` | Analytics from `.tokenix/hook.log` |
+| `src/gain.rs` | Analytics from `.tokenix/hook.log`. `MODELS` pricing table (Anthropic/OpenAI/Google, May 2026). |
+| `assets/filters/` | 59 RTK-compatible TOML filters embedded in the binary via `rust-embed`. User filters in `~/.tokenix/filters/` take priority. |
 
 ## Critical Rules
 

@@ -2,9 +2,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use regex::Regex;
+use rust_embed::Embed;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
+pub struct MatchOutput {
+    pub pattern: String,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct FilterDef {
     #[allow(dead_code)]
     pub description: Option<String>,
@@ -19,6 +26,12 @@ pub struct FilterDef {
     pub head_lines: Option<usize>,
     pub tail_lines: Option<usize>,
     pub on_empty: Option<String>,
+    #[serde(default)]
+    pub match_output: Vec<MatchOutput>,
+    pub truncate_lines_at: Option<usize>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub filter_stderr: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -27,11 +40,22 @@ struct FilterFile {
     filters: HashMap<String, FilterDef>,
 }
 
+#[derive(Embed)]
+#[folder = "assets/filters"]
+#[include = "*.toml"]
+struct BundledFilters;
+
 pub fn filters_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".tokenix")
         .join("filters")
+}
+
+fn parse_filter_file(content: &str) -> Vec<FilterDef> {
+    toml::from_str::<FilterFile>(content)
+        .map(|f| f.filters.into_values().collect())
+        .unwrap_or_default()
 }
 
 pub fn load_user_filters() -> Vec<FilterDef> {
@@ -45,14 +69,30 @@ pub fn load_user_filters() -> Vec<FilterDef> {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("toml") {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(f) = toml::from_str::<FilterFile>(&content) {
-                        result.extend(f.filters.into_values());
-                    }
+                    result.extend(parse_filter_file(&content));
                 }
             }
         }
     }
     result
+}
+
+pub fn load_bundled_filters() -> Vec<FilterDef> {
+    BundledFilters::iter()
+        .filter_map(|name| {
+            let file = BundledFilters::get(&name)?;
+            let content = std::str::from_utf8(file.data.as_ref()).ok()?;
+            Some(parse_filter_file(content))
+        })
+        .flatten()
+        .collect()
+}
+
+/// Returns user filters (priority) merged with bundled filters as fallback.
+pub fn load_all_filters() -> Vec<FilterDef> {
+    let mut all = load_user_filters();
+    all.extend(load_bundled_filters());
+    all
 }
 
 pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a FilterDef> {
@@ -67,6 +107,15 @@ pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a Filter
 }
 
 pub fn apply_filter(output: &str, f: &FilterDef) -> String {
+    // match_output short-circuits before any other transformation
+    for mo in &f.match_output {
+        if let Ok(re) = Regex::new(&mo.pattern) {
+            if re.is_match(output) {
+                return mo.message.clone();
+            }
+        }
+    }
+
     let s = if f.strip_ansi {
         crate::compress::strip_ansi(output)
     } else {
@@ -94,7 +143,22 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
     }
 
     let lines = apply_sizing(lines, f);
-    let result = lines.join("\n");
+
+    let result = if let Some(max_len) = f.truncate_lines_at {
+        lines
+            .iter()
+            .map(|l| {
+                if l.len() > max_len {
+                    &l[..max_len]
+                } else {
+                    l
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        lines.join("\n")
+    };
 
     if result.trim().is_empty() {
         if let Some(msg) = &f.on_empty {
@@ -131,15 +195,20 @@ match_command = "^regex_to_match_full_command_line"
 strip_ansi = true          # remove ANSI color codes
 strip_lines_matching = ["^pattern1", "^pattern2"]  # drop noisy lines
 keep_lines_matching = ["error", "warning"]          # keep only signal lines
+match_output = [           # short-circuit: if output matches pattern, return message
+  {{ pattern = "already installed", message = "ok (already installed)" }},
+]
 max_lines = 50             # truncate to N lines
 head_lines = 30            # keep first N lines
 tail_lines = 10            # keep last N lines
+truncate_lines_at = 120    # truncate individual lines at N chars
 on_empty = "command: ok"   # message when filter produces empty output
 ```
 
 Rules:
 - Use strip_lines_matching to drop boilerplate (progress, verbose info)
 - Use keep_lines_matching only if output has a clear signal/noise separation
+- Use match_output for commands that succeed silently or with a predictable summary line
 - Set on_empty when the command normally succeeds silently
 - match_command must be a valid Rust regex matching `{command}` or its typical invocations
 - Return ONLY valid TOML, no markdown code fences, no explanations

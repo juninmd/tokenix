@@ -340,60 +340,215 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
     let repo_root = find_repo_root(path);
     let stats = gain::compute_gain(&repo_root);
 
-    println!("\n{} -- {}\n", "tokenix gain".bold(), repo_root.display());
-    println!("  Total hook calls   {}", stats.total_calls);
-    println!(
-        "  Intercepted        {}",
-        stats.intercepted.to_string().green()
-    );
-    println!("  Passed through     {}", stats.passed);
-    println!(
-        "  Tokens saved       {}",
-        format_num(stats.tokens_saved).green().bold()
-    );
-    println!("  Tokens used        {}", format_num(stats.tokens_used));
-    println!("  Reduction          {:.1}%", stats.pct_saved);
-    println!("  Cost saved (est.)  ${:.4}", stats.cost_saved_usd);
+    let project_name = repo_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project");
 
+    // ── header ────────────────────────────────────────────────────────────────
+    let inner = format!(" tokenix gain  ·  {} ", project_name);
+    let width = inner.len().max(64);
+    let pad = width - inner.len();
+    println!("\n{}", format!("╭{}╮", "─".repeat(width)).bright_black());
+    println!(
+        "{}{}{}{}",
+        "│".bright_black(),
+        inner.bold(),
+        " ".repeat(pad),
+        "│".bright_black()
+    );
+    println!("{}", format!("╰{}╯", "─".repeat(width)).bright_black());
+
+    // ── token summary + hook calls (side by side) ─────────────────────────────
+    println!();
+    let bar = reduction_bar(stats.pct_saved, 18);
+    let intercept_pct = if stats.total_calls > 0 {
+        (stats.intercepted as f64 / stats.total_calls as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    println!(
+        "  {}                              {}",
+        "TOKEN SUMMARY".bold().underline(),
+        "HOOK CALLS".bold().underline()
+    );
+    println!(
+        "  {:<26} {:>14}    {:<22} {:>8}",
+        "Original (would-be)",
+        format_num(stats.tokens_original).yellow(),
+        "Total",
+        format_num(stats.total_calls as i64)
+    );
+    println!(
+        "  {:<26} {:>14}    {:<22} {:>8}",
+        "After optimization",
+        format_num(stats.tokens_used).cyan(),
+        "Intercepted",
+        format!(
+            "{}  ({:.0}%)",
+            format_num(stats.intercepted as i64).green(),
+            intercept_pct
+        )
+    );
+    println!(
+        "  {:<26} {:>14}    {:<22} {:>8}",
+        "Saved",
+        format_num(stats.tokens_saved).green().bold(),
+        "Passed through",
+        format_num(stats.passed as i64).dimmed()
+    );
+    println!(
+        "  {:<26} {:>14}",
+        "Reduction",
+        format!("{:.1}%  {}", stats.pct_saved, bar).green().bold()
+    );
+
+    // ── cost table ────────────────────────────────────────────────────────────
+    println!();
+    println!("  {}", "COST ESTIMATE  (input tokens · USD)".bold().underline());
+    println!(
+        "  {}",
+        "  Prices per 1M input tokens from public provider pricing pages.".dimmed()
+    );
+    println!();
+
+    let col_model = 27usize;
+    let col_price = 9usize;
+    let col_val   = 12usize;
+
+    let sep = format!(
+        "    {}  {}  {}  {}  {}",
+        "─".repeat(col_model),
+        "─".repeat(col_price),
+        "─".repeat(col_val),
+        "─".repeat(col_val),
+        "─".repeat(col_val)
+    );
+    // table header
+    println!(
+        "  {}",
+        format!(
+            "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
+            "Model", "$/1M in", "Without", "With", "Saved",
+            col_model = col_model, col_price = col_price, col_val = col_val
+        )
+        .bold()
+        .bright_black()
+    );
+    println!("  {}", sep.bright_black());
+
+    for row in &stats.cost_rows {
+        let marker = if row.reference { " ★" } else { "  " };
+        let name = format!("{}{}", row.model, marker);
+        let price_str = {
+            let m = gain::MODELS.iter().find(|m| m.name == row.model).unwrap();
+            format!("${:.2}", m.input_per_1m)
+        };
+        let without = format!("${:.4}", row.without_usd);
+        let with_   = format!("${:.4}", row.with_usd);
+        let saved   = format!("${:.4}", row.saved_usd);
+
+        let line = format!(
+            "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
+            name, price_str, without, with_, saved,
+            col_model = col_model, col_price = col_price, col_val = col_val
+        );
+        if row.reference {
+            println!("  {}", line.bold());
+        } else {
+            println!("  {}", line);
+        }
+    }
+
+    println!("  {}", sep.bright_black());
+    println!(
+        "  {}",
+        "    ★ reference model · prices from public provider pricing pages".dimmed()
+    );
+
+    // ── by tool / by phase ────────────────────────────────────────────────────
     if !stats.by_tool.is_empty() {
-        println!("\n{}", "By tool:".bold());
+        println!();
+        println!("  {}", "BY TOOL".bold().underline());
         for (tool, count, saved) in &stats.by_tool {
+            let bar = mini_bar(*saved, stats.tokens_saved, 20);
             println!(
-                "  {}: {} calls, {} tokens saved",
-                tool,
+                "  {:<14} {:>5} calls   {} {}",
+                tool.bold(),
                 count,
-                format_num(*saved)
+                format_num(*saved).green(),
+                bar.bright_black()
             );
         }
     }
 
     if stats.by_phase.len() > 1 {
-        println!("\n{}", "By phase:".bold());
+        println!();
+        println!("  {}", "BY PHASE".bold().underline());
         for (phase, count, saved) in &stats.by_phase {
-            let label = match phase.as_str() {
-                "pre" => "PreToolUse  (Read/Grep intercepts)",
-                "post" => "PostToolUse (Bash/ListDirectory compression)",
-                _ => phase.as_str(),
+            let (label, detail) = match phase.as_str() {
+                "pre"  => ("PreToolUse ", "Read / Grep intercepts"),
+                "post" => ("PostToolUse", "Bash / ListDirectory compression"),
+                other  => (other, ""),
             };
-            println!("  {}: {} calls, {} tokens saved", label, count, format_num(*saved));
+            println!(
+                "  {}  {:>5} calls   {}  {}",
+                label.bold(),
+                count,
+                format_num(*saved).green(),
+                detail.dimmed()
+            );
         }
     }
 
+    // ── history ───────────────────────────────────────────────────────────────
     if history {
         let events = store::read_hook_log(&repo_root);
-        let total = events.len();
-        println!("\n{}", format!("Last {} events:", total.min(20)).bold());
-        for e in events.iter().rev().take(20) {
+        let show = events.len().min(20);
+        println!();
+        println!("  {}", format!("LAST {} EVENTS", show).bold().underline());
+        for e in events.iter().rev().take(show) {
             let ts = format_ts(e.ts);
             let action = if e.action == "intercepted" {
-                "intercepted".green().to_string()
+                format!("{:<11}", "intercepted").green().to_string()
             } else {
-                "pass      ".dimmed().to_string()
+                format!("{:<11}", "pass").dimmed().to_string()
             };
-            println!("  {} {:5} {} saved={}", ts, e.tool, action, e.saved_tokens);
+            let phase = match e.phase.as_str() {
+                "pre"  => "pre ".dimmed().to_string(),
+                "post" => "post".dimmed().to_string(),
+                other  => other.dimmed().to_string(),
+            };
+            println!(
+                "  {} {} {:<8} {}  saved {}",
+                ts.bright_black(),
+                phase,
+                e.tool.bold(),
+                action,
+                format_num(e.saved_tokens).green()
+            );
         }
     }
+
+    println!();
     Ok(())
+}
+
+fn reduction_bar(pct: f64, width: usize) -> String {
+    let filled = ((pct / 100.0) * width as f64).round() as usize;
+    let filled = filled.min(width);
+    let empty = width - filled;
+    format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
+}
+
+fn mini_bar(value: i64, total: i64, width: usize) -> String {
+    if total == 0 {
+        return "─".repeat(width);
+    }
+    let filled = ((value as f64 / total as f64) * width as f64).round() as usize;
+    let filled = filled.min(width);
+    format!("{}{}", "▓".repeat(filled), "░".repeat(width - filled))
 }
 
 // install-hook

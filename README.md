@@ -84,7 +84,8 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **In-memory daemon** | `tokenix serve` keeps model + index in RAM — warm Grep calls drop from ~430ms to ~80ms |
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `3000`) |
-| **Savings analytics** | `tokenix gain` shows real estimated savings from hook events |
+| **Savings analytics** | `tokenix gain` — token summary, cost table across 20 models (Anthropic, OpenAI, Google), by-tool breakdown |
+| **Bundled output filters** | 59 RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `gradle`, `terraform`, and more |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
@@ -243,20 +244,43 @@ tokenix read src/auth/middleware.rs --lines 45-80       # line range
 
 ```bash
 tokenix gain
-tokenix gain --history
+tokenix gain --history   # includes last 20 hook events
 ```
 
 ```
-tokenix gain -- /home/user/my-project
+╭────────────────────────────────────────────────────────────────╮
+│ tokenix gain  ·  my-project                                   │
+╰────────────────────────────────────────────────────────────────╯
 
-  Total hook calls   47
-  Intercepted        31  (66%)
-  Passed through     16
-  Tokens saved       84,210
-  Tokens used         9,340
-  Reduction          90.0%
-  Cost saved (est.)  $0.2526
+  TOKEN SUMMARY                              HOOK CALLS
+  Original (would-be)               332,068    Total                       349
+  After optimization                214,646    Intercepted            148  (42%)
+  Saved                             240,091    Passed through              201
+  Reduction                  72.3%  [█████████████░░░░░]
+
+  COST ESTIMATE  (input tokens · USD)
+    Prices per 1M input tokens from public provider pricing pages.
+
+      Model                          $/1M in       Without          With         Saved
+      ───────────────────────────  ─────────  ────────────  ────────────  ────────────
+      claude-haiku-4-5                 $1.00       $0.3321       $0.2146       $0.1174
+      claude-sonnet-4.6 ★              $3.00       $0.9962       $0.6439       $0.3523
+      claude-opus-4.7                  $5.00       $1.6603       $1.0732       $0.5871
+      gpt-4.1                          $2.00       $0.6641       $0.4293       $0.2348
+      gpt-5.5                          $5.00       $1.6603       $1.0732       $0.5871
+      o3                               $2.00       $0.6641       $0.4293       $0.2348
+      gemini-2.5-pro                   $1.25       $0.4151       $0.2683       $0.1468
+      gemini-3.1-pro-preview           $2.00       $0.6641       $0.4293       $0.2348
+      ...
+      ★ reference model · prices from public provider pricing pages
+
+  BY TOOL
+  Read    59 calls   228,974 ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░
+  Grep    87 calls    11,094 ▓░░░░░░░░░░░░░░░░░░░
+  Bash     2 calls        23 ░░░░░░░░░░░░░░░░░░░░
 ```
+
+The cost table includes 20 models across Anthropic, OpenAI, and Google — prices updated May 2026.
 
 ---
 

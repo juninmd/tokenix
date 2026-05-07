@@ -13,7 +13,7 @@ const BASH_TAIL_LINES: usize = 15;
 /// Bash-aware compression: checks user TOML filters first, then built-in heuristics.
 pub fn compress_bash_output(cmd: &str, s: &str) -> String {
     // User-defined TOML filters take priority over built-in heuristics.
-    let user_filters = crate::filters::load_user_filters();
+    let user_filters = crate::filters::load_all_filters();
     if let Some(f) = crate::filters::find_filter(cmd, &user_filters) {
         return crate::filters::apply_filter(s, f);
     }
