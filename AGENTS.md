@@ -4,7 +4,7 @@ This file guides AI coding agents working on the tokenix codebase.
 
 ## Project Overview
 
-tokenix is a Rust CLI for token-efficient codebase exploration. It builds a local SQLite index with embeddings generated through Ollama, then exposes:
+tokenix is a Rust CLI for token-efficient codebase exploration. It builds a local SQLite index with embeddings generated in-process through fastembed/ONNX, then exposes:
 
 - `tokenix query` for semantic code search
 - `tokenix read` for compact file outlines, symbol reads, and line-range reads
@@ -82,7 +82,7 @@ Embeddings are stored as raw float32 little-endian blobs in SQLite. Query-time s
 
 `run_hook()` must fail open. It should silently allow the original tool when:
 
-- `.tokenix/index.db` does not exist
+- the project index does not exist (`~/.tokenix/<project-id>.db` by default)
 - the index is older than `MAX_INDEX_AGE_SECS` (3600 seconds)
 - the tool input cannot be parsed
 - an internal lookup/search fails

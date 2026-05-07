@@ -3,7 +3,7 @@
 
   <h1>tokenix</h1>
 
-  <p><strong>Stop wasting tokens. Give your AI assistant a brain.</strong></p>
+  <p><strong>Local semantic context for AI coding agents, with fewer wasted tokens.</strong></p>
 
   <p>
     <a href="https://github.com/juninmd/tokenix/releases"><img src="https://img.shields.io/github/v/release/juninmd/tokenix?style=flat-square&color=orange&label=release" alt="Latest Release" /></a>
@@ -27,7 +27,7 @@
 
 ---
 
-> **tokenix** is a Rust CLI that builds a local semantic index of your codebase and intercepts AI assistant file reads — replacing 800-line file dumps with compact, structured outlines. Works with Claude Code, GitHub Copilot, and OpenAI Codex CLI. **No Ollama or external server required.**
+> **tokenix** is a local-first Rust CLI that helps AI coding agents understand a repository without dumping huge files into the prompt. It indexes your code, finds relevant chunks by meaning, returns compact file outlines, and can hook into AI tools to replace noisy reads and command output with smaller, more useful context. Works with Claude Code, GitHub Copilot, and OpenAI Codex CLI. **No Ollama or external server required.**
 
 ```
 Without tokenix:  Read(src/auth/middleware.rs) → 800 lines → ~2,400 tokens  ❌
@@ -35,6 +35,23 @@ With tokenix:     tokenix read src/auth/middleware.rs → symbol outline → ~18
 ```
 
 Actual savings depend on codebase size, AI behavior, and file sizes. Run `tokenix gain --history` to see your real numbers.
+
+---
+
+## What Is tokenix?
+
+AI coding agents often waste context on the wrong shape of information: entire files, long grep output, repeated build logs, and directory listings that are much larger than the useful signal inside them. tokenix is a context layer between the agent and your repository.
+
+It does four jobs:
+
+| Job | What tokenix does | Why it matters |
+|---|---|---|
+| **Index the repository** | Walks source files, splits them into symbol-aware chunks, and stores local embeddings in SQLite | The agent can search by intent instead of opening files blindly |
+| **Read files compactly** | Returns outlines, symbols, or line ranges instead of full files when possible | Large files stop consuming thousands of unnecessary tokens |
+| **Intercept assistant tools** | Hooks into supported tools before large reads and after noisy command output | Optimization happens automatically during normal AI sessions |
+| **Measure savings** | Logs hook decisions and estimates token/cost reduction with `tokenix gain` and `tokenix benchmark` | You can prove whether it is actually helping on your codebase |
+
+tokenix is not a cloud service, not a vector database server, and not a replacement for your AI assistant. It is a local repository index plus a set of CLI and hook integrations that make the assistant's context smaller and more targeted.
 
 ---
 
@@ -84,7 +101,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **In-memory daemon** | `tokenix serve` keeps model + index in RAM — warm Grep calls drop from ~430ms to ~80ms |
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `3000`) |
-| **Savings analytics** | `tokenix gain` — token summary, cost table across 20 models (Anthropic, OpenAI, Google), by-tool breakdown |
+| **Savings analytics** | `tokenix gain` — token summary, focused cost table for 7 reference models (Anthropic, OpenAI, Google), by-tool breakdown |
 | **Bundled output filters** | 59 RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `gradle`, `terraform`, and more. Generate new ones with `tokenix filter generate` |
 | **Custom filters** | Drop `.toml` files in `~/.tokenix/filters/` — they override bundled filters. AI-assisted generation via `tokenix filter generate <command>` |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
@@ -103,40 +120,116 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 
 ## 🚀 How It Works
 
+tokenix has two modes:
+
+1. **Manual mode**: run `tokenix query` and `tokenix read` directly when you want compact context.
+2. **Hook mode**: install hooks so supported AI tools call tokenix automatically before large reads and after noisy tool output.
+
+### System overview
+
+```mermaid
+flowchart TB
+    Dev[Developer / AI agent] --> CLI[tokenix CLI]
+    Dev --> Hook[AI tool hooks]
+
+    CLI --> Index[tokenix index]
+    CLI --> Query[tokenix query]
+    CLI --> Read[tokenix read]
+    CLI --> Gain[tokenix gain / benchmark]
+
+    Hook --> Pre[PreToolUse: Read / Grep]
+    Hook --> Post[PostToolUse: Bash / ListDirectory]
+
+    Index --> Walker[File walker + ignore rules]
+    Walker --> Chunks[Symbol-aware chunks]
+    Chunks --> Embed[fastembed ONNX embeddings]
+    Embed --> Store[(SQLite project index)]
+
+    Query --> Store
+    Read --> Store
+    Pre --> Store
+    Post --> Filters[Bundled + user output filters]
+    Gain --> Logs[Hook event log]
+
+    Store --> Compact[Compact code context]
+    Filters --> CompactOutput[Compressed command output]
+    Logs --> Savings[Savings and cost estimates]
+```
+
 ### Indexing pipeline
 
 ```mermaid
 flowchart LR
-    A[Your repo] -->|tokenix index .| B[File walker]
-    B -->|Symbol-aware chunker| C[Chunks\nRust · TS · Py · Go · JS]
-    C -->|fastembed ONNX\nnomic-embed-text-v1.5-Q| D[float32 vectors\nin-process]
-    D -->|stored| E[~/.tokenix/index.db\nSQLite per project]
+    Repo[Repository] -->|tokenix index .| Walk[Walk files]
+    Walk --> Ignore[Apply ignore rules]
+    Ignore --> Chunk[Chunk by language and symbol]
+    Chunk --> Outline[Store outlines and text chunks]
+    Chunk --> Model[fastembed ONNX model]
+    Model --> Vector[768-dimension float32 vectors]
+    Outline --> DB[(~/.tokenix/project-id.db)]
+    Vector --> DB
+```
+
+Indexing is incremental. tokenix stores file metadata and content hashes so unchanged files do not need to be chunked and embedded again. The index is tied to the current project path and Git state, including branch/worktree/HEAD metadata, so stale hook decisions are avoided when you switch worktrees or branches.
+
+### Read and search flow
+
+```mermaid
+flowchart TD
+    Agent[AI assistant] -->|Read file| ReadCall[tokenix read]
+    Agent -->|Natural-language search| QueryCall[tokenix query]
+
+    ReadCall --> Size{Small file or explicit range?}
+    Size -->|Yes| Full[Return exact requested content]
+    Size -->|No| Outline[Return symbol outline]
+    Outline --> Target[Optional follow-up: --symbol or --lines]
+
+    QueryCall --> EmbedQuery[Embed query]
+    EmbedQuery --> Search[Hybrid semantic + lexical ranking]
+    Search --> Budget[Fit results into token budget]
+
+    Full --> Context[Useful context with fewer tokens]
+    Target --> Context
+    Budget --> Context
 ```
 
 ### Hook interception flow
 
 ```mermaid
 flowchart TD
-    A["🤖 AI Assistant\nClaude Code · Copilot · Codex"] -->|Read or Grep tool call| B["⚡ tokenix hook\nPreToolUse"]
+    Tool[Claude Code / Copilot tool call] --> Hook[tokenix hook]
+    Hook --> Fresh{Index exists and is fresh?}
+    Fresh -->|No| Allow[Allow original tool]
+    Fresh -->|Yes| Kind{Tool type}
 
-    B --> C{Index missing\nor stale > 1h?}
-    C -->|Yes| Z["exit 0\n▶ original tool runs"]
+    Kind -->|Read| ReadDecision{Large file without range?}
+    ReadDecision -->|No| Allow
+    ReadDecision -->|Yes| DenyRead[Deny original read and return outline]
 
-    C -->|No| D{Tool type?}
+    Kind -->|Grep| GrepDecision{Looks like semantic search?}
+    GrepDecision -->|No: regex / short pattern| Allow
+    GrepDecision -->|Yes| DenyGrep[Deny original grep and return ranked chunks]
 
-    D -->|Read| E{file < 200 lines\nor offset / limit set?}
-    E -->|Yes| Z
-    E -->|No ≥ 200 lines| G["exit 2 — intercept\n📄 symbol outline\n~180 tok vs ~2,400 tok"]
-
-    D -->|Grep| H{pattern\n< 3 words?}
-    H -->|Yes — likely regex| Z
-    H -->|No ≥ 3 words| I["exit 2 — intercept\n🔍 semantic results\ncosine similarity search"]
-
-    G --> R["✅ AI receives\ncompact structured context"]
-    I --> R
+    DenyRead --> AgentContext[Assistant receives compact context]
+    DenyGrep --> AgentContext
+    Allow --> Original[Original tool runs normally]
 ```
 
-1. **`tokenix index .`** — walks your repo, chunks files, generates embeddings via fastembed (ONNX, in-process), stores in `~/.tokenix/<project>.db`
+### Output compression flow
+
+```mermaid
+flowchart LR
+    Bash[Bash or ListDirectory output] --> Post[tokenix hook-post]
+    Post --> Normalize[Remove ANSI, blank lines, repeated noise]
+    Normalize --> Match[Match active RTK-compatible filters]
+    Match --> User[User filters]
+    Match --> Bundled[59 bundled filters]
+    User --> Compressed[Short signal-rich output]
+    Bundled --> Compressed
+    Compressed --> Agent[Assistant prompt]
+```
+
+1. **`tokenix index .`** — walks your repo, chunks files, generates embeddings via fastembed (ONNX, in-process), stores in `~/.tokenix/<project-id>.db`
 2. **`tokenix query "..."`** — embeds your query and returns the most relevant chunks within a token budget
 3. **`tokenix read FILE`** — returns a symbol outline for large files, full content for small ones
 4. **`tokenix install-hook`** — configures your AI tool to use tokenix automatically
@@ -254,7 +347,7 @@ tokenix gain --history   # includes last 20 hook events
   Bash     2 calls        23 ░░░░░░░░░░░░░░░░░░░░
 ```
 
-The cost table includes 20 models across Anthropic, OpenAI, and Google — prices updated May 2026.
+The cost table intentionally stays small: 7 reference models across Anthropic, OpenAI, and Google. Prices are shown with the collection date so benchmark reports stay auditable.
 
 ---
 
