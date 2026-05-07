@@ -14,32 +14,92 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
-      exists: ${{ steps.check_tag.outputs.exists }}
+      should_release: ${{ steps.version.outputs.should_release }}
+      bump: ${{ steps.version.outputs.bump }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Extract version from Cargo.toml
+      - name: Compute next semantic version
         id: version
         run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
+          set -euo pipefail
 
-      - name: Check if tag already exists
-        id: check_tag
-        run: |
-          if git ls-remote --tags origin "refs/tags/v${{ steps.version.outputs.version }}" | grep -q .; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Tag v${{ steps.version.outputs.version }} already exists, skipping release."
+          PREVIOUS_TAG=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1)
+          if [ -z "$PREVIOUS_TAG" ]; then
+            PREVIOUS_TAG="v0.0.0"
+            RANGE=""
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Tag v${{ steps.version.outputs.version }} does not exist, will create release."
+            RANGE="${PREVIOUS_TAG}..HEAD"
           fi
+
+          if [ -n "$RANGE" ]; then
+            COMMITS=$(git log --format='%s%n%b%n---END---' "$RANGE")
+          else
+            COMMITS=$(git log --format='%s%n%b%n---END---')
+          fi
+
+          if [ -z "$(echo "$COMMITS" | tr -d '[:space:]')" ]; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "bump=none" >> $GITHUB_OUTPUT
+            echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+            echo "No commits since $PREVIOUS_TAG."
+            exit 0
+          fi
+
+          BUMP="none"
+          if echo "$COMMITS" | grep -Eq '(^|[[:space:]])BREAKING CHANGE:|^[a-zA-Z]+(\([^)]+\))?!:'; then
+            BUMP="major"
+          elif echo "$COMMITS" | grep -Eq '^feat(\([^)]+\))?:'; then
+            BUMP="minor"
+          elif echo "$COMMITS" | grep -Eq '^(fix|perf)(\([^)]+\))?:'; then
+            BUMP="patch"
+          fi
+
+          if [ "$BUMP" = "none" ]; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "bump=none" >> $GITHUB_OUTPUT
+            echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+            echo "No semantic release commit found since $PREVIOUS_TAG."
+            exit 0
+          fi
+
+          BASE="${PREVIOUS_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+
+          case "$BUMP" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          TAG="v${VERSION}"
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "should_release=true" >> $GITHUB_OUTPUT
+          echo "bump=$BUMP" >> $GITHUB_OUTPUT
+          echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+          echo "Next release: $TAG ($BUMP from $PREVIOUS_TAG)"
 
   build:
     needs: check-version
-    if: needs.check-version.outputs.exists == 'false'
+    if: needs.check-version.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -116,7 +176,7 @@ jobs:
 
   release:
     needs: [check-version, build]
-    if: needs.check-version.outputs.exists == 'false'
+    if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -137,7 +197,11 @@ jobs:
         id: changelog
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
-          NOTES="Release v${VERSION}\n\nBuilt from commit \`${{ github.sha }}\` on \`${{ github.ref_name }}\`."
+          PREVIOUS_TAG="${{ needs.check-version.outputs.previous_tag }}"
+          NOTES="Release v${VERSION}\n\nSemantic bump: \`${{ needs.check-version.outputs.bump }}\`.\nBuilt from commit \`${{ github.sha }}\` on \`${{ github.ref_name }}\`."
+          if [ "$PREVIOUS_TAG" != "v0.0.0" ]; then
+            NOTES="${NOTES}\n\nChanges since ${PREVIOUS_TAG}:\n$(git log --format='- %s (%h)' ${PREVIOUS_TAG}..HEAD)"
+          fi
           echo "notes<<EOF" >> $GITHUB_OUTPUT
           echo -e "$NOTES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
