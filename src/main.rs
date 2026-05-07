@@ -605,6 +605,8 @@ fn install_claude_code(local: bool) -> Result<()> {
         serde_json::json!({})
     };
 
+    let removed_legacy_auto_index = remove_legacy_claude_auto_index_hook(&mut settings);
+
     let pre_already = settings["hooks"]["PreToolUse"]
         .as_array()
         .map(|arr| arr.iter().any(|h| h.to_string().contains("tokenix")))
@@ -615,7 +617,7 @@ fn install_claude_code(local: bool) -> Result<()> {
         .map(|arr| arr.iter().any(|h| h.to_string().contains("tokenix")))
         .unwrap_or(false);
 
-    if pre_already && post_already {
+    if pre_already && post_already && !removed_legacy_auto_index {
         println!("{} Claude Code hooks already installed.", "~".yellow());
         return Ok(());
     }
@@ -658,7 +660,39 @@ fn install_claude_code(local: bool) -> Result<()> {
     );
     println!("  PreToolUse:  {} hook", tokenix_bin);
     println!("  PostToolUse: {} hook-post", tokenix_bin);
+    if removed_legacy_auto_index {
+        println!("  Removed legacy UserPromptSubmit auto-index hook");
+    }
     Ok(())
+}
+
+fn remove_legacy_claude_auto_index_hook(settings: &mut serde_json::Value) -> bool {
+    let Some(entries) = settings["hooks"]["UserPromptSubmit"].as_array_mut() else {
+        return false;
+    };
+
+    let mut changed = false;
+    for entry in entries.iter_mut() {
+        let Some(hooks) = entry["hooks"].as_array_mut() else {
+            continue;
+        };
+        let before = hooks.len();
+        hooks.retain(|hook| {
+            let text = hook.to_string();
+            !(text.contains("tokenix") && text.contains("--if-stale") && text.contains("index"))
+        });
+        changed |= hooks.len() != before;
+    }
+
+    let before = entries.len();
+    entries.retain(|entry| {
+        entry["hooks"]
+            .as_array()
+            .map(|hooks| !hooks.is_empty())
+            .unwrap_or(true)
+    });
+    changed |= entries.len() != before;
+    changed
 }
 
 fn install_copilot() -> Result<()> {
