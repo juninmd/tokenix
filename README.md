@@ -85,7 +85,8 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `3000`) |
 | **Savings analytics** | `tokenix gain` — token summary, cost table across 20 models (Anthropic, OpenAI, Google), by-tool breakdown |
-| **Bundled output filters** | 59 RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `gradle`, `terraform`, and more |
+| **Bundled output filters** | 59 RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `gradle`, `terraform`, and more. Generate new ones with `tokenix filter generate` |
+| **Custom filters** | Drop `.toml` files in `~/.tokenix/filters/` — they override bundled filters. AI-assisted generation via `tokenix filter generate <command>` |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
@@ -332,10 +333,13 @@ tokenix install-hook --tool all
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix query TEXT` | Semantic search over indexed chunks |
 | `tokenix read FILE` | Smart reader — outline for large files, full for small |
-| `tokenix gain` | Estimated token savings analytics |
-| `tokenix stats` | Index statistics |
+| `tokenix gain` | Token savings analytics with per-model cost table |
+| `tokenix gain --history` | Same, plus last 20 hook events |
+| `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix serve [--port N]` | Start background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
+| `tokenix filter list` | Show top Bash commands by tokens wasted (no filter yet) |
+| `tokenix filter generate [CMD]` | AI-generate a TOML output filter for a command |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
 | `tokenix hook` | `PreToolUse` handler — intercepts large reads (called by AI tools) |
@@ -384,20 +388,73 @@ tokenix install-hook --tool all
 
 ---
 
+## 🔧 Output Filters
+
+tokenix compresses `Bash` and `ListDirectory` output via a `PostToolUse` hook before Claude sees it. Filtering happens in two layers:
+
+1. **Bundled filters** — 59 RTK-compatible TOML filters shipped inside the binary, covering `uv sync`, `cargo build`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, and more. Applied automatically — no setup needed.
+2. **User filters** — drop `.toml` files in `~/.tokenix/filters/`. They take priority over bundled filters.
+
+### Filter format
+
+```toml
+[filters.uv-sync]
+description = "Compact uv sync output"
+match_command = "^uv\\s+(sync|pip\\s+install)\\b"
+strip_ansi = true
+strip_lines_matching = ["^\\s*$", "^\\s+Downloading ", "^\\s+Using cached "]
+match_output = [
+  { pattern = "Audited \\d+ package", message = "ok (up to date)" },
+]
+max_lines = 20
+on_empty = "uv: ok"
+```
+
+| Field | Description |
+|---|---|
+| `match_command` | Rust regex matched against the full Bash command line |
+| `strip_ansi` | Remove ANSI colour codes before filtering |
+| `strip_lines_matching` | Drop lines matching any of these regex patterns |
+| `keep_lines_matching` | Keep only lines matching these patterns (signal/noise) |
+| `match_output` | Short-circuit: if output matches `pattern`, return `message` immediately |
+| `max_lines` / `head_lines` / `tail_lines` | Truncate output |
+| `truncate_lines_at` | Truncate individual lines at N characters |
+| `on_empty` | Message to return when filtering produces empty output |
+
+### AI-assisted filter generation
+
+```bash
+# See which commands waste the most tokens (no filter yet)
+tokenix filter list
+
+# Generate a TOML filter using a local AI CLI (claude, gh copilot, etc.)
+tokenix filter generate "cargo test"
+
+# Save to user filters directory
+# → ~/.tokenix/filters/cargo-test.toml
+```
+
+---
+
 ## 🏗 Architecture
 
 ```
 src/
-├── main.rs       CLI entry (clap), command dispatch, install helpers
-├── chunker.rs    Symbol-aware heuristic chunking + outline generation
-├── embed.rs      fastembed ONNX: embed_documents(), embed_query() — no server needed
-├── store.rs      SQLite schema, CRUD, cosine similarity, hook log NDJSON
-├── indexer.rs    File walker + incremental index pipeline (parallel chunking + batch embedding)
-├── query.rs      Ranking, token-budget selection, result formatting
-├── hook.rs       Hook handler for Claude-style and Copilot-style JSON input
-├── daemon.rs     Background TCP server — holds model + in-memory embedding cache
-├── compress.rs   PostToolUse compression (Bash/ListDirectory output)
-└── gain.rs       Analytics from .tokenix/hook.log
+├── main.rs        CLI entry (clap), command dispatch, install-hook helpers
+├── chunker.rs     Symbol-aware heuristic chunking + outline generation
+├── embed.rs       fastembed ONNX: embed_documents(), embed_query() — no server needed
+├── store.rs       SQLite schema, CRUD, cosine similarity, hook log NDJSON
+├── indexer.rs     File walker + incremental index pipeline (parallel chunking + batch embedding)
+├── query.rs       Ranking, token-budget selection, result formatting
+├── hook.rs        PreToolUse handler — Claude-style and Copilot-style JSON input
+├── daemon.rs      Background TCP server — holds model + in-memory embedding cache
+├── compress.rs    PostToolUse compression pipeline (Bash/ListDirectory output)
+├── filters.rs     FilterDef, load_user_filters(), load_bundled_filters(), apply_filter()
+├── cmd_filter.rs  `tokenix filter` subcommands (list, generate, AI-assisted TOML creation)
+└── gain.rs        Analytics from .tokenix/hook.log — per-model cost table
+
+assets/
+└── filters/       59 RTK-compatible TOML filters, embedded in the binary via rust-embed
 ```
 
 Storage lives at `~/.tokenix/<project-id>.db` (global, one DB per project). Embeddings are stored as raw `float32` blobs. Cosine similarity is computed in Rust — no external vector database needed.
