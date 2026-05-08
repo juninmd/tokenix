@@ -145,7 +145,7 @@ on_empty       = "my-cmd: ok"
 
 ## Common Tasks
 
-**Add a language:** `chunker.rs` — add to `INDEXED_EXTS`, `Lang` enum, `detect_lang()`, implement `chunk_<lang>()` following `chunk_rust()` pattern.
+**Add a language:** `chunker.rs` — add extension to `INDEXED_EXTS`, add variant to `Lang` enum, map it in `detect_lang()`, implement `chunk_<lang>()` following `chunk_rust()` pattern. Do NOT add a language to `INDEXED_EXTS` without a symbol-aware chunker — generic `chunk_by_lines` produces low-quality results for structured code.
 
 **Change intercept threshold:** `hook.rs` constants — `MAX_INDEX_AGE_SECS`, `MIN_LINES_FOR_OUTLINE`, `MIN_QUERY_WORDS`.
 

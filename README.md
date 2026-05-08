@@ -460,7 +460,9 @@ tokenix install-hook --tool all
 | TypeScript | `.ts`, `.tsx` | `function`, `class`, `interface`, `type`, arrow functions |
 | JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | `function`, `class`, arrow functions |
 | Go | `.go` | `func`, `type` |
-| Generic | `.java`, `.c`, `.cpp`, `.cs`, `.rb`, `.swift`, `.kt`, `.toml`, `.yaml`, `.json`, `.md`, … | 400-token line blocks |
+| Config / Docs | `.toml`, `.yaml`, `.yml`, `.json`, `.md`, `.txt`, `.sh`, `.bash` | 400-token line blocks |
+
+Languages without a symbol-aware chunker (Java, C, C++, C#, Ruby, Swift, Kotlin, Scala, …) are not indexed — blind line-block chunking produces low-quality search results and is intentionally excluded.
 
 ---
 

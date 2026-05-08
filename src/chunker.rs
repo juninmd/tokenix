@@ -21,9 +21,8 @@ pub const IGNORED_DIRS: &[&str] = &[
 ];
 
 pub const INDEXED_EXTS: &[&str] = &[
-    ".rs", ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".go", ".java", ".c", ".cpp", ".h",
-    ".hpp", ".cs", ".rb", ".swift", ".kt", ".scala", ".sh", ".bash", ".toml", ".yaml", ".yml",
-    ".json", ".md", ".txt",
+    ".rs", ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".go",
+    ".sh", ".bash", ".toml", ".yaml", ".yml", ".json", ".md", ".txt",
 ];
 
 #[derive(Debug, Clone)]
