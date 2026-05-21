@@ -1,0 +1,11 @@
+﻿name: Validate
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    uses: juninmd/base-actions/.github/workflows/reusable-validate.yml@main
