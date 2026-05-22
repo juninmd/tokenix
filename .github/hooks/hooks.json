@@ -2,8 +2,8 @@
   "hooks": {
     "preToolUse": [
       {
-        "bash": "C:/Users/jr_ac/.cargo/bin/tokenix.exe hook",
-        "powershell": "C:/Users/jr_ac/.cargo/bin/tokenix.exe hook",
+        "bash": "D:/Solutions/pessoal/tokenix/target/debug/tokenix.exe hook",
+        "powershell": "D:/Solutions/pessoal/tokenix/target/debug/tokenix.exe hook",
         "timeoutSec": 10,
         "type": "command"
       }

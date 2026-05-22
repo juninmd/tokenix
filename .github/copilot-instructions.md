@@ -25,6 +25,6 @@ tokenix read src/auth/middleware.rs --symbol validate_token
 
 Use `tokenix gain --history` to inspect estimated savings from hook events.
 
-tokenix binary: `C:/Users/jr_ac/.cargo/bin/tokenix.exe`
+tokenix binary: `D:/Solutions/pessoal/tokenix/target/debug/tokenix.exe`
 Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
 
