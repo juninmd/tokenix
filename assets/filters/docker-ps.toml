@@ -1,0 +1,6 @@
+[filters.docker-ps]
+description = "Compact docker ps output"
+match_command = "^docker\\s+ps\\b"
+strip_ansi = true
+truncate_lines_at = 120
+max_lines = 40

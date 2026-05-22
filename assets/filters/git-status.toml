@@ -1,0 +1,10 @@
+[filters.git-status]
+description = "Compact git status output"
+match_command = "^git\\s+status\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "\\(use \"git ",
+  "no changes added to commit",
+  "nothing added to commit but untracked files present"
+]
+max_lines = 50

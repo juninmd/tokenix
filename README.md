@@ -94,7 +94,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | Feature | Description |
 |---|---|
 | **Semantic search** | Find relevant code by meaning, not just keywords |
-| **Symbol-aware chunking** | Heuristic parsers for Rust, Python, TypeScript, JavaScript, Go |
+| **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C++ |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
 | **Hook-based interception** | `PreToolUse` intercepts large reads; `PostToolUse` compresses Bash/ListDirectory output |
 | **Output compression** | Strips ANSI codes, emojis, blank lines, groups repeated lines, compacts JSON |
@@ -384,6 +384,11 @@ echo '. ~/.codex/tokenix-init.ps1' >> $PROFILE
 
 Then use `tx-read` and `tx-query` as shell helpers.
 
+On Windows, this also installs `~/.codex/hooks.json` and
+`~/.codex/tokenix-codex-hook.ps1`. The wrapper keeps `PreToolUse` intercepts
+active, but makes `PostToolUse` fail open so Codex does not report compressed
+Bash output as a failed hook.
+
 ### All tools at once
 
 ```bash
@@ -468,7 +473,7 @@ Languages without a symbol-aware chunker (Java, C, C++, C#, Ruby, Swift, Kotlin,
 
 ## 🔧 Output Filters
 
-tokenix compresses `Bash` and `ListDirectory` output via a `PostToolUse` hook before Claude sees it. Filtering happens in two layers:
+tokenix compresses `Bash` and `ListDirectory` output via a `PostToolUse` hook before Claude sees it. Claude uses `hook-post` directly, where `exit 2` means "replace the tool output with compressed context". Codex uses a small wrapper that treats post-tool compression as success because Codex reports non-zero post hooks as failures. Filtering happens in two layers:
 
 1. **Bundled filters** — 59 RTK-compatible TOML filters shipped inside the binary, covering `uv sync`, `cargo build`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, and more. Applied automatically — no setup needed.
 2. **User filters** — drop `.toml` files in `~/.tokenix/filters/`. They take priority over bundled filters.
@@ -522,11 +527,11 @@ tokenix filter generate "cargo test"
 ```
 src/
 ├── main.rs        CLI entry (clap), command dispatch, install-hook helpers
-├── chunker.rs     Symbol-aware heuristic chunking + outline generation
+├── chunker.rs     Symbol-aware AST chunking (Tree-sitter) + outline generation
 ├── embed.rs       fastembed ONNX: embed_documents(), embed_query() — no server needed
-├── store.rs       SQLite schema, CRUD, cosine similarity, hook log NDJSON
+├── store.rs       SQLite schema, CRUD, FTS5 virtual table, hybrid search (dense + sparse RRF)
 ├── indexer.rs     File walker + incremental index pipeline (parallel chunking + batch embedding)
-├── query.rs       Hybrid semantic/lexical ranking, token-budget selection, result formatting
+├── query.rs       Hybrid semantic + sparse FTS5 ranking, token-budget selection, result formatting
 ├── hook.rs        PreToolUse handler — Claude-style and Copilot-style JSON input
 ├── daemon.rs      Background TCP server — holds model + in-memory embedding cache
 ├── compress.rs    PostToolUse compression pipeline (Bash/ListDirectory output)

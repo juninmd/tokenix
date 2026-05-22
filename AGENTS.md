@@ -144,6 +144,7 @@ Follow the existing pattern: detect definition starts, track brace or indentatio
 ```sql
 files(id, path TEXT UNIQUE, mtime REAL, content_hash TEXT)
 chunks(id, file_id, path, start_line, end_line, symbol, kind, content, token_count)
+chunks_fts(rowid, content, symbol, path) -- SQLite FTS5 virtual table for keyword search
 embeddings(chunk_id PRIMARY KEY, embedding BLOB)
 meta(key PRIMARY KEY, value)
 ```

@@ -11,15 +11,43 @@ pub const PRICING_COLLECTED_AT: &str = "2026-05-07";
 
 pub const MODELS: &[ModelPrice] = &[
     // Anthropic (source: anthropic.com/pricing, collected 2026-05-07)
-    ModelPrice { name: "claude-haiku-4-5",         input_per_1m: 1.00, reference: false },
-    ModelPrice { name: "claude-sonnet-4.6",        input_per_1m: 3.00, reference: true  },
-    ModelPrice { name: "claude-opus-4.7",          input_per_1m: 5.00, reference: false },
+    ModelPrice {
+        name: "claude-haiku-4-5",
+        input_per_1m: 1.00,
+        reference: false,
+    },
+    ModelPrice {
+        name: "claude-sonnet-4.6",
+        input_per_1m: 3.00,
+        reference: true,
+    },
+    ModelPrice {
+        name: "claude-opus-4.7",
+        input_per_1m: 5.00,
+        reference: false,
+    },
     // OpenAI (source: openai.com/api/pricing, collected 2026-05-07)
-    ModelPrice { name: "gpt-5.4-mini",             input_per_1m: 0.75,  reference: false },
-    ModelPrice { name: "gpt-5.4",                  input_per_1m: 2.50,  reference: false },
+    ModelPrice {
+        name: "gpt-5.4-mini",
+        input_per_1m: 0.75,
+        reference: false,
+    },
+    ModelPrice {
+        name: "gpt-5.4",
+        input_per_1m: 2.50,
+        reference: false,
+    },
     // Google (source: ai.google.dev/pricing, collected 2026-05-07)
-    ModelPrice { name: "gemini-3.1-flash-preview", input_per_1m: 0.25, reference: false },
-    ModelPrice { name: "gemini-3.1-pro-preview",   input_per_1m: 2.00, reference: false },
+    ModelPrice {
+        name: "gemini-3.1-flash-preview",
+        input_per_1m: 0.25,
+        reference: false,
+    },
+    ModelPrice {
+        name: "gemini-3.1-pro-preview",
+        input_per_1m: 2.00,
+        reference: false,
+    },
 ];
 
 pub struct CostRow {
@@ -46,7 +74,10 @@ pub struct GainStats {
 
 pub fn compute_gain(repo_root: &Path) -> GainStats {
     let events = read_hook_log(repo_root);
-    let intercepted_events: Vec<_> = events.iter().filter(|e| e.action == "intercepted").collect();
+    let intercepted_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.action == "intercepted")
+        .collect();
     let passed_events: Vec<_> = events.iter().filter(|e| e.action == "pass").collect();
 
     let tokens_saved: i64 = intercepted_events.iter().map(|e| e.saved_tokens).sum();
@@ -82,9 +113,11 @@ pub fn compute_gain(repo_root: &Path) -> GainStats {
         entry.0 += 1;
         entry.1 += e.saved_tokens;
     }
-    let mut by_tool: Vec<(String, usize, i64)> =
-        by_tool_map.into_iter().map(|(k, (c, s))| (k, c, s)).collect();
-    by_tool.sort_by(|a, b| b.2.cmp(&a.2));
+    let mut by_tool: Vec<(String, usize, i64)> = by_tool_map
+        .into_iter()
+        .map(|(k, (c, s))| (k, c, s))
+        .collect();
+    by_tool.sort_by_key(|row| std::cmp::Reverse(row.2));
 
     let mut by_phase_map: std::collections::HashMap<String, (usize, i64)> =
         std::collections::HashMap::new();
@@ -93,8 +126,10 @@ pub fn compute_gain(repo_root: &Path) -> GainStats {
         entry.0 += 1;
         entry.1 += e.saved_tokens;
     }
-    let mut by_phase: Vec<(String, usize, i64)> =
-        by_phase_map.into_iter().map(|(k, (c, s))| (k, c, s)).collect();
+    let mut by_phase: Vec<(String, usize, i64)> = by_phase_map
+        .into_iter()
+        .map(|(k, (c, s))| (k, c, s))
+        .collect();
     by_phase.sort_by(|a, b| a.0.cmp(&b.0));
 
     GainStats {

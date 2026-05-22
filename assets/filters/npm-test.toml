@@ -1,0 +1,13 @@
+[filters.npm-test]
+description = "Compact npm/pnpm/yarn test outputs"
+match_command = "^(npm|pnpm|yarn)\\s+(run\\s+)?test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^>\\s+\\S+@\\S+\\s+test\\b",
+  "^>\\s+\\S+\\s+\\S+\\b",
+  "^platform\\s+",
+  "^PASS\\s+"
+]
+max_lines = 80
+on_empty = "npm test: all tests passed"

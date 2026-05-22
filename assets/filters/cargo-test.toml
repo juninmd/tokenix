@@ -1,0 +1,15 @@
+[filters.cargo-test]
+description = "Compact Rust cargo test output"
+match_command = "^cargo\\s+test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Compiling\\s+",
+  "^\\s*Finished\\s+",
+  "^\\s*Fresh\\s+",
+  "^\\s*running\\s+\\d+\\s+test",
+  "^test\\s+\\S+\\s+\\.\\.\\.\\s+ok\\b",
+  "^\\s*Doc-tests\\s+"
+]
+max_lines = 100
+on_empty = "cargo test: all tests passed"

@@ -1,0 +1,12 @@
+[filters.go-test]
+description = "Compact go test output"
+match_command = "^go\\s+test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^ok\\s+\\S+\\s+\\d+\\.\\d+s",
+  "^\\?\\s+\\S+\\s+\\[no test files\\]",
+  "^PASS$"
+]
+max_lines = 80
+on_empty = "go test: all tests passed"

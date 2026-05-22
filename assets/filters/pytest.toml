@@ -1,0 +1,19 @@
+[filters.pytest]
+description = "Compact pytest test runs"
+match_command = "^(python\\s+-m\\s+)?pytest\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^platform\\s+",
+  "^cachedir:",
+  "^rootdir:",
+  "^configfile:",
+  "^plugins:",
+  "^collected \\d+ items",
+  "^passed in",
+  "^\\.+[\\s$]",
+  "^\\s*\\d+%\\s*$",
+  "^[\\.sFp]+$"
+]
+max_lines = 80
+on_empty = "pytest: all tests passed"

@@ -1,0 +1,11 @@
+[filters.git-diff]
+description = "Compact git diff view"
+match_command = "^git\\s+diff\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^diff --git",
+  "^index ",
+  "^--- ",
+  "^\\+\\+\\+ "
+]
+max_lines = 100

@@ -11,7 +11,7 @@ use crate::chunker::{chunk_file, file_hash, should_index, Chunk, IGNORED_DIRS};
 use crate::embed::embed_documents;
 use crate::store::{
     count_stats, delete_chunks_for_file, init_schema, insert_chunk, insert_embedding,
-    load_all_file_info, open_db, upsert_file, write_project_name, IndexStats,
+    load_all_file_info, open_db, upsert_file, write_project_name, IndexStats, NewChunk,
 };
 
 #[allow(dead_code)]
@@ -106,7 +106,7 @@ where
         .git_global(true)
         .git_exclude(true)
         .filter_entry(|e| {
-            if e.file_type().map_or(false, |t| t.is_dir()) {
+            if e.file_type().is_some_and(|t| t.is_dir()) {
                 let name = e.file_name().to_string_lossy();
                 return !IGNORED_DIRS.contains(&name.as_ref());
             }
@@ -114,7 +114,7 @@ where
         })
         .build()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map_or(false, |t| t.is_file()))
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
         .filter(|e| should_index(e.path()))
         .map(|e| {
             let abs = e.into_path();
@@ -130,11 +130,18 @@ where
     let total = files.len();
     if total == 0 {
         let stats = count_stats(&conn)?;
-        return Ok((IndexResult { total: 0, indexed: 0, skipped: 0, errors: 0 }, stats));
+        return Ok((
+            IndexResult {
+                total: 0,
+                indexed: 0,
+                skipped: 0,
+                errors: 0,
+            },
+            stats,
+        ));
     }
 
-    let existing: Arc<HashMap<String, (i64, f64, String)>> =
-        Arc::new(load_all_file_info(&conn)?);
+    let existing: Arc<HashMap<String, (i64, f64, String)>> = Arc::new(load_all_file_info(&conn)?);
 
     progress_cb(&format!("discovered {} file(s) — chunking", total));
 
@@ -173,14 +180,23 @@ where
         }
     }
 
-    // Phase 3: embed in batches of 512 to cap peak memory
-    const EMBED_BATCH: usize = 512;
+    // Phase 3: embed in batches to cap peak memory. ONNX Runtime can allocate
+    // large intermediate buffers on Windows, so keep the default conservative
+    // and allow local tuning for larger machines.
+    let embed_batch = std::env::var("TOKENIX_EMBED_BATCH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(8);
     let embeddings = if embed_texts.is_empty() {
         vec![]
     } else {
-        progress_cb(&format!("embedding {} chunks via fastembed (ONNX)...", embed_texts.len()));
+        progress_cb(&format!(
+            "embedding {} chunks via fastembed (ONNX)...",
+            embed_texts.len()
+        ));
         let mut all: Vec<Vec<f32>> = Vec::with_capacity(embed_texts.len());
-        for batch in embed_texts.chunks(EMBED_BATCH) {
+        for batch in embed_texts.chunks(embed_batch) {
             let batch_embs = embed_documents(batch)?;
             all.extend(batch_embs);
         }
@@ -236,14 +252,16 @@ where
         for (chunk, embedding) in f.chunks.iter().zip(file_embs.iter()) {
             let chunk_id = match insert_chunk(
                 &conn,
-                file_id,
-                &f.rel,
-                chunk.start_line,
-                chunk.end_line,
-                &chunk.symbol,
-                &chunk.kind,
-                &chunk.content,
-                chunk.token_count,
+                NewChunk {
+                    file_id,
+                    path: &f.rel,
+                    start: chunk.start_line,
+                    end: chunk.end_line,
+                    symbol: &chunk.symbol,
+                    kind: &chunk.kind,
+                    content: &chunk.content,
+                    token_count: chunk.token_count,
+                },
             ) {
                 Ok(id) => id,
                 Err(_) => continue,
@@ -253,6 +271,18 @@ where
         let _ = conn.execute_batch("COMMIT");
 
         indexed += 1;
+    }
+
+    // Phase 6: clean up removed files from index
+    let mut walked_files = std::collections::HashSet::new();
+    for (_, rel) in &files {
+        walked_files.insert(rel.clone());
+    }
+    for (rel_path, (file_id, _, _)) in existing.iter() {
+        if !walked_files.contains(rel_path) {
+            progress_cb(&format!("removing deleted file from index: {}", rel_path));
+            let _ = crate::store::delete_file(&conn, *file_id);
+        }
     }
 
     let now = SystemTime::now()

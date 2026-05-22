@@ -295,7 +295,7 @@ fn unique_files<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<String> {
 }
 
 fn path_expected(path: &str, expected: &[&str]) -> bool {
-    expected.iter().any(|p| path == *p)
+    expected.contains(&path)
 }
 
 fn print_read_reduction(rows: &[ReadRow]) {
@@ -393,8 +393,8 @@ fn print_semantic_quality(rows: &[QueryRow], query_budget: usize) {
         format_num(query_budget as i64)
     );
     println!(
-        "  {:<22} {:>8} {:>8} {:>7} {:>7}  {}",
-        "Case", "Tokens", "ms", "Hit@1", "Hit@3", "Top files"
+        "  {:<22} {:>8} {:>8} {:>7} {:>7}  Top files",
+        "Case", "Tokens", "ms", "Hit@1", "Hit@3"
     );
     println!("  {}", "-".repeat(104).dimmed());
 

@@ -1,0 +1,14 @@
+[filters.cargo-build]
+description = "Compact Rust cargo build output"
+match_command = "^cargo\\s+build\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Downloading\\s+",
+  "^\\s*Downloaded\\s+",
+  "^\\s*Compiling\\s+\\S+\\s+v\\d+\\.\\d+\\.\\d+\\s*(\\(.*\\))?$",
+  "^\\s*Fresh\\s+",
+  "^\\s*Finished\\s+"
+]
+max_lines = 80
+on_empty = "cargo build: build succeeded"

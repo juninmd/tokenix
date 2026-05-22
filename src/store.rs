@@ -113,6 +113,29 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);
         CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            content,
+            symbol,
+            path,
+            content='chunks',
+            content_rowid='id'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+            INSERT INTO chunks_fts(rowid, content, symbol, path) VALUES (new.id, new.content, new.symbol, new.path);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, content, symbol, path) VALUES ('delete', old.id, old.content, old.symbol, old.path);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, content, symbol, path) VALUES ('delete', old.id, old.content, old.symbol, old.path);
+            INSERT INTO chunks_fts(rowid, content, symbol, path) VALUES (new.id, new.content, new.symbol, new.path);
+        END;
+
+        INSERT OR IGNORE INTO chunks_fts(rowid, content, symbol, path) SELECT id, content, symbol, path FROM chunks;
         "#,
     )?;
     Ok(())
@@ -151,29 +174,37 @@ pub fn delete_chunks_for_file(conn: &Connection, file_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub fn insert_chunk(
-    conn: &Connection,
-    file_id: i64,
-    path: &str,
-    start: usize,
-    end: usize,
-    symbol: &str,
-    kind: &str,
-    content: &str,
-    token_count: usize,
-) -> Result<i64> {
+pub fn delete_file(conn: &Connection, file_id: i64) -> Result<()> {
+    delete_chunks_for_file(conn, file_id)?;
+    conn.execute("DELETE FROM files WHERE id=?1", params![file_id])?;
+    Ok(())
+}
+
+
+pub struct NewChunk<'a> {
+    pub file_id: i64,
+    pub path: &'a str,
+    pub start: usize,
+    pub end: usize,
+    pub symbol: &'a str,
+    pub kind: &'a str,
+    pub content: &'a str,
+    pub token_count: usize,
+}
+
+pub fn insert_chunk(conn: &Connection, chunk: NewChunk<'_>) -> Result<i64> {
     conn.execute(
         "INSERT INTO chunks(file_id,path,start_line,end_line,symbol,kind,content,token_count)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
-            file_id,
-            path,
-            start as i64,
-            end as i64,
-            symbol,
-            kind,
-            content,
-            token_count as i64
+            chunk.file_id,
+            chunk.path,
+            chunk.start as i64,
+            chunk.end as i64,
+            chunk.symbol,
+            chunk.kind,
+            chunk.content,
+            chunk.token_count as i64
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -202,6 +233,7 @@ pub struct SearchResult {
     pub distance: f32,
 }
 
+#[allow(dead_code)]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -213,17 +245,42 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-pub fn search_similar(conn: &Connection, query_vec: &[f32], k: usize) -> Result<Vec<SearchResult>> {
-    let mut stmt = conn.prepare(
-        "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding
-         FROM embeddings e JOIN chunks c ON c.id = e.chunk_id"
-    )?;
+pub fn cosine_similarity_to_bytes(query_vec: &[f32], query_norm: f32, bytes: &[u8]) -> f32 {
+    let mut dot = 0.0f32;
+    let mut nb = 0.0f32;
+    let mut i = 0;
+    for chunk in bytes.chunks_exact(4) {
+        if i >= query_vec.len() {
+            break;
+        }
+        let y = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        dot += query_vec[i] * y;
+        nb += y * y;
+        i += 1;
+    }
+    let nb_sqrt = nb.sqrt();
+    if query_norm == 0.0 || nb_sqrt == 0.0 {
+        0.0
+    } else {
+        dot / (query_norm * nb_sqrt)
+    }
+}
 
-    let mut scored: Vec<(f32, SearchResult)> = stmt
-        .query_map([], |row| {
-            let blob: Vec<u8> = row.get(8)?;
+pub fn search_similar(
+    conn: &Connection,
+    query_vec: &[f32],
+    k: usize,
+    file_filter: Option<&str>,
+) -> Result<Vec<SearchResult>> {
+    let rows_data: Vec<(Vec<u8>, i64, String, i64, i64, String, String, String, i64)> = if let Some(filter) = file_filter {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding
+             FROM embeddings e JOIN chunks c ON c.id = e.chunk_id
+             WHERE instr(c.path, ?1) > 0"
+        )?;
+        let rows = stmt.query_map(params![filter], |row| {
             Ok((
-                blob,
+                row.get::<_, Vec<u8>>(8)?,
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, i64>(2)?,
@@ -233,11 +290,38 @@ pub fn search_similar(conn: &Connection, query_vec: &[f32], k: usize) -> Result<
                 row.get::<_, String>(6)?,
                 row.get::<_, i64>(7)?,
             ))
-        })?
-        .filter_map(|r| r.ok())
+        })?;
+        let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+        collected
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding
+             FROM embeddings e JOIN chunks c ON c.id = e.chunk_id"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(8)?,
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        })?;
+        let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+        collected
+    };
+
+    let query_norm: f32 = query_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+    use rayon::prelude::*;
+    let mut scored: Vec<(f32, SearchResult)> = rows_data
+        .into_par_iter()
         .map(|(blob, id, path, sl, el, symbol, kind, content, tc)| {
-            let emb = deserialize_vec(&blob);
-            let sim = cosine_similarity(query_vec, &emb);
+            let sim = cosine_similarity_to_bytes(query_vec, query_norm, &blob);
             (
                 sim,
                 SearchResult {
@@ -258,6 +342,158 @@ pub fn search_similar(conn: &Connection, query_vec: &[f32], k: usize) -> Result<
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     Ok(scored.into_iter().take(k).map(|(_, r)| r).collect())
 }
+
+pub fn sanitize_fts_query(query: &str) -> String {
+    let mut words = Vec::new();
+    for word in query.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
+        let trimmed = word.trim();
+        if !trimmed.is_empty() {
+            let escaped = trimmed.replace('"', "\"\"");
+            words.push(format!("\"{}\"", escaped));
+        }
+    }
+    if words.is_empty() {
+        "".to_string()
+    } else {
+        words.join(" OR ")
+    }
+}
+
+pub fn search_fts(
+    conn: &Connection,
+    query_text: &str,
+    limit: usize,
+    file_filter: Option<&str>,
+) -> Result<Vec<i64>> {
+    let sanitized = sanitize_fts_query(query_text);
+    if sanitized.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut ids = Vec::new();
+    if let Some(filter) = file_filter {
+        let mut stmt = conn.prepare(
+            "SELECT c.id FROM chunks c JOIN chunks_fts f ON c.id = f.rowid
+             WHERE chunks_fts MATCH ?1 AND instr(c.path, ?2) > 0 LIMIT ?3"
+        )?;
+        let rows = stmt.query_map(params![sanitized, filter, limit], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        for r in rows {
+            if let Ok(id) = r {
+                ids.push(id);
+            }
+        }
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?1 LIMIT ?2"
+        )?;
+        let rows = stmt.query_map(params![sanitized, limit], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        for r in rows {
+            if let Ok(id) = r {
+                ids.push(id);
+            }
+        }
+    }
+    Ok(ids)
+}
+
+pub fn fetch_chunks_by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<SearchResult>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+    let query_str = format!(
+        "SELECT id, path, start_line, end_line, symbol, kind, content, token_count
+         FROM chunks WHERE id IN ({})",
+        placeholders.join(",")
+    );
+    let mut stmt = conn.prepare(&query_str)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
+        Ok(SearchResult {
+            id: row.get::<_, i64>(0)?,
+            path: row.get::<_, String>(1)?,
+            start_line: row.get::<_, i64>(2)? as usize,
+            end_line: row.get::<_, i64>(3)? as usize,
+            symbol: row.get::<_, String>(4)?,
+            kind: row.get::<_, String>(5)?,
+            content: row.get::<_, String>(6)?,
+            token_count: row.get::<_, i64>(7)? as usize,
+            distance: 1.0,
+        })
+    })?;
+    let mut results = Vec::new();
+    for r in rows {
+        results.push(r?);
+    }
+    Ok(results)
+}
+
+pub fn hybrid_search(
+    conn: &Connection,
+    query_vec: &[f32],
+    query_text: &str,
+    k: usize,
+    file_filter: Option<&str>,
+) -> Result<Vec<SearchResult>> {
+    let dense_limit = 100.max(k * 2);
+    let dense_results = search_similar(conn, query_vec, dense_limit, file_filter)?;
+
+    let sparse_limit = 100.max(k * 2);
+    let sparse_ids = search_fts(conn, query_text, sparse_limit, file_filter)?;
+
+    let mut rrf_scores: HashMap<i64, f32> = HashMap::new();
+
+    for (rank, res) in dense_results.iter().enumerate() {
+        let score = 1.0 / (60.0 + rank as f32);
+        rrf_scores.insert(res.id, score);
+    }
+
+    for (rank, id) in sparse_ids.iter().enumerate() {
+        let score = 1.0 / (60.0 + rank as f32);
+        rrf_scores.entry(*id)
+            .and_modify(|s| *s += score)
+            .or_insert(score);
+    }
+
+    let mut sorted_candidates: Vec<(i64, f32)> = rrf_scores.into_iter().collect();
+    sorted_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let top_candidates: Vec<(i64, f32)> = sorted_candidates.into_iter().take(k * 2).collect();
+    if top_candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut dense_map: HashMap<i64, SearchResult> = dense_results.into_iter().map(|r| (r.id, r)).collect();
+
+    let missing_ids: Vec<i64> = top_candidates.iter()
+        .map(|(id, _)| *id)
+        .filter(|id| !dense_map.contains_key(id))
+        .collect();
+
+    if !missing_ids.is_empty() {
+        let chunks_fetched = fetch_chunks_by_ids(conn, &missing_ids)?;
+        for chunk in chunks_fetched {
+            dense_map.insert(chunk.id, chunk);
+        }
+    }
+
+    let mut final_results = Vec::new();
+    for (id, rrf_score) in top_candidates {
+        if let Some(mut result) = dense_map.remove(&id) {
+            result.distance = 1.0 - rrf_score;
+            final_results.push(result);
+        }
+    }
+
+    final_results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+
+    Ok(final_results.into_iter().take(k).collect())
+}
+
+
 
 #[allow(dead_code)]
 pub struct SymbolMatch {
@@ -452,7 +688,12 @@ fn git_fingerprint(repo_root: &Path) -> Option<String> {
     let branch = git_output(repo_root, &["branch", "--show-current"]).unwrap_or_default();
     let worktree = git_output(repo_root, &["rev-parse", "--show-toplevel"])
         .unwrap_or_else(|| repo_root.to_string_lossy().to_string());
-    Some(format!("{}:{}:{}", worktree.trim(), branch.trim(), head.trim()))
+    Some(format!(
+        "{}:{}:{}",
+        worktree.trim(),
+        branch.trim(),
+        head.trim()
+    ))
 }
 
 fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
@@ -547,16 +788,18 @@ pub fn load_all_embeddings(conn: &Connection) -> Result<Vec<EmbeddingEntry>> {
             ))
         })?
         .filter_map(|r| r.ok())
-        .map(|(id, path, sl, el, symbol, kind, tc, blob)| EmbeddingEntry {
-            id,
-            path,
-            start_line: sl as usize,
-            end_line: el as usize,
-            symbol,
-            kind,
-            token_count: tc as usize,
-            embedding: deserialize_vec(&blob),
-        })
+        .map(
+            |(id, path, sl, el, symbol, kind, tc, blob)| EmbeddingEntry {
+                id,
+                path,
+                start_line: sl as usize,
+                end_line: el as usize,
+                symbol,
+                kind,
+                token_count: tc as usize,
+                embedding: deserialize_vec(&blob),
+            },
+        )
         .collect();
     Ok(entries)
 }
@@ -572,8 +815,10 @@ pub fn fetch_chunks_content(
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!("SELECT id, content FROM chunks WHERE id IN ({placeholders})");
     let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<rusqlite::types::Value> =
-        ids.iter().map(|id| rusqlite::types::Value::Integer(*id)).collect();
+    let params: Vec<rusqlite::types::Value> = ids
+        .iter()
+        .map(|id| rusqlite::types::Value::Integer(*id))
+        .collect();
     let result = stmt
         .query_map(rusqlite::params_from_iter(params.iter()), |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
@@ -591,4 +836,62 @@ pub fn get_db_mtime(repo_root: &Path) -> f64 {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cosine_similarity_to_bytes() {
+        let q = vec![1.0, 2.0, 3.0, 4.0];
+        let b = vec![0.5, -1.0, 2.0, 1.5];
+        let q_norm = q.iter().map(|x| x * x).sum::<f32>().sqrt();
+        
+        let sim1 = cosine_similarity(&q, &b);
+        let bytes = serialize_vec(&b);
+        let sim2 = cosine_similarity_to_bytes(&q, q_norm, &bytes);
+        
+        assert!((sim1 - sim2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_hybrid_search() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn, 4).unwrap();
+
+        // 1. Insert file
+        let file_id = upsert_file(&conn, "src/main.rs", 123.45, "abcde").unwrap();
+
+        // 2. Insert chunk
+        let chunk = NewChunk {
+            file_id,
+            path: "src/main.rs",
+            start: 1,
+            end: 10,
+            symbol: "my_cool_function",
+            kind: "function",
+            content: "fn my_cool_function() { println!(\"hello fts5 hybrid search\"); }",
+            token_count: 15,
+        };
+        let chunk_id = insert_chunk(&conn, chunk).unwrap();
+
+        // 3. Insert embedding
+        let embedding = vec![0.5, 0.5, 0.5, 0.5];
+        conn.execute(
+            "INSERT INTO embeddings(chunk_id, embedding) VALUES(?1, ?2)",
+            params![chunk_id, serialize_vec(&embedding)],
+        ).unwrap();
+
+        // 4. Test search_fts
+        let sparse_ids = search_fts(&conn, "fts5 hybrid", 10, None).unwrap();
+        assert_eq!(sparse_ids, vec![chunk_id]);
+
+        // 5. Test hybrid_search
+        let query_vec = vec![0.6, 0.6, 0.6, 0.6];
+        let results = hybrid_search(&conn, &query_vec, "hello search", 10, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, chunk_id);
+        assert_eq!(results[0].symbol, "my_cool_function");
+    }
 }

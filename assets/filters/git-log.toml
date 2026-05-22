@@ -1,0 +1,9 @@
+[filters.git-log]
+description = "Compact git log history"
+match_command = "^git\\s+log\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^Author:",
+  "^Date:"
+]
+max_lines = 40

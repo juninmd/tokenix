@@ -1,0 +1,12 @@
+[filters.cargo-check]
+description = "Compact cargo check and clippy outputs"
+match_command = "^cargo\\s+(check|clippy)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Compiling\\s+",
+  "^\\s*Finished\\s+",
+  "^\\s*Checking\\s+"
+]
+max_lines = 100
+on_empty = "cargo check/clippy: ok"

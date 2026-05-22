@@ -200,32 +200,27 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         .replace('\\', "/");
 
     let ext = full_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let is_code = matches!(ext, "rs" | "py" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "go");
+    let is_code = matches!(
+        ext,
+        "rs" | "py" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "go"
+    );
 
-    let msg = if is_code {
-        format!(
-            "{}\n\n[tokenix] File has {} lines. Showing symbol outline above.\n\
-            To read a specific symbol: tokenix read {} --symbol <name>\n\
-            To read specific lines:   use Read with offset/limit parameters.",
-            outline, line_count, rel
-        )
-    } else {
-        format!(
-            "{}\n\n[tokenix] File has {} lines. Content shown above (formatting stripped).\n\
-            To read specific lines: use Read with offset/limit parameters.",
-            outline, line_count
-        )
-    };
+    if !is_code {
+        return (false, String::new());
+    }
+
+    let msg = format!(
+        "{}\n\n[tokenix] File has {} lines. Showing symbol outline above.\n\
+        To read a specific symbol: tokenix read {} --symbol <name>\n\
+        To read specific lines:   use Read with offset/limit parameters.",
+        outline, line_count, rel
+    );
     (true, msg)
 }
 
 /// Returns a path to use as a soft lock file for concurrent embed protection.
 fn embed_lock_path() -> Option<std::path::PathBuf> {
-    Some(
-        dirs::cache_dir()?
-            .join("tokenix")
-            .join("embed.lock"),
-    )
+    Some(dirs::cache_dir()?.join("tokenix").join("embed.lock"))
 }
 
 /// Best-effort concurrency guard for the ONNX embed call.
@@ -286,7 +281,8 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     }
 
     // Try daemon first: model stays resident, ~30ms vs ~430ms cold embed.
-    if let Some(output) = crate::daemon::daemon_search_with_autostart(repo_root, pattern, 20, 2500) {
+    if let Some(output) = crate::daemon::daemon_search_with_autostart(repo_root, pattern, 20, 2500, None)
+    {
         return (true, output);
     }
 
@@ -437,7 +433,8 @@ mod tests {
 
     #[test]
     fn bom_prefix_stripped() {
-        let raw = "\u{feff}{\"tool_name\":\"Grep\",\"tool_input\":{\"pattern\":\"how does auth work\"}}";
+        let raw =
+            "\u{feff}{\"tool_name\":\"Grep\",\"tool_input\":{\"pattern\":\"how does auth work\"}}";
         let input = HookInput::from_stdin(raw).unwrap();
         assert_eq!(input.tool_name, "Grep");
     }

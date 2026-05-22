@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::chunker::count_tokens;
 use crate::embed::embed_query;
-use crate::store::{open_db, search_similar, SearchResult};
+use crate::store::{open_db, hybrid_search, SearchResult};
 
 pub fn query_index(
     repo_root: &Path,
@@ -20,11 +20,8 @@ pub fn query_index(
 
     let vec = embed_query(query_text)?;
     let candidate_k = (k.saturating_mul(5)).max(50);
-    let mut results = search_similar(&conn, &vec, candidate_k)?;
+    let mut results = hybrid_search(&conn, &vec, query_text, candidate_k, file_filter)?;
 
-    if let Some(filter) = file_filter {
-        results.retain(|r| r.path.contains(filter));
-    }
     rerank_results(&mut results, query_text);
 
     let mut selected = Vec::new();
@@ -115,7 +112,13 @@ fn query_terms(query: &str) -> Vec<String> {
 
 fn normalize_text(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { ' ' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
 }
 
@@ -174,7 +177,13 @@ mod tests {
     use super::*;
     use crate::store::SearchResult;
 
-    fn make_result(path: &str, start: usize, end: usize, symbol: &str, content: &str) -> SearchResult {
+    fn make_result(
+        path: &str,
+        start: usize,
+        end: usize,
+        symbol: &str,
+        content: &str,
+    ) -> SearchResult {
         SearchResult {
             id: 0,
             path: path.to_string(),

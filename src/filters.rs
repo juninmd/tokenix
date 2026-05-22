@@ -49,6 +49,7 @@ pub struct ActiveFilter {
 #[derive(Embed)]
 #[folder = "assets/filters"]
 #[include = "*.toml"]
+// Rebuild trigger for new filters
 struct BundledFilters;
 
 pub fn filters_dir() -> PathBuf {
@@ -188,13 +189,7 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
     let result = if let Some(max_len) = f.truncate_lines_at {
         lines
             .iter()
-            .map(|l| {
-                if l.len() > max_len {
-                    &l[..max_len]
-                } else {
-                    l
-                }
-            })
+            .map(|l| if l.len() > max_len { &l[..max_len] } else { l })
             .collect::<Vec<_>>()
             .join("\n")
     } else {

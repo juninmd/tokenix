@@ -11,12 +11,37 @@ const BASH_HEAD_LINES: usize = 40;
 const BASH_TAIL_LINES: usize = 15;
 
 /// Bash-aware compression: checks user TOML filters first, then built-in heuristics.
+fn log_unfiltered_cmd(cmd: &str) {
+    if cmd.is_empty() {
+        return;
+    }
+    let root = crate::store::find_project_root(
+        &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+    );
+    let log_path = root.join(".tokenix").join("unfiltered_cmds.log");
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let entry = format!("{}\n", cmd);
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = f.write_all(entry.as_bytes());
+    }
+}
+
 pub fn compress_bash_output(cmd: &str, s: &str) -> String {
     // User-defined TOML filters take priority over built-in heuristics.
     let user_filters = crate::filters::load_all_filters();
     if let Some(f) = crate::filters::find_filter(cmd, &user_filters) {
         return crate::filters::apply_filter(s, f);
     }
+
+    // No filter matched — record for later analysis (tokenix filter list).
+    log_unfiltered_cmd(cmd);
 
     let base = compress_output(s);
     let lines: Vec<&str> = base.lines().collect();
@@ -181,8 +206,7 @@ fn compact_json(s: &str) -> String {
         && lines.iter().all(|l| {
             let t = l.trim();
             t.is_empty()
-                || (t.starts_with('{')
-                    && serde_json::from_str::<serde_json::Value>(t).is_ok())
+                || (t.starts_with('{') && serde_json::from_str::<serde_json::Value>(t).is_ok())
         })
     {
         let compacted: String = lines
@@ -394,7 +418,10 @@ pub fn run_hook_post() -> Result<()> {
         _ => std::process::exit(0),
     };
 
-    let bash_cmd = v["tool_input"]["command"].as_str().unwrap_or("").to_string();
+    let bash_cmd = v["tool_input"]["command"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     let compressed = if tool_name == "Bash" {
         compress_bash_output(&bash_cmd, &text)
     } else {
@@ -499,7 +526,10 @@ mod tests {
     fn compacts_ndjson() {
         let input = "{ \"level\": \"info\", \"msg\": \"started\" }\n{ \"level\": \"error\", \"msg\": \"failed\" }\n";
         let output = compact_json(input);
-        assert_eq!(output, "{\"level\":\"info\",\"msg\":\"started\"}\n{\"level\":\"error\",\"msg\":\"failed\"}\n");
+        assert_eq!(
+            output,
+            "{\"level\":\"info\",\"msg\":\"started\"}\n{\"level\":\"error\",\"msg\":\"failed\"}\n"
+        );
     }
 
     #[test]
@@ -556,7 +586,10 @@ mod tests {
         let out = compress_bash_output("", &input);
         assert!(out.contains("error[E0425]"), "should keep error: {}", out);
         assert!(out.contains("Finished"), "should keep summary: {}", out);
-        assert!(!out.contains("Compiling crate0"), "should strip Compiling lines");
+        assert!(
+            !out.contains("Compiling crate0"),
+            "should strip Compiling lines"
+        );
     }
 
     #[test]

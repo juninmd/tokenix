@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Result};
@@ -33,10 +33,13 @@ fn format_num(n: i64) -> String {
     result.chars().rev().collect()
 }
 
-fn collect_stats(repo_root: &PathBuf) -> Vec<CmdStats> {
+fn collect_stats(repo_root: &Path) -> Vec<CmdStats> {
     let events = store::read_hook_log(repo_root);
     let mut map: HashMap<String, CmdStats> = HashMap::new();
-    for ev in events.iter().filter(|e| e.tool == "Bash" && e.phase == "post") {
+    for ev in events
+        .iter()
+        .filter(|e| e.tool == "Bash" && e.phase == "post")
+    {
         if let Some(cmd) = extract_base_command(&ev.input_preview) {
             let entry = map.entry(cmd.clone()).or_insert(CmdStats {
                 base_cmd: cmd,
@@ -55,7 +58,7 @@ fn collect_stats(repo_root: &PathBuf) -> Vec<CmdStats> {
     stats
 }
 
-pub fn cmd_filter_list(repo_root: &PathBuf) -> Result<()> {
+pub fn cmd_filter_list(repo_root: &Path) -> Result<()> {
     let stats = collect_stats(repo_root);
     print_stats_table(&stats);
     Ok(())
@@ -71,8 +74,8 @@ pub fn cmd_filter_active() -> Result<()> {
     println!();
     println!("{}", "ACTIVE OUTPUT FILTERS".bold().underline());
     println!(
-        "  {:<28} {:<8} {:<52} {}",
-        "Name", "Source", "Match command", "Description"
+        "  {:<28} {:<8} {:<52} Description",
+        "Name", "Source", "Match command"
     );
     println!("  {}", "-".repeat(118).bright_black());
 
@@ -121,7 +124,7 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}~", s.chars().take(keep).collect::<String>())
 }
 
-pub fn cmd_filter_generate(command: Option<String>, repo_root: &PathBuf) -> Result<()> {
+pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<()> {
     let base_cmd = match command {
         Some(c) => c,
         None => {
@@ -143,7 +146,11 @@ pub fn cmd_filter_generate(command: Option<String>, repo_root: &PathBuf) -> Resu
     };
 
     // Get sample output by running `<cmd> --help`
-    println!("\n{} running `{} --help` for sample output...", "→".cyan(), base_cmd);
+    println!(
+        "\n{} running `{} --help` for sample output...",
+        "→".cyan(),
+        base_cmd
+    );
     let sample = run_command_sample(&base_cmd);
 
     // Show preview and let user confirm or replace
@@ -178,7 +185,11 @@ pub fn cmd_filter_generate(command: Option<String>, repo_root: &PathBuf) -> Resu
     };
 
     // Build and send prompt
-    println!("{} asking {} to generate filter...", "→".cyan(), chosen_cli.0.green());
+    println!(
+        "{} asking {} to generate filter...",
+        "→".cyan(),
+        chosen_cli.0.green()
+    );
     let prompt = filters::build_filter_prompt(&base_cmd, &sample);
     let toml_output = invoke_ai_cli(&chosen_cli.0, &chosen_cli.1, &prompt)?;
     let toml_clean = extract_toml_from_response(&toml_output);
@@ -225,7 +236,10 @@ pub fn cmd_filter_generate(command: Option<String>, repo_root: &PathBuf) -> Resu
 
 fn preview_and_confirm_sample(cmd: &str, sample: String) -> Result<String> {
     let preview_lines: Vec<&str> = sample.lines().take(30).collect();
-    println!("\n{} (first 30 lines):", format!("Sample output for `{}`", cmd).bold());
+    println!(
+        "\n{} (first 30 lines):",
+        format!("Sample output for `{}`", cmd).bold()
+    );
     println!("{}", "─".repeat(60));
     for line in &preview_lines {
         println!("{}", line);
@@ -243,7 +257,9 @@ fn preview_and_confirm_sample(cmd: &str, sample: String) -> Result<String> {
     match ans.trim().to_lowercase().as_str() {
         "u" | "" => Ok(sample),
         "p" => {
-            println!("Paste your sample output, then enter a line with just a single dot (.) to finish:");
+            println!(
+                "Paste your sample output, then enter a line with just a single dot (.) to finish:"
+            );
             let mut pasted = String::new();
             let stdin = io::stdin();
             for line in stdin.lock().lines() {
@@ -285,11 +301,7 @@ fn run_command_sample(cmd: &str) -> String {
                 stdout.to_string()
             };
             // Cap at 150 lines
-            combined
-                .lines()
-                .take(150)
-                .collect::<Vec<_>>()
-                .join("\n")
+            combined.lines().take(150).collect::<Vec<_>>().join("\n")
         }
         Err(_) => format!("(could not run `{} --help`)", cmd),
     }
@@ -416,10 +428,18 @@ fn create_pr(cmd: &str, toml_content: &str) -> Result<()> {
     std::fs::create_dir_all(&filters_dir)?;
     std::fs::write(filters_dir.join(format!("{}.toml", cmd)), toml_content)?;
 
-    git_run(&["-C", repo.to_str().unwrap(), "add", &format!("filters/{}.toml", cmd)])?;
     git_run(&[
-        "-C", repo.to_str().unwrap(),
-        "commit", "-m", &format!("filter: add {} filter", cmd),
+        "-C",
+        repo.to_str().unwrap(),
+        "add",
+        &format!("filters/{}.toml", cmd),
+    ])?;
+    git_run(&[
+        "-C",
+        repo.to_str().unwrap(),
+        "commit",
+        "-m",
+        &format!("filter: add {} filter", cmd),
     ])?;
     git_run(&["-C", repo.to_str().unwrap(), "push", "origin", &branch])?;
 
@@ -428,16 +448,28 @@ fn create_pr(cmd: &str, toml_content: &str) -> Result<()> {
     let body = format!(
         "New community filter for `{cmd}`.\n\nGenerated by `tokenix filter generate {cmd}`.\n\n```toml\n{toml_content}\n```\n"
     );
-    gh_run(&[
-        "pr", "create",
-        "--repo", "juninmd/tokenix",
-        "--title", &title,
-        "--body", &body,
-        "--base", "main",
-        "--head", &branch,
-    ], &repo)?;
+    gh_run(
+        &[
+            "pr",
+            "create",
+            "--repo",
+            "juninmd/tokenix",
+            "--title",
+            &title,
+            "--body",
+            &body,
+            "--base",
+            "main",
+            "--head",
+            &branch,
+        ],
+        &repo,
+    )?;
 
-    println!("{} PR created at github.com/juninmd/tokenix/pulls", "✓".green());
+    println!(
+        "{} PR created at github.com/juninmd/tokenix/pulls",
+        "✓".green()
+    );
     let _ = std::fs::remove_dir_all(&tmp);
     Ok(())
 }
@@ -451,7 +483,11 @@ fn gh_run(args: &[&str], cwd: &std::path::Path) -> Result<()> {
     } else {
         Command::new("gh").args(args).current_dir(cwd).status()?
     };
-    if ok.success() { Ok(()) } else { bail!("gh {:?} failed", args) }
+    if ok.success() {
+        Ok(())
+    } else {
+        bail!("gh {:?} failed", args)
+    }
 }
 
 /// Run a `git` subcommand (no working-dir needed; uses -C flag instead).
@@ -463,7 +499,11 @@ fn git_run(args: &[&str]) -> Result<()> {
     } else {
         Command::new("git").args(args).status()?
     };
-    if ok.success() { Ok(()) } else { bail!("git {:?} failed", args) }
+    if ok.success() {
+        Ok(())
+    } else {
+        bail!("git {:?} failed", args)
+    }
 }
 
 fn print_contribution_instructions(cmd: &str, toml_content: &str) {

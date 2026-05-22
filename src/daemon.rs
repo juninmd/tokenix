@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
@@ -61,12 +60,14 @@ impl ProjectCache {
                 }
             })
             .collect();
-        Ok(Self { entries, db_mtime, content: HashMap::new() })
+        Ok(Self {
+            entries,
+            db_mtime,
+            content: HashMap::new(),
+        })
     }
 
-    /// Cosine search over embedding vectors — returns top-K without content.
-    /// Content is fetched from SQLite by the caller for the final result set.
-    fn search_ids(&self, query: &[f32], k: usize) -> Vec<(usize, f32)> {
+    fn search_ids(&self, query: &[f32], k: usize, file_filter: Option<&str>) -> Vec<(usize, f32)> {
         let q_norm: f32 = query.iter().map(|x| x * x).sum::<f32>().sqrt();
         if q_norm == 0.0 {
             return vec![];
@@ -75,14 +76,29 @@ impl ProjectCache {
             .entries
             .iter()
             .enumerate()
+            .filter(|(_, e)| {
+                if let Some(filter) = file_filter {
+                    e.path.contains(filter)
+                } else {
+                    true
+                }
+            })
             .map(|(i, e)| {
                 let dot: f32 = query.iter().zip(&e.embedding).map(|(a, b)| a * b).sum();
-                let sim = if e.norm == 0.0 { 0.0 } else { dot / (q_norm * e.norm) };
+                let sim = if e.norm == 0.0 {
+                    0.0
+                } else {
+                    dot / (q_norm * e.norm)
+                };
                 (sim, i)
             })
             .collect();
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        scored.into_iter().take(k).map(|(sim, i)| (i, sim)).collect()
+        scored
+            .into_iter()
+            .take(k)
+            .map(|(sim, i)| (i, sim))
+            .collect()
     }
 }
 
@@ -96,7 +112,10 @@ struct CacheState {
 
 impl CacheState {
     fn new() -> Self {
-        Self { projects: HashMap::new(), lru: Vec::new() }
+        Self {
+            projects: HashMap::new(),
+            lru: Vec::new(),
+        }
     }
 
     fn touch(&mut self, key: &str) {
@@ -133,6 +152,7 @@ enum Request {
         k: usize,
         #[serde(default = "default_budget")]
         budget: usize,
+        file: Option<String>,
     },
     Health,
 }
@@ -260,9 +280,13 @@ pub fn run_stop() -> Result<()> {
 
 // ---- Client -----------------------------------------------------------------
 
-/// Send a search request to the running daemon and return the formatted output.
-/// Returns `None` if the daemon is not reachable or returns an error.
-pub fn daemon_search(project_root: &Path, query: &str, k: usize, budget: usize) -> Option<String> {
+pub fn daemon_search(
+    project_root: &Path,
+    query: &str,
+    k: usize,
+    budget: usize,
+    file_filter: Option<&str>,
+) -> Option<String> {
     let port = daemon_port();
     let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
     let timeout = Duration::from_millis(CONNECT_TIMEOUT_MS);
@@ -279,6 +303,7 @@ pub fn daemon_search(project_root: &Path, query: &str, k: usize, budget: usize) 
         "query": query,
         "k": k,
         "budget": budget,
+        "file": file_filter,
     });
     stream.write_all(format!("{req}\n").as_bytes()).ok()?;
 
@@ -300,9 +325,10 @@ pub fn daemon_search_with_autostart(
     query: &str,
     k: usize,
     budget: usize,
+    file_filter: Option<&str>,
 ) -> Option<String> {
     // Fast path: daemon already running.
-    if let Some(out) = daemon_search(project_root, query, k, budget) {
+    if let Some(out) = daemon_search(project_root, query, k, budget, file_filter) {
         return Some(out);
     }
 
@@ -311,7 +337,7 @@ pub fn daemon_search_with_autostart(
         return None;
     }
     std::thread::sleep(Duration::from_millis(800));
-    daemon_search(project_root, query, k, budget)
+    daemon_search(project_root, query, k, budget, file_filter)
 }
 
 fn spawn_daemon() -> bool {
@@ -405,7 +431,8 @@ fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) -> Result<()> {
             query,
             k,
             budget,
-        }) => search_handler(&state, &project_root, &query, k, budget),
+            file,
+        }) => search_handler(&state, &project_root, &query, k, budget, file.as_deref()),
         Err(e) => serde_json::to_string(&RespErr {
             ok: false,
             error: e.to_string(),
@@ -423,6 +450,7 @@ fn search_handler(
     query: &str,
     k: usize,
     budget: usize,
+    file_filter: Option<&str>,
 ) -> String {
     // Embed outside the lock — takes 50-100ms, holds no mutex.
     let query_vec = match embed_query(query) {
@@ -440,7 +468,11 @@ fn search_handler(
         _ => return err_json("db not found".into()),
     };
 
-    // Acquire lock, reload cache if stale, run cosine search, release lock.
+    // Run sparse FTS5 search (holds no cache lock, query is fast)
+    let sparse_limit = (k.saturating_mul(5)).max(50);
+    let sparse_ids = store::search_fts(&conn, query, sparse_limit, file_filter).unwrap_or_default();
+
+    // Acquire lock, reload cache if stale, run cosine search + RRF merge, release lock.
     let top_ids: Vec<(usize, f32, i64)> = {
         let mut cache_lock = state.cache.lock().unwrap();
         let needs_reload = cache_lock
@@ -467,10 +499,39 @@ fn search_handler(
 
         let pc = &cache_lock.projects[&root_key];
         let candidate_k = (k.saturating_mul(5)).max(50);
-        pc.search_ids(&query_vec, candidate_k)
-            .into_iter()
-            .map(|(idx, sim)| (idx, sim, pc.entries[idx].id))
-            .collect()
+        let dense_results = pc.search_ids(&query_vec, candidate_k, file_filter);
+
+        let mut rrf_scores: HashMap<i64, f32> = HashMap::new();
+        let mut dense_map: HashMap<i64, (usize, f32)> = HashMap::new();
+
+        for (rank, &(idx, sim)) in dense_results.iter().enumerate() {
+            let id = pc.entries[idx].id;
+            dense_map.insert(id, (idx, sim));
+            let score = 1.0 / (60.0 + rank as f32);
+            rrf_scores.insert(id, score);
+        }
+
+        for (rank, id) in sparse_ids.iter().enumerate() {
+            let score = 1.0 / (60.0 + rank as f32);
+            rrf_scores.entry(*id)
+                .and_modify(|s| *s += score)
+                .or_insert(score);
+        }
+
+        let mut sorted_candidates: Vec<(i64, f32)> = rrf_scores.into_iter().collect();
+        sorted_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let top_candidates: Vec<(i64, f32)> = sorted_candidates.into_iter().take(candidate_k).collect();
+
+        let mut top_ids_mapped = Vec::new();
+        for (id, rrf_score) in top_candidates {
+            if let Some(&(idx, _)) = dense_map.get(&id) {
+                top_ids_mapped.push((idx, rrf_score, id));
+            } else if let Some(idx) = pc.entries.iter().position(|e| e.id == id) {
+                top_ids_mapped.push((idx, rrf_score, id));
+            }
+        }
+        top_ids_mapped
     };
 
     // Populate content: check in-memory cache first, fetch missing from SQLite.
@@ -482,7 +543,11 @@ fn search_handler(
         None => return err_json("cache evicted during search".into()),
     };
 
-    let missing: Vec<i64> = chunk_ids.iter().copied().filter(|id| !pc.content.contains_key(id)).collect();
+    let missing: Vec<i64> = chunk_ids
+        .iter()
+        .copied()
+        .filter(|id| !pc.content.contains_key(id))
+        .collect();
     if !missing.is_empty() {
         if let Ok(fetched) = store::fetch_chunks_content(&conn, &missing) {
             if pc.content.len() > 1000 {
@@ -494,7 +559,7 @@ fn search_handler(
 
     let mut results: Vec<SearchResult> = top_ids
         .iter()
-        .map(|(idx, sim, id)| {
+        .map(|(idx, rrf_score, id)| {
             let e = &pc.entries[*idx];
             SearchResult {
                 id: e.id,
@@ -505,7 +570,7 @@ fn search_handler(
                 kind: e.kind.clone(),
                 content: pc.content.get(id).cloned().unwrap_or_default(),
                 token_count: e.token_count,
-                distance: 1.0 - sim,
+                distance: 1.0 - rrf_score,
             }
         })
         .collect();
@@ -515,8 +580,17 @@ fn search_handler(
 
     let mut budget_left = budget;
     results.retain(|r| {
-        let t = if r.token_count > 0 { r.token_count } else { count_tokens(&r.content) };
-        if budget_left >= t { budget_left -= t; true } else { false }
+        let t = if r.token_count > 0 {
+            r.token_count
+        } else {
+            count_tokens(&r.content)
+        };
+        if budget_left >= t {
+            budget_left -= t;
+            true
+        } else {
+            false
+        }
     });
     results.truncate(k);
 
@@ -525,5 +599,9 @@ fn search_handler(
 }
 
 fn err_json(msg: String) -> String {
-    serde_json::to_string(&RespErr { ok: false, error: msg }).unwrap()
+    serde_json::to_string(&RespErr {
+        ok: false,
+        error: msg,
+    })
+    .unwrap()
 }

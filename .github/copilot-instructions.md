@@ -27,3 +27,4 @@ Use `tokenix gain --history` to inspect estimated savings from hook events.
 
 tokenix binary: `C:/Users/jr_ac/.cargo/bin/tokenix.exe`
 Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
+

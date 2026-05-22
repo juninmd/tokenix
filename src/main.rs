@@ -10,11 +10,12 @@ mod hook;
 mod indexer;
 mod query;
 mod store;
+mod mcp;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -33,6 +34,8 @@ enum Tool {
     Copilot,
     #[value(name = "codex")]
     Codex,
+    #[value(name = "mcp")]
+    Mcp,
     #[value(name = "all")]
     All,
 }
@@ -119,7 +122,10 @@ enum Commands {
     },
     /// Start the background embedding daemon (keeps model in memory)
     Serve {
-        #[arg(long, help = "TCP port to listen on (default: 47392 or $TOKENIX_DAEMON_PORT)")]
+        #[arg(
+            long,
+            help = "TCP port to listen on (default: 47392 or $TOKENIX_DAEMON_PORT)"
+        )]
         port: Option<u16>,
     },
     /// Stop the background embedding daemon
@@ -133,6 +139,8 @@ enum Commands {
     Hook,
     /// PostToolUse hook handler for output compression (not for direct use)
     HookPost,
+    /// Run as a Model Context Protocol (MCP) server over stdin/stdout
+    Mcp,
 }
 
 #[derive(Subcommand)]
@@ -148,8 +156,8 @@ enum FilterAction {
     },
 }
 
-fn find_repo_root(start: &PathBuf) -> PathBuf {
-    let abs = start.canonicalize().unwrap_or_else(|_| start.clone());
+fn find_repo_root(start: &Path) -> PathBuf {
+    let abs = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
     store::find_project_root(&abs)
 }
 
@@ -165,7 +173,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Index { path, force, if_stale } => {
+        Commands::Index {
+            path,
+            force,
+            if_stale,
+        } => {
             // Cap parallelism for indexing: rayon chunking + ONNX embedding.
             // Without limits, large repos max out all CPU cores and freeze the PC.
             #[allow(unused_unsafe)]
@@ -230,14 +242,24 @@ fn main() -> Result<()> {
         }
         Commands::HookPost => {
             #[allow(unused_unsafe)]
-            unsafe { std::env::set_var("RAYON_NUM_THREADS", "1") };
+            unsafe {
+                std::env::set_var("RAYON_NUM_THREADS", "1")
+            };
             compress::run_hook_post()
+        }
+        Commands::Mcp => {
+            #[allow(unused_unsafe)]
+            unsafe {
+                std::env::set_var("OMP_NUM_THREADS", "1");
+                std::env::set_var("RAYON_NUM_THREADS", "1");
+            }
+            mcp::run_mcp_server()
         }
     }
 }
 
-fn cmd_index(path: &PathBuf, force: bool, if_stale: bool) -> Result<()> {
-    let repo_root = path.canonicalize().unwrap_or_else(|_| path.clone());
+fn cmd_index(path: &Path, force: bool, if_stale: bool) -> Result<()> {
+    let repo_root = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     if if_stale && !force {
         let staleness = store::index_staleness(&repo_root, hook::MAX_INDEX_AGE_SECS);
@@ -274,14 +296,15 @@ fn cmd_index(path: &PathBuf, force: bool, if_stale: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_query(
-    text: &str,
-    budget: usize,
-    k: usize,
-    file: Option<&str>,
-    path: &PathBuf,
-) -> Result<()> {
+fn cmd_query(text: &str, budget: usize, k: usize, file: Option<&str>, path: &Path) -> Result<()> {
     let repo_root = find_repo_root(path);
+
+    // Try to query via daemon if it's running
+    if let Some(output) = daemon::daemon_search(&repo_root, text, k, budget, file) {
+        println!("{}", output);
+        return Ok(());
+    }
+
     let results = query::query_index(&repo_root, text, budget, k, file)?
         .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))?;
     println!("{}", query::format_results(&results, text));
@@ -292,7 +315,7 @@ fn cmd_read(
     file: &str,
     symbol: Option<&str>,
     lines_range: Option<&str>,
-    path: &PathBuf,
+    path: &Path,
 ) -> Result<()> {
     let repo_root = find_repo_root(path);
     let fp = {
@@ -360,7 +383,7 @@ fn cmd_read(
     Ok(())
 }
 
-fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
+fn cmd_gain(path: &Path, history: bool) -> Result<()> {
     let repo_root = find_repo_root(path);
     let stats = gain::compute_gain(&repo_root);
 
@@ -430,7 +453,10 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
 
     // ── cost table ────────────────────────────────────────────────────────────
     println!();
-    println!("  {}", "COST ESTIMATE  (input tokens · USD)".bold().underline());
+    println!(
+        "  {}",
+        "COST ESTIMATE  (input tokens · USD)".bold().underline()
+    );
     println!(
         "  {}",
         format!(
@@ -443,7 +469,7 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
 
     let col_model = 27usize;
     let col_price = 9usize;
-    let col_val   = 12usize;
+    let col_val = 12usize;
 
     let sep = format!(
         "    {}  {}  {}  {}  {}",
@@ -458,8 +484,14 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
         "  {}",
         format!(
             "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
-            "Model", "$/1M in", "Without", "With", "Saved",
-            col_model = col_model, col_price = col_price, col_val = col_val
+            "Model",
+            "$/1M in",
+            "Without",
+            "With",
+            "Saved",
+            col_model = col_model,
+            col_price = col_price,
+            col_val = col_val
         )
         .bold()
         .bright_black()
@@ -474,13 +506,19 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
             format!("${:.2}", m.input_per_1m)
         };
         let without = format!("${:.4}", row.without_usd);
-        let with_   = format!("${:.4}", row.with_usd);
-        let saved   = format!("${:.4}", row.saved_usd);
+        let with_ = format!("${:.4}", row.with_usd);
+        let saved = format!("${:.4}", row.saved_usd);
 
         let line = format!(
             "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
-            name, price_str, without, with_, saved,
-            col_model = col_model, col_price = col_price, col_val = col_val
+            name,
+            price_str,
+            without,
+            with_,
+            saved,
+            col_model = col_model,
+            col_price = col_price,
+            col_val = col_val
         );
         if row.reference {
             println!("  {}", line.bold());
@@ -520,9 +558,9 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
         println!("  {}", "BY PHASE".bold().underline());
         for (phase, count, saved) in &stats.by_phase {
             let (label, detail) = match phase.as_str() {
-                "pre"  => ("PreToolUse ", "Read / Grep intercepts"),
+                "pre" => ("PreToolUse ", "Read / Grep intercepts"),
                 "post" => ("PostToolUse", "Bash / ListDirectory compression"),
-                other  => (other, ""),
+                other => (other, ""),
             };
             println!(
                 "  {}  {:>5} calls   {}  {}",
@@ -548,9 +586,9 @@ fn cmd_gain(path: &PathBuf, history: bool) -> Result<()> {
                 format!("{:<11}", "pass").dimmed().to_string()
             };
             let phase = match e.phase.as_str() {
-                "pre"  => "pre ".dimmed().to_string(),
+                "pre" => "pre ".dimmed().to_string(),
                 "post" => "post".dimmed().to_string(),
-                other  => other.dimmed().to_string(),
+                other => other.dimmed().to_string(),
             };
             println!(
                 "  {} {} {:<8} {}  saved {}",
@@ -590,10 +628,12 @@ fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
         Tool::ClaudeCode => install_claude_code(local)?,
         Tool::Copilot => install_copilot()?,
         Tool::Codex => install_codex()?,
+        Tool::Mcp => install_mcp_server()?,
         Tool::All => {
             install_claude_code(local)?;
             install_copilot()?;
             install_codex()?;
+            install_mcp_server()?;
         }
     }
     Ok(())
@@ -900,10 +940,132 @@ function tx-query {{ & "{tokenix_bin}" query @args }}
         ps1_path.display()
     );
 
+    let hook_ps1_path = codex_dir.join("tokenix-codex-hook.ps1");
+    std::fs::write(&hook_ps1_path, codex_hook_ps1(&tokenix_bin))?;
+    println!(
+        "{} Codex hook wrapper ->  {}",
+        "ok".green(),
+        hook_ps1_path.display()
+    );
+
+    let hooks_path = codex_dir.join("hooks.json");
+    install_codex_hooks_json(&hooks_path, &hook_ps1_path)?;
+    println!(
+        "{} Codex hooks        ->  {}",
+        "ok".green(),
+        hooks_path.display()
+    );
+
     println!("  To activate shell helpers:");
     println!("    bash/zsh:   echo 'source ~/.codex/tokenix-init.sh' >> ~/.bashrc");
     println!("    PowerShell: echo '. ~/.codex/tokenix-init.ps1' >> $PROFILE");
     Ok(())
+}
+
+fn codex_hook_ps1(tokenix_bin: &str) -> String {
+    format!(
+        r#"param(
+  [Parameter(Mandatory = $true)]
+  [ValidateSet("pre", "post")]
+  [string]$Phase
+)
+
+$ErrorActionPreference = "SilentlyContinue"
+$inputJson = [Console]::In.ReadToEnd()
+$tokenix = "{tokenix_bin}"
+$subcommand = if ($Phase -eq "post") {{ "hook-post" }} else {{ "hook" }}
+
+$psi = [System.Diagnostics.ProcessStartInfo]::new()
+$psi.FileName = $tokenix
+$psi.Arguments = $subcommand
+$psi.UseShellExecute = $false
+$psi.RedirectStandardInput = $true
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+
+$proc = [System.Diagnostics.Process]::Start($psi)
+$proc.StandardInput.Write($inputJson)
+$proc.StandardInput.Close()
+
+$stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+$stderrTask = $proc.StandardError.ReadToEndAsync()
+
+if (-not $proc.WaitForExit(10000)) {{
+  try {{ $proc.Kill() }} catch {{}}
+  exit 0
+}}
+
+$stdout = $stdoutTask.GetAwaiter().GetResult()
+$stderr = $stderrTask.GetAwaiter().GetResult()
+
+if ($proc.ExitCode -eq 2) {{
+  if ($Phase -eq "post") {{
+    exit 0
+  }}
+  if (-not [string]::IsNullOrWhiteSpace($stderr)) {{
+    [Console]::Error.Write($stderr)
+  }} elseif (-not [string]::IsNullOrWhiteSpace($stdout)) {{
+    [Console]::Error.Write($stdout)
+  }}
+  exit 2
+}}
+
+exit 0
+"#
+    )
+}
+
+fn install_codex_hooks_json(hooks_path: &Path, hook_ps1_path: &Path) -> Result<()> {
+    let mut hooks: serde_json::Value = if hooks_path.exists() {
+        let raw = std::fs::read_to_string(hooks_path)?;
+        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    if !hooks["hooks"].is_object() {
+        hooks["hooks"] = serde_json::json!({});
+    }
+
+    let command = format!(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+        hook_ps1_path.to_string_lossy().replace('\\', "/")
+    );
+
+    upsert_codex_hook(
+        &mut hooks["hooks"]["PreToolUse"],
+        serde_json::json!({
+            "matcher": "^(Read|Grep)$",
+            "hooks": [{
+                "type": "command",
+                "command": format!("{command} pre"),
+                "timeout": 10
+            }]
+        }),
+    );
+    upsert_codex_hook(
+        &mut hooks["hooks"]["PostToolUse"],
+        serde_json::json!({
+            "matcher": "^(Bash|ListDirectory)$",
+            "hooks": [{
+                "type": "command",
+                "command": format!("{command} post"),
+                "timeout": 10
+            }]
+        }),
+    );
+
+    std::fs::write(hooks_path, serde_json::to_string_pretty(&hooks)?)?;
+    Ok(())
+}
+
+fn upsert_codex_hook(slot: &mut serde_json::Value, hook: serde_json::Value) {
+    if !slot.is_array() {
+        *slot = serde_json::json!([]);
+    }
+    let arr = slot.as_array_mut().unwrap();
+    arr.retain(|entry| !entry.to_string().contains("tokenix-codex-hook.ps1"));
+    arr.push(hook);
 }
 
 // remove-hook
@@ -913,10 +1075,12 @@ fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
         Tool::ClaudeCode => remove_claude_code(local)?,
         Tool::Copilot => remove_copilot()?,
         Tool::Codex => remove_codex()?,
+        Tool::Mcp => remove_mcp_server()?,
         Tool::All => {
             remove_claude_code(local)?;
             remove_copilot()?;
             remove_codex()?;
+            remove_mcp_server()?;
         }
     }
     Ok(())
@@ -974,11 +1138,92 @@ fn remove_codex() -> Result<()> {
             println!("{} Codex instructions cleaned", "ok".green());
         }
     }
-    for helper in ["tokenix-init.sh", "tokenix-init.ps1"] {
+    for helper in [
+        "tokenix-init.sh",
+        "tokenix-init.ps1",
+        "tokenix-codex-hook.ps1",
+    ] {
         let p = home.join(".codex").join(helper);
         if p.exists() {
             std::fs::remove_file(&p)?;
             println!("{} Removed {}", "ok".green(), p.display());
+        }
+    }
+    let hooks = home.join(".codex/hooks.json");
+    if hooks.exists() {
+        let raw = std::fs::read_to_string(&hooks)?;
+        let mut json: serde_json::Value = serde_json::from_str(&raw)?;
+        remove_codex_hooks_json(&mut json);
+        std::fs::write(&hooks, serde_json::to_string_pretty(&json)?)?;
+        println!("{} Codex hooks cleaned", "ok".green());
+    }
+    Ok(())
+}
+
+fn remove_codex_hooks_json(json: &mut serde_json::Value) {
+    for phase in ["PreToolUse", "PostToolUse"] {
+        let Some(arr) = json["hooks"][phase].as_array_mut() else {
+            continue;
+        };
+        arr.retain(|entry| !entry.to_string().contains("tokenix-codex-hook.ps1"));
+    }
+}
+
+fn mcp_config_path() -> Result<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+    Ok(home.join(".gemini").join("antigravity-cli").join("mcp_config.json"))
+}
+
+fn install_mcp_server() -> Result<()> {
+    let config_path = mcp_config_path()?;
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let tokenix_bin = tokenix_bin_path()?;
+
+    let mut config: serde_json::Value = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)?;
+        serde_json::from_str(&raw).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    if !config["mcpServers"].is_object() {
+        config["mcpServers"] = serde_json::json!({});
+    }
+
+    config["mcpServers"]["tokenix"] = serde_json::json!({
+        "command": tokenix_bin,
+        "args": ["mcp"]
+    });
+
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+    println!(
+        "{} Antigravity CLI MCP server registered at {}",
+        "ok".green(),
+        config_path.display()
+    );
+    Ok(())
+}
+
+fn remove_mcp_server() -> Result<()> {
+    let config_path = mcp_config_path()?;
+    if !config_path.exists() {
+        return Ok(());
+    }
+
+    let raw = std::fs::read_to_string(&config_path)?;
+    let mut config: serde_json::Value = serde_json::from_str(&raw)?;
+
+    if let Some(servers) = config["mcpServers"].as_object_mut() {
+        if servers.remove("tokenix").is_some() {
+            std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+            println!(
+                "{} Antigravity CLI MCP server unregistered from {}",
+                "ok".green(),
+                config_path.display()
+            );
         }
     }
     Ok(())
@@ -999,7 +1244,7 @@ fn claude_settings_path(local: bool) -> Result<PathBuf> {
     }
 }
 
-fn cmd_stats(path: &PathBuf) -> Result<()> {
+fn cmd_stats(path: &Path) -> Result<()> {
     let repo_root = find_repo_root(path);
     let conn = store::open_db(&repo_root, false)?
         .ok_or_else(|| anyhow::anyhow!("No index found. Run: tokenix index"))?;
@@ -1039,4 +1284,72 @@ fn format_ts(ts: f64) -> String {
     let m = (secs / 60) % 60;
     let s = secs % 60;
     format!("{:02}:{:02}:{:02}", h, m, s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_wrapper_fails_post_open_but_preserves_pre_intercepts() {
+        let ps1 = codex_hook_ps1("C:/tokenix/tokenix.exe");
+
+        assert!(ps1.contains("if ($Phase -eq \"post\")"));
+        assert!(ps1.contains("exit 0"));
+        assert!(ps1.contains("exit 2"));
+        assert!(ps1.contains("ReadToEndAsync()"));
+    }
+
+    #[test]
+    fn codex_hook_json_preserves_unrelated_hooks() {
+        let mut json = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Other",
+                    "hooks": [{"type": "command", "command": "other pre"}]
+                }]
+            }
+        });
+
+        upsert_codex_hook(
+            &mut json["hooks"]["PreToolUse"],
+            serde_json::json!({
+                "matcher": "^(Read|Grep)$",
+                "hooks": [{"type": "command", "command": "powershell tokenix-codex-hook.ps1 pre"}]
+            }),
+        );
+
+        let arr = json["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert!(arr
+            .iter()
+            .any(|entry| entry.to_string().contains("other pre")));
+        assert!(arr
+            .iter()
+            .any(|entry| entry.to_string().contains("tokenix-codex-hook.ps1")));
+    }
+
+    #[test]
+    fn remove_codex_hook_json_removes_only_tokenix_entries() {
+        let mut json = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {"hooks": [{"command": "other pre"}]},
+                    {"hooks": [{"command": "powershell tokenix-codex-hook.ps1 pre"}]}
+                ],
+                "PostToolUse": [
+                    {"hooks": [{"command": "other post"}]},
+                    {"hooks": [{"command": "powershell tokenix-codex-hook.ps1 post"}]}
+                ]
+            }
+        });
+
+        remove_codex_hooks_json(&mut json);
+
+        assert_eq!(json["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(json["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
+        assert!(json.to_string().contains("other pre"));
+        assert!(json.to_string().contains("other post"));
+        assert!(!json.to_string().contains("tokenix-codex-hook.ps1"));
+    }
 }

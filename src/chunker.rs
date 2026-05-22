@@ -3,6 +3,7 @@ use std::path::Path;
 
 pub const MAX_CHUNK_TOKENS: usize = 400;
 pub const MIN_CHUNK_TOKENS: usize = 10;
+pub const CHUNK_OVERLAP_TOKENS: usize = 40;
 
 pub const IGNORED_DIRS: &[&str] = &[
     ".git",
@@ -21,8 +22,8 @@ pub const IGNORED_DIRS: &[&str] = &[
 ];
 
 pub const INDEXED_EXTS: &[&str] = &[
-    ".rs", ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".go",
-    ".sh", ".bash", ".toml", ".yaml", ".yml", ".json", ".md", ".txt",
+    ".rs", ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".go", ".sh", ".bash", ".toml",
+    ".yaml", ".yml", ".json", ".md", ".txt", ".c", ".cpp", ".h", ".hpp", ".cc", ".cxx",
 ];
 
 #[derive(Debug, Clone)]
@@ -46,7 +47,7 @@ pub fn file_hash(content: &[u8]) -> String {
 pub fn count_tokens(text: &str) -> usize {
     // Fast approximation: ~4 chars per token (Claude/GPT tokenizers)
     // Accurate enough for budget decisions without shipping tiktoken in Rust
-    (text.len() + 3) / 4
+    text.len().div_ceil(4)
 }
 
 pub fn should_index(path: &Path) -> bool {
@@ -75,6 +76,7 @@ enum Lang {
     TypeScript,
     JavaScript,
     Go,
+    Cpp,
     Generic,
 }
 
@@ -90,6 +92,7 @@ fn detect_lang(path: &Path) -> Lang {
         "ts" | "tsx" => Lang::TypeScript,
         "js" | "jsx" | "mjs" | "cjs" => Lang::JavaScript,
         "go" => Lang::Go,
+        "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" => Lang::Cpp,
         _ => Lang::Generic,
     }
 }
@@ -97,15 +100,182 @@ fn detect_lang(path: &Path) -> Lang {
 pub fn chunk_file(path: &str, content: &str) -> Vec<Chunk> {
     let p = Path::new(path);
     let lang = detect_lang(p);
-    let lines: Vec<&str> = content.lines().collect();
 
     match lang {
-        Lang::Rust => chunk_rust(&lines, path),
-        Lang::Python => chunk_python(&lines, path),
-        Lang::TypeScript | Lang::JavaScript => chunk_ts_js(&lines, path),
-        Lang::Go => chunk_go(&lines, path),
-        Lang::Generic => chunk_by_lines(&lines, path),
+        Lang::Rust => chunk_rust(content, path),
+        Lang::Python => chunk_python(content, path),
+        Lang::TypeScript | Lang::JavaScript => chunk_ts_js(content, path),
+        Lang::Go => chunk_go(content, path),
+        Lang::Cpp => chunk_cpp(content, path),
+        Lang::Generic => {
+            let lines: Vec<&str> = content.lines().collect();
+            chunk_by_lines(&lines, path)
+        }
     }
+}
+
+struct SymbolNode {
+    start_line: usize,
+    end_line: usize,
+    symbol: String,
+    kind: String,
+}
+
+fn find_first_identifier<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<String> {
+    let kind = node.kind();
+    if kind == "identifier" || kind == "type_identifier" || kind == "field_identifier" {
+        if let Ok(text) = node.utf8_text(source) {
+            return Some(text.to_string());
+        }
+    }
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            if let Some(name) = find_first_identifier(child, source) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+fn chunk_with_parser(
+    language: tree_sitter::Language,
+    content: &str,
+    path: &str,
+    is_symbol_node: fn(&str) -> Option<&'static str>,
+) -> Vec<Chunk> {
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(language).is_err() {
+        let lines: Vec<&str> = content.lines().collect();
+        return chunk_by_lines(&lines, path);
+    }
+    let tree = match parser.parse(content, None) {
+        Some(t) => t,
+        None => {
+            let lines: Vec<&str> = content.lines().collect();
+            return chunk_by_lines(&lines, path);
+        }
+    };
+
+    let source = content.as_bytes();
+    let mut symbols = Vec::new();
+
+    fn traverse<'a>(
+        node: tree_sitter::Node<'a>,
+        source: &'a [u8],
+        is_symbol_node: fn(&str) -> Option<&'static str>,
+        symbols: &mut Vec<SymbolNode>,
+    ) {
+        let kind_str = node.kind();
+        if let Some(kind) = is_symbol_node(kind_str) {
+            let start_line = node.start_position().row;
+            let end_line = node.end_position().row;
+            let symbol = find_first_identifier(node, source)
+                .unwrap_or_else(|| "anonymous".to_string());
+            symbols.push(SymbolNode {
+                start_line,
+                end_line,
+                symbol,
+                kind: kind.to_string(),
+            });
+        }
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                traverse(child, source, is_symbol_node, symbols);
+            }
+        }
+    }
+
+    traverse(tree.root_node(), source, is_symbol_node, &mut symbols);
+
+    let lines: Vec<&str> = content.lines().collect();
+    if symbols.is_empty() {
+        return chunk_by_lines(&lines, path);
+    }
+
+    let mut chunks = Vec::new();
+    for sym in symbols {
+        flush_chunk(
+            &lines,
+            path,
+            sym.start_line,
+            sym.end_line,
+            &sym.symbol,
+            &sym.kind,
+            &mut chunks,
+        );
+    }
+    chunks
+}
+
+fn is_rust_symbol(kind: &str) -> Option<&'static str> {
+    match kind {
+        "function_item" | "fn_item" => Some("function"),
+        "struct_item" => Some("struct"),
+        "enum_item" => Some("enum"),
+        "impl_item" => Some("impl"),
+        "trait_item" => Some("trait"),
+        "macro_definition" => Some("macro"),
+        _ => None,
+    }
+}
+
+fn chunk_rust(content: &str, path: &str) -> Vec<Chunk> {
+    chunk_with_parser(tree_sitter_rust::language(), content, path, is_rust_symbol)
+}
+
+fn is_python_symbol(kind: &str) -> Option<&'static str> {
+    match kind {
+        "function_definition" => Some("function"),
+        "class_definition" => Some("class"),
+        _ => None,
+    }
+}
+
+fn chunk_python(content: &str, path: &str) -> Vec<Chunk> {
+    chunk_with_parser(tree_sitter_python::language(), content, path, is_python_symbol)
+}
+
+fn is_js_ts_symbol(kind: &str) -> Option<&'static str> {
+    match kind {
+        "function_declaration" => Some("function"),
+        "class_declaration" => Some("class"),
+        "method_definition" => Some("method"),
+        "function_expression" => Some("function"),
+        "arrow_function" => Some("function"),
+        _ => None,
+    }
+}
+
+fn chunk_ts_js(content: &str, path: &str) -> Vec<Chunk> {
+    chunk_with_parser(tree_sitter_javascript::language(), content, path, is_js_ts_symbol)
+}
+
+fn is_go_symbol(kind: &str) -> Option<&'static str> {
+    match kind {
+        "function_declaration" => Some("function"),
+        "method_declaration" => Some("method"),
+        "type_declaration" => Some("type"),
+        _ => None,
+    }
+}
+
+fn chunk_go(content: &str, path: &str) -> Vec<Chunk> {
+    chunk_with_parser(tree_sitter_go::language(), content, path, is_go_symbol)
+}
+
+fn is_cpp_symbol(kind: &str) -> Option<&'static str> {
+    match kind {
+        "function_definition" => Some("function"),
+        "class_specifier" => Some("class"),
+        "struct_specifier" => Some("struct"),
+        "namespace_definition" => Some("namespace"),
+        _ => None,
+    }
+}
+
+fn chunk_cpp(content: &str, path: &str) -> Vec<Chunk> {
+    chunk_with_parser(tree_sitter_cpp::language(), content, path, is_cpp_symbol)
 }
 
 fn make_chunk(
@@ -145,395 +315,77 @@ fn flush_chunk(
     out: &mut Vec<Chunk>,
 ) {
     let total = end.saturating_sub(start) + 1;
-    if total * 4 > MAX_CHUNK_TOKENS * 4 {
-        // Split large chunk
+    if total > MAX_CHUNK_TOKENS {
+        // Split large chunk with sliding-window overlap
         let mut s = start;
         while s <= end {
             let e = (s + MAX_CHUNK_TOKENS).min(end);
             if let Some(c) = make_chunk(lines, path, s, e, symbol, kind) {
                 out.push(c);
             }
-            s = e + 1;
+            
+            // Advance s with overlap
+            let mut next_s = e + 1;
+            let mut accumulated = 0;
+            // Backtrack from e to find how many lines to include for overlap
+            for idx in (s..=e).rev() {
+                accumulated += count_tokens(lines[idx]);
+                if accumulated >= CHUNK_OVERLAP_TOKENS {
+                    if idx > s {
+                        next_s = idx;
+                    }
+                    break;
+                }
+            }
+            s = next_s;
         }
     } else if let Some(c) = make_chunk(lines, path, start, end, symbol, kind) {
         out.push(c);
     }
 }
 
-fn chunk_rust(lines: &[&str], path: &str) -> Vec<Chunk> {
-    let mut out = Vec::new();
-    let mut block_start: Option<usize> = None;
-    let mut block_symbol = String::new();
-    let mut block_kind = String::new();
-    let mut brace_depth: i32 = 0;
-    let mut in_block = false;
-
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-
-        if !in_block {
-            let is_def = trimmed.starts_with("pub fn ")
-                || trimmed.starts_with("fn ")
-                || trimmed.starts_with("pub async fn ")
-                || trimmed.starts_with("async fn ")
-                || trimmed.starts_with("pub struct ")
-                || trimmed.starts_with("struct ")
-                || trimmed.starts_with("pub enum ")
-                || trimmed.starts_with("enum ")
-                || trimmed.starts_with("pub impl")
-                || trimmed.starts_with("impl ")
-                || trimmed.starts_with("pub trait ")
-                || trimmed.starts_with("trait ")
-                || trimmed.starts_with("pub mod ")
-                || trimmed.starts_with("mod ");
-
-            if is_def {
-                block_start = Some(i);
-                block_symbol = extract_rust_name(trimmed);
-                block_kind = if trimmed.contains(" fn ") {
-                    "function"
-                } else if trimmed.contains("struct ") {
-                    "struct"
-                } else if trimmed.contains("enum ") {
-                    "enum"
-                } else if trimmed.contains("impl") {
-                    "impl"
-                } else if trimmed.contains("trait ") {
-                    "trait"
-                } else {
-                    "module"
-                }
-                .to_string();
-                in_block = true;
-                brace_depth = 0;
-            }
-        }
-
-        if in_block {
-            brace_depth += line.chars().filter(|&c| c == '{').count() as i32;
-            brace_depth -= line.chars().filter(|&c| c == '}').count() as i32;
-
-            if brace_depth <= 0 && block_start.is_some() {
-                let start = block_start.take().unwrap();
-                flush_chunk(lines, path, start, i, &block_symbol, &block_kind, &mut out);
-                in_block = false;
-                brace_depth = 0;
-            }
-        }
-    }
-
-    if out.is_empty() {
-        chunk_by_lines(lines, path)
-    } else {
-        out
-    }
-}
-
-fn extract_rust_name(line: &str) -> String {
-    let tokens: Vec<&str> = line.split_whitespace().collect();
-    for (i, &t) in tokens.iter().enumerate() {
-        if t == "fn" || t == "struct" || t == "enum" || t == "trait" || t == "mod" || t == "impl" {
-            if let Some(next) = tokens.get(i + 1) {
-                // Strip generic params, paren args, and non-identifier chars
-                let name = next
-                    .split(['(', '<', '{', ';'])
-                    .next()
-                    .unwrap_or(next)
-                    .trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
-                return name.to_string();
-            }
-        }
-    }
-    String::new()
-}
-
-fn chunk_python(lines: &[&str], path: &str) -> Vec<Chunk> {
-    let mut out = Vec::new();
-    let mut block_start: Option<usize> = None;
-    let mut block_symbol = String::new();
-    let mut block_kind = String::new();
-
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        let is_def = trimmed.starts_with("def ")
-            || trimmed.starts_with("async def ")
-            || trimmed.starts_with("class ");
-
-        if is_def {
-            if let Some(start) = block_start.take() {
-                flush_chunk(
-                    lines,
-                    path,
-                    start,
-                    i.saturating_sub(1),
-                    &block_symbol,
-                    &block_kind,
-                    &mut out,
-                );
-            }
-            block_start = Some(i);
-            block_symbol = extract_python_name(trimmed);
-            block_kind = if trimmed.starts_with("class ") {
-                "class"
-            } else {
-                "function"
-            }
-            .to_string();
-        }
-    }
-
-    if let Some(start) = block_start {
-        flush_chunk(
-            lines,
-            path,
-            start,
-            lines.len().saturating_sub(1),
-            &block_symbol,
-            &block_kind,
-            &mut out,
-        );
-    }
-
-    if out.is_empty() {
-        chunk_by_lines(lines, path)
-    } else {
-        out
-    }
-}
-
-fn extract_python_name(line: &str) -> String {
-    let after_kw = if let Some(s) = line.strip_prefix("async def ") {
-        s
-    } else if let Some(s) = line.strip_prefix("def ") {
-        s
-    } else if let Some(s) = line.strip_prefix("class ") {
-        s
-    } else {
-        line
-    };
-    after_kw
-        .split(['(', ':'])
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string()
-}
-
-fn chunk_ts_js(lines: &[&str], path: &str) -> Vec<Chunk> {
-    let mut out = Vec::new();
-    let mut block_start: Option<usize> = None;
-    let mut block_symbol = String::new();
-    let mut block_kind = String::new();
-    let mut brace_depth: i32 = 0;
-    let mut in_block = false;
-
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-
-        if !in_block {
-            let is_def = trimmed.starts_with("function ")
-                || trimmed.starts_with("export function ")
-                || trimmed.starts_with("export default function")
-                || trimmed.starts_with("export async function")
-                || trimmed.starts_with("async function")
-                || trimmed.starts_with("class ")
-                || trimmed.starts_with("export class ")
-                || trimmed.starts_with("interface ")
-                || trimmed.starts_with("export interface ")
-                || trimmed.starts_with("type ")
-                || trimmed.starts_with("export type ")
-                || (trimmed.contains("= function")
-                    || trimmed.contains("= async function")
-                    || trimmed.contains("=> {"))
-                    && (trimmed.contains("const ")
-                        || trimmed.contains("let ")
-                        || trimmed.contains("var "));
-
-            if is_def {
-                block_start = Some(i);
-                block_symbol = extract_ts_name(trimmed);
-                block_kind = if trimmed.contains("class ") {
-                    "class"
-                } else if trimmed.contains("interface ") {
-                    "interface"
-                } else if trimmed.starts_with("type ") || trimmed.starts_with("export type ") {
-                    "type"
-                } else {
-                    "function"
-                }
-                .to_string();
-                in_block = true;
-                brace_depth = 0;
-            }
-        }
-
-        if in_block {
-            brace_depth += line.chars().filter(|&c| c == '{').count() as i32;
-            brace_depth -= line.chars().filter(|&c| c == '}').count() as i32;
-
-            if brace_depth <= 0 && block_start.is_some() {
-                let start = block_start.take().unwrap();
-                flush_chunk(lines, path, start, i, &block_symbol, &block_kind, &mut out);
-                in_block = false;
-                brace_depth = 0;
-            }
-        }
-    }
-
-    if out.is_empty() {
-        chunk_by_lines(lines, path)
-    } else {
-        out
-    }
-}
-
-fn extract_ts_name(line: &str) -> String {
-    // "function foo(" -> "foo"
-    // "const foo = " -> "foo"
-    // "export function foo" -> "foo"
-    let cleaned = line
-        .trim_start_matches("export ")
-        .trim_start_matches("default ")
-        .trim_start_matches("async ");
-    if let Some(s) = cleaned.strip_prefix("function ") {
-        return s.split(['(', '<', ' ']).next().unwrap_or("").to_string();
-    }
-    if let Some(s) = cleaned.strip_prefix("class ") {
-        return s.split([' ', '{', '<']).next().unwrap_or("").to_string();
-    }
-    if let Some(s) = cleaned.strip_prefix("interface ") {
-        return s.split([' ', '{', '<']).next().unwrap_or("").to_string();
-    }
-    if let Some(s) = cleaned.strip_prefix("type ") {
-        return s.split([' ', '=']).next().unwrap_or("").to_string();
-    }
-    // const/let/var foo = ...
-    let after_decl = cleaned
-        .trim_start_matches("const ")
-        .trim_start_matches("let ")
-        .trim_start_matches("var ");
-    after_decl
-        .split(['=', ':', ' '])
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string()
-}
-
-fn chunk_go(lines: &[&str], path: &str) -> Vec<Chunk> {
-    let mut out = Vec::new();
-    let mut block_start: Option<usize> = None;
-    let mut block_symbol = String::new();
-    let mut block_kind = String::new();
-    let mut brace_depth: i32 = 0;
-    let mut in_block = false;
-
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-
-        if !in_block {
-            let is_def = trimmed.starts_with("func ") || trimmed.starts_with("type ");
-            if is_def {
-                block_start = Some(i);
-                block_symbol = extract_go_name(trimmed);
-                block_kind = if trimmed.starts_with("type ") {
-                    "type"
-                } else {
-                    "function"
-                }
-                .to_string();
-                in_block = true;
-                brace_depth = 0;
-            }
-        }
-
-        if in_block {
-            brace_depth += line.chars().filter(|&c| c == '{').count() as i32;
-            brace_depth -= line.chars().filter(|&c| c == '}').count() as i32;
-
-            if brace_depth <= 0 && block_start.is_some() {
-                let start = block_start.take().unwrap();
-                flush_chunk(lines, path, start, i, &block_symbol, &block_kind, &mut out);
-                in_block = false;
-                brace_depth = 0;
-            }
-        }
-    }
-
-    if out.is_empty() {
-        chunk_by_lines(lines, path)
-    } else {
-        out
-    }
-}
-
-fn extract_go_name(line: &str) -> String {
-    if let Some(s) = line.strip_prefix("func ") {
-        // func (recv) Name( or func Name(
-        let after = if s.starts_with('(') {
-            s.splitn(2, ')')
-                .nth(1)
-                .unwrap_or(s)
-                .trim()
-                .trim_start_matches(' ')
-        } else {
-            s
-        };
-        return after.split(['(', ' ']).next().unwrap_or("").to_string();
-    }
-    if let Some(s) = line.strip_prefix("type ") {
-        return s.split(' ').next().unwrap_or("").to_string();
-    }
-    String::new()
-}
-
 pub fn chunk_by_lines(lines: &[&str], path: &str) -> Vec<Chunk> {
     let mut out = Vec::new();
-    let mut current: Vec<&str> = Vec::new();
-    let mut current_tokens = 0usize;
-    let mut start = 0usize;
-
-    for (i, &line) in lines.iter().enumerate() {
-        let lt = count_tokens(line);
-        if current_tokens + lt > MAX_CHUNK_TOKENS && !current.is_empty() {
-            let content = current.join("\n").trim_end().to_string();
-            let tc = count_tokens(&content);
-            if tc >= MIN_CHUNK_TOKENS {
-                out.push(Chunk {
-                    path: path.to_string(),
-                    start_line: start + 1,
-                    end_line: start + current.len(),
-                    symbol: String::new(),
-                    kind: "block".to_string(),
-                    content,
-                    token_count: tc,
-                });
+    if lines.is_empty() {
+        return out;
+    }
+    let mut s = 0usize;
+    let end = lines.len().saturating_sub(1);
+    while s <= end {
+        // Find how many lines we can include up to MAX_CHUNK_TOKENS
+        let mut e = s;
+        let mut tokens = 0;
+        while e <= end {
+            let lt = count_tokens(lines[e]);
+            if tokens + lt > MAX_CHUNK_TOKENS && e > s {
+                break;
             }
-            start = i;
-            current = vec![line];
-            current_tokens = lt;
-        } else {
-            current.push(line);
-            current_tokens += lt;
+            tokens += lt;
+            e += 1;
         }
-    }
-
-    if !current.is_empty() {
-        let content = current.join("\n").trim_end().to_string();
-        let tc = count_tokens(&content);
-        if tc >= MIN_CHUNK_TOKENS {
-            out.push(Chunk {
-                path: path.to_string(),
-                start_line: start + 1,
-                end_line: start + current.len(),
-                symbol: String::new(),
-                kind: "block".to_string(),
-                content,
-                token_count: tc,
-            });
+        let last_included = e.saturating_sub(1);
+        if let Some(c) = make_chunk(lines, path, s, last_included, "", "block") {
+            out.push(c);
         }
+        
+        if e > end {
+            break;
+        }
+        
+        // Find next start with overlap
+        let mut next_s = e;
+        let mut accumulated = 0;
+        for idx in (s..=last_included).rev() {
+            accumulated += count_tokens(lines[idx]);
+            if accumulated >= CHUNK_OVERLAP_TOKENS {
+                if idx > s {
+                    next_s = idx;
+                }
+                break;
+            }
+        }
+        s = next_s;
     }
-
     out
 }
 
@@ -561,10 +413,7 @@ fn extract_full_signature(content: &str) -> String {
     }
     let joined = parts.join(" ");
     // Strip trailing `{` or `:` left by the loop-break line
-    let sig = joined
-        .trim_end_matches('{')
-        .trim_end_matches(':')
-        .trim();
+    let sig = joined.trim_end_matches('{').trim_end_matches(':').trim();
     // Collapse internal whitespace runs
     let sig: String = sig.split_whitespace().collect::<Vec<_>>().join(" ");
     if sig.chars().count() > 200 {
@@ -620,15 +469,22 @@ pub fn clean_generic_text(content: &str) -> String {
         if in_fence {
             let s = strip_emojis(t);
             if s.is_empty() {
-                if !last_blank { out.push('\n'); last_blank = true; }
+                if !last_blank {
+                    out.push('\n');
+                    last_blank = true;
+                }
             } else {
-                out.push_str(&s); out.push('\n'); last_blank = false;
+                out.push_str(&s);
+                out.push('\n');
+                last_blank = false;
             }
             continue;
         }
 
         // HTML comment (single-line)
-        if t.starts_with("<!--") { continue; }
+        if t.starts_with("<!--") {
+            continue;
+        }
 
         // Horizontal rule: --- *** ___ (no alphanumeric content)
         if t.len() >= 3
@@ -639,9 +495,7 @@ pub fn clean_generic_text(content: &str) -> String {
         }
 
         // Table separator: | --- | --- |
-        if t.starts_with('|')
-            && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
-        {
+        if t.starts_with('|') && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
             continue;
         }
 
@@ -650,9 +504,14 @@ pub fn clean_generic_text(content: &str) -> String {
         let s = s.trim().to_string();
 
         if s.is_empty() {
-            if !last_blank { out.push('\n'); last_blank = true; }
+            if !last_blank {
+                out.push('\n');
+                last_blank = true;
+            }
         } else {
-            out.push_str(&s); out.push('\n'); last_blank = false;
+            out.push_str(&s);
+            out.push('\n');
+            last_blank = false;
         }
     }
 
@@ -663,9 +522,14 @@ fn clean_line(s: &str) -> String {
     // Strip heading markers (# ## ### …)
     let s = s.trim_start_matches('#').trim_start();
     // Blockquote
-    let s = s.strip_prefix("> ").or_else(|| s.strip_prefix('>')).unwrap_or(s).trim_start();
+    let s = s
+        .strip_prefix("> ")
+        .or_else(|| s.strip_prefix('>'))
+        .unwrap_or(s)
+        .trim_start();
     // Unordered list marker
-    let s = s.strip_prefix("- ")
+    let s = s
+        .strip_prefix("- ")
         .or_else(|| s.strip_prefix("* "))
         .or_else(|| s.strip_prefix("+ "))
         .unwrap_or(s);
@@ -673,7 +537,9 @@ fn clean_line(s: &str) -> String {
     let s = {
         let b = s.as_bytes();
         let mut n = 0;
-        while n < b.len() && b[n].is_ascii_digit() { n += 1; }
+        while n < b.len() && b[n].is_ascii_digit() {
+            n += 1;
+        }
         if n > 0 && b.get(n) == Some(&b'.') && b.get(n + 1) == Some(&b' ') {
             &s[n + 2..]
         } else {
@@ -683,7 +549,8 @@ fn clean_line(s: &str) -> String {
     // Table row: | cell | cell | → "cell  cell"
     let owned: String;
     let s = if s.starts_with('|') {
-        owned = s.split('|')
+        owned = s
+            .split('|')
             .map(str::trim)
             .filter(|c| !c.is_empty())
             .collect::<Vec<_>>()
@@ -705,47 +572,93 @@ fn strip_inline(s: &str) -> String {
             // Image: ![alt](url) → remove entirely
             '!' if chars.get(i + 1) == Some(&'[') => {
                 i += 2;
-                while i < n && chars[i] != ']' { i += 1; }
-                if i < n { i += 1; }
+                while i < n && chars[i] != ']' {
+                    i += 1;
+                }
+                if i < n {
+                    i += 1;
+                }
                 if chars.get(i) == Some(&'(') {
                     i += 1;
-                    while i < n && chars[i] != ')' { i += 1; }
-                    if i < n { i += 1; }
+                    while i < n && chars[i] != ')' {
+                        i += 1;
+                    }
+                    if i < n {
+                        i += 1;
+                    }
                 }
             }
             // Link: [text](url) → text
             '[' => {
                 i += 1;
                 let start = i;
-                while i < n && chars[i] != ']' { i += 1; }
+                while i < n && chars[i] != ']' {
+                    i += 1;
+                }
                 let text: String = chars[start..i].iter().collect();
-                if i < n { i += 1; }
+                if i < n {
+                    i += 1;
+                }
                 if chars.get(i) == Some(&'(') {
                     i += 1;
-                    while i < n && chars[i] != ')' { i += 1; }
-                    if i < n { i += 1; }
+                    while i < n && chars[i] != ')' {
+                        i += 1;
+                    }
+                    if i < n {
+                        i += 1;
+                    }
                 }
                 out.push_str(&strip_inline(&text));
             }
             // Bold/italic markers: ** * __ _ → drop markers, keep text
-            '*' => { if chars.get(i+1) == Some(&'*') { i += 2; } else { i += 1; } }
-            '_' => { if chars.get(i+1) == Some(&'_') { i += 2; } else { i += 1; } }
+            '*' => {
+                if chars.get(i + 1) == Some(&'*') {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            '_' => {
+                if chars.get(i + 1) == Some(&'_') {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
             // Strikethrough: ~~text~~ → drop markers
-            '~' if chars.get(i+1) == Some(&'~') => { i += 2; }
+            '~' if chars.get(i + 1) == Some(&'~') => {
+                i += 2;
+            }
             // Inline code: `text` → text (preserve content)
             '`' => {
                 i += 1;
-                while i < n && chars[i] != '`' { out.push(chars[i]); i += 1; }
-                if i < n { i += 1; }
+                while i < n && chars[i] != '`' {
+                    out.push(chars[i]);
+                    i += 1;
+                }
+                if i < n {
+                    i += 1;
+                }
             }
             // HTML tag: <...> → drop
             '<' => {
-                while i < n && chars[i] != '>' { i += 1; }
-                if i < n { i += 1; }
+                while i < n && chars[i] != '>' {
+                    i += 1;
+                }
+                if i < n {
+                    i += 1;
+                }
             }
             // Backslash escape: \* → *
-            '\\' if i + 1 < n => { i += 1; out.push(chars[i]); i += 1; }
-            c => { out.push(c); i += 1; }
+            '\\' if i + 1 < n => {
+                i += 1;
+                out.push(chars[i]);
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
         }
     }
     out
@@ -761,7 +674,7 @@ fn is_emoji(c: char) -> bool {
         || (0x1F000..=0x1FAFF).contains(&u) // main emoji block
         || (0x1FB00..=0x1FBFF).contains(&u) // legacy computing symbols
         || u == 0xFE0F  // variation selector-16
-        || u == 0x200D  // zero-width joiner
+        || u == 0x200D // zero-width joiner
 }
 
 pub fn generate_outline(content: &str, path: &str) -> String {
@@ -793,11 +706,12 @@ pub fn generate_outline(content: &str, path: &str) -> String {
     for c in &chunks {
         let sig = extract_full_signature(&c.content);
         let doc = extract_doc_comment(&lines, c.start_line);
-        let doc_suffix = doc
-            .map(|d| format!("  // {}", d))
-            .unwrap_or_default();
+        let doc_suffix = doc.map(|d| format!("  // {}", d)).unwrap_or_default();
         let label = if c.symbol.is_empty() {
-            format!("  L{}-{} [{}]: {}{}", c.start_line, c.end_line, c.kind, sig, doc_suffix)
+            format!(
+                "  L{}-{} [{}]: {}{}",
+                c.start_line, c.end_line, c.kind, sig, doc_suffix
+            )
         } else {
             format!(
                 "  L{}-{} [{}] {}: {}{}",
@@ -809,6 +723,7 @@ pub fn generate_outline(content: &str, path: &str) -> String {
 
     parts.join("\n")
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -841,7 +756,9 @@ mod tests {
 
     #[test]
     fn should_index_rejects_ignored_dirs() {
-        assert!(!should_index(std::path::Path::new("node_modules/lib/index.js")));
+        assert!(!should_index(std::path::Path::new(
+            "node_modules/lib/index.js"
+        )));
         assert!(!should_index(std::path::Path::new("target/debug/build.rs")));
         assert!(!should_index(std::path::Path::new(".git/config")));
     }
@@ -863,12 +780,21 @@ mod tests {
     #[test]
     fn chunk_rust_detects_functions() {
         // Functions need >10 tokens each to pass MIN_CHUNK_TOKENS
-        let body = "    let value = compute_something_complex(input, config, options);\n    value * 2\n";
+        let body =
+            "    let value = compute_something_complex(input, config, options);\n    value * 2\n";
         let code = format!("fn hello(input: i32, config: Config, options: Options) -> i32 {{\n{body}}}\n\nfn world(input: i32, config: Config, options: Options) -> i32 {{\n{body}}}\n");
         let chunks = chunk_file("src/test.rs", &code);
         let symbols: Vec<&str> = chunks.iter().map(|c| c.symbol.as_str()).collect();
-        assert!(symbols.contains(&"hello"), "expected 'hello' in {:?}", symbols);
-        assert!(symbols.contains(&"world"), "expected 'world' in {:?}", symbols);
+        assert!(
+            symbols.contains(&"hello"),
+            "expected 'hello' in {:?}",
+            symbols
+        );
+        assert!(
+            symbols.contains(&"world"),
+            "expected 'world' in {:?}",
+            symbols
+        );
     }
 
     #[test]
@@ -886,15 +812,53 @@ mod tests {
         );
         let chunks = chunk_file("module.py", code);
         let symbols: Vec<&str> = chunks.iter().map(|c| c.symbol.as_str()).collect();
-        assert!(symbols.iter().any(|s| s.contains("DatabaseClient") || s.contains("connect_to_database")),
-            "no expected symbols in {:?}", symbols);
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.contains("DatabaseClient") || s.contains("connect_to_database")),
+            "no expected symbols in {:?}",
+            symbols
+        );
+    }
+
+    #[test]
+    fn test_chunk_cpp() {
+        let code = r#"
+class MyClass {
+public:
+    void myMethod() {
+        int x = 42;
+        int y = x * 2;
+        int z = y + 10;
+        // Make this method pass the min token count threshold
+        printf("Calculated value: %d\n", z);
+    }
+};
+
+void globalFunc() {
+    int a = 100;
+    int b = 200;
+    int c = a + b;
+    // Ensure the function chunk is large enough to be indexed
+    printf("The sum is %d\n", c);
+}
+"#;
+        let chunks = chunk_file("test.cpp", code);
+        assert!(!chunks.is_empty());
+        let symbols: Vec<&str> = chunks.iter().map(|c| c.symbol.as_str()).collect();
+        assert!(symbols.contains(&"MyClass"));
+        assert!(symbols.contains(&"globalFunc"));
     }
 
     #[test]
     fn generate_outline_includes_line_counts() {
         let code = "fn a() {}\n".repeat(50);
         let out = generate_outline(&code, "src/many.rs");
-        assert!(out.contains("50 lines") || out.contains("lines"), "outline: {}", &out[..200.min(out.len())]);
+        assert!(
+            out.contains("50 lines") || out.contains("lines"),
+            "outline: {}",
+            &out[..200.min(out.len())]
+        );
     }
 
     #[test]
@@ -906,5 +870,21 @@ mod tests {
         for c in &chunks {
             assert!(c.token_count > 0);
         }
+    }
+
+    #[test]
+    fn test_sliding_window_overlap() {
+        // Create an input where each line has several tokens
+        let line_content = "let var_to_verify_overlap = 12345;"; 
+        let lines: Vec<String> = (0..150).map(|i| format!("{}: {}", i, line_content)).collect();
+        let slice: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        let chunks = chunk_by_lines(&slice, "test.txt");
+        assert!(chunks.len() > 1);
+        
+        let c1 = &chunks[0];
+        let c2 = &chunks[1];
+        assert!(c2.start_line < c1.end_line);
+        assert!(c1.content.contains("let var_to_verify_overlap"));
+        assert!(c2.content.contains("let var_to_verify_overlap"));
     }
 }
