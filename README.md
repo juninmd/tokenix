@@ -97,6 +97,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **One-call MCP context** | `tokenix_context` combines semantic search, entry points, and compact outlines so agents do not burn calls chaining search/read loops |
 | **Graph-aware explore** | `tokenix explore` / `tokenix_explore` returns related symbols, relationship maps, and grouped source in one capped call |
 | **Symbol graph** | `tokenix symbols`, `callers`, `callees`, and `impact` trace relationships between indexed symbols |
+| **Preference memory** | `tokenix memory add/list` stores global and project preferences in editable Markdown; context/explore include saved preferences and capture guidance |
 | **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C++ |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
 | **Hook-based interception** | `PreToolUse` intercepts large reads; `PostToolUse` compresses Bash/ListDirectory output |
@@ -428,6 +429,9 @@ tokenix install-hook --tool all
 | `tokenix query TEXT` | Semantic search over indexed chunks |
 | `tokenix context TEXT` | One-call task context: entry points, relevant source, compact outlines |
 | `tokenix explore TEXT` | Graph-aware exploration: entry points, relationships, grouped source |
+| `tokenix memory add TEXT` | Save a project preference for future context |
+| `tokenix memory add --global TEXT` | Save a global preference for future context |
+| `tokenix memory list` | List global and project preferences |
 | `tokenix read FILE` | Smart reader — outline for large files, full for small |
 | `tokenix symbols QUERY` | Find indexed symbols by name or path |
 | `tokenix callers SYMBOL` | Show symbols that call/reference a symbol |

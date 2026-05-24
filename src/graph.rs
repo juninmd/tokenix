@@ -24,6 +24,12 @@ struct ChunkSymbol {
     content: String,
 }
 
+#[derive(Debug, Clone)]
+struct SymbolTarget {
+    chunk_id: i64,
+    path: String,
+}
+
 pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
     let chunks = load_symbol_chunks(conn)?;
     store::clear_symbol_graph(conn)?;
@@ -41,42 +47,33 @@ pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
         )?;
     }
 
-    let mut by_name: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut by_name: HashMap<String, Vec<SymbolTarget>> = HashMap::new();
     for chunk in &chunks {
         by_name
             .entry(normalize_name(&chunk.name))
             .or_default()
-            .push(chunk.chunk_id);
+            .push(SymbolTarget {
+                chunk_id: chunk.chunk_id,
+                path: chunk.path.clone(),
+            });
     }
 
     let mut inserted = HashSet::new();
     for chunk in &chunks {
         for reference in extract_references(&chunk.content) {
-            let key = normalize_name(&reference);
-            let short_key = reference
-                .rsplit("::")
-                .next()
-                .or_else(|| reference.rsplit('.').next())
-                .map(normalize_name)
-                .unwrap_or_else(|| key.clone());
-            let targets = if let Some(targets) = by_name.get(&key) {
-                targets
-            } else if is_keyword(&short_key) {
+            let targets = resolve_reference_targets(&by_name, &reference);
+            if targets.is_empty() {
                 continue;
-            } else if let Some(targets) = by_name.get(&short_key) {
-                targets
-            } else {
-                continue;
-            };
+            }
             for target in targets {
-                if *target == chunk.chunk_id {
+                if target.chunk_id == chunk.chunk_id {
                     continue;
                 }
-                if inserted.insert((chunk.chunk_id, *target)) {
+                if inserted.insert((chunk.chunk_id, target.chunk_id)) {
                     store::insert_graph_edge(
                         conn,
                         chunk.chunk_id,
-                        *target,
+                        target.chunk_id,
                         &reference,
                         "references",
                     )?;
@@ -86,6 +83,82 @@ pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_reference_targets<'a>(
+    by_name: &'a HashMap<String, Vec<SymbolTarget>>,
+    reference: &str,
+) -> Vec<&'a SymbolTarget> {
+    let key = normalize_name(reference);
+    if let Some(targets) = by_name.get(&key) {
+        return targets.iter().collect();
+    }
+
+    let short_key = short_reference_name(reference);
+    if is_keyword(&short_key) {
+        return Vec::new();
+    }
+
+    let Some(targets) = by_name.get(&short_key) else {
+        return Vec::new();
+    };
+
+    let qualifiers = reference_qualifiers(reference);
+    if qualifiers.is_empty() {
+        return targets.iter().collect();
+    }
+
+    let preferred: Vec<&SymbolTarget> = targets
+        .iter()
+        .filter(|target| {
+            qualifiers
+                .iter()
+                .any(|qualifier| path_matches_qualifier(&target.path, qualifier))
+        })
+        .collect();
+    if preferred.is_empty() {
+        targets.iter().collect()
+    } else {
+        preferred
+    }
+}
+
+fn short_reference_name(reference: &str) -> String {
+    reference
+        .rsplit("::")
+        .next()
+        .or_else(|| reference.rsplit('.').next())
+        .map(normalize_name)
+        .unwrap_or_else(|| normalize_name(reference))
+}
+
+fn reference_qualifiers(reference: &str) -> Vec<String> {
+    let separators: &[char] = if reference.contains("::") {
+        &[':']
+    } else {
+        &['.']
+    };
+    let mut parts: Vec<String> = reference
+        .split(separators)
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(normalize_name)
+        .collect();
+    if parts.len() <= 1 {
+        return Vec::new();
+    }
+    parts.pop();
+    parts
+        .into_iter()
+        .filter(|part| !matches!(part.as_str(), "crate" | "self" | "super"))
+        .collect()
+}
+
+fn path_matches_qualifier(path: &str, qualifier: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    normalized
+        .split('/')
+        .any(|segment| segment.strip_suffix(".rs").unwrap_or(segment) == qualifier)
 }
 
 pub fn format_nodes(nodes: &[GraphNode], title: &str) -> String {
@@ -247,5 +320,43 @@ mod tests {
         let callees = store::graph_callees(&conn, "caller", 10).unwrap();
         assert_eq!(callees.len(), 1);
         assert_eq!(callees[0].to.name, "callee");
+    }
+
+    #[test]
+    fn qualified_reference_prefers_matching_module_path() {
+        let mut by_name = HashMap::new();
+        by_name.insert(
+            "insert_chunk".to_string(),
+            vec![
+                SymbolTarget {
+                    chunk_id: 1,
+                    path: "src/other.rs".to_string(),
+                },
+                SymbolTarget {
+                    chunk_id: 2,
+                    path: "src/store.rs".to_string(),
+                },
+            ],
+        );
+
+        let targets = resolve_reference_targets(&by_name, "store::insert_chunk");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].chunk_id, 2);
+    }
+
+    #[test]
+    fn crate_qualified_reference_uses_last_module_as_hint() {
+        let mut by_name = HashMap::new();
+        by_name.insert(
+            "rebuild_symbol_graph".to_string(),
+            vec![SymbolTarget {
+                chunk_id: 7,
+                path: "src/graph.rs".to_string(),
+            }],
+        );
+
+        let targets = resolve_reference_targets(&by_name, "crate::graph::rebuild_symbol_graph");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].chunk_id, 7);
     }
 }

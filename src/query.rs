@@ -188,6 +188,7 @@ pub fn build_task_context(
 
     let mut out = String::new();
     out.push_str(&format!("<!-- tokenix_context: '{}' -->\n\n", task));
+    append_preferences(&mut out, repo_root);
     out.push_str("## Entry Points\n");
     for result in results.iter().take(8) {
         let symbol = if result.symbol.is_empty() {
@@ -296,6 +297,7 @@ pub fn build_explore_context(
     let chunks = crate::store::fetch_chunks_by_ids(&conn, &chunk_ids)?;
     let mut out = String::new();
     out.push_str(&format!("<!-- tokenix_explore: '{}' -->\n\n", task));
+    append_preferences(&mut out, repo_root);
     out.push_str("## Entry Points\n");
     for seed in seeds.iter().take(max_symbols.max(1)) {
         let symbol = if seed.symbol.is_empty() {
@@ -322,6 +324,23 @@ pub fn build_explore_context(
     out.push_str("\n## Source By File\n");
     append_grouped_chunks(&mut out, &chunks, budget);
     Ok(out)
+}
+
+fn append_preferences(out: &mut String, repo_root: &Path) {
+    let preferences = crate::memory::preferences_for_context(repo_root, 8).unwrap_or_default();
+    out.push_str("## Preference Memory\n");
+    out.push_str("- If the user states a durable preference, migration decision, workflow rule, or project policy, save it with `tokenix_memory_add` when MCP is available.\n");
+    out.push_str("- Use `scope=project` for repository-specific rules and `scope=global` only for cross-repository preferences.\n");
+    out.push_str(
+        "- Do not save secrets, credentials, private tokens, one-off bug details, or guesses.\n",
+    );
+    if preferences.is_empty() {
+        out.push('\n');
+        return;
+    }
+    out.push_str("\nSaved preferences:\n");
+    out.push_str(&preferences);
+    out.push_str("\n\n");
 }
 
 fn append_grouped_chunks(out: &mut String, chunks: &[SearchResult], budget: usize) {

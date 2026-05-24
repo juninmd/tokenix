@@ -10,6 +10,7 @@ mod graph;
 mod hook;
 mod indexer;
 mod mcp;
+mod memory;
 mod query;
 mod store;
 
@@ -95,6 +96,11 @@ enum Commands {
         max_symbols: usize,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
+    },
+    /// Store or list user preference memory
+    Memory {
+        #[command(subcommand)]
+        action: MemoryAction,
     },
     /// Smart file reader - shows outline by default for large files
     Read {
@@ -216,6 +222,29 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+enum MemoryAction {
+    /// Add a preference to global or project memory
+    Add {
+        text: String,
+        #[arg(long, help = "Save under ~/.tokenix/memory/preferences.md")]
+        global: bool,
+        #[arg(long, help = "Save under this project's preference memory")]
+        project: bool,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// List saved preferences
+    List {
+        #[arg(long, help = "Only show global preferences")]
+        global: bool,
+        #[arg(long, help = "Only show project preferences")]
+        project: bool,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum FilterAction {
     /// List top Bash commands by tokens wasted (no custom filter yet)
     List,
@@ -275,6 +304,7 @@ fn main() -> Result<()> {
             max_symbols,
             path,
         } => cmd_explore(&query, budget, max_symbols, &path),
+        Commands::Memory { action } => cmd_memory(action),
         Commands::Read {
             file,
             symbol,
@@ -438,6 +468,52 @@ fn cmd_explore(query_text: &str, budget: usize, max_symbols: usize, path: &Path)
     let out = query::build_explore_context(&repo_root, query_text, budget, max_symbols)?;
     println!("{}", out);
     Ok(())
+}
+
+fn cmd_memory(action: MemoryAction) -> Result<()> {
+    match action {
+        MemoryAction::Add {
+            text,
+            global,
+            project,
+            path,
+        } => {
+            let repo_root = find_repo_root(&path);
+            let mut saved = Vec::new();
+            if global {
+                saved.push(memory::add_preference(
+                    &repo_root,
+                    memory::PreferenceScope::Global,
+                    &text,
+                )?);
+            }
+            if project || !global {
+                saved.push(memory::add_preference(
+                    &repo_root,
+                    memory::PreferenceScope::Project,
+                    &text,
+                )?);
+            }
+            for path in saved {
+                println!("saved {}", path.display());
+            }
+            Ok(())
+        }
+        MemoryAction::List {
+            global,
+            project,
+            path,
+        } => {
+            let repo_root = find_repo_root(&path);
+            let include_global = global || !project;
+            let include_project = project || !global;
+            println!(
+                "{}",
+                memory::list_preferences(&repo_root, include_global, include_project)?
+            );
+            Ok(())
+        }
+    }
 }
 
 fn cmd_query(text: &str, budget: usize, k: usize, file: Option<&str>, path: &Path) -> Result<()> {

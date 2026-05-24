@@ -95,7 +95,7 @@ pub fn run_mcp_server() -> Result<()> {
                                 },
                                 {
                                     "name": "tokenix_context",
-                                    "description": "PRIMARY TOOL: build focused task context in one call by combining semantic search, entry points, and compact file outlines",
+                                    "description": "PRIMARY TOOL: build focused task context in one call by combining semantic search, preference-memory capture guidance, entry points, and compact file outlines",
                                     "inputSchema": {
                                         "type": "object",
                                         "properties": {
@@ -119,7 +119,7 @@ pub fn run_mcp_server() -> Result<()> {
                                 },
                                 {
                                     "name": "tokenix_explore",
-                                    "description": "Graph-aware exploration in one capped call: entry points, relationship map, and source grouped by file. Use after tokenix_context when you need implementation details.",
+                                    "description": "Graph-aware exploration in one capped call: preference-memory capture guidance, entry points, relationship map, and source grouped by file. Use after tokenix_context when you need implementation details.",
                                     "inputSchema": {
                                         "type": "object",
                                         "properties": {
@@ -210,6 +210,39 @@ pub fn run_mcp_server() -> Result<()> {
                                             "limit": {"type": "integer", "description": "Maximum relationships (default 50)", "default": 50}
                                         },
                                         "required": ["symbol"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_memory_add",
+                                    "description": "Save a durable user preference for future tokenix context. Scope defaults to project.",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "text": {
+                                                "type": "string",
+                                                "description": "Preference to remember, e.g. 'Prefer Biome over ESLint for linting migrations'"
+                                            },
+                                            "scope": {
+                                                "type": "string",
+                                                "description": "Preference scope: project or global",
+                                                "default": "project"
+                                            }
+                                        },
+                                        "required": ["text"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_memory_list",
+                                    "description": "List saved tokenix preferences from global, project, or all scopes",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "scope": {
+                                                "type": "string",
+                                                "description": "Scope to list: all, project, or global",
+                                                "default": "all"
+                                            }
+                                        }
                                     }
                                 },
                                 {
@@ -446,6 +479,38 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 &relations,
                 &format!("Impact graph for `{symbol}`"),
             ))
+        }
+        "tokenix_memory_add" => {
+            let text = args
+                .get("text")
+                .and_then(|q| q.as_str())
+                .ok_or_else(|| anyhow!("Missing 'text' argument"))?;
+            let scope = args
+                .get("scope")
+                .and_then(|q| q.as_str())
+                .unwrap_or("project");
+            let scope = match scope {
+                "global" => crate::memory::PreferenceScope::Global,
+                "project" => crate::memory::PreferenceScope::Project,
+                other => return Err(anyhow!("Invalid scope '{}'. Use: global | project", other)),
+            };
+            let path = crate::memory::add_preference(&repo_root, scope, text)?;
+            Ok(format!("saved {}", path.display()))
+        }
+        "tokenix_memory_list" => {
+            let scope = args.get("scope").and_then(|q| q.as_str()).unwrap_or("all");
+            let (include_global, include_project) = match scope {
+                "all" => (true, true),
+                "global" => (true, false),
+                "project" => (false, true),
+                other => {
+                    return Err(anyhow!(
+                        "Invalid scope '{}'. Use: all | global | project",
+                        other
+                    ))
+                }
+            };
+            crate::memory::list_preferences(&repo_root, include_global, include_project)
         }
         "tokenix_gain" => {
             let history = args
