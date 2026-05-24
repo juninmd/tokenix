@@ -170,8 +170,8 @@ fn chunk_with_parser(
         if let Some(kind) = is_symbol_node(kind_str) {
             let start_line = node.start_position().row;
             let end_line = node.end_position().row;
-            let symbol = find_first_identifier(node, source)
-                .unwrap_or_else(|| "anonymous".to_string());
+            let symbol =
+                find_first_identifier(node, source).unwrap_or_else(|| "anonymous".to_string());
             symbols.push(SymbolNode {
                 start_line,
                 end_line,
@@ -233,7 +233,12 @@ fn is_python_symbol(kind: &str) -> Option<&'static str> {
 }
 
 fn chunk_python(content: &str, path: &str) -> Vec<Chunk> {
-    chunk_with_parser(tree_sitter_python::language(), content, path, is_python_symbol)
+    chunk_with_parser(
+        tree_sitter_python::language(),
+        content,
+        path,
+        is_python_symbol,
+    )
 }
 
 fn is_js_ts_symbol(kind: &str) -> Option<&'static str> {
@@ -248,7 +253,12 @@ fn is_js_ts_symbol(kind: &str) -> Option<&'static str> {
 }
 
 fn chunk_ts_js(content: &str, path: &str) -> Vec<Chunk> {
-    chunk_with_parser(tree_sitter_javascript::language(), content, path, is_js_ts_symbol)
+    chunk_with_parser(
+        tree_sitter_javascript::language(),
+        content,
+        path,
+        is_js_ts_symbol,
+    )
 }
 
 fn is_go_symbol(kind: &str) -> Option<&'static str> {
@@ -323,7 +333,7 @@ fn flush_chunk(
             if let Some(c) = make_chunk(lines, path, s, e, symbol, kind) {
                 out.push(c);
             }
-            
+
             // Advance s with overlap
             let mut next_s = e + 1;
             let mut accumulated = 0;
@@ -367,11 +377,11 @@ pub fn chunk_by_lines(lines: &[&str], path: &str) -> Vec<Chunk> {
         if let Some(c) = make_chunk(lines, path, s, last_included, "", "block") {
             out.push(c);
         }
-        
+
         if e > end {
             break;
         }
-        
+
         // Find next start with overlap
         let mut next_s = e;
         let mut accumulated = 0;
@@ -724,7 +734,6 @@ pub fn generate_outline(content: &str, path: &str) -> String {
     parts.join("\n")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,12 +884,14 @@ void globalFunc() {
     #[test]
     fn test_sliding_window_overlap() {
         // Create an input where each line has several tokens
-        let line_content = "let var_to_verify_overlap = 12345;"; 
-        let lines: Vec<String> = (0..150).map(|i| format!("{}: {}", i, line_content)).collect();
+        let line_content = "let var_to_verify_overlap = 12345;";
+        let lines: Vec<String> = (0..150)
+            .map(|i| format!("{}: {}", i, line_content))
+            .collect();
         let slice: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
         let chunks = chunk_by_lines(&slice, "test.txt");
         assert!(chunks.len() > 1);
-        
+
         let c1 = &chunks[0];
         let c2 = &chunks[1];
         assert!(c2.start_line < c1.end_line);

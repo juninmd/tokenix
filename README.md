@@ -94,6 +94,9 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | Feature | Description |
 |---|---|
 | **Semantic search** | Find relevant code by meaning, not just keywords |
+| **One-call MCP context** | `tokenix_context` combines semantic search, entry points, and compact outlines so agents do not burn calls chaining search/read loops |
+| **Graph-aware explore** | `tokenix explore` / `tokenix_explore` returns related symbols, relationship maps, and grouped source in one capped call |
+| **Symbol graph** | `tokenix symbols`, `callers`, `callees`, and `impact` trace relationships between indexed symbols |
 | **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C++ |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
 | **Hook-based interception** | `PreToolUse` intercepts large reads; `PostToolUse` compresses Bash/ListDirectory output |
@@ -104,6 +107,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **Savings analytics** | `tokenix gain` — token summary, focused cost table for 7 reference models (Anthropic, OpenAI, Google), by-tool breakdown |
 | **Bundled output filters** | 59 RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `gradle`, `terraform`, and more. Generate new ones with `tokenix filter generate` |
 | **Custom filters** | Drop `.toml` files in `~/.tokenix/filters/` — they override bundled filters. AI-assisted generation via `tokenix filter generate <command>` |
+| **Polite indexing controls** | `tokenix index --low-cpu`, `--jobs`, and `--embed-batch` keep large-repo indexing from monopolizing the machine |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
@@ -114,7 +118,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 |---|---|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `PreToolUse` + `PostToolUse` hooks in `~/.claude/settings.json` |
 | [GitHub Copilot](https://docs.github.com/en/copilot) | `.github/copilot-instructions.md` + `.github/hooks/hooks.json` |
-| [OpenAI Codex CLI](https://help.openai.com/en/articles/11096431-openai-codex-cli-getting-started) | Shell helpers + `~/.codex/instructions.md` |
+| [OpenAI Codex CLI](https://help.openai.com/en/articles/11096431-openai-codex-cli-getting-started) | `~/.codex/hooks.json` + Windows wrapper + optional shell helpers |
 
 ---
 
@@ -231,8 +235,9 @@ flowchart LR
 
 1. **`tokenix index .`** — walks your repo, chunks files, generates embeddings via fastembed (ONNX, in-process), stores in `~/.tokenix/<project-id>.db`
 2. **`tokenix query "..."`** — embeds your query and returns the most relevant chunks within a token budget
-3. **`tokenix read FILE`** — returns a symbol outline for large files, full content for small ones
-4. **`tokenix install-hook`** — configures your AI tool to use tokenix automatically
+3. **`tokenix context "..."`** — returns entry points, relevant source chunks, and compact outlines in one call
+4. **`tokenix read FILE`** — returns a symbol outline for large files, full content for small ones
+5. **`tokenix install-hook`** — configures your AI tool to use tokenix automatically
 
 ---
 
@@ -301,7 +306,15 @@ tokenix query "how does JWT validation work"
 tokenix query "database connection pooling" --budget 2000
 ```
 
-### 3. Smart file reader
+### 3. One-call task context
+
+```bash
+tokenix context "fix login refresh token bug"
+tokenix context "how does the indexer batch embeddings" --budget 2000 --max-files 3
+tokenix explore "run_hook hook_post compression" --budget 4000 --max-symbols 8
+```
+
+### 4. Smart file reader
 
 ```bash
 tokenix read src/auth/middleware.rs                     # symbol outline
@@ -309,7 +322,17 @@ tokenix read src/auth/middleware.rs --symbol validate_token   # targeted
 tokenix read src/auth/middleware.rs --lines 45-80       # line range
 ```
 
-### 4. Token savings analytics
+### 5. Symbol graph
+
+```bash
+tokenix symbols validate_token
+tokenix callers validate_token
+tokenix callees run_hook
+tokenix impact update_user --depth 2
+tokenix rebuild-graph   # recompute relationships without re-embedding
+```
+
+### 6. Token savings analytics
 
 ```bash
 tokenix gain
@@ -403,7 +426,14 @@ tokenix install-hook --tool all
 |---|---|
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix query TEXT` | Semantic search over indexed chunks |
+| `tokenix context TEXT` | One-call task context: entry points, relevant source, compact outlines |
+| `tokenix explore TEXT` | Graph-aware exploration: entry points, relationships, grouped source |
 | `tokenix read FILE` | Smart reader — outline for large files, full for small |
+| `tokenix symbols QUERY` | Find indexed symbols by name or path |
+| `tokenix callers SYMBOL` | Show symbols that call/reference a symbol |
+| `tokenix callees SYMBOL` | Show symbols called/referenced by a symbol |
+| `tokenix impact SYMBOL` | Show bidirectional impact graph around a symbol |
+| `tokenix rebuild-graph` | Rebuild graph tables from existing indexed chunks without re-embedding |
 | `tokenix gain` | Token savings analytics with per-model cost table |
 | `tokenix gain --history` | Same, plus last 20 hook events |
 | `tokenix benchmark` | Reproducible savings and semantic-quality benchmark |
@@ -417,6 +447,7 @@ tokenix install-hook --tool all
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
 | `tokenix hook` | `PreToolUse` handler — intercepts large reads (called by AI tools) |
 | `tokenix hook-post` | `PostToolUse` handler — compresses Bash/ListDirectory output (called by AI tools) |
+| `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools |
 
 <details>
 <summary>Flag reference</summary>
@@ -426,6 +457,9 @@ tokenix install-hook --tool all
 | Flag | Default | Description |
 |---|---|---|
 | `--force`, `-f` | false | Reindex all files, ignoring cache |
+| `--low-cpu` | false | Use 1 worker, 1 ONNX thread, tiny embedding batches, and a short pause between batches |
+| `--jobs N` | env/default | Set max rayon worker threads for indexing |
+| `--embed-batch N` | env/default | Set embedding batch size for indexing |
 | `--if-stale` | false | Skip if index is fresh for the current Git worktree/branch/HEAD |
 
 **`tokenix query`**

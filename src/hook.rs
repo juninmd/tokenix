@@ -281,7 +281,8 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     }
 
     // Try daemon first: model stays resident, ~30ms vs ~430ms cold embed.
-    if let Some(output) = crate::daemon::daemon_search_with_autostart(repo_root, pattern, 20, 2500, None)
+    if let Some(output) =
+        crate::daemon::daemon_search_with_autostart(repo_root, pattern, 20, 2500, None)
     {
         return (true, output);
     }

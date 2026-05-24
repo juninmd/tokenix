@@ -18,14 +18,16 @@ fn open_query_cache_db() -> Option<Connection> {
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join("query_cache.db");
     let conn = Connection::open(&path).ok()?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").ok()?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .ok()?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS query_cache (
             query_text TEXT PRIMARY KEY,
             embedding BLOB NOT NULL
         )",
         [],
-    ).ok()?;
+    )
+    .ok()?;
     Some(conn)
 }
 
@@ -77,7 +79,9 @@ pub fn embed_documents(texts: &[String]) -> Result<Vec<Vec<f32>>> {
 pub fn embed_query(text: &str) -> Result<Vec<f32>> {
     // 1. Try checking the persistent query cache
     if let Some(conn) = open_query_cache_db() {
-        if let Ok(mut stmt) = conn.prepare("SELECT embedding FROM query_cache WHERE query_text = ?1") {
+        if let Ok(mut stmt) =
+            conn.prepare("SELECT embedding FROM query_cache WHERE query_text = ?1")
+        {
             if let Ok(mut rows) = stmt.query(params![text]) {
                 if let Ok(Some(row)) = rows.next() {
                     if let Ok(blob) = row.get::<_, Vec<u8>>(0) {
@@ -167,18 +171,18 @@ mod tests {
     #[test]
     fn test_query_cache_persistence() {
         let query = "test_persistent_cache_query_string_12345";
-        
+
         // Remove from cache if exists to start clean
         if let Some(conn) = open_query_cache_db() {
             let _ = conn.execute("DELETE FROM query_cache WHERE query_text = ?1", [query]);
         }
-        
+
         // First call: generates and caches
         let vec1 = embed_query(query).expect("First embed failed");
-        
+
         // Second call: should retrieve from cache
         let vec2 = embed_query(query).expect("Second embed failed");
-        
+
         assert_eq!(vec1.len(), 768);
         assert_eq!(vec1, vec2);
     }

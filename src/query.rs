@@ -1,10 +1,10 @@
-use anyhow::Result;
-use std::collections::HashMap;
+use anyhow::{anyhow, Result};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use crate::chunker::count_tokens;
 use crate::embed::embed_query;
-use crate::store::{open_db, hybrid_search, SearchResult};
+use crate::store::{hybrid_search, open_db, SearchResult};
 
 pub fn query_index(
     repo_root: &Path,
@@ -170,6 +170,192 @@ pub fn get_file_outline(file_path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(file_path).ok()?;
     let path_str = file_path.to_string_lossy().replace('\\', "/");
     Some(crate::chunker::generate_outline(&content, &path_str))
+}
+
+pub fn build_task_context(
+    repo_root: &Path,
+    task: &str,
+    budget: usize,
+    max_files: usize,
+) -> Result<String> {
+    let search_budget = (budget * 2 / 3).max(500);
+    let results = query_index(repo_root, task, search_budget, 12, None)?
+        .ok_or_else(|| anyhow!("Index not found. Please index the workspace first."))?;
+
+    if results.is_empty() {
+        return Ok(format!("No relevant context found for: {}", task));
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!("<!-- tokenix_context: '{}' -->\n\n", task));
+    out.push_str("## Entry Points\n");
+    for result in results.iter().take(8) {
+        let symbol = if result.symbol.is_empty() {
+            "(file chunk)"
+        } else {
+            result.symbol.as_str()
+        };
+        out.push_str(&format!(
+            "- {}:{}-{} [{}] {}\n",
+            result.path, result.start_line, result.end_line, result.kind, symbol
+        ));
+    }
+
+    out.push_str("\n## Relevant Source\n");
+    out.push_str(&format_results(&results, task));
+
+    let mut paths = BTreeSet::new();
+    for result in &results {
+        paths.insert(result.path.clone());
+        if paths.len() >= max_files.max(1) {
+            break;
+        }
+    }
+
+    out.push_str("\n\n## File Outlines\n");
+    let mut outline_tokens = crate::chunker::count_tokens(&out);
+    for path in paths {
+        if outline_tokens >= budget {
+            break;
+        }
+        let full = repo_root.join(&path);
+        if !full.exists() {
+            continue;
+        }
+        if let Some(outline) = get_file_outline(&full) {
+            let remaining = budget.saturating_sub(outline_tokens);
+            let outline_cost = crate::chunker::count_tokens(&outline);
+            if outline_cost > remaining {
+                out.push_str(&format!(
+                    "\n### {}\n(outline omitted: budget exhausted)\n",
+                    path
+                ));
+                break;
+            }
+            out.push_str(&format!("\n### {}\n{}\n", path, outline));
+            outline_tokens += outline_cost;
+        }
+    }
+
+    Ok(out)
+}
+
+pub fn build_explore_context(
+    repo_root: &Path,
+    task: &str,
+    budget: usize,
+    max_symbols: usize,
+) -> Result<String> {
+    let conn = open_db(repo_root, false)?
+        .ok_or_else(|| anyhow!("Index not found. Please index the workspace first."))?;
+    let seed_budget = (budget / 2).max(500);
+    let seeds = query_index(repo_root, task, seed_budget, max_symbols.max(4), None)?
+        .ok_or_else(|| anyhow!("Index not found. Please index the workspace first."))?;
+
+    if seeds.is_empty() {
+        return Ok(format!("No relevant context found for: {}", task));
+    }
+
+    let mut chunk_ids = Vec::new();
+    let mut seen_ids = HashSet::new();
+    let mut relation_lines = BTreeSet::new();
+
+    for seed in &seeds {
+        if seen_ids.insert(seed.id) {
+            chunk_ids.push(seed.id);
+        }
+
+        if seed.symbol.is_empty() {
+            continue;
+        }
+
+        for relation in crate::store::graph_callers(&conn, &seed.symbol, 4)?
+            .into_iter()
+            .chain(crate::store::graph_callees(&conn, &seed.symbol, 4)?)
+        {
+            relation_lines.insert(format!(
+                "- {}:{} [{}] {} -> {}:{} [{}] {} via `{}`",
+                relation.from.path,
+                relation.from.start_line,
+                relation.from.kind,
+                relation.from.name,
+                relation.to.path,
+                relation.to.start_line,
+                relation.to.kind,
+                relation.to.name,
+                relation.reference
+            ));
+            for id in [relation.from.chunk_id, relation.to.chunk_id] {
+                if seen_ids.insert(id) && chunk_ids.len() < max_symbols.max(4) * 3 {
+                    chunk_ids.push(id);
+                }
+            }
+        }
+    }
+
+    let chunks = crate::store::fetch_chunks_by_ids(&conn, &chunk_ids)?;
+    let mut out = String::new();
+    out.push_str(&format!("<!-- tokenix_explore: '{}' -->\n\n", task));
+    out.push_str("## Entry Points\n");
+    for seed in seeds.iter().take(max_symbols.max(1)) {
+        let symbol = if seed.symbol.is_empty() {
+            "(file chunk)"
+        } else {
+            seed.symbol.as_str()
+        };
+        out.push_str(&format!(
+            "- {}:{}-{} [{}] {}\n",
+            seed.path, seed.start_line, seed.end_line, seed.kind, symbol
+        ));
+    }
+
+    out.push_str("\n## Relationship Map\n");
+    if relation_lines.is_empty() {
+        out.push_str("(no graph relationships found for the selected entry points)\n");
+    } else {
+        for line in relation_lines.iter().take(max_symbols.max(4) * 3) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+
+    out.push_str("\n## Source By File\n");
+    append_grouped_chunks(&mut out, &chunks, budget);
+    Ok(out)
+}
+
+fn append_grouped_chunks(out: &mut String, chunks: &[SearchResult], budget: usize) {
+    let mut by_file: HashMap<&str, Vec<&SearchResult>> = HashMap::new();
+    for chunk in chunks {
+        by_file.entry(&chunk.path).or_default().push(chunk);
+    }
+
+    let mut files: Vec<(&str, Vec<&SearchResult>)> = by_file.into_iter().collect();
+    files.sort_by_key(|(path, _)| *path);
+
+    for (path, mut file_chunks) in files {
+        if count_tokens(out) >= budget {
+            break;
+        }
+        file_chunks.sort_by_key(|chunk| chunk.start_line);
+        out.push_str(&format!("\n### {}\n", path));
+        for chunk in file_chunks {
+            let label = if chunk.symbol.is_empty() {
+                format!("L{}-{}", chunk.start_line, chunk.end_line)
+            } else {
+                format!(
+                    "L{}-{} [{}] {}",
+                    chunk.start_line, chunk.end_line, chunk.kind, chunk.symbol
+                )
+            };
+            let block = format!("```  {}\n{}\n```\n", label, chunk.content);
+            if count_tokens(out) + count_tokens(&block) > budget {
+                out.push_str("(remaining source omitted: budget exhausted)\n");
+                return;
+            }
+            out.push_str(&block);
+        }
+    }
 }
 
 #[cfg(test)]

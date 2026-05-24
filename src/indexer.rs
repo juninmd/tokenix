@@ -5,6 +5,8 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunker::{chunk_file, file_hash, should_index, Chunk, IGNORED_DIRS};
@@ -187,18 +189,41 @@ where
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(8);
+        .unwrap_or(4);
+    let embed_sleep = std::env::var("TOKENIX_EMBED_SLEEP_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
     let embeddings = if embed_texts.is_empty() {
         vec![]
     } else {
         progress_cb(&format!(
-            "embedding {} chunks via fastembed (ONNX)...",
-            embed_texts.len()
+            "embedding {} chunks via fastembed (ONNX), batch size {}...",
+            embed_texts.len(),
+            embed_batch
         ));
         let mut all: Vec<Vec<f32>> = Vec::with_capacity(embed_texts.len());
-        for batch in embed_texts.chunks(embed_batch) {
-            let batch_embs = embed_documents(batch)?;
+        let total_batches = embed_texts.len().div_ceil(embed_batch);
+        for (batch_idx, batch) in embed_texts.chunks(embed_batch).enumerate() {
+            progress_cb(&format!(
+                "embedding batch {}/{} ({} chunks)",
+                batch_idx + 1,
+                total_batches,
+                batch.len()
+            ));
+            let batch_embs = embed_documents(batch).map_err(|e| {
+                anyhow::anyhow!(
+                    "embedding failed at batch {}/{} with {} chunk(s): {}",
+                    batch_idx + 1,
+                    total_batches,
+                    batch.len(),
+                    e
+                )
+            })?;
             all.extend(batch_embs);
+            if embed_sleep > 0 && batch_idx + 1 < total_batches {
+                thread::sleep(Duration::from_millis(embed_sleep));
+            }
         }
         all
     };
@@ -284,6 +309,9 @@ where
             let _ = crate::store::delete_file(&conn, *file_id);
         }
     }
+
+    progress_cb("rebuilding symbol graph...");
+    crate::graph::rebuild_symbol_graph(&conn)?;
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

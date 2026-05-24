@@ -107,12 +107,31 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
             chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
             embedding BLOB NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS graph_nodes (
+            chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+            file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            name TEXT NOT NULL,
+            kind TEXT,
+            start_line INTEGER,
+            end_line INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS graph_edges (
+            id INTEGER PRIMARY KEY,
+            caller_chunk_id INTEGER REFERENCES chunks(id) ON DELETE CASCADE,
+            callee_chunk_id INTEGER REFERENCES chunks(id) ON DELETE CASCADE,
+            reference TEXT NOT NULL,
+            edge_kind TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS meta (
             key TEXT PRIMARY KEY,
             value TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);
         CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);
+        CREATE INDEX IF NOT EXISTS idx_graph_nodes_name ON graph_nodes(name);
+        CREATE INDEX IF NOT EXISTS idx_graph_edges_caller ON graph_edges(caller_chunk_id);
+        CREATE INDEX IF NOT EXISTS idx_graph_edges_callee ON graph_edges(callee_chunk_id);
 
         CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
             content,
@@ -170,6 +189,12 @@ pub fn delete_chunks_for_file(conn: &Connection, file_id: i64) -> Result<()> {
         "DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE file_id=?1)",
         params![file_id],
     )?;
+    conn.execute(
+        "DELETE FROM graph_edges WHERE caller_chunk_id IN (SELECT id FROM chunks WHERE file_id=?1)
+         OR callee_chunk_id IN (SELECT id FROM chunks WHERE file_id=?1)",
+        params![file_id],
+    )?;
+    conn.execute("DELETE FROM graph_nodes WHERE file_id=?1", params![file_id])?;
     conn.execute("DELETE FROM chunks WHERE file_id=?1", params![file_id])?;
     Ok(())
 }
@@ -179,7 +204,6 @@ pub fn delete_file(conn: &Connection, file_id: i64) -> Result<()> {
     conn.execute("DELETE FROM files WHERE id=?1", params![file_id])?;
     Ok(())
 }
-
 
 pub struct NewChunk<'a> {
     pub file_id: i64,
@@ -220,6 +244,233 @@ pub fn insert_embedding(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> 
 }
 
 #[derive(Debug, Clone)]
+pub struct GraphNode {
+    pub chunk_id: i64,
+    pub path: String,
+    pub name: String,
+    pub kind: String,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct GraphRelation {
+    pub from: GraphNode,
+    pub to: GraphNode,
+    pub reference: String,
+    pub edge_kind: String,
+}
+
+pub fn clear_symbol_graph(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM graph_edges", [])?;
+    conn.execute("DELETE FROM graph_nodes", [])?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn insert_graph_node(
+    conn: &Connection,
+    chunk_id: i64,
+    file_id: i64,
+    path: &str,
+    name: &str,
+    kind: &str,
+    start_line: usize,
+    end_line: usize,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO graph_nodes(chunk_id,file_id,path,name,kind,start_line,end_line)
+         VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        params![
+            chunk_id,
+            file_id,
+            path,
+            name,
+            kind,
+            start_line as i64,
+            end_line as i64
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn insert_graph_edge(
+    conn: &Connection,
+    caller_chunk_id: i64,
+    callee_chunk_id: i64,
+    reference: &str,
+    edge_kind: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO graph_edges(caller_chunk_id,callee_chunk_id,reference,edge_kind)
+         VALUES(?1,?2,?3,?4)",
+        params![caller_chunk_id, callee_chunk_id, reference, edge_kind],
+    )?;
+    Ok(())
+}
+
+pub fn search_graph_nodes(conn: &Connection, query: &str, limit: usize) -> Result<Vec<GraphNode>> {
+    let pattern = format!("%{}%", query);
+    let mut stmt = conn.prepare(
+        "SELECT chunk_id,path,name,kind,start_line,end_line
+         FROM graph_nodes
+         WHERE name = ?1 COLLATE NOCASE OR name LIKE ?2 COLLATE NOCASE OR path LIKE ?2 COLLATE NOCASE
+         ORDER BY CASE WHEN name = ?1 COLLATE NOCASE THEN 0 ELSE 1 END, path, start_line
+         LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(params![query, pattern, limit as i64], graph_node_from_row)?;
+    Ok(rows.filter_map(|row| row.ok()).collect())
+}
+
+pub fn graph_callers(conn: &Connection, symbol: &str, limit: usize) -> Result<Vec<GraphRelation>> {
+    graph_relations(conn, symbol, limit, true)
+}
+
+pub fn graph_callees(conn: &Connection, symbol: &str, limit: usize) -> Result<Vec<GraphRelation>> {
+    graph_relations(conn, symbol, limit, false)
+}
+
+pub fn graph_impact(
+    conn: &Connection,
+    symbol: &str,
+    depth: usize,
+    limit: usize,
+) -> Result<Vec<GraphRelation>> {
+    let start_ids: Vec<i64> = search_graph_nodes(conn, symbol, 20)?
+        .into_iter()
+        .map(|node| node.chunk_id)
+        .collect();
+    if start_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut relations = Vec::new();
+    let mut frontier = start_ids;
+    let mut seen_nodes = std::collections::HashSet::new();
+    let mut seen_edges = std::collections::HashSet::new();
+
+    for _ in 0..depth.max(1) {
+        let mut next = Vec::new();
+        for node_id in &frontier {
+            if !seen_nodes.insert(*node_id) {
+                continue;
+            }
+            for relation in relations_for_node(conn, *node_id, true)?
+                .into_iter()
+                .chain(relations_for_node(conn, *node_id, false)?)
+            {
+                let edge_key = (
+                    relation.from.chunk_id,
+                    relation.to.chunk_id,
+                    relation.reference.clone(),
+                );
+                if seen_edges.insert(edge_key) {
+                    next.push(relation.from.chunk_id);
+                    next.push(relation.to.chunk_id);
+                    relations.push(relation);
+                    if relations.len() >= limit {
+                        return Ok(relations);
+                    }
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+
+    Ok(relations)
+}
+
+fn graph_relations(
+    conn: &Connection,
+    symbol: &str,
+    limit: usize,
+    callers: bool,
+) -> Result<Vec<GraphRelation>> {
+    let nodes = search_graph_nodes(conn, symbol, 20)?;
+    let mut relations = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for node in nodes {
+        for relation in relations_for_node(conn, node.chunk_id, callers)? {
+            let key = (
+                relation.from.chunk_id,
+                relation.to.chunk_id,
+                relation.reference.clone(),
+            );
+            if seen.insert(key) {
+                relations.push(relation);
+                if relations.len() >= limit {
+                    return Ok(relations);
+                }
+            }
+        }
+    }
+    Ok(relations)
+}
+
+fn relations_for_node(
+    conn: &Connection,
+    chunk_id: i64,
+    callers: bool,
+) -> Result<Vec<GraphRelation>> {
+    let (where_col, other_col) = if callers {
+        ("e.callee_chunk_id", "e.caller_chunk_id")
+    } else {
+        ("e.caller_chunk_id", "e.callee_chunk_id")
+    };
+    let sql = format!(
+        "SELECT
+            from_node.chunk_id, from_node.path, from_node.name, from_node.kind, from_node.start_line, from_node.end_line,
+            to_node.chunk_id, to_node.path, to_node.name, to_node.kind, to_node.start_line, to_node.end_line,
+            e.reference, e.edge_kind
+         FROM graph_edges e
+         JOIN graph_nodes from_node ON from_node.chunk_id = e.caller_chunk_id
+         JOIN graph_nodes to_node ON to_node.chunk_id = e.callee_chunk_id
+         WHERE {where_col} = ?1
+         ORDER BY {other_col}"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![chunk_id], graph_relation_from_row)?;
+    Ok(rows.filter_map(|row| row.ok()).collect())
+}
+
+fn graph_node_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphNode> {
+    Ok(GraphNode {
+        chunk_id: row.get(0)?,
+        path: row.get(1)?,
+        name: row.get(2)?,
+        kind: row.get(3)?,
+        start_line: row.get::<_, i64>(4)? as usize,
+        end_line: row.get::<_, i64>(5)? as usize,
+    })
+}
+
+fn graph_relation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphRelation> {
+    Ok(GraphRelation {
+        from: GraphNode {
+            chunk_id: row.get(0)?,
+            path: row.get(1)?,
+            name: row.get(2)?,
+            kind: row.get(3)?,
+            start_line: row.get::<_, i64>(4)? as usize,
+            end_line: row.get::<_, i64>(5)? as usize,
+        },
+        to: GraphNode {
+            chunk_id: row.get(6)?,
+            path: row.get(7)?,
+            name: row.get(8)?,
+            kind: row.get(9)?,
+            start_line: row.get::<_, i64>(10)? as usize,
+            end_line: row.get::<_, i64>(11)? as usize,
+        },
+        reference: row.get(12)?,
+        edge_kind: row.get(13)?,
+    })
+}
+
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct SearchResult {
     pub id: i64,
@@ -248,15 +499,13 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 pub fn cosine_similarity_to_bytes(query_vec: &[f32], query_norm: f32, bytes: &[u8]) -> f32 {
     let mut dot = 0.0f32;
     let mut nb = 0.0f32;
-    let mut i = 0;
-    for chunk in bytes.chunks_exact(4) {
+    for (i, chunk) in bytes.chunks_exact(4).enumerate() {
         if i >= query_vec.len() {
             break;
         }
         let y = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         dot += query_vec[i] * y;
         nb += y * y;
-        i += 1;
     }
     let nb_sqrt = nb.sqrt();
     if query_norm == 0.0 || nb_sqrt == 0.0 {
@@ -266,54 +515,56 @@ pub fn cosine_similarity_to_bytes(query_vec: &[f32], query_norm: f32, bytes: &[u
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn search_similar(
     conn: &Connection,
     query_vec: &[f32],
     k: usize,
     file_filter: Option<&str>,
 ) -> Result<Vec<SearchResult>> {
-    let rows_data: Vec<(Vec<u8>, i64, String, i64, i64, String, String, String, i64)> = if let Some(filter) = file_filter {
-        let mut stmt = conn.prepare(
+    let rows_data: Vec<(Vec<u8>, i64, String, i64, i64, String, String, String, i64)> =
+        if let Some(filter) = file_filter {
+            let mut stmt = conn.prepare(
             "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding
              FROM embeddings e JOIN chunks c ON c.id = e.chunk_id
              WHERE instr(c.path, ?1) > 0"
         )?;
-        let rows = stmt.query_map(params![filter], |row| {
-            Ok((
-                row.get::<_, Vec<u8>>(8)?,
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-            ))
-        })?;
-        let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
-        collected
-    } else {
-        let mut stmt = conn.prepare(
+            let rows = stmt.query_map(params![filter], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(8)?,
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            })?;
+            let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+            collected
+        } else {
+            let mut stmt = conn.prepare(
             "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding
              FROM embeddings e JOIN chunks c ON c.id = e.chunk_id"
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, Vec<u8>>(8)?,
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-            ))
-        })?;
-        let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
-        collected
-    };
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(8)?,
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            })?;
+            let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+            collected
+        };
 
     let query_norm: f32 = query_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
 
@@ -374,27 +625,20 @@ pub fn search_fts(
     if let Some(filter) = file_filter {
         let mut stmt = conn.prepare(
             "SELECT c.id FROM chunks c JOIN chunks_fts f ON c.id = f.rowid
-             WHERE chunks_fts MATCH ?1 AND instr(c.path, ?2) > 0 LIMIT ?3"
+             WHERE chunks_fts MATCH ?1 AND instr(c.path, ?2) > 0 LIMIT ?3",
         )?;
         let rows = stmt.query_map(params![sanitized, filter, limit], |row| {
             row.get::<_, i64>(0)
         })?;
-        for r in rows {
-            if let Ok(id) = r {
-                ids.push(id);
-            }
+        for id in rows.flatten() {
+            ids.push(id);
         }
     } else {
-        let mut stmt = conn.prepare(
-            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?1 LIMIT ?2"
-        )?;
-        let rows = stmt.query_map(params![sanitized, limit], |row| {
-            row.get::<_, i64>(0)
-        })?;
-        for r in rows {
-            if let Ok(id) = r {
-                ids.push(id);
-            }
+        let mut stmt =
+            conn.prepare("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?1 LIMIT ?2")?;
+        let rows = stmt.query_map(params![sanitized, limit], |row| row.get::<_, i64>(0))?;
+        for id in rows.flatten() {
+            ids.push(id);
         }
     }
     Ok(ids)
@@ -453,7 +697,8 @@ pub fn hybrid_search(
 
     for (rank, id) in sparse_ids.iter().enumerate() {
         let score = 1.0 / (60.0 + rank as f32);
-        rrf_scores.entry(*id)
+        rrf_scores
+            .entry(*id)
             .and_modify(|s| *s += score)
             .or_insert(score);
     }
@@ -466,9 +711,11 @@ pub fn hybrid_search(
         return Ok(Vec::new());
     }
 
-    let mut dense_map: HashMap<i64, SearchResult> = dense_results.into_iter().map(|r| (r.id, r)).collect();
+    let mut dense_map: HashMap<i64, SearchResult> =
+        dense_results.into_iter().map(|r| (r.id, r)).collect();
 
-    let missing_ids: Vec<i64> = top_candidates.iter()
+    let missing_ids: Vec<i64> = top_candidates
+        .iter()
         .map(|(id, _)| *id)
         .filter(|id| !dense_map.contains_key(id))
         .collect();
@@ -488,12 +735,14 @@ pub fn hybrid_search(
         }
     }
 
-    final_results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+    final_results.sort_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Ok(final_results.into_iter().take(k).collect())
 }
-
-
 
 #[allow(dead_code)]
 pub struct SymbolMatch {
@@ -847,11 +1096,11 @@ mod tests {
         let q = vec![1.0, 2.0, 3.0, 4.0];
         let b = vec![0.5, -1.0, 2.0, 1.5];
         let q_norm = q.iter().map(|x| x * x).sum::<f32>().sqrt();
-        
+
         let sim1 = cosine_similarity(&q, &b);
         let bytes = serialize_vec(&b);
         let sim2 = cosine_similarity_to_bytes(&q, q_norm, &bytes);
-        
+
         assert!((sim1 - sim2).abs() < 1e-6);
     }
 
@@ -881,7 +1130,8 @@ mod tests {
         conn.execute(
             "INSERT INTO embeddings(chunk_id, embedding) VALUES(?1, ?2)",
             params![chunk_id, serialize_vec(&embedding)],
-        ).unwrap();
+        )
+        .unwrap();
 
         // 4. Test search_fts
         let sparse_ids = search_fts(&conn, "fts5 hybrid", 10, None).unwrap();

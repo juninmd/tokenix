@@ -513,15 +513,18 @@ fn search_handler(
 
         for (rank, id) in sparse_ids.iter().enumerate() {
             let score = 1.0 / (60.0 + rank as f32);
-            rrf_scores.entry(*id)
+            rrf_scores
+                .entry(*id)
                 .and_modify(|s| *s += score)
                 .or_insert(score);
         }
 
         let mut sorted_candidates: Vec<(i64, f32)> = rrf_scores.into_iter().collect();
-        sorted_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        sorted_candidates
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        let top_candidates: Vec<(i64, f32)> = sorted_candidates.into_iter().take(candidate_k).collect();
+        let top_candidates: Vec<(i64, f32)> =
+            sorted_candidates.into_iter().take(candidate_k).collect();
 
         let mut top_ids_mapped = Vec::new();
         for (id, rrf_score) in top_candidates {

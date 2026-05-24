@@ -6,11 +6,12 @@ mod daemon;
 mod embed;
 mod filters;
 mod gain;
+mod graph;
 mod hook;
 mod indexer;
+mod mcp;
 mod query;
 mod store;
-mod mcp;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -50,6 +51,18 @@ enum Commands {
         force: bool,
         #[arg(long, help = "Skip if index is fresh (used by session hooks)")]
         if_stale: bool,
+        #[arg(
+            long,
+            help = "Use the lowest CPU settings: 1 worker, 1 ONNX thread, tiny embedding batches"
+        )]
+        low_cpu: bool,
+        #[arg(
+            long,
+            help = "Max rayon worker threads for chunking/search during indexing"
+        )]
+        jobs: Option<usize>,
+        #[arg(long, help = "Embedding batch size for indexing")]
+        embed_batch: Option<usize>,
     },
     /// Semantic search over the indexed repository
     Query {
@@ -63,6 +76,26 @@ enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// Build focused task context in one call
+    Context {
+        task: String,
+        #[arg(short, long, default_value_t = 3000)]
+        budget: usize,
+        #[arg(long, default_value_t = 4)]
+        max_files: usize,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Explore related symbols and source in one graph-aware call
+    Explore {
+        query: String,
+        #[arg(short, long, default_value_t = 4000)]
+        budget: usize,
+        #[arg(long, default_value_t = 8)]
+        max_symbols: usize,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
     /// Smart file reader - shows outline by default for large files
     Read {
         file: String,
@@ -70,6 +103,45 @@ enum Commands {
         symbol: Option<String>,
         #[arg(short, long, help = "Line range e.g. 10-50")]
         lines: Option<String>,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Find indexed symbols by name or path
+    Symbols {
+        query: String,
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show symbols that call a target symbol
+    Callers {
+        symbol: String,
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show symbols called by a target symbol
+    Callees {
+        symbol: String,
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show a bidirectional impact graph around a symbol
+    Impact {
+        symbol: String,
+        #[arg(short, long, default_value_t = 2)]
+        depth: usize,
+        #[arg(short, long, default_value_t = 50)]
+        limit: usize,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Rebuild only the symbol graph from existing indexed chunks
+    RebuildGraph {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -177,18 +249,11 @@ fn main() -> Result<()> {
             path,
             force,
             if_stale,
+            low_cpu,
+            jobs,
+            embed_batch,
         } => {
-            // Cap parallelism for indexing: rayon chunking + ONNX embedding.
-            // Without limits, large repos max out all CPU cores and freeze the PC.
-            #[allow(unused_unsafe)]
-            unsafe {
-                if std::env::var("RAYON_NUM_THREADS").is_err() {
-                    std::env::set_var("RAYON_NUM_THREADS", "4");
-                }
-                if std::env::var("OMP_NUM_THREADS").is_err() {
-                    std::env::set_var("OMP_NUM_THREADS", "2");
-                }
-            }
+            configure_index_limits(low_cpu, jobs, embed_batch);
             cmd_index(&path, force, if_stale)
         }
         Commands::Query {
@@ -198,12 +263,42 @@ fn main() -> Result<()> {
             file,
             path,
         } => cmd_query(&text, budget, k, file.as_deref(), &path),
+        Commands::Context {
+            task,
+            budget,
+            max_files,
+            path,
+        } => cmd_context(&task, budget, max_files, &path),
+        Commands::Explore {
+            query,
+            budget,
+            max_symbols,
+            path,
+        } => cmd_explore(&query, budget, max_symbols, &path),
         Commands::Read {
             file,
             symbol,
             lines,
             path,
         } => cmd_read(&file, symbol.as_deref(), lines.as_deref(), &path),
+        Commands::Symbols { query, limit, path } => cmd_symbols(&query, limit, &path),
+        Commands::Callers {
+            symbol,
+            limit,
+            path,
+        } => cmd_graph_relations(&symbol, limit, &path, true),
+        Commands::Callees {
+            symbol,
+            limit,
+            path,
+        } => cmd_graph_relations(&symbol, limit, &path, false),
+        Commands::Impact {
+            symbol,
+            depth,
+            limit,
+            path,
+        } => cmd_impact(&symbol, depth, limit, &path),
+        Commands::RebuildGraph { path } => cmd_rebuild_graph(&path),
         Commands::Gain { path, history } => cmd_gain(&path, history),
         Commands::Benchmark {
             path,
@@ -258,6 +353,41 @@ fn main() -> Result<()> {
     }
 }
 
+fn set_env_default(key: &str, value: impl ToString) {
+    #[allow(unused_unsafe)]
+    unsafe {
+        if std::env::var(key).is_err() {
+            std::env::set_var(key, value.to_string());
+        }
+    }
+}
+
+fn set_env_override(key: &str, value: impl ToString) {
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::set_var(key, value.to_string());
+    }
+}
+
+fn configure_index_limits(low_cpu: bool, jobs: Option<usize>, embed_batch: Option<usize>) {
+    if low_cpu {
+        set_env_override("RAYON_NUM_THREADS", jobs.unwrap_or(1).max(1));
+        set_env_override("OMP_NUM_THREADS", 1);
+        set_env_override("TOKENIX_EMBED_BATCH", embed_batch.unwrap_or(2).max(1));
+        set_env_default("TOKENIX_EMBED_SLEEP_MS", 25);
+        return;
+    }
+
+    // Keep the default polite. Users can raise this with --jobs / env vars.
+    set_env_default("RAYON_NUM_THREADS", jobs.unwrap_or(2).max(1));
+    set_env_default("OMP_NUM_THREADS", 1);
+    if let Some(batch) = embed_batch {
+        set_env_override("TOKENIX_EMBED_BATCH", batch.max(1));
+    } else {
+        set_env_default("TOKENIX_EMBED_BATCH", 4);
+    }
+}
+
 fn cmd_index(path: &Path, force: bool, if_stale: bool) -> Result<()> {
     let repo_root = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
@@ -296,6 +426,20 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_context(task: &str, budget: usize, max_files: usize, path: &Path) -> Result<()> {
+    let repo_root = find_repo_root(path);
+    let out = query::build_task_context(&repo_root, task, budget, max_files)?;
+    println!("{}", out);
+    Ok(())
+}
+
+fn cmd_explore(query_text: &str, budget: usize, max_symbols: usize, path: &Path) -> Result<()> {
+    let repo_root = find_repo_root(path);
+    let out = query::build_explore_context(&repo_root, query_text, budget, max_symbols)?;
+    println!("{}", out);
+    Ok(())
+}
+
 fn cmd_query(text: &str, budget: usize, k: usize, file: Option<&str>, path: &Path) -> Result<()> {
     let repo_root = find_repo_root(path);
 
@@ -308,6 +452,55 @@ fn cmd_query(text: &str, budget: usize, k: usize, file: Option<&str>, path: &Pat
     let results = query::query_index(&repo_root, text, budget, k, file)?
         .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))?;
     println!("{}", query::format_results(&results, text));
+    Ok(())
+}
+
+fn open_existing_index(path: &Path) -> Result<rusqlite::Connection> {
+    let repo_root = find_repo_root(path);
+    store::open_db(&repo_root, false)?
+        .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))
+}
+
+fn cmd_symbols(query: &str, limit: usize, path: &Path) -> Result<()> {
+    let conn = open_existing_index(path)?;
+    let nodes = store::search_graph_nodes(&conn, query, limit)?;
+    println!(
+        "{}",
+        graph::format_nodes(&nodes, &format!("Symbols matching `{query}`"))
+    );
+    Ok(())
+}
+
+fn cmd_graph_relations(symbol: &str, limit: usize, path: &Path, callers: bool) -> Result<()> {
+    let conn = open_existing_index(path)?;
+    let relations = if callers {
+        store::graph_callers(&conn, symbol, limit)?
+    } else {
+        store::graph_callees(&conn, symbol, limit)?
+    };
+    let title = if callers {
+        format!("Callers of `{symbol}`")
+    } else {
+        format!("Callees of `{symbol}`")
+    };
+    println!("{}", graph::format_relations(&relations, &title));
+    Ok(())
+}
+
+fn cmd_impact(symbol: &str, depth: usize, limit: usize, path: &Path) -> Result<()> {
+    let conn = open_existing_index(path)?;
+    let relations = store::graph_impact(&conn, symbol, depth, limit)?;
+    println!(
+        "{}",
+        graph::format_relations(&relations, &format!("Impact graph for `{symbol}`"))
+    );
+    Ok(())
+}
+
+fn cmd_rebuild_graph(path: &Path) -> Result<()> {
+    let conn = open_existing_index(path)?;
+    graph::rebuild_symbol_graph(&conn)?;
+    println!("{}", "Symbol graph rebuilt from indexed chunks".green());
     Ok(())
 }
 
@@ -1171,7 +1364,10 @@ fn remove_codex_hooks_json(json: &mut serde_json::Value) {
 
 fn mcp_config_path() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
-    Ok(home.join(".gemini").join("antigravity-cli").join("mcp_config.json"))
+    Ok(home
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("mcp_config.json"))
 }
 
 fn install_mcp_server() -> Result<()> {
