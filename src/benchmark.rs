@@ -950,16 +950,24 @@ fn print_verdict(
     let cmd_tokenix: usize = cmd_rows.iter().map(|r| r.tokenix).sum();
 
     println!("{}", "Verdict".bold());
-    println!(
-        "  Read-only exploration saved {:.1}% ({}) tokens on large files (Vanilla baseline).",
-        saved_pct(read_raw, read_outline),
-        format_num((read_raw.saturating_sub(read_outline)) as i64)
-    );
-    println!(
-        "  Targeted workflows saved {:.1}% ({}) tokens vs reading full files.",
-        saved_pct(flow_raw, flow_tokenix),
-        format_num((flow_raw.saturating_sub(flow_tokenix)) as i64)
-    );
+    if read_rows.is_empty() {
+        println!("  Read-only exploration: n/a for this benchmark case set.");
+    } else {
+        println!(
+            "  Read-only exploration saved {:.1}% ({}) tokens on large files (Vanilla baseline).",
+            saved_pct(read_raw, read_outline),
+            format_num((read_raw.saturating_sub(read_outline)) as i64)
+        );
+    }
+    if workflow_rows.is_empty() {
+        println!("  Targeted workflows: n/a for this benchmark case set.");
+    } else {
+        println!(
+            "  Targeted workflows saved {:.1}% ({}) tokens vs reading full files.",
+            saved_pct(flow_raw, flow_tokenix),
+            format_num((flow_raw.saturating_sub(flow_tokenix)) as i64)
+        );
+    }
     println!(
         "  Command output compression saved {:.1}% ({}) tokens on common tools.",
         saved_pct(cmd_vanilla, cmd_tokenix),
@@ -1051,8 +1059,18 @@ fn print_codegraph_comparison(
     println!(
         "  {:<28} {:<28} {:<28}",
         "Token reduction (workflow)",
-        format!("{:.1}%", saved_pct(flow_raw, flow_tokenix)),
+        if workflow_rows.is_empty() {
+            "n/a".to_string()
+        } else {
+            format!("{:.1}%", saved_pct(flow_raw, flow_tokenix))
+        },
         "not applicable (graph-based)"
+    );
+    println!(
+        "  {:<28} {:<28} {:<28}",
+        "Context quality",
+        quality_summary(context_rows, "tokenix"),
+        quality_summary(context_rows, "codegraph")
     );
     println!(
         "  {:<28} {:<28} {:<28}",
@@ -1098,6 +1116,21 @@ fn print_codegraph_comparison(
     );
     println!();
     Ok(())
+}
+
+fn quality_summary(rows: &[ContextArmRow], arm: &str) -> String {
+    let measured: Vec<&ContextArmRow> = rows
+        .iter()
+        .filter(|row| row.arm == arm && row.quality_ok.is_some())
+        .collect();
+    if measured.is_empty() {
+        return "n/a".to_string();
+    }
+    let ok = measured
+        .iter()
+        .filter(|row| row.quality_ok == Some(true))
+        .count();
+    format!("{}/{}", ok, measured.len())
 }
 
 struct CodeGraphStatus {
