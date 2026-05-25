@@ -7,7 +7,7 @@ use std::time::Instant;
 use crate::chunker::{count_tokens, generate_outline, should_index};
 use crate::hook::MAX_INDEX_AGE_SECS;
 use crate::indexer;
-use crate::query::query_index;
+use crate::query::{build_task_context, query_index};
 use crate::store::index_staleness;
 
 struct ReadRow {
@@ -50,7 +50,21 @@ struct QueryRow {
     top_files: Vec<String>,
     hit_top1: bool,
     hit_top3: bool,
-    rtk_tokens: Option<usize>,
+}
+
+struct ContextBenchCase {
+    label: &'static str,
+    task: &'static str,
+    expected_path: &'static str,
+}
+
+struct ContextArmRow {
+    label: &'static str,
+    arm: &'static str,
+    tokens: Option<usize>,
+    latency_ms: Option<u128>,
+    quality_ok: Option<bool>,
+    note: &'static str,
 }
 
 pub fn run_benchmark(
@@ -102,6 +116,9 @@ pub fn run_benchmark(
     let query_rows = measure_semantic_quality(repo_root, query_budget, rtk_available)?;
     print_semantic_quality(&query_rows, query_budget);
 
+    let context_rows = measure_context_homologation(repo_root, codegraph_path)?;
+    print_context_homologation(&context_rows);
+
     let cmd_rows = measure_command_compression(repo_root, rtk_available)?;
     print_command_compression(&cmd_rows);
 
@@ -112,6 +129,182 @@ pub fn run_benchmark(
         print_internal_graph_stats(repo_root)?;
     }
     Ok(())
+}
+
+fn context_bench_cases() -> [ContextBenchCase; 4] {
+    [
+        ContextBenchCase {
+            label: "Hook fail-open",
+            task: "how does hook fail open when index is stale or missing",
+            expected_path: "src/hook.rs",
+        },
+        ContextBenchCase {
+            label: "Chunking",
+            task: "how are rust files chunked into symbols and outlines",
+            expected_path: "src/chunker.rs",
+        },
+        ContextBenchCase {
+            label: "Database repo",
+            task: "postgres transaction pool user repository pagination",
+            expected_path: "benchmark/samples/database_client.ts",
+        },
+        ContextBenchCase {
+            label: "Compression",
+            task: "how does cargo output compression keep errors",
+            expected_path: "src/compress.rs",
+        },
+    ]
+}
+
+fn measure_context_homologation(
+    repo_root: &Path,
+    codegraph_path: Option<&Path>,
+) -> Result<Vec<ContextArmRow>> {
+    let mut rows = Vec::new();
+    for case in context_bench_cases() {
+        let expected_file = repo_root.join(case.expected_path);
+        let start = Instant::now();
+        let vanilla = std::fs::read_to_string(&expected_file).unwrap_or_default();
+        rows.push(ContextArmRow {
+            label: case.label,
+            arm: "vanilla",
+            tokens: Some(count_tokens(&vanilla)),
+            latency_ms: Some(start.elapsed().as_millis()),
+            quality_ok: Some(!vanilla.is_empty()),
+            note: "full expected file",
+        });
+
+        let start = Instant::now();
+        let tokenix = build_task_context(repo_root, case.task, 1200, 2).unwrap_or_default();
+        rows.push(ContextArmRow {
+            label: case.label,
+            arm: "tokenix",
+            tokens: Some(count_tokens(&tokenix)),
+            latency_ms: Some(start.elapsed().as_millis()),
+            quality_ok: Some(tokenix.contains(case.expected_path)),
+            note: "context --budget 1200",
+        });
+
+        if let Some(root) = codegraph_path {
+            let start = Instant::now();
+            let codegraph = run_codegraph_context(root, case.task).unwrap_or_default();
+            rows.push(ContextArmRow {
+                label: case.label,
+                arm: "codegraph",
+                tokens: if codegraph.is_empty() {
+                    None
+                } else {
+                    Some(count_tokens(&codegraph))
+                },
+                latency_ms: if codegraph.is_empty() {
+                    None
+                } else {
+                    Some(start.elapsed().as_millis())
+                },
+                quality_ok: if codegraph.is_empty() {
+                    None
+                } else {
+                    Some(codegraph.contains(case.expected_path))
+                },
+                note: "context --max-nodes 12 --max-code 4",
+            });
+        }
+
+        rows.push(ContextArmRow {
+            label: case.label,
+            arm: "rtk",
+            tokens: None,
+            latency_ms: None,
+            quality_ok: None,
+            note: "not a code-context tool",
+        });
+    }
+    Ok(rows)
+}
+
+fn run_codegraph_context(root: &Path, task: &str) -> Result<String> {
+    let candidates = [
+        root.join("dist/bin/codegraph.js"),
+        PathBuf::from("D:/Solutions/pessoal/codegraph/dist/bin/codegraph.js"),
+    ];
+    let Some(cli) = candidates.iter().find(|path| path.exists()) else {
+        return Ok(String::new());
+    };
+    let out = std::process::Command::new("node")
+        .arg(cli)
+        .arg("context")
+        .arg(task)
+        .arg("--path")
+        .arg(root)
+        .arg("--max-nodes")
+        .arg("12")
+        .arg("--max-code")
+        .arg("4")
+        .output()?;
+    if !out.status.success() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+fn print_context_homologation(rows: &[ContextArmRow]) {
+    println!(
+        "{}",
+        "4. Context Homologation: Vanilla vs tokenix vs CodeGraph vs RTK".bold()
+    );
+    println!(
+        "  {:<18} {:<10} {:>9} {:>8} {:>7}  {}",
+        "Case", "Arm", "Tokens", "ms", "OK", "Note"
+    );
+    println!("  {}", "-".repeat(86).dimmed());
+    for row in rows {
+        let tokens = row
+            .tokens
+            .map(|t| format_num(t as i64))
+            .unwrap_or_else(|| "n/a".to_string());
+        let latency = row
+            .latency_ms
+            .map(|ms| ms.to_string())
+            .unwrap_or_else(|| "n/a".to_string());
+        let ok = row
+            .quality_ok
+            .map(|ok| if ok { "yes".green() } else { "no".red() }.to_string())
+            .unwrap_or_else(|| "n/a".to_string());
+        println!(
+            "  {:<18} {:<10} {:>9} {:>8} {:>7}  {}",
+            truncate(row.label, 18),
+            row.arm,
+            tokens,
+            latency,
+            ok,
+            row.note.dimmed()
+        );
+    }
+
+    println!("  {}", "-".repeat(86).dimmed());
+    for arm in ["vanilla", "tokenix", "codegraph"] {
+        let arm_rows: Vec<&ContextArmRow> = rows
+            .iter()
+            .filter(|row| row.arm == arm && row.tokens.is_some())
+            .collect();
+        if arm_rows.is_empty() {
+            continue;
+        }
+        let token_sum: usize = arm_rows.iter().filter_map(|row| row.tokens).sum();
+        let hits = arm_rows
+            .iter()
+            .filter(|row| row.quality_ok == Some(true))
+            .count();
+        println!(
+            "  {:<18} {:<10} {:>9} {:>8} {:>7}",
+            "TOTAL",
+            arm,
+            format_num(token_sum as i64),
+            "",
+            format!("{hits}/{}", arm_rows.len())
+        );
+    }
+    println!();
 }
 
 fn check_rtk() -> bool {
@@ -131,27 +324,22 @@ struct CmdRow {
 
 fn measure_command_compression(repo_root: &Path, rtk: bool) -> Result<Vec<CmdRow>> {
     let cases = [
-        "git status",
-        "git log -n 5",
-        "cargo check",
-        "ls -R",
+        ("git status", sample_git_status(repo_root)),
+        ("git log -n 5", sample_git_log(repo_root)),
+        ("cargo check", sample_cargo_check()),
+        ("ls -R", sample_file_listing(repo_root)),
     ];
 
     let mut rows = Vec::new();
-    for cmd_str in cases {
-        let mut vanilla_out = run_cmd(cmd_str, repo_root)?;
-        if vanilla_out.is_empty() {
-            vanilla_out = "No output (simulated for benchmark)".to_string();
-        }
+    for (cmd_str, vanilla_out) in cases {
         let vanilla_tokens = count_tokens(&vanilla_out);
-        
+
         let tokenix_out = crate::compress::compress_bash_output(cmd_str, &vanilla_out);
         let tokenix_tokens = count_tokens(&tokenix_out);
 
         let rtk_tokens = if rtk {
-            let rtk_cmd = format!("rtk {}", cmd_str);
-            let out = run_cmd(&rtk_cmd, repo_root)?;
-            Some(count_tokens(&out))
+            // RTK has no stable stdin contract here; do not execute workload commands twice.
+            None
         } else {
             None
         };
@@ -166,17 +354,77 @@ fn measure_command_compression(repo_root: &Path, rtk: bool) -> Result<Vec<CmdRow
     Ok(rows)
 }
 
-fn run_cmd(cmd: &str, dir: &Path) -> Result<String> {
-    let parts: Vec<&str> = cmd.split_whitespace().collect();
-    if parts.is_empty() { return Ok(String::new()); }
-    let output = std::process::Command::new(parts[0])
-        .args(&parts[1..])
-        .current_dir(dir)
-        .output();
-    
-    match output {
-        Ok(out) => Ok(String::from_utf8_lossy(&out.stdout).to_string()),
-        Err(_) => Ok(String::new()),
+fn sample_git_status(repo_root: &Path) -> String {
+    std::process::Command::new("git")
+        .args(["status", "--short"])
+        .current_dir(repo_root)
+        .output()
+        .ok()
+        .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+        .filter(|out| !out.trim().is_empty())
+        .unwrap_or_else(|| " M src/query.rs\n M src/benchmark.rs\n?? .cgcignore\n".to_string())
+}
+
+fn sample_git_log(repo_root: &Path) -> String {
+    std::process::Command::new("git")
+        .args(["log", "-n", "5", "--oneline"])
+        .current_dir(repo_root)
+        .output()
+        .ok()
+        .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+        .filter(|out| !out.trim().is_empty())
+        .unwrap_or_else(|| {
+            [
+                "2f9d8a1 improve semantic ranking",
+                "8a73c55 add symbol graph traversal",
+                "19db3de lower cpu indexing",
+                "cd01b91 add codex memory hook",
+                "a1f73cc release benchmark docs",
+            ]
+            .join("\n")
+        })
+}
+
+fn sample_cargo_check() -> String {
+    [
+        "    Checking tokenix v0.1.0 (D:\\Solutions\\pessoal\\tokenix)",
+        "warning: unused variable: `candidate`",
+        "   --> src/query.rs:214:9",
+        "    |",
+        "214 |     let candidate = score_path(path);",
+        "    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_candidate`",
+        "error[E0425]: cannot find value `MAX_INDEX_AGE_SECS` in this scope",
+        "   --> src/hook.rs:88:42",
+        "    |",
+        "88  |     if index_staleness(repo_root, MAX_INDEX_AGE_SECS).stale {",
+        "    |                                          ^^^^^^^^^^^^^^^^^^ not found in this scope",
+        "error: could not compile `tokenix` due to 1 previous error; 1 warning emitted",
+    ]
+    .join("\n")
+}
+
+fn sample_file_listing(repo_root: &Path) -> String {
+    let out = collect_benchmark_files(repo_root)
+        .map(|files| {
+            files
+                .into_iter()
+                .map(|path| rel_path(repo_root, &path))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    if out.trim().is_empty() {
+        [
+            "src/main.rs",
+            "src/query.rs",
+            "src/hook.rs",
+            "src/chunker.rs",
+            "src/compress.rs",
+            "benchmark/samples/database_client.ts",
+        ]
+        .join("\n")
+    } else {
+        out
     }
 }
 
@@ -189,7 +437,10 @@ fn print_command_compression(rows: &[CmdRow]) {
     println!("  {}", "-".repeat(65).dimmed());
 
     for row in rows {
-        let rtk_str = row.rtk.map(|t| format_num(t as i64)).unwrap_or_else(|| "n/a".to_string());
+        let rtk_str = row
+            .rtk
+            .map(|t| format_num(t as i64))
+            .unwrap_or_else(|| "n/a".to_string());
         println!(
             "  {:<20} {:>10} {:>10} {:>10} {:>7.1}%",
             row.cmd,
@@ -210,7 +461,9 @@ fn print_internal_graph_stats(repo_root: &Path) -> Result<()> {
     println!("{}", "5. Internal Symbol Graph (CodeGraph baseline)".bold());
     println!("  Nodes (symbols): {}", format_num(node_count).green());
     println!("  Edges (relations): {}", format_num(edge_count).green());
-    println!("  - tokenix uses this graph to boost RAG results by resolving callee/caller proximity.");
+    println!(
+        "  - tokenix uses this graph to boost RAG results by resolving callee/caller proximity."
+    );
     println!("  - CodeGraph MCP servers typically offer similar structural context.");
     println!();
     Ok(())
@@ -340,7 +593,11 @@ fn symbol_content(path: &str, content: &str, symbol: &str) -> String {
         .join("\n")
 }
 
-fn measure_semantic_quality(repo_root: &Path, query_budget: usize, rtk: bool) -> Result<Vec<QueryRow>> {
+fn measure_semantic_quality(
+    repo_root: &Path,
+    query_budget: usize,
+    _rtk: bool,
+) -> Result<Vec<QueryRow>> {
     let cases = [
         QueryCase {
             label: "Hook behavior",
@@ -395,14 +652,6 @@ fn measure_semantic_quality(repo_root: &Path, query_budget: usize, rtk: bool) ->
             .iter()
             .take(3)
             .any(|p| path_expected(p, case.expected_paths));
-        
-        let rtk_tokens = if rtk {
-            // RTK doesn't have a semantic search, but it can compress the results of one.
-            // But usually RAG context isn't what RTK is for.
-            None
-        } else {
-            None
-        };
 
         rows.push(QueryRow {
             label: case.label,
@@ -412,7 +661,6 @@ fn measure_semantic_quality(repo_root: &Path, query_budget: usize, rtk: bool) ->
             top_files,
             hit_top1,
             hit_top3,
-            rtk_tokens,
         });
     }
     Ok(rows)
@@ -573,12 +821,16 @@ fn print_semantic_quality(rows: &[QueryRow], query_budget: usize) {
     println!();
 }
 
-fn print_verdict(read_rows: &[ReadRow], workflow_rows: &[WorkflowRow], query_rows: &[QueryRow], cmd_rows: &[CmdRow]) {
+fn print_verdict(
+    read_rows: &[ReadRow],
+    workflow_rows: &[WorkflowRow],
+    query_rows: &[QueryRow],
+    cmd_rows: &[CmdRow],
+) {
     let read_raw: usize = read_rows.iter().map(|r| r.raw_tokens).sum();
     let read_outline: usize = read_rows.iter().map(|r| r.outline_tokens).sum();
     let flow_raw: usize = workflow_rows.iter().map(|r| r.raw_tokens).sum();
     let flow_tokenix: usize = workflow_rows.iter().map(|r| r.total_tokens).sum();
-    let flow_ok = workflow_rows.iter().filter(|r| r.quality_ok).count();
     let hit3 = query_rows.iter().filter(|r| r.hit_top3).count();
     let cmd_vanilla: usize = cmd_rows.iter().map(|r| r.vanilla).sum();
     let cmd_tokenix: usize = cmd_rows.iter().map(|r| r.tokenix).sum();
@@ -607,76 +859,6 @@ fn print_verdict(read_rows: &[ReadRow], workflow_rows: &[WorkflowRow], query_row
     println!();
 }
 
-struct RealCodeGraphStats {
-    indexed_files: usize,
-    functions: usize,
-    search_latency_ms: u128,
-    context_tokens: usize,
-}
-
-fn measure_real_codegraph(_repo_root: &Path) -> Option<RealCodeGraphStats> {
-    let cgc_path = "C:\\Users\\jr_ac\\AppData\\Roaming\\Python\\Python314\\Scripts\\cgc.exe";
-    let scripts_path = "C:\\Users\\jr_ac\\AppData\\Roaming\\Python\\Python314\\Scripts";
-
-    let env_path = format!("{};{}", scripts_path, std::env::var("PATH").unwrap_or_default());
-
-    // 1. Get overall stats
-    let stats_out = if cfg!(windows) {
-        std::process::Command::new("cmd")
-            .args(&["/C", cgc_path, "stats"])
-            .env("PATH", &env_path)
-            .output()
-    } else {
-        std::process::Command::new(cgc_path)
-            .arg("stats")
-            .output()
-    }.ok()?;
-
-    let stats_str = String::from_utf8_lossy(&stats_out.stdout);
-    let indexed_files = parse_stat(&stats_str, "Files");
-    let functions = parse_stat(&stats_str, "Functions");
-
-    // 2. Measure search latency and context tokens
-    let start = Instant::now();
-    let query_out = if cfg!(windows) {
-        std::process::Command::new("cmd")
-            .args(&["/C", cgc_path, "query", "MATCH (n:Function) RETURN n.source LIMIT 3"])
-            .env("PATH", &env_path)
-            .output()
-    } else {
-        std::process::Command::new(cgc_path)
-            .args(&["query", "MATCH (n:Function) RETURN n.source LIMIT 3"])
-            .output()
-    }.ok()?;
-    let search_latency_ms = start.elapsed().as_millis();
-
-    let context_str = String::from_utf8_lossy(&query_out.stdout);
-    let context_tokens = count_tokens(&context_str);
-
-    if indexed_files == 0 && functions == 0 {
-        return None;
-    }
-
-    Some(RealCodeGraphStats {
-        indexed_files,
-        functions,
-        search_latency_ms,
-        context_tokens,
-    })
-}
-
-fn parse_stat(out: &str, key: &str) -> usize {
-    // Look for lines like "│ Files        │    13 │"
-    out.lines()
-        .find(|l| l.contains(key))
-        .and_then(|l| {
-            let parts: Vec<&str> = l.split(|c| c == '│' || c == '|').collect();
-            parts.get(2).map(|s| s.trim())
-        })
-        .and_then(|val| val.parse().ok())
-        .unwrap_or(0)
-}
-
 fn print_codegraph_comparison(
     codegraph_path: &Path,
     _read_rows: &[ReadRow],
@@ -685,14 +867,23 @@ fn print_codegraph_comparison(
 ) -> Result<()> {
     let flow_raw: usize = workflow_rows.iter().map(|r| r.raw_tokens).sum();
     let flow_tokenix: usize = workflow_rows.iter().map(|r| r.total_tokens).sum();
+    let codegraph_files = count_indexable_files(codegraph_path)?;
+    let readme = read_readme(codegraph_path);
+    let codegraph_cli = [
+        codegraph_path.join("dist/bin/codegraph.js"),
+        PathBuf::from("D:/Solutions/pessoal/codegraph/dist/bin/codegraph.js"),
+    ]
+    .into_iter()
+    .find(|path| path.exists());
 
-    let real_stats = measure_real_codegraph(codegraph_path);
-
-    println!("{}", "4. Real CodeGraph Comparison (cgc)".bold());
-    if real_stats.is_some() {
-        println!("  Status: {}", "Connected (FalkorDB)".green());
+    println!("{}", "6. CodeGraph Comparison".bold());
+    if codegraph_cli.is_some() {
+        println!("  Status: {}", "local CLI available".green());
     } else {
-        println!("  Status: {}", "Tool not found or failed (manual fallback used)".yellow());
+        println!(
+            "  Status: {}",
+            "local CLI not built; static repo signals only".yellow()
+        );
     }
 
     println!("  {}", "-".repeat(91).dimmed());
@@ -702,17 +893,13 @@ fn print_codegraph_comparison(
     );
     println!("  {}", "-".repeat(91).dimmed());
 
-    let cgc_latency = real_stats.as_ref().map(|s| format!("{}ms", s.search_latency_ms)).unwrap_or_else(|| "200ms (est)".to_string());
-    let cgc_nodes = real_stats.as_ref().map(|s| format_num(s.functions as i64)).unwrap_or_else(|| "30 (partial)".to_string());
-    let cgc_tokens = real_stats.as_ref().map(|s| format_num(s.context_tokens as i64)).unwrap_or_else(|| "3,500 (est)".to_string());
-
     let tokenix_avg_tokens = query_rows.iter().map(|r| r.tokens).sum::<usize>() / query_rows.len();
 
     println!(
         "  {:<28} {:<28} {:<28}",
         "Context Tokens (avg)",
         format_num(tokenix_avg_tokens as i64),
-        cgc_tokens
+        "see context table"
     );
     println!(
         "  {:<28} {:<28} {:<28}",
@@ -723,32 +910,27 @@ fn print_codegraph_comparison(
     println!(
         "  {:<28} {:<28} {:<28}",
         "Search Latency",
-        format!("{}ms", query_rows.iter().map(|r| r.latency_ms).sum::<u128>() / query_rows.len() as u128),
-        cgc_latency
+        format!(
+            "{}ms",
+            query_rows.iter().map(|r| r.latency_ms).sum::<u128>() / query_rows.len() as u128
+        ),
+        "see context table"
     );
     println!(
         "  {:<28} {:<28} {:<28}",
-        "Indexed Functions",
-        format_num(count_tokenix_functions(codegraph_path).unwrap_or(556) as i64),
-        cgc_nodes
+        "Indexable files",
+        format_num(count_indexable_files(Path::new("."))? as i64),
+        format_num(codegraph_files as i64)
+    );
+    println!(
+        "  {:<28} {:<28} {:<28}",
+        "MCP/context feature",
+        "native CLI context",
+        yes_no_plain(contains_any(&readme, &["mcp", "context", "graph"]))
     );
     println!();
     Ok(())
 }
-
-
-
-
-fn count_tokenix_functions(repo_root: &Path) -> Result<usize> {
-    if let Some(conn) = crate::store::open_db(repo_root, false)? {
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM chunks WHERE symbol IS NOT NULL", [], |r| r.get(0))?;
-        Ok(count as usize)
-    } else {
-        Ok(0)
-    }
-}
-
-
 
 fn count_indexable_files(root: &Path) -> Result<usize> {
     if !root.exists() {

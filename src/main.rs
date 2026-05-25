@@ -54,9 +54,11 @@ enum Commands {
         if_stale: bool,
         #[arg(
             long,
-            help = "Use the lowest CPU settings: 1 worker, 1 ONNX thread, tiny embedding batches"
+            help = "Use the lowest CPU settings: 1 worker, 1 ONNX thread, tiny embedding batches (default)"
         )]
         low_cpu: bool,
+        #[arg(long, help = "Opt out of the default low-CPU indexing profile")]
+        high_cpu: bool,
         #[arg(
             long,
             help = "Max rayon worker threads for chunking/search during indexing"
@@ -70,7 +72,7 @@ enum Commands {
     /// Semantic search over the indexed repository
     Query {
         text: String,
-        #[arg(short, long, default_value_t = 3000)]
+        #[arg(short, long, default_value_t = 1200)]
         budget: usize,
         #[arg(long, default_value_t = 20)]
         k: usize,
@@ -82,7 +84,7 @@ enum Commands {
     /// Build focused task context in one call
     Context {
         task: String,
-        #[arg(short, long, default_value_t = 3000)]
+        #[arg(short, long, default_value_t = 1200)]
         budget: usize,
         #[arg(long, default_value_t = 4)]
         max_files: usize,
@@ -92,7 +94,7 @@ enum Commands {
     /// Explore related symbols and source in one graph-aware call
     Explore {
         query: String,
-        #[arg(short, long, default_value_t = 4000)]
+        #[arg(short, long, default_value_t = 1200)]
         budget: usize,
         #[arg(long, default_value_t = 8)]
         max_symbols: usize,
@@ -168,7 +170,7 @@ enum Commands {
         refresh_index: bool,
         #[arg(
             long,
-            default_value_t = 2500,
+            default_value_t = 1200,
             help = "Token budget for semantic queries"
         )]
         budget: usize,
@@ -307,11 +309,12 @@ fn main() -> Result<()> {
             force,
             if_stale,
             low_cpu,
+            high_cpu,
             jobs,
             embed_batch,
             no_embed,
         } => {
-            configure_index_limits(low_cpu, jobs, embed_batch);
+            configure_index_limits(low_cpu || !high_cpu, jobs, embed_batch);
             cmd_index(&path, force, if_stale, no_embed)
         }
         Commands::Query {

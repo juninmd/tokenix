@@ -105,7 +105,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **Output filters** | 70+ RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, and more |
 | **In-memory daemon** | `tokenix serve` keeps model + index in RAM — warm Grep calls drop from ~430ms to ~80ms |
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
-| **Token budget** | Results fit within a configurable token budget (default `3000`) |
+| **Token budget** | Results fit within a configurable token budget (default `1200`) |
 | **Savings analytics** | `tokenix gain` — token summary, focused cost table for 7 reference models, by-tool breakdown |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
@@ -354,7 +354,8 @@ tokenix install-hook --tool all
 | Flag | Default | Description |
 |---|---|---|
 | `--force`, `-f` | false | Reindex all files, ignoring cache |
-| `--low-cpu` | false | Use 1 worker, 1 ONNX thread, tiny embedding batches, and a short pause between batches |
+| `--low-cpu` | true | Use 1 worker, 1 ONNX thread, tiny embedding batches, and a short pause between batches |
+| `--high-cpu` | false | Opt out of the default low-CPU indexing profile |
 | `--jobs N` | env/default | Set max rayon worker threads for indexing |
 | `--embed-batch N` | env/default | Set embedding batch size for indexing |
 | `--if-stale` | false | Skip if index is fresh for the current Git worktree/branch/HEAD |
@@ -363,7 +364,7 @@ tokenix install-hook --tool all
 
 | Flag | Default | Description |
 |---|---|---|
-| `--budget`, `-b` | 3000 | Max approximate tokens to return |
+| `--budget`, `-b` | 1200 | Max approximate tokens to return |
 | `--k` | 20 | Candidate chunks before budget filtering |
 | `--file`, `-f` | — | Filter results to a specific file |
 | `--path`, `-p` | `.` | Repository/index path |
@@ -373,7 +374,7 @@ tokenix install-hook --tool all
 | Flag | Default | Description |
 |---|---|---|
 | `--refresh-index` | false | Refresh index metadata before measuring |
-| `--budget` | 2500 | Semantic query token budget |
+| `--budget` | 1200 | Semantic query token budget |
 | `--path`, `-p` | `.` | Repository/index path |
 
 **`tokenix install-hook` / `tokenix remove-hook`**
