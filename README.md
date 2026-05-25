@@ -142,18 +142,39 @@ tokenix now includes advanced output filtering logic inspired by RTK (Rust Token
 
 > Every number below comes from a live benchmark run on the tokenix source, using the actual index, chunking, and query code paths.
 
-### Real-World Comparison
+### Benchmark Results
 
-We measure **tokenix** against pure **Vanilla** reads, **RTK** command filtering, and **CodeGraph (CGC)** structural search.
+We measure **tokenix** against pure **Vanilla** reads, **RTK** command filtering, and **CodeGraph (CGC)** structural search. `N/A` means the tool does not provide that category of function, not that the measurement failed.
 
 | Metric | **tokenix** | **RTK** | **CodeGraph** | **Vanilla** |
 | :--- | :---: | :---: | :---: | :---: |
-| **Read Reduction (Code)** | **84.7%** saved | N/A | N/A | 0% |
-| **Command Compression** | **53.0%** saved | 9.8% saved | N/A | 0% |
-| **Context Tokens (avg)** | **435** | N/A | 591 | 5,050 |
-| **Search Latency** | **65ms** | N/A | 195ms | N/A |
-| **Symbol Intelligence** | Yes | No | Yes | No |
-| **Semantic Quality** | Hit@1 6/7, Hit@3 7/7 | N/A | N/A | N/A |
+| **Large-file read reduction** | **84.7% saved** | N/A | N/A | 0% |
+| **Targeted workflow reduction** | **67.2% saved** | N/A | N/A | 0% |
+| **Context tokens, avg** | **435** | N/A | 591 | 5,050 |
+| **Context homologation** | **4/4** | N/A | **4/4** | **4/4** |
+| **Context latency, avg** | **65ms** | N/A | 195ms | N/A |
+| **Semantic quality** | **Hit@1 6/7, Hit@3 7/7** | N/A | N/A | N/A |
+| **Command compression** | **53.0% saved** | 9.8% saved | N/A | 0% |
+| **Command compression vs RTK** | **4/4 equal or lower tokens** | baseline | N/A | N/A |
+
+### Capability Matrix
+
+This table compares what each tool is designed to do. It is intentionally separate from the benchmark table so RTK is not judged as a semantic code search tool, and CodeGraph is not judged as a shell-output compressor.
+
+| Capability | **tokenix** | **RTK** | **CodeGraph** | **Vanilla** |
+| :--- | :---: | :---: | :---: | :---: |
+| **Large read interception** | Yes | No | No | No |
+| **Compact file outlines** | Yes | No | No | No |
+| **Symbol-targeted reads** | Yes | No | Yes | No |
+| **Semantic code search** | Yes | No | Yes | No |
+| **Symbol graph / relationships** | Yes | No | Yes | No |
+| **Shell output filtering** | Yes | Yes | No | No |
+| **RTK-compatible filters** | Yes | Native | No | No |
+| **Claude/Codex/Copilot hooks** | Yes | Yes | Partial | No |
+| **Stale-index fail-open guard** | Yes | N/A | N/A | N/A |
+| **Local embeddings / SQLite** | Yes | N/A | N/A | N/A |
+| **Savings analytics** | Yes | Yes | No | No |
+| **MCP support** | Yes | No | Yes | No |
 
 *Results from `cargo run -- benchmark --refresh-index --compare-codegraph D:\Solutions\pessoal\codegraph` on May 25, 2026.*
 
