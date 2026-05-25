@@ -148,25 +148,27 @@ We measure **tokenix** against pure **Vanilla** reads, **RTK** command filtering
 
 | Metric | **tokenix** | **RTK** | **CodeGraph** | **Vanilla** |
 | :--- | :---: | :---: | :---: | :---: |
-| **Read Reduction (Code)** | **84.4%** saved | 0% | N/A | 0% |
-| **Command Compression** | 36.9% saved | **58.9%** saved | N/A | 0% |
-| **Context Tokens (avg)** | **2,371** | ~90k | ~3,500 | ~90k |
-| **Search Latency** | **129ms** | N/A | 200ms | N/A |
+| **Read Reduction (Code)** | **84.7%** saved | N/A | N/A | 0% |
+| **Command Compression** | **53.0%** saved | 9.8% saved | N/A | 0% |
+| **Context Tokens (avg)** | **435** | N/A | 591 | 5,050 |
+| **Search Latency** | **65ms** | N/A | 195ms | N/A |
 | **Symbol Intelligence** | Yes | No | Yes | No |
+| **Semantic Quality** | Hit@1 6/7, Hit@3 7/7 | N/A | N/A | N/A |
 
-*Results from `tokenix benchmark --refresh-index --compare-codegraph .` on May 24, 2026.*
+*Results from `cargo run -- benchmark --refresh-index --compare-codegraph D:\Solutions\pessoal\codegraph` on May 25, 2026.*
 
 ### Methodology
 
 - **Large-file read reduction:** full file tokens vs. large-file outline tokens.
-- **Command output compression:** Mede efficiency on `git status`, `git log`, `cargo check`, etc.
+- **Command output compression:** measures the same synthetic command outputs through tokenix and `rtk pipe`; tokenix must be equal or lower tokens per command to avoid a hidden regression.
 - **Semantic search quality:** Hit@1/Hit@3 accuracy on labeled repository queries.
-- **CodeGraph Comparison:** Real-time measurement of indexing depth and search latency vs `codegraphcontext`.
+- **Context homologation:** validates whether each context arm includes the expected file, not just whether it is small.
+- **CodeGraph comparison:** real CodeGraph context tokens and latency are measured from the local CLI, not estimated from README claims.
 
 ### Reproduce it
 
 ```bash
-tokenix benchmark --refresh-index --compare-codegraph .
+cargo run -- benchmark --refresh-index --compare-codegraph D:\Solutions\pessoal\codegraph
 ```
 
 
@@ -375,6 +377,7 @@ tokenix install-hook --tool all
 |---|---|---|
 | `--refresh-index` | false | Refresh index metadata before measuring |
 | `--budget` | 1200 | Semantic query token budget |
+| `--compare-codegraph` | — | Path to a local CodeGraph checkout; prints measured CodeGraph context tokens/latency |
 | `--path`, `-p` | `.` | Repository/index path |
 
 **`tokenix install-hook` / `tokenix remove-hook`**

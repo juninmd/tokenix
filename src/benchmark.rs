@@ -1,7 +1,9 @@
 use anyhow::Result;
 use colored::Colorize;
 use std::collections::BTreeSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use crate::chunker::{count_tokens, generate_outline, should_index};
@@ -124,7 +126,7 @@ pub fn run_benchmark(
 
     print_verdict(&read_rows, &workflow_rows, &query_rows, &cmd_rows);
     if let Some(path) = codegraph_path {
-        print_codegraph_comparison(path, &read_rows, &workflow_rows, &query_rows)?;
+        print_codegraph_comparison(path, &workflow_rows, &query_rows, &context_rows)?;
     } else {
         print_internal_graph_stats(repo_root)?;
     }
@@ -187,7 +189,7 @@ fn measure_context_homologation(
 
         if let Some(root) = codegraph_path {
             let start = Instant::now();
-            let codegraph = run_codegraph_context(root, case.task).unwrap_or_default();
+            let codegraph = run_codegraph_context(root, repo_root, case.task).unwrap_or_default();
             rows.push(ContextArmRow {
                 label: case.label,
                 arm: "codegraph",
@@ -222,7 +224,7 @@ fn measure_context_homologation(
     Ok(rows)
 }
 
-fn run_codegraph_context(root: &Path, task: &str) -> Result<String> {
+fn run_codegraph_context(root: &Path, repo_root: &Path, task: &str) -> Result<String> {
     let candidates = [
         root.join("dist/bin/codegraph.js"),
         PathBuf::from("D:/Solutions/pessoal/codegraph/dist/bin/codegraph.js"),
@@ -235,7 +237,7 @@ fn run_codegraph_context(root: &Path, task: &str) -> Result<String> {
         .arg("context")
         .arg(task)
         .arg("--path")
-        .arg(root)
+        .arg(repo_root)
         .arg("--max-nodes")
         .arg("12")
         .arg("--max-code")
@@ -253,8 +255,8 @@ fn print_context_homologation(rows: &[ContextArmRow]) {
         "4. Context Homologation: Vanilla vs tokenix vs CodeGraph vs RTK".bold()
     );
     println!(
-        "  {:<18} {:<10} {:>9} {:>8} {:>7}  {}",
-        "Case", "Arm", "Tokens", "ms", "OK", "Note"
+        "  {:<18} {:<10} {:>9} {:>8} {:>7}  Note",
+        "Case", "Arm", "Tokens", "ms", "OK"
     );
     println!("  {}", "-".repeat(86).dimmed());
     for row in rows {
@@ -337,12 +339,9 @@ fn measure_command_compression(repo_root: &Path, rtk: bool) -> Result<Vec<CmdRow
         let tokenix_out = crate::compress::compress_bash_output(cmd_str, &vanilla_out);
         let tokenix_tokens = count_tokens(&tokenix_out);
 
-        let rtk_tokens = if rtk {
-            // RTK has no stable stdin contract here; do not execute workload commands twice.
-            None
-        } else {
-            None
-        };
+        let rtk_tokens = rtk
+            .then(|| rtk_pipe_filter(cmd_str, &vanilla_out).map(|out| count_tokens(&out)))
+            .flatten();
 
         rows.push(CmdRow {
             cmd: cmd_str,
@@ -352,6 +351,29 @@ fn measure_command_compression(repo_root: &Path, rtk: bool) -> Result<Vec<CmdRow
         });
     }
     Ok(rows)
+}
+
+fn rtk_pipe_filter(cmd: &str, input: &str) -> Option<String> {
+    let filter = match cmd {
+        "git status" => "git-status",
+        "git log -n 5" => "git-log",
+        "cargo check" => "cargo",
+        "ls -R" => "find",
+        _ => return None,
+    };
+    let exe = if cfg!(windows) { "rtk.exe" } else { "rtk" };
+    let mut child = Command::new(exe)
+        .args(["pipe", "-f", filter])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.as_mut()?.write_all(input.as_bytes()).ok()?;
+    let out = child.wait_with_output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 fn sample_git_status(repo_root: &Path) -> String {
@@ -431,23 +453,28 @@ fn sample_file_listing(repo_root: &Path) -> String {
 fn print_command_compression(rows: &[CmdRow]) {
     println!("{}", "4. Command Output Compression".bold());
     println!(
-        "  {:<20} {:>10} {:>10} {:>10} {:>8}",
-        "Command", "Vanilla", "tokenix", "RTK", "Saved"
+        "  {:<20} {:>10} {:>10} {:>10} {:>8} {:>9}",
+        "Command", "Vanilla", "tokenix", "RTK", "Saved", "vs RTK"
     );
-    println!("  {}", "-".repeat(65).dimmed());
+    println!("  {}", "-".repeat(75).dimmed());
 
     for row in rows {
         let rtk_str = row
             .rtk
             .map(|t| format_num(t as i64))
             .unwrap_or_else(|| "n/a".to_string());
+        let vs_rtk = row
+            .rtk
+            .map(|rtk| if row.tokenix <= rtk { "ok" } else { "behind" })
+            .unwrap_or("n/a");
         println!(
-            "  {:<20} {:>10} {:>10} {:>10} {:>7.1}%",
+            "  {:<20} {:>10} {:>10} {:>10} {:>7.1}% {:>9}",
             row.cmd,
             format_num(row.vanilla as i64),
             format_num(row.tokenix as i64),
             rtk_str,
-            saved_pct(row.vanilla, row.tokenix)
+            saved_pct(row.vanilla, row.tokenix),
+            vs_rtk
         );
     }
     println!();
@@ -861,9 +888,9 @@ fn print_verdict(
 
 fn print_codegraph_comparison(
     codegraph_path: &Path,
-    _read_rows: &[ReadRow],
     workflow_rows: &[WorkflowRow],
-    query_rows: &[QueryRow],
+    _query_rows: &[QueryRow],
+    context_rows: &[ContextArmRow],
 ) -> Result<()> {
     let flow_raw: usize = workflow_rows.iter().map(|r| r.raw_tokens).sum();
     let flow_tokenix: usize = workflow_rows.iter().map(|r| r.total_tokens).sum();
@@ -893,13 +920,39 @@ fn print_codegraph_comparison(
     );
     println!("  {}", "-".repeat(91).dimmed());
 
-    let tokenix_avg_tokens = query_rows.iter().map(|r| r.tokens).sum::<usize>() / query_rows.len();
+    let avg_tokens = |arm: &str| {
+        let rows: Vec<&ContextArmRow> = context_rows
+            .iter()
+            .filter(|row| row.arm == arm && row.tokens.is_some())
+            .collect();
+        if rows.is_empty() {
+            "n/a".to_string()
+        } else {
+            format_num(
+                (rows.iter().filter_map(|row| row.tokens).sum::<usize>() / rows.len()) as i64,
+            )
+        }
+    };
+    let avg_latency = |arm: &str| {
+        let rows: Vec<&ContextArmRow> = context_rows
+            .iter()
+            .filter(|row| row.arm == arm && row.latency_ms.is_some())
+            .collect();
+        if rows.is_empty() {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{}ms",
+                rows.iter().filter_map(|row| row.latency_ms).sum::<u128>() / rows.len() as u128
+            )
+        }
+    };
 
     println!(
         "  {:<28} {:<28} {:<28}",
         "Context Tokens (avg)",
-        format_num(tokenix_avg_tokens as i64),
-        "see context table"
+        avg_tokens("tokenix"),
+        avg_tokens("codegraph")
     );
     println!(
         "  {:<28} {:<28} {:<28}",
@@ -910,11 +963,8 @@ fn print_codegraph_comparison(
     println!(
         "  {:<28} {:<28} {:<28}",
         "Search Latency",
-        format!(
-            "{}ms",
-            query_rows.iter().map(|r| r.latency_ms).sum::<u128>() / query_rows.len() as u128
-        ),
-        "see context table"
+        avg_latency("tokenix"),
+        avg_latency("codegraph")
     );
     println!(
         "  {:<28} {:<28} {:<28}",

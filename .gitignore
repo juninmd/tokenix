@@ -1,5 +1,6 @@
 ﻿target/
 .tokenix/
+.codegraph/
 .cgcignore
 tokenix.egg-info/
 *.pyc

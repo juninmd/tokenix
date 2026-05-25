@@ -54,6 +54,13 @@ pub fn compress_bash_output(cmd: &str, s: &str) -> String {
         }
     }
 
+    if is_path_listing_command(cmd) {
+        let listing_out = compress_path_listing(&lines);
+        if listing_out.len() < base.len() {
+            return listing_out;
+        }
+    }
+
     if lines.len() <= BASH_MAX_LINES {
         return base;
     }
@@ -63,6 +70,11 @@ pub fn compress_bash_output(cmd: &str, s: &str) -> String {
     }
 
     truncate_head_tail(&lines, BASH_HEAD_LINES, BASH_TAIL_LINES)
+}
+
+fn is_path_listing_command(cmd: &str) -> bool {
+    let trimmed = cmd.trim();
+    trimmed == "ls -R" || trimmed.starts_with("find ")
 }
 
 fn is_cargo_output(lines: &[&str]) -> bool {
@@ -151,6 +163,40 @@ fn compress_git_log(lines: &[&str]) -> String {
         omitted,
         MAX_COMMITS
     )
+}
+
+fn compress_path_listing(lines: &[&str]) -> String {
+    let paths: Vec<&str> = lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| {
+            !line.is_empty()
+                && !line.ends_with(':')
+                && !line.contains(" -> ")
+                && (line.contains('/') || line.contains('\\'))
+        })
+        .collect();
+    if paths.len() < 4 {
+        return lines.join("\n");
+    }
+
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for path in paths {
+        let normalized = path.replace('\\', "/");
+        let dir = normalized
+            .rsplit_once('/')
+            .map(|(dir, _)| dir)
+            .unwrap_or(".")
+            .to_string();
+        *counts.entry(dir).or_insert(0) += 1;
+    }
+
+    let total_files: usize = counts.values().sum();
+    let mut out = vec![format!("{} files in {} dirs:", total_files, counts.len())];
+    for (dir, count) in counts {
+        out.push(format!("{}/ ({})", dir, count));
+    }
+    out.join("\n")
 }
 
 fn truncate_head_tail(lines: &[&str], head: usize, tail: usize) -> String {
@@ -403,8 +449,8 @@ fn try_fuzzy_group(lines: &[&str], start: usize) -> Option<usize> {
                 continue;
             }
             let mut count = 1;
-            for next_idx in start + 1..lines.len() {
-                if lines[next_idx].starts_with(prefix) {
+            for next_line in lines.iter().skip(start + 1) {
+                if next_line.starts_with(prefix) {
                     count += 1;
                 } else {
                     break;
@@ -627,6 +673,22 @@ mod tests {
         assert!(out.contains("lines omitted"), "should truncate: {}", out);
         assert!(out.contains("line 1\n"));
         assert!(out.contains("line 150"));
+    }
+
+    #[test]
+    fn bash_path_listing_groups_by_directory() {
+        let input = [
+            "src/main.rs",
+            "src/query.rs",
+            "src/hook.rs",
+            "benchmark/samples/database_client.ts",
+        ]
+        .join("\n");
+
+        let out = compress_bash_output("ls -R", &input);
+        assert!(out.contains("4 files in 2 dirs"), "output: {}", out);
+        assert!(out.contains("src/ (3)"), "output: {}", out);
+        assert!(out.contains("benchmark/samples/ (1)"), "output: {}", out);
     }
 
     #[test]

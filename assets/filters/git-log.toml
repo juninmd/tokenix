@@ -7,3 +7,4 @@ strip_lines_matching = [
   "^Date:"
 ]
 max_lines = 40
+head_lines = 3

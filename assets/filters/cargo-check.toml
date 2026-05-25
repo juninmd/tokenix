@@ -8,5 +8,10 @@ strip_lines_matching = [
   "^\\s*Finished\\s+",
   "^\\s*Checking\\s+"
 ]
-max_lines = 100
+keep_lines_matching = [
+  "^warning",
+  "^error",
+  "^\\s*-->"
+]
+max_lines = 60
 on_empty = "cargo check/clippy: ok"

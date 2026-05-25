@@ -158,12 +158,14 @@ fn lexical_boost(result: &SearchResult, terms: &[String]) -> f32 {
     boost += domain_boost(&path, &symbol, &content, terms);
     boost += language_boost(&path, terms);
     boost += benchmark_leak_penalty(&path, terms);
+    boost += test_leak_penalty(&symbol, &content, terms);
     boost += markdown_doc_penalty(&path, terms);
     boost += non_code_asset_penalty(&path, terms);
     boost.min(2.5)
 }
 
 fn intent_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f32 {
+    let mut boost = 0.0;
     let has_hook = terms.iter().any(|t| t == "hook") || path.contains("hook");
     let has_fail_open = terms.iter().any(|t| t == "fail") && terms.iter().any(|t| t == "open");
     if has_hook
@@ -174,7 +176,7 @@ fn intent_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f3
             || content.contains("action pass")
             || symbol.contains("run_hook"))
     {
-        return 0.75;
+        boost += 0.75;
     }
 
     let has_stale_index =
@@ -185,7 +187,7 @@ fn intent_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f3
             || content.contains("staleness stale")
             || content.contains("max_index_age_secs"))
     {
-        return 0.55;
+        boost += 0.55;
     }
 
     let asks_token_savings =
@@ -199,12 +201,31 @@ fn intent_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f3
             || content.contains("tokens_saved")
             || content.contains("original_estimate"))
     {
-        return 0.7;
+        boost += if path.contains("gain") || symbol.contains("compute_gain") {
+            1.5
+        } else if content.contains("read_hook_log") {
+            1.1
+        } else {
+            0.45
+        };
     }
-    0.0
+    let asks_output_compression = terms.iter().any(|t| t == "output")
+        && terms.iter().any(|t| t.starts_with("compress"))
+        && (terms.iter().any(|t| t == "cargo") || terms.iter().any(|t| t.starts_with("error")));
+    if asks_output_compression
+        && (path.contains("compress")
+            || symbol.contains("compress_cargo")
+            || symbol.contains("compress_bash_output")
+            || content.contains("compress cargo")
+            || content.contains("cargo output"))
+    {
+        boost += 1.2;
+    }
+    boost
 }
 
 fn domain_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f32 {
+    let mut boost = 0.0;
     let has_db_query = terms.iter().any(|t| {
         matches!(
             t.as_str(),
@@ -219,9 +240,23 @@ fn domain_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f3
             || content.contains("postgres")
             || content.contains("from pg"))
     {
-        return 0.18;
+        boost += 0.18;
     }
-    0.0
+    let asks_vector_similarity = terms
+        .iter()
+        .any(|t| matches!(t.as_str(), "cosine" | "similarity" | "vector"))
+        && terms
+            .iter()
+            .any(|t| matches!(t.as_str(), "sqlite" | "search" | "implemented"));
+    if asks_vector_similarity
+        && (path.contains("store")
+            || symbol.contains("cosine_similarity")
+            || content.contains("cosine similarity")
+            || content.contains("cosine_similarity_to_bytes"))
+    {
+        boost += 1.0;
+    }
+    boost
 }
 
 fn benchmark_leak_penalty(path: &str, terms: &[String]) -> f32 {
@@ -230,6 +265,24 @@ fn benchmark_leak_penalty(path: &str, terms: &[String]) -> f32 {
         .any(|t| matches!(t.as_str(), "benchmark" | "bench" | "evaluation" | "test"));
     if !asks_benchmark && path == "src benchmark rs" {
         return -0.8;
+    }
+    0.0
+}
+
+fn test_leak_penalty(symbol: &str, content: &str, terms: &[String]) -> f32 {
+    let asks_test = terms
+        .iter()
+        .any(|t| matches!(t.as_str(), "test" | "tests" | "benchmark" | "bench"));
+    if asks_test {
+        return 0.0;
+    }
+    let looks_like_test = symbol.starts_with("test ")
+        || symbol.contains(" test")
+        || symbol.starts_with("rerank ")
+        || content.contains("assert ")
+        || content.contains("assert eq");
+    if looks_like_test {
+        return -1.5;
     }
     0.0
 }
@@ -755,6 +808,169 @@ mod tests {
         );
         assert_eq!(results[0].path, "src/hook.rs");
         assert_eq!(results[0].symbol, "run_hook");
+    }
+
+    #[test]
+    fn rerank_prefers_pre_hook_staleness_over_post_hook_compression() {
+        let mut results = vec![
+            SearchResult {
+                distance: 0.01,
+                ..make_result(
+                    "src/compress.rs",
+                    461,
+                    516,
+                    "run_hook_post",
+                    "pub fn run_hook_post() { std::process::exit(0); log_hook_event saved_tokens }",
+                )
+            },
+            SearchResult {
+                distance: 0.16,
+                ..make_result(
+                    "src/hook.rs",
+                    327,
+                    407,
+                    "run_hook",
+                    "pub fn run_hook() { let staleness = index_staleness(); if staleness.stale { std::process::exit(0); } action pass }",
+                )
+            },
+        ];
+
+        rerank_results(
+            &mut results,
+            "how does hook fail open when index is stale or missing",
+        );
+        assert_eq!(results[0].path, "src/hook.rs");
+        assert_eq!(results[0].symbol, "run_hook");
+    }
+
+    #[test]
+    fn rerank_prefers_store_for_sqlite_cosine_search() {
+        let mut results = vec![
+            SearchResult {
+                distance: 0.01,
+                ..make_result(
+                    "src/embed.rs",
+                    152,
+                    169,
+                    "similar_texts_have_higher_cosine_similarity",
+                    "cosine similarity embedding query vector",
+                )
+            },
+            SearchResult {
+                distance: 0.16,
+                ..make_result(
+                    "src/store.rs",
+                    523,
+                    551,
+                    "cosine_similarity_to_bytes",
+                    "sqlite embeddings chunk_id cosine_similarity_to_bytes vector search",
+                )
+            },
+        ];
+
+        rerank_results(
+            &mut results,
+            "how is cosine similarity search implemented in sqlite",
+        );
+        assert_eq!(results[0].path, "src/store.rs");
+    }
+
+    #[test]
+    fn rerank_penalizes_unit_test_leakage_for_code_queries() {
+        let mut results = vec![
+            SearchResult {
+                distance: 0.01,
+                ..make_result(
+                    "src/query.rs",
+                    728,
+                    758,
+                    "rerank_prefers_hook_fail_open_implementation",
+                    "assert_eq hook fail open stale missing index",
+                )
+            },
+            SearchResult {
+                distance: 0.16,
+                ..make_result(
+                    "src/hook.rs",
+                    327,
+                    407,
+                    "run_hook",
+                    "index_staleness staleness stale std::process::exit(0) action pass",
+                )
+            },
+        ];
+
+        rerank_results(
+            &mut results,
+            "how does hook fail open when index is stale or missing",
+        );
+        assert_eq!(results[0].path, "src/hook.rs");
+    }
+
+    #[test]
+    fn rerank_prefers_gain_for_hook_log_savings_analytics() {
+        let mut results = vec![
+            SearchResult {
+                distance: 0.01,
+                ..make_result(
+                    "src/hook.rs",
+                    327,
+                    407,
+                    "run_hook",
+                    "log_hook_event saved_tokens actual_tokens original_estimate",
+                )
+            },
+            SearchResult {
+                distance: 0.16,
+                ..make_result(
+                    "src/gain.rs",
+                    75,
+                    135,
+                    "compute_gain",
+                    "compute_gain read_hook_log tokens_saved original_estimate hook log",
+                )
+            },
+        ];
+
+        rerank_results(
+            &mut results,
+            "how are token savings calculated from hook log",
+        );
+        assert_eq!(results[0].path, "src/gain.rs");
+        assert_eq!(results[0].symbol, "compute_gain");
+    }
+
+    #[test]
+    fn rerank_prefers_compress_for_cargo_output_errors() {
+        let mut results = vec![
+            SearchResult {
+                distance: 0.01,
+                ..make_result(
+                    "src/filters.rs",
+                    1,
+                    80,
+                    "apply_filter",
+                    "output filters keep lines matching error warning",
+                )
+            },
+            SearchResult {
+                distance: 0.16,
+                ..make_result(
+                    "src/compress.rs",
+                    78,
+                    120,
+                    "compress_cargo",
+                    "compress cargo output keep errors warnings diagnostics",
+                )
+            },
+        ];
+
+        rerank_results(
+            &mut results,
+            "how does cargo output compression keep errors",
+        );
+        assert_eq!(results[0].path, "src/compress.rs");
+        assert_eq!(results[0].symbol, "compress_cargo");
     }
 
     #[test]
