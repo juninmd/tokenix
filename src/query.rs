@@ -337,10 +337,10 @@ fn project_intent_boost(path: &str, terms: &[String]) -> f32 {
             boost += 0.55;
         }
         if path.contains("test pwa") {
-            boost += 1.6;
+            boost += 2.2;
         }
         if has_any(terms, &["pwa", "capacitor", "manifest"]) && path.contains("links") {
-            boost -= 0.6;
+            boost -= 1.1;
         }
     }
 

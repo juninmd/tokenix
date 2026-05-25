@@ -179,6 +179,8 @@ enum Commands {
             help = "Path to a local CodeGraph checkout for a lightweight comparison"
         )]
         compare_codegraph: Option<PathBuf>,
+        #[arg(long, help = "TOML file with project-specific benchmark cases")]
+        cases: Option<PathBuf>,
     },
     /// Install hook for one or more AI coding tools
     InstallHook {
@@ -367,6 +369,7 @@ fn main() -> Result<()> {
             refresh_index,
             budget,
             compare_codegraph,
+            cases,
         } => {
             let repo_root = find_repo_root(&path);
             benchmark::run_benchmark(
@@ -374,6 +377,7 @@ fn main() -> Result<()> {
                 refresh_index,
                 budget,
                 compare_codegraph.as_deref(),
+                cases.as_deref(),
             )
         }
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
