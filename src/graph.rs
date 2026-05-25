@@ -60,8 +60,14 @@ pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
 
     let mut inserted = HashSet::new();
     for chunk in &chunks {
+        let aliases = extract_import_aliases(&chunk.content);
         for reference in extract_references(&chunk.content) {
-            let targets = resolve_reference_targets(&by_name, &reference);
+            let resolved_reference = aliases
+                .get(&reference)
+                .or_else(|| aliases.get(&short_reference_name(&reference)))
+                .map(String::as_str)
+                .unwrap_or(&reference);
+            let targets = resolve_reference_targets(&by_name, resolved_reference);
             if targets.is_empty() {
                 continue;
             }
@@ -251,6 +257,70 @@ fn extract_references(content: &str) -> Vec<String> {
     refs
 }
 
+fn extract_import_aliases(content: &str) -> HashMap<String, String> {
+    let mut aliases = HashMap::new();
+    extract_rust_use_aliases(content, &mut aliases);
+    extract_ts_import_aliases(content, &mut aliases);
+    aliases
+}
+
+fn extract_rust_use_aliases(content: &str, aliases: &mut HashMap<String, String>) {
+    let group_re = Regex::new(r"\buse\s+([^;{]+)::\{([^}]+)\}\s*;").unwrap();
+    for cap in group_re.captures_iter(content) {
+        let Some(prefix) = cap.get(1).map(|m| m.as_str().trim()) else {
+            continue;
+        };
+        let Some(items) = cap.get(2).map(|m| m.as_str()) else {
+            continue;
+        };
+        for item in items
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            let parts: Vec<&str> = item.split_whitespace().collect();
+            if parts.len() == 3 && parts[1] == "as" {
+                aliases.insert(parts[2].to_string(), format!("{prefix}::{}", parts[0]));
+            } else if parts.len() == 1 {
+                aliases.insert(parts[0].to_string(), format!("{prefix}::{}", parts[0]));
+            }
+        }
+    }
+
+    let direct_re =
+        Regex::new(r"\buse\s+([A-Za-z_][A-Za-z0-9_:]*(?:::[A-Za-z_][A-Za-z0-9_]*)+)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;")
+            .unwrap();
+    for cap in direct_re.captures_iter(content) {
+        let Some(path) = cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let short = short_reference_name(path);
+        let alias = cap.get(2).map(|m| m.as_str()).unwrap_or(&short);
+        aliases.insert(alias.to_string(), path.to_string());
+    }
+}
+
+fn extract_ts_import_aliases(content: &str, aliases: &mut HashMap<String, String>) {
+    let named_re = Regex::new(r#"\bimport\s+\{([^}]+)\}\s+from\s+['"][^'"]+['"]"#).unwrap();
+    for cap in named_re.captures_iter(content) {
+        let Some(items) = cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        for item in items
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            let parts: Vec<&str> = item.split_whitespace().collect();
+            if parts.len() == 3 && parts[1] == "as" {
+                aliases.insert(parts[2].to_string(), parts[0].to_string());
+            } else if parts.len() == 1 {
+                aliases.insert(parts[0].to_string(), parts[0].to_string());
+            }
+        }
+    }
+}
+
 fn normalize_name(name: &str) -> String {
     name.trim().to_ascii_lowercase()
 }
@@ -358,5 +428,35 @@ mod tests {
         let targets = resolve_reference_targets(&by_name, "crate::graph::rebuild_symbol_graph");
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].chunk_id, 7);
+    }
+
+    #[test]
+    fn rust_use_alias_expands_reference_target() {
+        let aliases = extract_import_aliases(
+            "use crate::store::{insert_chunk as put_chunk, upsert_file};\nfn x(){ put_chunk(); }",
+        );
+        assert_eq!(
+            aliases.get("put_chunk").map(String::as_str),
+            Some("crate::store::insert_chunk")
+        );
+        assert_eq!(
+            aliases.get("upsert_file").map(String::as_str),
+            Some("crate::store::upsert_file")
+        );
+    }
+
+    #[test]
+    fn ts_import_alias_expands_reference_target() {
+        let aliases = extract_import_aliases(
+            "import { createUser as makeUser, deleteUser } from './users';\nmakeUser();",
+        );
+        assert_eq!(
+            aliases.get("makeUser").map(String::as_str),
+            Some("createUser")
+        );
+        assert_eq!(
+            aliases.get("deleteUser").map(String::as_str),
+            Some("deleteUser")
+        );
     }
 }

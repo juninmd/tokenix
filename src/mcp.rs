@@ -246,6 +246,31 @@ pub fn run_mcp_server() -> Result<()> {
                                     }
                                 },
                                 {
+                                    "name": "tokenix_memory_remove",
+                                    "description": "Remove saved preferences matching text from project or global memory",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "query": {"type": "string", "description": "Text to match in saved preferences"},
+                                            "scope": {"type": "string", "description": "Scope to edit: project or global", "default": "project"}
+                                        },
+                                        "required": ["query"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_memory_edit",
+                                    "description": "Replace saved preferences matching text in project or global memory",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "query": {"type": "string", "description": "Text to match in saved preferences"},
+                                            "replacement": {"type": "string", "description": "Replacement preference text"},
+                                            "scope": {"type": "string", "description": "Scope to edit: project or global", "default": "project"}
+                                        },
+                                        "required": ["query", "replacement"]
+                                    }
+                                },
+                                {
                                     "name": "tokenix_gain",
                                     "description": "Show estimated token savings statistics from tokenix hooks",
                                     "inputSchema": {
@@ -489,11 +514,7 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 .get("scope")
                 .and_then(|q| q.as_str())
                 .unwrap_or("project");
-            let scope = match scope {
-                "global" => crate::memory::PreferenceScope::Global,
-                "project" => crate::memory::PreferenceScope::Project,
-                other => return Err(anyhow!("Invalid scope '{}'. Use: global | project", other)),
-            };
+            let scope = parse_memory_scope(scope)?;
             let path = crate::memory::add_preference(&repo_root, scope, text)?;
             Ok(format!("saved {}", path.display()))
         }
@@ -511,6 +532,37 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 }
             };
             crate::memory::list_preferences(&repo_root, include_global, include_project)
+        }
+        "tokenix_memory_remove" => {
+            let query = args
+                .get("query")
+                .and_then(|q| q.as_str())
+                .ok_or_else(|| anyhow!("Missing 'query' argument"))?;
+            let scope = parse_memory_scope(
+                args.get("scope")
+                    .and_then(|q| q.as_str())
+                    .unwrap_or("project"),
+            )?;
+            let (path, count) = crate::memory::remove_preference(&repo_root, scope, query)?;
+            Ok(format!("removed {} from {}", count, path.display()))
+        }
+        "tokenix_memory_edit" => {
+            let query = args
+                .get("query")
+                .and_then(|q| q.as_str())
+                .ok_or_else(|| anyhow!("Missing 'query' argument"))?;
+            let replacement = args
+                .get("replacement")
+                .and_then(|q| q.as_str())
+                .ok_or_else(|| anyhow!("Missing 'replacement' argument"))?;
+            let scope = parse_memory_scope(
+                args.get("scope")
+                    .and_then(|q| q.as_str())
+                    .unwrap_or("project"),
+            )?;
+            let (path, count) =
+                crate::memory::edit_preference(&repo_root, scope, query, replacement)?;
+            Ok(format!("edited {} in {}", count, path.display()))
         }
         "tokenix_gain" => {
             let history = args
@@ -578,6 +630,14 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
             Ok(out)
         }
         _ => Err(anyhow!("Unknown tool '{}'", name)),
+    }
+}
+
+fn parse_memory_scope(scope: &str) -> Result<crate::memory::PreferenceScope> {
+    match scope {
+        "global" => Ok(crate::memory::PreferenceScope::Global),
+        "project" => Ok(crate::memory::PreferenceScope::Project),
+        other => Err(anyhow!("Invalid scope '{}'. Use: global | project", other)),
     }
 }
 

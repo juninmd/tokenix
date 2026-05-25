@@ -107,6 +107,11 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
             chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
             embedding BLOB NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS embedding_cache (
+            content_hash TEXT PRIMARY KEY,
+            embedding BLOB NOT NULL,
+            updated_at REAL
+        );
         CREATE TABLE IF NOT EXISTS graph_nodes (
             chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
             file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
@@ -239,6 +244,36 @@ pub fn insert_embedding(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> 
     conn.execute(
         "INSERT OR REPLACE INTO embeddings(chunk_id,embedding) VALUES(?1,?2)",
         params![chunk_id, blob],
+    )?;
+    Ok(())
+}
+
+pub fn cached_embedding(conn: &Connection, content_hash: &str) -> Result<Option<Vec<f32>>> {
+    let res = conn.query_row(
+        "SELECT embedding FROM embedding_cache WHERE content_hash=?1",
+        params![content_hash],
+        |row| row.get::<_, Vec<u8>>(0),
+    );
+    match res {
+        Ok(bytes) => Ok(Some(deserialize_vec(&bytes))),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub fn upsert_embedding_cache(
+    conn: &Connection,
+    content_hash: &str,
+    embedding: &[f32],
+) -> Result<()> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    conn.execute(
+        "INSERT INTO embedding_cache(content_hash,embedding,updated_at) VALUES(?1,?2,?3)
+         ON CONFLICT(content_hash) DO UPDATE SET embedding=excluded.embedding, updated_at=excluded.updated_at",
+        params![content_hash, serialize_vec(embedding), now],
     )?;
     Ok(())
 }

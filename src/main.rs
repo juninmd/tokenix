@@ -64,6 +64,8 @@ enum Commands {
         jobs: Option<usize>,
         #[arg(long, help = "Embedding batch size for indexing")]
         embed_batch: Option<usize>,
+        #[arg(long, help = "Update file chunks and symbol graph without embedding")]
+        no_embed: bool,
     },
     /// Semantic search over the indexed repository
     Query {
@@ -170,6 +172,11 @@ enum Commands {
             help = "Token budget for semantic queries"
         )]
         budget: usize,
+        #[arg(
+            long,
+            help = "Path to a local CodeGraph checkout for a lightweight comparison"
+        )]
+        compare_codegraph: Option<PathBuf>,
     },
     /// Install hook for one or more AI coding tools
     InstallHook {
@@ -242,6 +249,27 @@ enum MemoryAction {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// Remove saved preferences matching text
+    Remove {
+        query: String,
+        #[arg(long, help = "Remove from global preferences")]
+        global: bool,
+        #[arg(long, help = "Remove from project preferences")]
+        project: bool,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Replace saved preferences matching text
+    Edit {
+        query: String,
+        replacement: String,
+        #[arg(long, help = "Edit global preferences")]
+        global: bool,
+        #[arg(long, help = "Edit project preferences")]
+        project: bool,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -281,9 +309,10 @@ fn main() -> Result<()> {
             low_cpu,
             jobs,
             embed_batch,
+            no_embed,
         } => {
             configure_index_limits(low_cpu, jobs, embed_batch);
-            cmd_index(&path, force, if_stale)
+            cmd_index(&path, force, if_stale, no_embed)
         }
         Commands::Query {
             text,
@@ -334,9 +363,15 @@ fn main() -> Result<()> {
             path,
             refresh_index,
             budget,
+            compare_codegraph,
         } => {
             let repo_root = find_repo_root(&path);
-            benchmark::run_benchmark(&repo_root, refresh_index, budget)
+            benchmark::run_benchmark(
+                &repo_root,
+                refresh_index,
+                budget,
+                compare_codegraph.as_deref(),
+            )
         }
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
         Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),
@@ -418,7 +453,7 @@ fn configure_index_limits(low_cpu: bool, jobs: Option<usize>, embed_batch: Optio
     }
 }
 
-fn cmd_index(path: &Path, force: bool, if_stale: bool) -> Result<()> {
+fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result<()> {
     let repo_root = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     if if_stale && !force {
@@ -435,9 +470,12 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool) -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let (result, stats) = indexer::index_repo(&repo_root, force, |msg| {
-        println!("  {}", msg);
-    })?;
+    let mut progress = |msg: &str| println!("  {}", msg);
+    let (result, stats) = indexer::index_repo_with_options(
+        &repo_root,
+        indexer::IndexOptions { force, no_embed },
+        &mut progress,
+    )?;
 
     println!(
         "\n{} in {:.1}s",
@@ -513,6 +551,47 @@ fn cmd_memory(action: MemoryAction) -> Result<()> {
             );
             Ok(())
         }
+        MemoryAction::Remove {
+            query,
+            global,
+            project,
+            path,
+        } => {
+            let repo_root = find_repo_root(&path);
+            for scope in selected_memory_scopes(global, project) {
+                let (path, count) = memory::remove_preference(&repo_root, scope, &query)?;
+                println!("removed {} from {}", count, path.display());
+            }
+            Ok(())
+        }
+        MemoryAction::Edit {
+            query,
+            replacement,
+            global,
+            project,
+            path,
+        } => {
+            let repo_root = find_repo_root(&path);
+            for scope in selected_memory_scopes(global, project) {
+                let (path, count) =
+                    memory::edit_preference(&repo_root, scope, &query, &replacement)?;
+                println!("edited {} in {}", count, path.display());
+            }
+            Ok(())
+        }
+    }
+}
+
+fn selected_memory_scopes(global: bool, project: bool) -> Vec<memory::PreferenceScope> {
+    if global && project {
+        vec![
+            memory::PreferenceScope::Global,
+            memory::PreferenceScope::Project,
+        ]
+    } else if global {
+        vec![memory::PreferenceScope::Global]
+    } else {
+        vec![memory::PreferenceScope::Project]
     }
 }
 

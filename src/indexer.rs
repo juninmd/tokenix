@@ -2,6 +2,7 @@ use anyhow::Result;
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
+use sha2::Digest;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,8 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::chunker::{chunk_file, file_hash, should_index, Chunk, IGNORED_DIRS};
 use crate::embed::embed_documents;
 use crate::store::{
-    count_stats, delete_chunks_for_file, init_schema, insert_chunk, insert_embedding,
-    load_all_file_info, open_db, upsert_file, write_project_name, IndexStats, NewChunk,
+    cached_embedding, count_stats, delete_chunks_for_file, init_schema, insert_chunk,
+    insert_embedding, load_all_file_info, open_db, upsert_embedding_cache, upsert_file,
+    write_project_name, IndexStats, NewChunk,
 };
 
 #[allow(dead_code)]
@@ -33,6 +35,19 @@ struct ChunkedFile {
     error: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct IndexOptions {
+    pub force: bool,
+    pub no_embed: bool,
+}
+
+struct EmbedJob {
+    file_idx: usize,
+    chunk_idx: usize,
+    cache_key: String,
+    text: String,
+}
+
 fn mtime_of(path: &Path) -> f64 {
     std::fs::metadata(path)
         .ok()
@@ -40,6 +55,12 @@ fn mtime_of(path: &Path) -> f64 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+fn chunk_embedding_key(text: &str) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(text.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 fn chunk_only(
@@ -95,6 +116,24 @@ pub fn index_repo<F>(
     repo_root: &Path,
     force: bool,
     mut progress_cb: F,
+) -> Result<(IndexResult, IndexStats)>
+where
+    F: FnMut(&str),
+{
+    index_repo_with_options(
+        repo_root,
+        IndexOptions {
+            force,
+            no_embed: false,
+        },
+        &mut progress_cb,
+    )
+}
+
+pub fn index_repo_with_options<F>(
+    repo_root: &Path,
+    options: IndexOptions,
+    progress_cb: &mut F,
 ) -> Result<(IndexResult, IndexStats)>
 where
     F: FnMut(&str),
@@ -158,7 +197,7 @@ where
     let chunked: Vec<ChunkedFile> = files
         .par_iter()
         .map(|(abs, rel)| {
-            let r = chunk_only(abs, rel, force, &existing);
+            let r = chunk_only(abs, rel, options.force, &existing);
             pb.set_message(rel.to_string());
             pb.inc(1);
             r
@@ -167,18 +206,33 @@ where
 
     pb.finish_and_clear();
 
-    // Phase 2: collect all texts that need embedding
-    // Track which (file_idx, chunk_idx) each embed slot belongs to
-    let mut embed_texts: Vec<String> = Vec::new();
-    let mut embed_map: Vec<(usize, usize)> = Vec::new(); // (file_idx, chunk_idx)
+    // Phase 2: collect embeddings, reusing cache by chunk text hash.
+    let mut file_embeddings: HashMap<usize, Vec<Option<Vec<f32>>>> = HashMap::new();
+    let mut embed_jobs = Vec::new();
 
-    for (fi, f) in chunked.iter().enumerate() {
-        if f.skipped || f.error.is_some() || f.chunks.is_empty() {
-            continue;
-        }
-        for (ci, chunk) in f.chunks.iter().enumerate() {
-            embed_texts.push(format!("{}\n{}", f.rel, chunk.content));
-            embed_map.push((fi, ci));
+    if options.no_embed {
+        progress_cb("skipping embeddings (--no-embed); updating chunks and graph only");
+    } else {
+        for (fi, f) in chunked.iter().enumerate() {
+            if f.skipped || f.error.is_some() || f.chunks.is_empty() {
+                continue;
+            }
+            let mut embeddings = vec![None; f.chunks.len()];
+            for (ci, chunk) in f.chunks.iter().enumerate() {
+                let text = format!("{}\n{}", f.rel, chunk.content);
+                let cache_key = chunk_embedding_key(&text);
+                if let Some(embedding) = cached_embedding(&conn, &cache_key)? {
+                    embeddings[ci] = Some(embedding);
+                } else {
+                    embed_jobs.push(EmbedJob {
+                        file_idx: fi,
+                        chunk_idx: ci,
+                        cache_key,
+                        text,
+                    });
+                }
+            }
+            file_embeddings.insert(fi, embeddings);
         }
     }
 
@@ -194,24 +248,25 @@ where
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
-    let embeddings = if embed_texts.is_empty() {
+    let new_embeddings = if embed_jobs.is_empty() {
         vec![]
     } else {
         progress_cb(&format!(
-            "embedding {} chunks via fastembed (ONNX), batch size {}...",
-            embed_texts.len(),
+            "embedding {} uncached chunks via fastembed (ONNX), batch size {}...",
+            embed_jobs.len(),
             embed_batch
         ));
-        let mut all: Vec<Vec<f32>> = Vec::with_capacity(embed_texts.len());
-        let total_batches = embed_texts.len().div_ceil(embed_batch);
-        for (batch_idx, batch) in embed_texts.chunks(embed_batch).enumerate() {
+        let mut all: Vec<Vec<f32>> = Vec::with_capacity(embed_jobs.len());
+        let total_batches = embed_jobs.len().div_ceil(embed_batch);
+        for (batch_idx, batch) in embed_jobs.chunks(embed_batch).enumerate() {
             progress_cb(&format!(
                 "embedding batch {}/{} ({} chunks)",
                 batch_idx + 1,
                 total_batches,
                 batch.len()
             ));
-            let batch_embs = embed_documents(batch).map_err(|e| {
+            let texts: Vec<String> = batch.iter().map(|job| job.text.clone()).collect();
+            let batch_embs = embed_documents(&texts).map_err(|e| {
                 anyhow::anyhow!(
                     "embedding failed at batch {}/{} with {} chunk(s): {}",
                     batch_idx + 1,
@@ -228,14 +283,12 @@ where
         all
     };
 
-    // Phase 4: pair embeddings back with files
-    // Build per-file embedding vecs
-    let mut file_embeddings: HashMap<usize, Vec<Vec<f32>>> = HashMap::new();
-    for (slot, (fi, _ci)) in embed_map.iter().enumerate() {
-        file_embeddings
-            .entry(*fi)
-            .or_default()
-            .push(embeddings[slot].clone());
+    // Phase 4: pair new embeddings back with files and update cache.
+    for (job, embedding) in embed_jobs.iter().zip(new_embeddings.iter()) {
+        upsert_embedding_cache(&conn, &job.cache_key, embedding)?;
+        if let Some(file_embs) = file_embeddings.get_mut(&job.file_idx) {
+            file_embs[job.chunk_idx] = Some(embedding.clone());
+        }
     }
 
     // Phase 5: write to SQLite
@@ -257,11 +310,6 @@ where
             continue;
         }
 
-        let file_embs = match file_embeddings.get(&fi) {
-            Some(e) => e,
-            None => continue,
-        };
-
         let file_id = match upsert_file(&conn, &f.rel, f.mtime, &f.hash) {
             Ok(id) => id,
             Err(e) => {
@@ -274,7 +322,7 @@ where
         let _ = delete_chunks_for_file(&conn, file_id);
 
         let _ = conn.execute_batch("BEGIN IMMEDIATE");
-        for (chunk, embedding) in f.chunks.iter().zip(file_embs.iter()) {
+        for (ci, chunk) in f.chunks.iter().enumerate() {
             let chunk_id = match insert_chunk(
                 &conn,
                 NewChunk {
@@ -291,7 +339,9 @@ where
                 Ok(id) => id,
                 Err(_) => continue,
             };
-            let _ = insert_embedding(&conn, chunk_id, embedding);
+            if let Some(Some(embedding)) = file_embeddings.get(&fi).and_then(|embs| embs.get(ci)) {
+                let _ = insert_embedding(&conn, chunk_id, embedding);
+            }
         }
         let _ = conn.execute_batch("COMMIT");
 

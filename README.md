@@ -109,6 +109,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **Bundled output filters** | 59 RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `gradle`, `terraform`, and more. Generate new ones with `tokenix filter generate` |
 | **Custom filters** | Drop `.toml` files in `~/.tokenix/filters/` — they override bundled filters. AI-assisted generation via `tokenix filter generate <command>` |
 | **Polite indexing controls** | `tokenix index --low-cpu`, `--jobs`, and `--embed-batch` keep large-repo indexing from monopolizing the machine |
+| **Embedding cache** | Reuses chunk embeddings by content hash; `tokenix index --no-embed` updates chunks and graph without ONNX work |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
@@ -432,6 +433,8 @@ tokenix install-hook --tool all
 | `tokenix memory add TEXT` | Save a project preference for future context |
 | `tokenix memory add --global TEXT` | Save a global preference for future context |
 | `tokenix memory list` | List global and project preferences |
+| `tokenix memory remove QUERY` | Remove matching project preferences |
+| `tokenix memory edit QUERY REPLACEMENT` | Replace matching project preferences |
 | `tokenix read FILE` | Smart reader — outline for large files, full for small |
 | `tokenix symbols QUERY` | Find indexed symbols by name or path |
 | `tokenix callers SYMBOL` | Show symbols that call/reference a symbol |
@@ -441,6 +444,7 @@ tokenix install-hook --tool all
 | `tokenix gain` | Token savings analytics with per-model cost table |
 | `tokenix gain --history` | Same, plus last 20 hook events |
 | `tokenix benchmark` | Reproducible savings and semantic-quality benchmark |
+| `tokenix benchmark --compare-codegraph PATH` | Add a lightweight local CodeGraph comparison section |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix serve [--port N]` | Start background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |

@@ -67,7 +67,46 @@ pub fn list_preferences(
     Ok(out.trim_end().to_string())
 }
 
-pub fn preferences_for_context(repo_root: &Path, max_items: usize) -> Result<String> {
+pub fn remove_preference(
+    repo_root: &Path,
+    scope: PreferenceScope,
+    query: &str,
+) -> Result<(PathBuf, usize)> {
+    let path = scope_path(repo_root, scope)?;
+    let removed = rewrite_preference_file(&path, |line| {
+        if preference_matches(line, query) {
+            None
+        } else {
+            Some(line.to_string())
+        }
+    })?;
+    Ok((path, removed))
+}
+
+pub fn edit_preference(
+    repo_root: &Path,
+    scope: PreferenceScope,
+    query: &str,
+    replacement: &str,
+) -> Result<(PathBuf, usize)> {
+    let clean = normalize_preference_text(replacement)?;
+    reject_sensitive_preference(&clean)?;
+
+    let date = Utc::now().format("%Y-%m-%d").to_string();
+    let path = scope_path(repo_root, scope)?;
+    let mut changed = 0usize;
+    rewrite_preference_file(&path, |line| {
+        if preference_matches(line, query) {
+            changed += 1;
+            Some(format!("- [{}] {}", date, clean))
+        } else {
+            Some(line.to_string())
+        }
+    })?;
+    Ok((path, changed))
+}
+
+pub fn preferences_for_context(repo_root: &Path, task: &str, max_items: usize) -> Result<String> {
     let mut lines = Vec::new();
     for path in [
         global_preferences_path()?,
@@ -79,8 +118,16 @@ pub fn preferences_for_context(repo_root: &Path, max_items: usize) -> Result<Str
             break;
         }
     }
+    rank_preference_lines(&mut lines, task);
     lines.truncate(max_items);
     Ok(lines.join("\n"))
+}
+
+fn scope_path(repo_root: &Path, scope: PreferenceScope) -> Result<PathBuf> {
+    match scope {
+        PreferenceScope::Global => global_preferences_path(),
+        PreferenceScope::Project => project_preferences_path(repo_root),
+    }
 }
 
 fn tokenix_home() -> Result<PathBuf> {
@@ -127,6 +174,34 @@ fn append_preference_to_file(path: &Path, header: &str, text: &str, date: &str) 
     Ok(())
 }
 
+fn rewrite_preference_file<F>(path: &Path, mut rewrite: F) -> Result<usize>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let content = fs::read_to_string(path).unwrap_or_default();
+    let mut changed = 0usize;
+    let mut output = Vec::new();
+    for line in content.lines() {
+        if line.trim_start().starts_with("- ") {
+            match rewrite(line.trim()) {
+                Some(new_line) => {
+                    if new_line != line {
+                        changed += 1;
+                    }
+                    output.push(new_line);
+                }
+                None => changed += 1,
+            }
+        } else {
+            output.push(line.to_string());
+        }
+    }
+    if changed > 0 {
+        fs::write(path, format!("{}\n", output.join("\n")))?;
+    }
+    Ok(changed)
+}
+
 fn extract_preference_lines(content: &str) -> Vec<String> {
     content
         .lines()
@@ -157,6 +232,35 @@ fn normalize_for_dedupe(text: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn preference_matches(line: &str, query: &str) -> bool {
+    let query = normalize_for_dedupe(query);
+    !query.is_empty() && normalize_for_dedupe(line).contains(&query)
+}
+
+fn rank_preference_lines(lines: &mut [String], task: &str) {
+    let terms: Vec<String> = normalize_for_dedupe(task)
+        .split_whitespace()
+        .filter(|term| term.len() >= 3)
+        .map(str::to_string)
+        .collect();
+    if terms.is_empty() {
+        return;
+    }
+    lines.sort_by(|a, b| {
+        let score_a = preference_score(a, &terms);
+        let score_b = preference_score(b, &terms);
+        score_b.cmp(&score_a).then_with(|| a.cmp(b))
+    });
+}
+
+fn preference_score(line: &str, terms: &[String]) -> usize {
+    let normalized = normalize_for_dedupe(line);
+    terms
+        .iter()
+        .filter(|term| normalized.contains(term.as_str()))
+        .count()
 }
 
 fn reject_sensitive_preference(text: &str) -> Result<()> {
@@ -213,5 +317,40 @@ mod tests {
     fn rejects_sensitive_preferences() {
         let err = reject_sensitive_preference("use api_key abc for tests").unwrap_err();
         assert!(err.to_string().contains("sensitive"));
+    }
+
+    #[test]
+    fn ranks_preferences_by_task_terms() {
+        let mut lines = vec![
+            "- [2026-05-24] Prefer cargo check for Rust validation".to_string(),
+            "- [2026-05-24] Prefer Biome over ESLint".to_string(),
+        ];
+        rank_preference_lines(&mut lines, "migrate eslint to biome");
+        assert!(lines[0].contains("Biome"));
+    }
+
+    #[test]
+    fn rewrite_removes_matching_preference() {
+        let path = temp_file("memory-remove");
+        fs::write(
+            &path,
+            "# H\n\n- [2026-05-24] Prefer Biome over ESLint\n- [2026-05-24] Use cargo check\n",
+        )
+        .unwrap();
+
+        let removed = rewrite_preference_file(&path, |line| {
+            if preference_matches(line, "Biome") {
+                None
+            } else {
+                Some(line.to_string())
+            }
+        })
+        .unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(removed, 1);
+        assert!(!content.contains("Biome"));
+        assert!(content.contains("cargo check"));
+
+        let _ = fs::remove_file(path);
     }
 }

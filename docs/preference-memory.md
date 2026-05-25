@@ -78,6 +78,8 @@ tokenix memory add "This project is migrating from ESLint to Biome."
 tokenix memory list
 tokenix memory list --global
 tokenix memory list --project
+tokenix memory remove "Biome"
+tokenix memory edit "ESLint" "Prefer Biome over ESLint for JS/TS linting migrations."
 ```
 
 `memory add` defaults to project scope. Use `--global` for cross-repository preferences.
@@ -86,6 +88,8 @@ tokenix memory list --project
 
 - `tokenix_memory_add`: save one preference with `scope` set to `project` or `global`.
 - `tokenix_memory_list`: list `all`, `project`, or `global` preferences.
+- `tokenix_memory_remove`: remove matching project or global preferences.
+- `tokenix_memory_edit`: replace matching project or global preferences.
 
 ## Hook/Agent Flow
 
@@ -105,5 +109,5 @@ tokenix memory list --project
 ## Roadmap
 
 1. Add optional heuristic extraction suggestions from user prompts.
-2. Add richer preference editing commands.
-3. Add preference search/ranking once the file grows beyond a small list.
+2. Add confirmation policy knobs for fully automatic agents.
+3. Add preference search over embeddings once the file grows beyond keyword ranking.

@@ -52,7 +52,12 @@ struct QueryRow {
     hit_top3: bool,
 }
 
-pub fn run_benchmark(repo_root: &Path, refresh_index: bool, query_budget: usize) -> Result<()> {
+pub fn run_benchmark(
+    repo_root: &Path,
+    refresh_index: bool,
+    query_budget: usize,
+    codegraph_path: Option<&Path>,
+) -> Result<()> {
     println!();
     println!("{}", "=== tokenix real benchmark ===".bold());
     println!(
@@ -62,7 +67,7 @@ pub fn run_benchmark(repo_root: &Path, refresh_index: bool, query_budget: usize)
     );
     println!();
 
-    if refresh_index || index_needs_refresh(repo_root) {
+    if refresh_index {
         println!("{}", "Preparing fresh-enough index...".yellow());
         let start = Instant::now();
         let (_result, stats) = indexer::index_repo(repo_root, false, |msg| {
@@ -74,6 +79,13 @@ pub fn run_benchmark(repo_root: &Path, refresh_index: bool, query_budget: usize)
             stats.files,
             stats.chunks,
             format_num(stats.total_tokens)
+        );
+        println!();
+    } else if index_needs_refresh(repo_root) {
+        println!(
+            "{}",
+            "Index is stale or missing; benchmark will use available metadata only. Pass --refresh-index to re-embed."
+                .yellow()
         );
         println!();
     }
@@ -88,6 +100,9 @@ pub fn run_benchmark(repo_root: &Path, refresh_index: bool, query_budget: usize)
     print_semantic_quality(&query_rows, query_budget);
 
     print_verdict(&read_rows, &workflow_rows, &query_rows);
+    if let Some(path) = codegraph_path {
+        print_codegraph_comparison(path, &read_rows, &workflow_rows, &query_rows)?;
+    }
     Ok(())
 }
 
@@ -465,6 +480,122 @@ fn print_verdict(read_rows: &[ReadRow], workflow_rows: &[WorkflowRow], query_row
         query_rows.len()
     );
     println!();
+}
+
+fn print_codegraph_comparison(
+    codegraph_path: &Path,
+    read_rows: &[ReadRow],
+    workflow_rows: &[WorkflowRow],
+    query_rows: &[QueryRow],
+) -> Result<()> {
+    let read_raw: usize = read_rows.iter().map(|r| r.raw_tokens).sum();
+    let read_outline: usize = read_rows.iter().map(|r| r.outline_tokens).sum();
+    let flow_raw: usize = workflow_rows.iter().map(|r| r.raw_tokens).sum();
+    let flow_tokenix: usize = workflow_rows.iter().map(|r| r.total_tokens).sum();
+    let hit3 = query_rows.iter().filter(|r| r.hit_top3).count();
+
+    let codegraph_files = count_indexable_files(codegraph_path)?;
+    let codegraph_readme = read_readme(codegraph_path);
+    let has_symbol_claim =
+        contains_any(&codegraph_readme, &["symbol", "ast", "call graph", "graph"]);
+    let has_mcp_claim = contains_any(&codegraph_readme, &["mcp", "model context protocol"]);
+    let has_memory_claim = contains_any(&codegraph_readme, &["memory", "preference"]);
+
+    println!("{}", "4. CodeGraph Comparison".bold());
+    println!(
+        "  CodeGraph path: {} ({} indexable files detected)",
+        codegraph_path.display(),
+        codegraph_files
+    );
+    println!("  {}", "-".repeat(91).dimmed());
+    println!(
+        "  {:<28} {:<28} {:<28}",
+        "Capability", "tokenix proof", "CodeGraph local signal"
+    );
+    println!("  {}", "-".repeat(91).dimmed());
+    println!(
+        "  {:<28} {:<28} {:<28}",
+        "Token reduction",
+        format!(
+            "{:.1}% read / {:.1}% workflow",
+            saved_pct(read_raw, read_outline),
+            saved_pct(flow_raw, flow_tokenix)
+        ),
+        "not measured by tokenix"
+    );
+    println!(
+        "  {:<28} {:<28} {:<28}",
+        "Retrieval quality",
+        format!("Hit@3 {}/{}", hit3, query_rows.len()),
+        "not measured by tokenix"
+    );
+    println!(
+        "  {:<28} {:<28} {:<28}",
+        "Symbol graph",
+        "callers/callees/impact",
+        yes_no_plain(has_symbol_claim)
+    );
+    println!(
+        "  {:<28} {:<28} {:<28}",
+        "Agent MCP",
+        "context/explore/memory",
+        yes_no_plain(has_mcp_claim)
+    );
+    println!(
+        "  {:<28} {:<28} {:<28}",
+        "Preference memory",
+        "global + project markdown",
+        yes_no_plain(has_memory_claim)
+    );
+    println!();
+    Ok(())
+}
+
+fn count_indexable_files(root: &Path) -> Result<usize> {
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut count = 0usize;
+    count_files_rec(root, &mut count)?;
+    Ok(count)
+}
+
+fn count_files_rec(dir: &Path, count: &mut usize) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !matches!(name, ".git" | "node_modules" | "target" | "dist" | "build") {
+                count_files_rec(&path, count)?;
+            }
+        } else if should_index(&path) {
+            *count += 1;
+        }
+    }
+    Ok(())
+}
+
+fn read_readme(root: &Path) -> String {
+    for name in ["README.md", "readme.md", "README"] {
+        let path = root.join(name);
+        if let Ok(content) = std::fs::read_to_string(path) {
+            return content.to_ascii_lowercase();
+        }
+    }
+    String::new()
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
+}
+
+fn yes_no_plain(value: bool) -> &'static str {
+    if value {
+        "claimed"
+    } else {
+        "not found"
+    }
 }
 
 fn rel_path(repo_root: &Path, path: &Path) -> String {
