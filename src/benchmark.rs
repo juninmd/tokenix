@@ -506,7 +506,7 @@ fn sample_file_listing(repo_root: &Path) -> String {
 }
 
 fn print_command_compression(rows: &[CmdRow]) {
-    println!("{}", "4. Command Output Compression".bold());
+    println!("{}", "5. Command Output Compression".bold());
     println!(
         "  {:<20} {:>10} {:>10} {:>10} {:>8} {:>9}",
         "Command", "Vanilla", "tokenix", "RTK", "Saved", "vs RTK"
@@ -781,6 +781,14 @@ fn path_expected(path: &str, expected: &[String]) -> bool {
 
 fn print_read_reduction(rows: &[ReadRow]) {
     println!("{}", "1. Read Interception: Gross Token Reduction".bold());
+    if rows.is_empty() {
+        println!(
+            "  {}",
+            "No default large-file cases found in this repository.".dimmed()
+        );
+        println!();
+        return;
+    }
     println!(
         "  {:<42} {:>6} {:>10} {:>10} {:>8}",
         "File", "Lines", "Raw", "Outline", "Saved"
@@ -817,6 +825,14 @@ fn print_read_reduction(rows: &[ReadRow]) {
 fn print_targeted_workflows(rows: &[WorkflowRow]) {
     println!("{}", "2. Targeted Workflow: Outline + Symbol Read".bold());
     println!("{}", "  Baseline is reading the full file once. tokenix cost is outline plus the target symbol chunk.".dimmed());
+    if rows.is_empty() {
+        println!(
+            "  {}",
+            "No default symbol workflow cases found in this repository.".dimmed()
+        );
+        println!();
+        return;
+    }
     println!(
         "  {:<24} {:>9} {:>9} {:>9} {:>9} {:>8} {:>5}",
         "Task", "Raw", "Outline", "Target", "Total", "Saved", "OK"
