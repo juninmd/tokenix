@@ -1,3 +1,4 @@
+use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -253,12 +254,90 @@ fn is_js_ts_symbol(kind: &str) -> Option<&'static str> {
 }
 
 fn chunk_ts_js(content: &str, path: &str) -> Vec<Chunk> {
-    chunk_with_parser(
+    let mut chunks = chunk_with_parser(
         tree_sitter_javascript::language(),
         content,
         path,
         is_js_ts_symbol,
+    );
+    merge_missing_symbol_chunks(&mut chunks, heuristic_ts_js_symbols(content), content, path);
+    chunks
+}
+
+fn merge_missing_symbol_chunks(
+    chunks: &mut Vec<Chunk>,
+    symbols: Vec<SymbolNode>,
+    content: &str,
+    path: &str,
+) {
+    if symbols.is_empty() {
+        return;
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    for symbol in symbols {
+        if chunks.iter().any(|chunk| chunk.symbol == symbol.symbol) {
+            continue;
+        }
+        flush_chunk(
+            &lines,
+            path,
+            symbol.start_line,
+            symbol.end_line,
+            &symbol.symbol,
+            &symbol.kind,
+            chunks,
+        );
+    }
+    chunks.sort_by_key(|chunk| (chunk.start_line, chunk.end_line));
+}
+
+fn heuristic_ts_js_symbols(content: &str) -> Vec<SymbolNode> {
+    let re = Regex::new(
+        r"\b(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(class|interface|enum|function|type)\s+([A-Za-z_$][A-Za-z0-9_$]*)",
     )
+    .unwrap();
+    let lines: Vec<&str> = content.lines().collect();
+    let mut symbols = Vec::new();
+    for cap in re.captures_iter(content) {
+        let Some(mat) = cap.get(0) else {
+            continue;
+        };
+        let kind = cap.get(1).map(|m| m.as_str()).unwrap_or("symbol");
+        let name = cap.get(2).map(|m| m.as_str()).unwrap_or("anonymous");
+        let start_line = content[..mat.start()].lines().count();
+        let end_line = find_block_end(&lines, start_line);
+        symbols.push(SymbolNode {
+            start_line,
+            end_line,
+            symbol: name.to_string(),
+            kind: kind.to_string(),
+        });
+    }
+    symbols
+}
+
+fn find_block_end(lines: &[&str], start_line: usize) -> usize {
+    let mut depth = 0i32;
+    let mut saw_open = false;
+    for (idx, line) in lines.iter().enumerate().skip(start_line) {
+        for ch in line.chars() {
+            match ch {
+                '{' => {
+                    depth += 1;
+                    saw_open = true;
+                }
+                '}' => {
+                    depth -= 1;
+                    if saw_open && depth <= 0 {
+                        return idx;
+                    }
+                }
+                ';' if !saw_open => return idx,
+                _ => {}
+            }
+        }
+    }
+    lines.len().saturating_sub(1)
 }
 
 fn is_go_symbol(kind: &str) -> Option<&'static str> {
@@ -828,6 +907,81 @@ mod tests {
             "no expected symbols in {:?}",
             symbols
         );
+    }
+
+    #[test]
+    fn chunk_typescript_detects_exported_classes_and_interfaces() {
+        let code = concat!(
+            "export interface UserRepositoryOptions {\n",
+            "  tableName: string;\n",
+            "  poolSize: number;\n",
+            "}\n\n",
+            "export abstract class BaseRepository<T> {\n",
+            "  async findById(id: string): Promise<T | null> {\n",
+            "    return this.queryById(id);\n",
+            "  }\n",
+            "  protected abstract queryById(id: string): Promise<T | null>;\n",
+            "}\n\n",
+            "export class UserRepository extends BaseRepository<User> {\n",
+            "  protected async queryById(id: string): Promise<User | null> {\n",
+            "    const user = await this.pool.query('select * from users where id = $1', [id]);\n",
+            "    return user.rows[0] ?? null;\n",
+            "  }\n",
+            "}\n",
+        );
+        let chunks = chunk_file("database_client.ts", code);
+        let symbols: Vec<&str> = chunks.iter().map(|c| c.symbol.as_str()).collect();
+        assert!(
+            symbols.contains(&"UserRepository"),
+            "expected UserRepository in {:?}",
+            symbols
+        );
+        assert!(
+            symbols.contains(&"BaseRepository"),
+            "expected BaseRepository in {:?}",
+            symbols
+        );
+    }
+
+    #[test]
+    fn chunk_typescript_detects_types_enums_and_functions() {
+        let code = concat!(
+            "export type UserRole = 'admin' | 'user' | 'guest';\n\n",
+            "export enum LoginState {\n",
+            "  Pending = 'pending',\n",
+            "  Complete = 'complete',\n",
+            "}\n\n",
+            "export function buildUserPayload(id: string, role: UserRole) {\n",
+            "  const payload = { id, role, createdAt: new Date().toISOString() };\n",
+            "  return JSON.stringify(payload);\n",
+            "}\n",
+        );
+        let chunks = chunk_file("auth.ts", code);
+        let symbols: Vec<&str> = chunks.iter().map(|c| c.symbol.as_str()).collect();
+        assert!(symbols.contains(&"UserRole"), "symbols: {:?}", symbols);
+        assert!(symbols.contains(&"LoginState"), "symbols: {:?}", symbols);
+        assert!(
+            symbols.contains(&"buildUserPayload"),
+            "symbols: {:?}",
+            symbols
+        );
+    }
+
+    #[test]
+    fn chunk_javascript_detects_default_export_class() {
+        let code = concat!(
+            "export default class SessionStore {\n",
+            "  constructor(client) {\n",
+            "    this.client = client;\n",
+            "  }\n",
+            "  async save(session) {\n",
+            "    await this.client.set(session.id, JSON.stringify(session));\n",
+            "  }\n",
+            "}\n",
+        );
+        let chunks = chunk_file("session.js", code);
+        let symbols: Vec<&str> = chunks.iter().map(|c| c.symbol.as_str()).collect();
+        assert!(symbols.contains(&"SessionStore"), "symbols: {:?}", symbols);
     }
 
     #[test]
