@@ -185,6 +185,11 @@ pub fn compress_output(s: &str) -> String {
 fn compact_json(s: &str) -> String {
     let trimmed = s.trim();
 
+    // Case 0: too short to be meaningful JSON
+    if trimmed.len() < 2 {
+        return s.to_string();
+    }
+
     // Case 1: entire output is a JSON object or array
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
@@ -200,13 +205,14 @@ fn compact_json(s: &str) -> String {
         }
     }
 
-    // Case 2: NDJSON — every non-empty line is a JSON object
+    // Case 2: NDJSON — every non-empty line is a JSON object or array
     let lines: Vec<&str> = trimmed.lines().collect();
     if lines.len() > 1
         && lines.iter().all(|l| {
             let t = l.trim();
             t.is_empty()
                 || (t.starts_with('{') && serde_json::from_str::<serde_json::Value>(t).is_ok())
+                || (t.starts_with('[') && serde_json::from_str::<serde_json::Value>(t).is_ok())
         })
     {
         let compacted: String = lines
@@ -324,6 +330,7 @@ fn collapse_blank_lines(s: &str) -> String {
 
 /// Group consecutive identical lines that appear 3+ times into one line + annotation.
 /// Lines appearing 1–2 times in a row are left unchanged.
+/// Also performs fuzzy grouping for common patterns (e.g., progress bars, file listings).
 fn group_repeated_lines(s: &str) -> String {
     let trailing_newline = s.ends_with('\n');
     let source = if trailing_newline {
@@ -336,6 +343,8 @@ fn group_repeated_lines(s: &str) -> String {
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
+
+        // 1. Exact match grouping
         let mut end = i + 1;
         while end < lines.len() && lines[end] == line {
             end += 1;
@@ -345,18 +354,68 @@ fn group_repeated_lines(s: &str) -> String {
             result.push_str(line);
             result.push('\n');
             result.push_str(&format!("[repeated {}x]\n", count - 1));
-        } else {
-            for _ in 0..count {
+            i = end;
+            continue;
+        }
+
+        // 2. Fuzzy grouping (similarity)
+        if let Some(fuzzy_count) = try_fuzzy_group(&lines, i) {
+            if fuzzy_count >= 3 {
                 result.push_str(line);
-                result.push('\n');
+                result.push_str(" ... (and ");
+                result.push_str(&(fuzzy_count - 1).to_string());
+                result.push_str(" similar lines)\n");
+                i += fuzzy_count;
+                continue;
             }
         }
-        i = end;
+
+        result.push_str(line);
+        result.push('\n');
+        i += 1;
     }
     if !trailing_newline && result.ends_with('\n') {
         result.pop();
     }
     result
+}
+
+fn try_fuzzy_group(lines: &[&str], start: usize) -> Option<usize> {
+    let line = lines[start];
+    if line.len() < 5 {
+        return None;
+    }
+
+    // Patterns for fuzzy grouping:
+    let prefixes = [
+        "Removing ",
+        "Compiling ",
+        "Installing ",
+        "Download ",
+        "Extracting ",
+        "Checked ",
+        "test ",
+    ];
+
+    for prefix in prefixes {
+        if line.starts_with(prefix) {
+            if prefix == "test " && !line.contains(" ... ok") {
+                continue;
+            }
+            let mut count = 1;
+            for next_idx in start + 1..lines.len() {
+                if lines[next_idx].starts_with(prefix) {
+                    count += 1;
+                } else {
+                    break;
+                }
+            }
+            if count >= 3 {
+                return Some(count);
+            }
+        }
+    }
+    None
 }
 
 fn find_repo_root() -> PathBuf {
