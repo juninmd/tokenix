@@ -11,7 +11,7 @@ use crate::chunker::{count_tokens, generate_outline, should_index};
 use crate::hook::MAX_INDEX_AGE_SECS;
 use crate::indexer;
 use crate::query::{build_task_context, query_index};
-use crate::store::index_staleness;
+use crate::store::{count_stats, index_staleness, open_db};
 
 struct ReadRow {
     path: String,
@@ -145,7 +145,7 @@ pub fn run_benchmark(
 
     print_verdict(&read_rows, &workflow_rows, &query_rows, &cmd_rows);
     if let Some(path) = codegraph_path {
-        print_codegraph_comparison(path, &workflow_rows, &query_rows, &context_rows)?;
+        print_codegraph_comparison(repo_root, path, &workflow_rows, &query_rows, &context_rows)?;
     } else {
         print_internal_graph_stats(repo_root)?;
     }
@@ -958,6 +958,7 @@ fn print_verdict(
 }
 
 fn print_codegraph_comparison(
+    repo_root: &Path,
     codegraph_path: &Path,
     workflow_rows: &[WorkflowRow],
     _query_rows: &[QueryRow],
@@ -965,7 +966,6 @@ fn print_codegraph_comparison(
 ) -> Result<()> {
     let flow_raw: usize = workflow_rows.iter().map(|r| r.raw_tokens).sum();
     let flow_tokenix: usize = workflow_rows.iter().map(|r| r.total_tokens).sum();
-    let codegraph_files = count_indexable_files(codegraph_path)?;
     let readme = read_readme(codegraph_path);
     let codegraph_cli = [
         codegraph_path.join("dist/bin/codegraph.js"),
@@ -973,6 +973,13 @@ fn print_codegraph_comparison(
     ]
     .into_iter()
     .find(|path| path.exists());
+    let tokenix_stats = open_db(repo_root, false)?
+        .as_ref()
+        .and_then(|conn| count_stats(conn).ok());
+    let codegraph_stats = codegraph_cli
+        .as_ref()
+        .and_then(|cli| codegraph_status(cli, repo_root).ok())
+        .flatten();
 
     println!("{}", "6. CodeGraph Comparison".bold());
     if codegraph_cli.is_some() {
@@ -1039,9 +1046,33 @@ fn print_codegraph_comparison(
     );
     println!(
         "  {:<28} {:<28} {:<28}",
-        "Indexable files",
-        format_num(count_indexable_files(Path::new("."))? as i64),
-        format_num(codegraph_files as i64)
+        "Indexed files",
+        tokenix_stats
+            .as_ref()
+            .map(|stats| format_num(stats.files))
+            .unwrap_or_else(|| "n/a".to_string()),
+        codegraph_stats
+            .as_ref()
+            .map(|stats| format_num(stats.files))
+            .unwrap_or_else(|| "n/a".to_string())
+    );
+    println!(
+        "  {:<28} {:<28} {:<28}",
+        "Index shape",
+        tokenix_stats
+            .as_ref()
+            .map(|stats| format!("{} chunks", format_num(stats.chunks)))
+            .unwrap_or_else(|| "n/a".to_string()),
+        codegraph_stats
+            .as_ref()
+            .map(|stats| {
+                format!(
+                    "{} nodes / {} edges",
+                    format_num(stats.nodes),
+                    format_num(stats.edges)
+                )
+            })
+            .unwrap_or_else(|| "n/a".to_string())
     );
     println!(
         "  {:<28} {:<28} {:<28}",
@@ -1053,29 +1084,35 @@ fn print_codegraph_comparison(
     Ok(())
 }
 
-fn count_indexable_files(root: &Path) -> Result<usize> {
-    if !root.exists() {
-        return Ok(0);
-    }
-    let mut count = 0usize;
-    count_files_rec(root, &mut count)?;
-    Ok(count)
+struct CodeGraphStatus {
+    files: i64,
+    nodes: i64,
+    edges: i64,
 }
 
-fn count_files_rec(dir: &Path, count: &mut usize) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !matches!(name, ".git" | "node_modules" | "target" | "dist" | "build") {
-                count_files_rec(&path, count)?;
-            }
-        } else if should_index(&path) {
-            *count += 1;
-        }
+fn codegraph_status(cli: &Path, repo_root: &Path) -> Result<Option<CodeGraphStatus>> {
+    let out = Command::new("node")
+        .arg(cli)
+        .arg("status")
+        .arg(repo_root)
+        .output()?;
+    if !out.status.success() {
+        return Ok(None);
     }
-    Ok(())
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    Ok(Some(CodeGraphStatus {
+        files: parse_status_count(&stdout, "Files:").unwrap_or(0),
+        nodes: parse_status_count(&stdout, "Nodes:").unwrap_or(0),
+        edges: parse_status_count(&stdout, "Edges:").unwrap_or(0),
+    }))
+}
+
+fn parse_status_count(stdout: &str, label: &str) -> Option<i64> {
+    stdout
+        .lines()
+        .find_map(|line| line.split_once(label).map(|(_, value)| value))
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.replace(',', "").parse().ok())
 }
 
 fn read_readme(root: &Path) -> String {
