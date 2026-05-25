@@ -144,18 +144,18 @@ tokenix now includes advanced output filtering logic inspired by RTK (Rust Token
 
 ### Benchmark Results
 
-We measure **tokenix** against pure **Vanilla** reads, **RTK** command filtering, and **CodeGraph (CGC)** structural search. `N/A` means the tool does not provide that category of function, not that the measurement failed.
+We measure **tokenix** against pure **Vanilla** reads and **RTK** command filtering. `N/A` means the tool does not provide that category of function, not that the measurement failed.
 
-| Metric | **tokenix** | **RTK** | **CodeGraph** | **Vanilla** |
-| :--- | :---: | :---: | :---: | :---: |
-| **Large-file read reduction** | **84.7% saved** | N/A | N/A | 0% |
-| **Targeted workflow reduction** | **67.2% saved** | N/A | N/A | 0% |
-| **Context tokens, avg** | **435** | N/A | 591 | 5,050 |
-| **Context homologation** | **4/4** | N/A | **4/4** | **4/4** |
-| **Context latency, avg** | **65ms** | N/A | 195ms | N/A |
-| **Semantic quality** | **Hit@1 6/7, Hit@3 7/7** | N/A | N/A | N/A |
-| **Command compression** | **53.0% saved** | 9.8% saved | N/A | 0% |
-| **Command compression vs RTK** | **4/4 equal or lower tokens** | baseline | N/A | N/A |
+| Metric | **tokenix** | **RTK** | **Vanilla** |
+| :--- | :---: | :---: | :---: |
+| **Large-file read reduction** | **84.8% saved** | N/A | 0% |
+| **Targeted workflow reduction** | **67.2% saved** | N/A | 0% |
+| **Context tokens, avg** | **435** | N/A | 5,050 |
+| **Context homologation** | **4/4** | N/A | **4/4** |
+| **Context latency, avg** | **11ms** | N/A | N/A |
+| **Semantic quality** | **Hit@1 3/4, Hit@3 4/4** | N/A | N/A |
+| **Command compression** | **63.0% saved** | 9.8% saved | 0% |
+| **Command compression vs RTK** | **4/4 equal or lower tokens** | baseline | N/A |
 
 ### Capability Matrix
 
@@ -176,7 +176,7 @@ This table compares what each tool is designed to do. It is intentionally separa
 | **Savings analytics** | Yes | Yes | No | No |
 | **MCP support** | Yes | No | Yes | No |
 
-*Results from `cargo run -- benchmark --refresh-index --compare-codegraph D:\Solutions\pessoal\codegraph` on May 25, 2026.*
+*Results from `cargo run --release -- benchmark --refresh-index` on May 25, 2026.*
 
 ### Methodology
 
@@ -189,7 +189,12 @@ This table compares what each tool is designed to do. It is intentionally separa
 ### Reproduce it
 
 ```bash
-cargo run -- benchmark --refresh-index --compare-codegraph D:\Solutions\pessoal\codegraph
+cargo run --release -- benchmark --refresh-index
+```
+
+To include a local CodeGraph comparison:
+```bash
+cargo run --release -- benchmark --refresh-index --compare-codegraph /path/to/codegraph
 ```
 
 
