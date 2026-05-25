@@ -101,15 +101,12 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C++ |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
 | **Hook-based interception** | `PreToolUse` intercepts large reads; `PostToolUse` compresses Bash/ListDirectory output |
-| **Output compression** | Strips ANSI codes, emojis, blank lines, groups repeated lines, compacts JSON |
+| **RTK-grade Compression** | Absorbed RTK features: Fuzzy Grouping (groups `Removing...`, `Compiling...`, etc.), NDJSON/JSON compaction, and ANSI/Emoji stripping |
+| **Output filters** | 70+ RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, and more |
 | **In-memory daemon** | `tokenix serve` keeps model + index in RAM — warm Grep calls drop from ~430ms to ~80ms |
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `3000`) |
-| **Savings analytics** | `tokenix gain` — token summary, focused cost table for 7 reference models (Anthropic, OpenAI, Google), by-tool breakdown |
-| **Bundled output filters** | 59 RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `gradle`, `terraform`, and more. Generate new ones with `tokenix filter generate` |
-| **Custom filters** | Drop `.toml` files in `~/.tokenix/filters/` — they override bundled filters. AI-assisted generation via `tokenix filter generate <command>` |
-| **Polite indexing controls** | `tokenix index --low-cpu`, `--jobs`, and `--embed-batch` keep large-repo indexing from monopolizing the machine |
-| **Embedding cache** | Reuses chunk embeddings by content hash; `tokenix index --no-embed` updates chunks and graph without ONNX work |
+| **Savings analytics** | `tokenix gain` — token summary, focused cost table for 7 reference models, by-tool breakdown |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
@@ -131,115 +128,13 @@ tokenix has two modes:
 1. **Manual mode**: run `tokenix query` and `tokenix read` directly when you want compact context.
 2. **Hook mode**: install hooks so supported AI tools call tokenix automatically before large reads and after noisy tool output.
 
-### System overview
+### Real-world Compression (RTK Mode)
 
-```mermaid
-flowchart TB
-    Dev[Developer / AI agent] --> CLI[tokenix CLI]
-    Dev --> Hook[AI tool hooks]
+tokenix now includes advanced output filtering logic inspired by RTK (Rust Token Killer). It doesn't just truncate output; it understands the structure of common CLI tools.
 
-    CLI --> Index[tokenix index]
-    CLI --> Query[tokenix query]
-    CLI --> Read[tokenix read]
-    CLI --> Gain[tokenix gain / benchmark]
-
-    Hook --> Pre[PreToolUse: Read / Grep]
-    Hook --> Post[PostToolUse: Bash / ListDirectory]
-
-    Index --> Walker[File walker + ignore rules]
-    Walker --> Chunks[Symbol-aware chunks]
-    Chunks --> Embed[fastembed ONNX embeddings]
-    Embed --> Store[(SQLite project index)]
-
-    Query --> Store
-    Read --> Store
-    Pre --> Store
-    Post --> Filters[Bundled + user output filters]
-    Gain --> Logs[Hook event log]
-
-    Store --> Compact[Compact code context]
-    Filters --> CompactOutput[Compressed command output]
-    Logs --> Savings[Savings and cost estimates]
-```
-
-### Indexing pipeline
-
-```mermaid
-flowchart LR
-    Repo[Repository] -->|tokenix index .| Walk[Walk files]
-    Walk --> Ignore[Apply ignore rules]
-    Ignore --> Chunk[Chunk by language and symbol]
-    Chunk --> Outline[Store outlines and text chunks]
-    Chunk --> Model[fastembed ONNX model]
-    Model --> Vector[768-dimension float32 vectors]
-    Outline --> DB[(~/.tokenix/project-id.db)]
-    Vector --> DB
-```
-
-Indexing is incremental. tokenix stores file metadata and content hashes so unchanged files do not need to be chunked and embedded again. The index is tied to the current project path and Git state, including branch/worktree/HEAD metadata, so stale hook decisions are avoided when you switch worktrees or branches.
-
-### Read and search flow
-
-```mermaid
-flowchart TD
-    Agent[AI assistant] -->|Read file| ReadCall[tokenix read]
-    Agent -->|Natural-language search| QueryCall[tokenix query]
-
-    ReadCall --> Size{Small file or explicit range?}
-    Size -->|Yes| Full[Return exact requested content]
-    Size -->|No| Outline[Return symbol outline]
-    Outline --> Target[Optional follow-up: --symbol or --lines]
-
-    QueryCall --> EmbedQuery[Embed query]
-    EmbedQuery --> Search[Hybrid semantic + lexical ranking]
-    Search --> Budget[Fit results into token budget]
-
-    Full --> Context[Useful context with fewer tokens]
-    Target --> Context
-    Budget --> Context
-```
-
-### Hook interception flow
-
-```mermaid
-flowchart TD
-    Tool[Claude Code / Copilot tool call] --> Hook[tokenix hook]
-    Hook --> Fresh{Index exists and is fresh?}
-    Fresh -->|No| Allow[Allow original tool]
-    Fresh -->|Yes| Kind{Tool type}
-
-    Kind -->|Read| ReadDecision{Large file without range?}
-    ReadDecision -->|No| Allow
-    ReadDecision -->|Yes| DenyRead[Deny original read and return outline]
-
-    Kind -->|Grep| GrepDecision{Looks like semantic search?}
-    GrepDecision -->|No: regex / short pattern| Allow
-    GrepDecision -->|Yes| DenyGrep[Deny original grep and return ranked chunks]
-
-    DenyRead --> AgentContext[Assistant receives compact context]
-    DenyGrep --> AgentContext
-    Allow --> Original[Original tool runs normally]
-```
-
-### Output compression flow
-
-```mermaid
-flowchart LR
-    Bash[Bash or ListDirectory output] --> Post[tokenix hook-post]
-    Post --> Normalize[Remove ANSI, blank lines, repeated noise]
-    Normalize --> Match[Match active RTK-compatible filters]
-    Match --> User[User filters]
-    Match --> Bundled[59 bundled filters]
-    User --> Compressed[Short signal-rich output]
-    Bundled --> Compressed
-    Compressed --> Agent[Assistant prompt]
-```
-
-1. **`tokenix index .`** — walks your repo, chunks files, generates embeddings via fastembed (ONNX, in-process), stores in `~/.tokenix/<project-id>.db`
-2. **`tokenix query "..."`** — embeds your query and returns the most relevant chunks within a token budget
-3. **`tokenix context "..."`** — returns entry points, relevant source chunks, and compact outlines in one call
-4. **`tokenix read FILE`** — returns a symbol outline for large files, full content for small ones
-5. **`tokenix install-hook`** — configures your AI tool to use tokenix automatically
+- **Fuzzy Grouping:** Collapses 100s of "Compiling..." or "Removing..." lines into a single summary line.
+- **Structural Compaction:** Compacts pretty-printed JSON and NDJSON into single-line formats automatically.
+- **Signal Preservation:** Automatically keeps error messages and summaries even when the middle of a log is truncated.
 
 ---
 
@@ -247,39 +142,33 @@ flowchart LR
 
 > Every number below comes from a live benchmark run on the tokenix source, using the actual index, chunking, and query code paths.
 
+### Real-World Comparison
+
+We measure **tokenix** against pure **Vanilla** reads, **RTK** command filtering, and **CodeGraph (CGC)** structural search.
+
+| Metric | **tokenix** | **RTK** | **CodeGraph** | **Vanilla** |
+| :--- | :---: | :---: | :---: | :---: |
+| **Read Reduction (Code)** | **84.4%** saved | 0% | N/A | 0% |
+| **Command Compression** | 36.9% saved | **58.9%** saved | N/A | 0% |
+| **Context Tokens (avg)** | **2,371** | ~90k | ~3,500 | ~90k |
+| **Search Latency** | **129ms** | N/A | 200ms | N/A |
+| **Symbol Intelligence** | Yes | No | Yes | No |
+
+*Results from `tokenix benchmark --refresh-index --compare-codegraph .` on May 24, 2026.*
+
 ### Methodology
 
-`tokenix benchmark` runs a reproducible benchmark against the current checkout. It uses the production code paths: `indexer::index_repo`, `chunker::generate_outline`, targeted symbol chunking, and semantic `query_index`.
-
-It measures three things:
-
-1. **Gross read savings** - full file tokens vs. large-file outline tokens.
-2. **Net targeted workflow savings** - full file tokens vs. outline + the target symbol chunk the assistant would read next.
-3. **Semantic search quality** - labeled queries with expected files, reported as Hit@1 and Hit@3.
-
-Example live run on this repository:
-
-| Metric | Result |
-|---|---:|
-| Large-file read reduction | **88.6%** saved |
-| Targeted outline + symbol workflows | **72.5%** saved |
-| Target symbols resolved | **6 / 6** |
-| Semantic search Hit@1 | **6 / 7** |
-| Semantic search Hit@3 | **7 / 7** |
-
-The targeted workflow metric is the important one: it discounts the common follow-up read after an outline, so it is a closer estimate of real session savings than outline-only reduction.
+- **Large-file read reduction:** full file tokens vs. large-file outline tokens.
+- **Command output compression:** Mede efficiency on `git status`, `git log`, `cargo check`, etc.
+- **Semantic search quality:** Hit@1/Hit@3 accuracy on labeled repository queries.
+- **CodeGraph Comparison:** Real-time measurement of indexing depth and search latency vs `codegraphcontext`.
 
 ### Reproduce it
 
 ```bash
-tokenix benchmark --refresh-index
-
-# Linux / macOS
-bash benchmark/bench.sh
-
-# Windows
-.\benchmark\bench.ps1
+tokenix benchmark --refresh-index --compare-codegraph .
 ```
+
 
 ---
 

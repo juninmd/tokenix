@@ -611,43 +611,47 @@ struct RealCodeGraphStats {
     indexed_files: usize,
     functions: usize,
     search_latency_ms: u128,
+    context_tokens: usize,
 }
 
 fn measure_real_codegraph(_repo_root: &Path) -> Option<RealCodeGraphStats> {
     let cgc_path = "C:\\Users\\jr_ac\\AppData\\Roaming\\Python\\Python314\\Scripts\\cgc.exe";
     let scripts_path = "C:\\Users\\jr_ac\\AppData\\Roaming\\Python\\Python314\\Scripts";
-    
-    // Check if cgc works and get stats
+
+    let env_path = format!("{};{}", scripts_path, std::env::var("PATH").unwrap_or_default());
+
+    // 1. Get overall stats
     let stats_out = if cfg!(windows) {
         std::process::Command::new("cmd")
             .args(&["/C", cgc_path, "stats"])
-            .env("PATH", format!("{};{}", scripts_path, std::env::var("PATH").unwrap_or_default()))
+            .env("PATH", &env_path)
             .output()
     } else {
         std::process::Command::new(cgc_path)
             .arg("stats")
             .output()
     }.ok()?;
-    
+
     let stats_str = String::from_utf8_lossy(&stats_out.stdout);
-    
-    // Parse counts from cgc stats output table
     let indexed_files = parse_stat(&stats_str, "Files");
     let functions = parse_stat(&stats_str, "Functions");
-    
-    // Measure search latency
+
+    // 2. Measure search latency and context tokens
     let start = Instant::now();
-    let _search_out = if cfg!(windows) {
+    let query_out = if cfg!(windows) {
         std::process::Command::new("cmd")
-            .args(&["/C", cgc_path, "find", "name", "run_hook"])
-            .env("PATH", format!("{};{}", scripts_path, std::env::var("PATH").unwrap_or_default()))
+            .args(&["/C", cgc_path, "query", "MATCH (n:Function) RETURN n.source LIMIT 3"])
+            .env("PATH", &env_path)
             .output()
     } else {
         std::process::Command::new(cgc_path)
-            .args(&["find", "name", "run_hook"])
+            .args(&["query", "MATCH (n:Function) RETURN n.source LIMIT 3"])
             .output()
-    };
+    }.ok()?;
     let search_latency_ms = start.elapsed().as_millis();
+
+    let context_str = String::from_utf8_lossy(&query_out.stdout);
+    let context_tokens = count_tokens(&context_str);
 
     if indexed_files == 0 && functions == 0 {
         return None;
@@ -657,10 +661,9 @@ fn measure_real_codegraph(_repo_root: &Path) -> Option<RealCodeGraphStats> {
         indexed_files,
         functions,
         search_latency_ms,
+        context_tokens,
     })
 }
-
-
 
 fn parse_stat(out: &str, key: &str) -> usize {
     // Look for lines like "│ Files        │    13 │"
@@ -687,26 +690,34 @@ fn print_codegraph_comparison(
 
     println!("{}", "4. Real CodeGraph Comparison (cgc)".bold());
     if real_stats.is_some() {
-        println!("  Status: {}", "Connected (KuzuDB)".green());
+        println!("  Status: {}", "Connected (FalkorDB)".green());
     } else {
         println!("  Status: {}", "Tool not found or failed (manual fallback used)".yellow());
     }
-    
+
     println!("  {}", "-".repeat(91).dimmed());
     println!(
         "  {:<28} {:<28} {:<28}",
         "Capability", "tokenix (measured)", "CodeGraph (measured/est)"
     );
     println!("  {}", "-".repeat(91).dimmed());
-    
+
     let cgc_latency = real_stats.as_ref().map(|s| format!("{}ms", s.search_latency_ms)).unwrap_or_else(|| "200ms (est)".to_string());
     let cgc_nodes = real_stats.as_ref().map(|s| format_num(s.functions as i64)).unwrap_or_else(|| "30 (partial)".to_string());
-    let cgc_files = real_stats.as_ref().map(|s| format_num(s.indexed_files as i64)).unwrap_or_else(|| "13 (partial)".to_string());
+    let cgc_tokens = real_stats.as_ref().map(|s| format_num(s.context_tokens as i64)).unwrap_or_else(|| "3,500 (est)".to_string());
+
+    let tokenix_avg_tokens = query_rows.iter().map(|r| r.tokens).sum::<usize>() / query_rows.len();
 
     println!(
         "  {:<28} {:<28} {:<28}",
-        "Token reduction",
-        format!("{:.1}% workflow", saved_pct(flow_raw, flow_tokenix)),
+        "Context Tokens (avg)",
+        format_num(tokenix_avg_tokens as i64),
+        cgc_tokens
+    );
+    println!(
+        "  {:<28} {:<28} {:<28}",
+        "Token reduction (workflow)",
+        format!("{:.1}%", saved_pct(flow_raw, flow_tokenix)),
         "not applicable (graph-based)"
     );
     println!(
@@ -721,15 +732,10 @@ fn print_codegraph_comparison(
         format_num(count_tokenix_functions(codegraph_path).unwrap_or(556) as i64),
         cgc_nodes
     );
-    println!(
-        "  {:<28} {:<28} {:<28}",
-        "Indexed Files",
-        format_num(count_indexable_files(codegraph_path).unwrap_or(98) as i64),
-        cgc_files
-    );
     println!();
     Ok(())
 }
+
 
 
 
