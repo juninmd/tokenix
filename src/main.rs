@@ -445,18 +445,17 @@ fn configure_index_limits(low_cpu: bool, jobs: Option<usize>, embed_batch: Optio
     if low_cpu {
         set_env_override("RAYON_NUM_THREADS", jobs.unwrap_or(1).max(1));
         set_env_override("OMP_NUM_THREADS", 1);
-        set_env_override("TOKENIX_EMBED_BATCH", embed_batch.unwrap_or(2).max(1));
-        set_env_default("TOKENIX_EMBED_SLEEP_MS", 25);
+        set_env_override("TOKENIX_EMBED_BATCH", embed_batch.unwrap_or(8).max(1));
         return;
     }
 
-    // Keep the default polite. Users can raise this with --jobs / env vars.
+    // High-CPU profile: more parallel workers, larger ONNX batches.
     set_env_default("RAYON_NUM_THREADS", jobs.unwrap_or(2).max(1));
     set_env_default("OMP_NUM_THREADS", 1);
     if let Some(batch) = embed_batch {
         set_env_override("TOKENIX_EMBED_BATCH", batch.max(1));
     } else {
-        set_env_default("TOKENIX_EMBED_BATCH", 4);
+        set_env_default("TOKENIX_EMBED_BATCH", 32);
     }
 }
 
@@ -464,7 +463,7 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result
     let repo_root = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     if if_stale && !force {
-        let staleness = store::index_staleness(&repo_root, hook::MAX_INDEX_AGE_SECS);
+        let staleness = store::index_staleness(&repo_root);
         if !staleness.stale {
             return Ok(());
         }

@@ -198,7 +198,6 @@ where
         .par_iter()
         .map(|(abs, rel)| {
             let r = chunk_only(abs, rel, options.force, &existing);
-            pb.set_message(rel.to_string());
             pb.inc(1);
             r
         })
@@ -243,7 +242,7 @@ where
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(4);
+        .unwrap_or(16);
     let embed_sleep = std::env::var("TOKENIX_EMBED_SLEEP_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -291,11 +290,12 @@ where
         }
     }
 
-    // Phase 5: write to SQLite
+    // Phase 5: write to SQLite in a single transaction
     let mut indexed = 0usize;
     let mut skipped = 0usize;
     let mut errors = 0usize;
 
+    let _ = conn.execute_batch("BEGIN IMMEDIATE");
     for (fi, f) in chunked.iter().enumerate() {
         if f.skipped {
             skipped += 1;
@@ -321,7 +321,6 @@ where
 
         let _ = delete_chunks_for_file(&conn, file_id);
 
-        let _ = conn.execute_batch("BEGIN IMMEDIATE");
         for (ci, chunk) in f.chunks.iter().enumerate() {
             let chunk_id = match insert_chunk(
                 &conn,
@@ -343,25 +342,29 @@ where
                 let _ = insert_embedding(&conn, chunk_id, embedding);
             }
         }
-        let _ = conn.execute_batch("COMMIT");
 
         indexed += 1;
     }
+    let _ = conn.execute_batch("COMMIT");
 
     // Phase 6: clean up removed files from index
-    let mut walked_files = std::collections::HashSet::new();
-    for (_, rel) in &files {
-        walked_files.insert(rel.clone());
-    }
+    let walked_files: std::collections::HashSet<&str> =
+        files.iter().map(|(_, r)| r.as_str()).collect();
+    let mut removed = false;
     for (rel_path, (file_id, _, _)) in existing.iter() {
-        if !walked_files.contains(rel_path) {
+        if !walked_files.contains(rel_path.as_str()) {
             progress_cb(&format!("removing deleted file from index: {}", rel_path));
             let _ = crate::store::delete_file(&conn, *file_id);
+            removed = true;
         }
     }
 
-    progress_cb("rebuilding symbol graph...");
-    crate::graph::rebuild_symbol_graph(&conn)?;
+    if indexed > 0 || removed {
+        progress_cb("rebuilding symbol graph...");
+        crate::graph::rebuild_symbol_graph(&conn)?;
+    } else {
+        progress_cb("no changes — skipping graph rebuild");
+    }
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

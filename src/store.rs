@@ -888,7 +888,7 @@ pub fn get_index_age(repo_root: &Path) -> Option<f64> {
     Some(now - indexed_at)
 }
 
-pub fn index_staleness(repo_root: &Path, max_age_secs: f64) -> IndexStaleness {
+pub fn index_staleness(repo_root: &Path) -> IndexStaleness {
     let conn = match open_db(repo_root, false) {
         Ok(Some(c)) => c,
         _ => {
@@ -899,14 +899,7 @@ pub fn index_staleness(repo_root: &Path, max_age_secs: f64) -> IndexStaleness {
         }
     };
 
-    let indexed_at = meta_value(&conn, "indexed_at").and_then(|v| v.parse::<f64>().ok());
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_secs_f64());
-    let age_secs = indexed_at.and_then(|ts| now.map(|n| n - ts));
-
-    if indexed_at.is_none() {
+    if meta_value(&conn, "indexed_at").is_none() {
         return IndexStaleness {
             stale: true,
             reason: "missing indexed_at".to_string(),
@@ -928,15 +921,6 @@ pub fn index_staleness(repo_root: &Path, max_age_secs: f64) -> IndexStaleness {
                     reason: "missing git fingerprint".to_string(),
                 }
             }
-        }
-    }
-
-    if let Some(age) = age_secs {
-        if age > max_age_secs {
-            return IndexStaleness {
-                stale: true,
-                reason: format!("stale ({}s old)", age as i64),
-            };
         }
     }
 

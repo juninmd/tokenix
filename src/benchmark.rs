@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use crate::chunker::{count_tokens, generate_outline, should_index};
-use crate::hook::MAX_INDEX_AGE_SECS;
+
 use crate::indexer;
 use crate::query::{build_task_context, query_index};
 use crate::store::{count_stats, index_staleness, open_db};
@@ -552,7 +552,7 @@ fn print_internal_graph_stats(repo_root: &Path) -> Result<()> {
 }
 
 fn index_needs_refresh(repo_root: &Path) -> bool {
-    index_staleness(repo_root, MAX_INDEX_AGE_SECS).stale
+    index_staleness(repo_root).stale
 }
 
 fn collect_benchmark_files(repo_root: &Path) -> Result<Vec<PathBuf>> {
