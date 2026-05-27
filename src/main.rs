@@ -147,6 +147,15 @@ enum Commands {
         depth: usize,
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
+        #[arg(long, help = "Output format: text | html", default_value = "text")]
+        format: String,
+        #[arg(
+            short,
+            long,
+            help = "Output file path for html format",
+            default_value = "impact.html"
+        )]
+        output: String,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -360,8 +369,10 @@ fn main() -> Result<()> {
             symbol,
             depth,
             limit,
+            format,
+            output,
             path,
-        } => cmd_impact(&symbol, depth, limit, &path),
+        } => cmd_impact(&symbol, depth, limit, &format, &output, &path),
         Commands::RebuildGraph { path } => cmd_rebuild_graph(&path),
         Commands::Gain { path, history } => cmd_gain(&path, history),
         Commands::Benchmark {
@@ -648,13 +659,27 @@ fn cmd_graph_relations(symbol: &str, limit: usize, path: &Path, callers: bool) -
     Ok(())
 }
 
-fn cmd_impact(symbol: &str, depth: usize, limit: usize, path: &Path) -> Result<()> {
+fn cmd_impact(
+    symbol: &str,
+    depth: usize,
+    limit: usize,
+    format_str: &str,
+    output: &str,
+    path: &Path,
+) -> Result<()> {
     let conn = open_existing_index(path)?;
     let relations = store::graph_impact(&conn, symbol, depth, limit)?;
-    println!(
-        "{}",
-        graph::format_relations(&relations, &format!("Impact graph for `{symbol}`"))
-    );
+    if format_str.eq_ignore_ascii_case("html") {
+        let html =
+            graph::export_relations_to_html(&relations, &format!("Impact graph for `{symbol}`"));
+        std::fs::write(output, html)?;
+        println!("{} HTML graph exported to {}", "ok".green(), output);
+    } else {
+        println!(
+            "{}",
+            graph::format_relations(&relations, &format!("Impact graph for `{symbol}`"))
+        );
+    }
     Ok(())
 }
 

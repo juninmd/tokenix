@@ -91,6 +91,34 @@ pub fn load_user_filters_named() -> Vec<(String, FilterDef)> {
     result
 }
 
+pub fn load_local_filters_named() -> Vec<(String, FilterDef)> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = crate::store::find_project_root(&cwd);
+    let dir = root.join(".tokenix").join("filters");
+    if !dir.exists() {
+        return vec![];
+    }
+    let mut result = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    result.extend(parse_filter_file_named(&content));
+                }
+            }
+        }
+    }
+    result
+}
+
+pub fn load_local_filters() -> Vec<FilterDef> {
+    load_local_filters_named()
+        .into_iter()
+        .map(|(_, f)| f)
+        .collect()
+}
+
 pub fn load_bundled_filters() -> Vec<FilterDef> {
     load_bundled_filters_named()
         .into_iter()
@@ -110,14 +138,23 @@ pub fn load_bundled_filters_named() -> Vec<(String, FilterDef)> {
 }
 
 pub fn load_active_filters() -> Vec<ActiveFilter> {
-    let mut result: Vec<ActiveFilter> = load_user_filters_named()
+    let mut result: Vec<ActiveFilter> = load_local_filters_named()
         .into_iter()
         .map(|(name, filter)| ActiveFilter {
             name,
-            source: "user",
+            source: "local",
             filter,
         })
         .collect();
+    result.extend(
+        load_user_filters_named()
+            .into_iter()
+            .map(|(name, filter)| ActiveFilter {
+                name,
+                source: "user",
+                filter,
+            }),
+    );
     result.extend(
         load_bundled_filters_named()
             .into_iter()
@@ -130,9 +167,10 @@ pub fn load_active_filters() -> Vec<ActiveFilter> {
     result
 }
 
-/// Returns user filters (priority) merged with bundled filters as fallback.
+/// Returns local filters (highest priority), then user filters, then bundled filters as fallback.
 pub fn load_all_filters() -> Vec<FilterDef> {
-    let mut all = load_user_filters();
+    let mut all = load_local_filters();
+    all.extend(load_user_filters());
     all.extend(load_bundled_filters());
     all
 }
@@ -256,4 +294,45 @@ Sample output from `{command} --help` (or similar):
 
 TOML filter:"#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_local_filters() {
+        let temp_dir = std::env::current_dir()
+            .unwrap()
+            .join(".tokenix")
+            .join("filters");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let toml_path = temp_dir.join("test_local_cmd.toml");
+        std::fs::write(
+            &toml_path,
+            r#"
+[filters.test_local_cmd]
+description = "test local"
+match_command = "^test_local_cmd$"
+on_empty = "empty filter output"
+"#,
+        )
+        .unwrap();
+
+        let local_filters = load_local_filters();
+        assert!(!local_filters.is_empty());
+        let found = find_filter("test_local_cmd", &local_filters);
+        assert!(found.is_some());
+        let filter = found.unwrap();
+        assert_eq!(filter.on_empty.as_deref(), Some("empty filter output"));
+
+        // Clean up
+        let _ = std::fs::remove_file(&toml_path);
+        let _ = std::fs::remove_dir_all(
+            std::env::current_dir()
+                .unwrap()
+                .join(".tokenix")
+                .join("filters"),
+        );
+    }
 }

@@ -329,6 +329,129 @@ fn is_keyword(name: &str) -> bool {
     KEYWORDS.iter().any(|kw| kw.eq_ignore_ascii_case(name))
 }
 
+pub fn export_relations_to_html(relations: &[GraphRelation], title: &str) -> String {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut seen_nodes = std::collections::HashSet::new();
+
+    let get_color = |kind: &str| -> &str {
+        match kind.to_lowercase().as_str() {
+            "function" | "method" => "#38bdf8",
+            "struct" | "class" | "interface" => "#34d399",
+            "enum" => "#f472b6",
+            "module" | "file" => "#a78bfa",
+            _ => "#94a3b8",
+        }
+    };
+
+    for rel in relations {
+        if seen_nodes.insert(rel.from.chunk_id) {
+            nodes.push(serde_json::json!({
+                "id": rel.from.chunk_id,
+                "label": format!("{}\n[{}]", rel.from.name, rel.from.kind),
+                "title": format!("{}: L{}-{}", rel.from.path, rel.from.start_line, rel.from.end_line),
+                "color": {
+                    "background": get_color(&rel.from.kind),
+                    "border": "#1e293b"
+                }
+            }));
+        }
+        if seen_nodes.insert(rel.to.chunk_id) {
+            nodes.push(serde_json::json!({
+                "id": rel.to.chunk_id,
+                "label": format!("{}\n[{}]", rel.to.name, rel.to.kind),
+                "title": format!("{}: L{}-{}", rel.to.path, rel.to.start_line, rel.to.end_line),
+                "color": {
+                    "background": get_color(&rel.to.kind),
+                    "border": "#1e293b"
+                }
+            }));
+        }
+        edges.push(serde_json::json!({
+            "from": rel.from.chunk_id,
+            "to": rel.to.chunk_id,
+            "label": rel.reference,
+            "title": format!("Kind: {}", rel.edge_kind)
+        }));
+    }
+
+    let nodes_json = serde_json::to_string_pretty(&nodes).unwrap_or_else(|_| "[]".to_string());
+    let edges_json = serde_json::to_string_pretty(&edges).unwrap_or_else(|_| "[]".to_string());
+
+    format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>Tokenix Impact Graph - {}</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style type="text/css">
+        body {{
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }}
+        #network {{
+            width: 100vw;
+            height: 100vh;
+        }}
+        .header {{
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            background: rgba(15, 23, 42, 0.85);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            backdrop-filter: blur(4px);
+        }}
+        h1 {{ margin: 0 0 5px 0; font-size: 20px; color: #38bdf8; }}
+        p {{ margin: 0; font-size: 12px; color: #94a3b8; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{}</h1>
+        <p>Tokenix Bidirectional Impact Relationship Graph</p>
+    </div>
+    <div id="network"></div>
+    <script type="text/javascript">
+        var nodes = new vis.DataSet({});
+        var edges = new vis.DataSet({});
+        var container = document.getElementById('network');
+        var data = {{ nodes: nodes, edges: edges }};
+        var options = {{
+            nodes: {{
+                shape: 'dot',
+                size: 20,
+                font: {{ color: '#f8fafc', size: 12, face: 'monospace' }},
+                borderWidth: 2,
+                shadow: true
+            }},
+            edges: {{
+                width: 2,
+                color: {{ color: '#64748b', highlight: '#38bdf8' }},
+                arrows: {{ to: {{ enabled: true, scaleFactor: 0.5 }} }},
+                shadow: true,
+                font: {{ color: '#94a3b8', size: 10, align: 'middle' }}
+            }},
+            physics: {{
+                barnesHut: {{ gravitationalConstant: -2000, centralGravity: 0.3, springLength: 120 }},
+                minVelocity: 0.75
+            }}
+        }};
+        var network = new vis.Network(container, data, options);
+    </script>
+</body>
+</html>
+"#,
+        title, title, nodes_json, edges_json
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

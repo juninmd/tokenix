@@ -909,11 +909,36 @@ pub fn index_staleness(repo_root: &Path) -> IndexStaleness {
     if let Some(current) = git_fingerprint(repo_root) {
         match meta_value(&conn, "git_fingerprint") {
             Some(stored) if stored == current => {}
-            Some(_) => {
+            Some(stored) => {
+                if let (Some(stored_head), Some(current_head)) =
+                    (stored.split(':').last(), current.split(':').last())
+                {
+                    if let (Some(diff), Some(status)) = (
+                        git_output(
+                            repo_root,
+                            &["diff", "--name-only", stored_head, current_head],
+                        ),
+                        git_output(repo_root, &["status", "--porcelain"]),
+                    ) {
+                        if diff.trim().is_empty() && status.trim().is_empty() {
+                            if set_meta(&conn, "git_fingerprint", &current).is_ok() {
+                                let now = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs_f64();
+                                let _ = set_meta(&conn, "indexed_at", &now.to_string());
+                                return IndexStaleness {
+                                    stale: false,
+                                    reason: "git HEAD changed but code is identical (fingerprint auto-updated)".to_string(),
+                                };
+                            }
+                        }
+                    }
+                }
                 return IndexStaleness {
                     stale: true,
                     reason: "git HEAD changed".to_string(),
-                }
+                };
             }
             None => {
                 return IndexStaleness {
@@ -1162,5 +1187,63 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, chunk_id);
         assert_eq!(results[0].symbol, "my_cool_function");
+    }
+
+    #[test]
+    fn test_index_staleness_fingerprint_auto_update() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("tokenix-test-{}", now));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Initialize a dummy git repo
+        let run_git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&temp_dir)
+                .output()
+                .unwrap();
+        };
+        run_git(&["init"]);
+        run_git(&["config", "user.name", "Test"]);
+        run_git(&["config", "user.email", "test@example.com"]);
+
+        let test_file = temp_dir.join("test.txt");
+        std::fs::write(&test_file, "hello").unwrap();
+        run_git(&["add", "test.txt"]);
+        run_git(&["commit", "-m", "initial commit"]);
+
+        // Open the tokenix db for this repo
+        let conn = open_db(&temp_dir, true).unwrap().unwrap();
+        init_schema(&conn, 4).unwrap();
+
+        // Write the initial metadata
+        let initial_fp = git_fingerprint(&temp_dir).unwrap();
+        set_meta(&conn, "git_fingerprint", &initial_fp).unwrap();
+        set_meta(&conn, "indexed_at", "12345.6").unwrap();
+        drop(conn);
+
+        // Make another commit with NO file changes (e.g. empty commit)
+        run_git(&["commit", "--allow-empty", "-m", "second commit"]);
+
+        // Now run index_staleness. It should detect that the branch/commit changed but files are identical,
+        // and automatically update the stored fingerprint and mark it as fresh (stale: false)!
+        let staleness = index_staleness(&temp_dir);
+        assert!(
+            !staleness.stale,
+            "Should not be stale since code is identical: {:?}",
+            staleness.reason
+        );
+
+        // Verify the database has the updated fingerprint
+        let conn2 = open_db(&temp_dir, false).unwrap().unwrap();
+        let current_fp = git_fingerprint(&temp_dir).unwrap();
+        let stored_fp = meta_value(&conn2, "git_fingerprint").unwrap();
+        assert_eq!(stored_fp, current_fp);
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }

@@ -51,6 +51,43 @@ pub fn count_tokens(text: &str) -> usize {
     text.len().div_ceil(4)
 }
 
+#[derive(serde::Deserialize, Default)]
+struct ProjectConfig {
+    #[serde(default)]
+    languages: std::collections::HashMap<String, String>,
+}
+
+fn load_project_config() -> Option<ProjectConfig> {
+    let cwd = std::env::current_dir().ok()?;
+    let root = crate::store::find_project_root(&cwd);
+    let config_path = root.join(".tokenix.toml");
+    if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path).ok()?;
+        return toml::from_str(&content).ok();
+    }
+    let config_path2 = root.join("tokenix.toml");
+    if config_path2.exists() {
+        let content = std::fs::read_to_string(&config_path2).ok()?;
+        return toml::from_str(&content).ok();
+    }
+    None
+}
+
+fn detect_custom_lang(path: &Path) -> Option<Lang> {
+    let ext = path.extension().and_then(|e| e.to_str())?.to_lowercase();
+    let config = load_project_config()?;
+    let lang_str = config.languages.get(&ext)?;
+    match lang_str.to_lowercase().as_str() {
+        "rust" => Some(Lang::Rust),
+        "python" => Some(Lang::Python),
+        "typescript" => Some(Lang::TypeScript),
+        "javascript" => Some(Lang::JavaScript),
+        "go" => Some(Lang::Go),
+        "cpp" | "c" => Some(Lang::Cpp),
+        _ => Some(Lang::Generic),
+    }
+}
+
 pub fn should_index(path: &Path) -> bool {
     for component in path.components() {
         let s = component.as_os_str().to_string_lossy();
@@ -64,10 +101,17 @@ pub fn should_index(path: &Path) -> bool {
     }
     // Check extension
     let has_ext = INDEXED_EXTS.iter().any(|ext| name.ends_with(ext));
-    if !has_ext {
-        return false;
+    if has_ext {
+        return true;
     }
-    true
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if let Some(config) = load_project_config() {
+            if config.languages.contains_key(&ext.to_lowercase()) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[derive(Debug)]
@@ -82,6 +126,9 @@ enum Lang {
 }
 
 fn detect_lang(path: &Path) -> Lang {
+    if let Some(lang) = detect_custom_lang(path) {
+        return lang;
+    }
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -863,6 +910,39 @@ mod tests {
         assert!(!should_index(std::path::Path::new("bundle.min.js")));
         assert!(!should_index(std::path::Path::new("app.min.css")));
         assert!(!should_index(std::path::Path::new("source.map")));
+    }
+
+    #[test]
+    fn custom_extension_indexing_and_detection() {
+        // Create a temporary .tokenix.toml in the current directory
+        let toml_path = std::path::Path::new(".tokenix.toml");
+        std::fs::write(
+            &toml_path,
+            r#"
+[languages]
+customrs = "rust"
+custompy = "python"
+"#,
+        )
+        .unwrap();
+
+        // should_index should now accept files with .customrs and .custompy
+        assert!(should_index(std::path::Path::new("src/test.customrs")));
+        assert!(should_index(std::path::Path::new("src/test.custompy")));
+        assert!(!should_index(std::path::Path::new("src/test.unknown")));
+
+        // detect_lang should detect the mapped languages
+        assert!(matches!(
+            detect_lang(std::path::Path::new("src/test.customrs")),
+            Lang::Rust
+        ));
+        assert!(matches!(
+            detect_lang(std::path::Path::new("src/test.custompy")),
+            Lang::Python
+        ));
+
+        // Clean up
+        let _ = std::fs::remove_file(&toml_path);
     }
 
     #[test]
