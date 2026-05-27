@@ -98,12 +98,17 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **One-call MCP context** | `tokenix_context` combines semantic search, entry points, and compact outlines so agents do not burn calls chaining search/read loops |
 | **Graph-aware explore** | `tokenix explore` / `tokenix_explore` returns related symbols, relationship maps, and grouped source in one capped call |
 | **Symbol graph** | `tokenix symbols`, `callers`, `callees`, and `impact` trace relationships between indexed symbols |
+| **Interactive HTML graph** | `tokenix impact --format html` exports a dark-mode vis.js graph with node colours, directional arrows, and physics springs |
 | **Preference memory** | `tokenix memory add/list` stores global and project preferences in editable Markdown; context/explore include saved preferences and capture guidance |
+| **Dynamic language detection** | Map custom file extensions to any built-in parser via a project `.tokenix.toml` — no recompile needed |
 | **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C++ |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
 | **Hook-based interception** | `PreToolUse` intercepts large reads; `PostToolUse` compresses Bash/ListDirectory output |
 | **RTK-grade Compression** | Absorbed RTK features: Fuzzy Grouping (groups `Removing...`, `Compiling...`, etc.), NDJSON/JSON compaction, and ANSI/Emoji stripping |
+| **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
 | **Output filters** | 70+ RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, and more |
+| **Incremental branch indexing** | Branch/HEAD switches with identical code auto-update the git fingerprint without re-indexing |
+| **GPU acceleration (opt-in)** | Compile with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU via ONNX Runtime |
 | **In-memory daemon** | `tokenix serve` keeps model + index in RAM — warm Grep calls drop from ~430ms to ~80ms |
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `1200`) |
@@ -249,6 +254,8 @@ tokenix symbols validate_token
 tokenix callers validate_token
 tokenix callees run_hook
 tokenix impact update_user --depth 2
+tokenix impact update_user --format html                          # dark-mode vis.js graph
+tokenix impact update_user --format html --output update_user.html --depth 3
 tokenix rebuild-graph   # recompute relationships without re-embedding
 ```
 
@@ -358,6 +365,8 @@ tokenix install-hook --tool all
 | `tokenix callers SYMBOL` | Show symbols that call/reference a symbol |
 | `tokenix callees SYMBOL` | Show symbols called/referenced by a symbol |
 | `tokenix impact SYMBOL` | Show bidirectional impact graph around a symbol |
+| `tokenix impact SYMBOL --format html` | Export interactive vis.js HTML graph (dark mode, physics, colour-coded by kind) |
+| `tokenix impact SYMBOL --format html --output FILE.html` | Save HTML graph to a specific path |
 | `tokenix rebuild-graph` | Rebuild graph tables from existing indexed chunks without re-embedding |
 | `tokenix gain` | Token savings analytics with per-model cost table |
 | `tokenix gain --history` | Same, plus last 20 hook events |
@@ -429,17 +438,33 @@ tokenix install-hook --tool all
 | Go | `.go` | `func`, `type` |
 | C / C++ | `.c`, `.cpp`, `.h`, `.hpp`, `.cc`, `.cxx` | `function`, `class`, `struct`, `namespace` |
 | Config / Docs | `.toml`, `.yaml`, `.yml`, `.json`, `.md`, `.txt`, `.sh`, `.bash` | 400-token line blocks |
+| **Custom** | any extension | Mapped to an existing parser via `.tokenix.toml` |
 
 Languages without a symbol-aware chunker (Java, C#, Ruby, Swift, Kotlin, Scala, …) are not indexed — blind line-block chunking produces low-quality search results and is intentionally excluded.
+
+### Custom language mapping
+
+Create a `.tokenix.toml` (or `tokenix.toml`) in the project root:
+
+```toml
+[languages]
+# map custom extensions to existing parsers
+pyi   = "python"    # Python stub files
+mts   = "typescript"  # TypeScript module files
+lua   = "generic"   # use sliding-window chunks
+```
+
+Valid parser values: `rust`, `python`, `typescript`, `javascript`, `go`, `cpp`, `c`, `generic`.
 
 ---
 
 ## 🔧 Output Filters
 
-tokenix compresses `Bash` and `ListDirectory` output via a `PostToolUse` hook before Claude sees it. Claude uses `hook-post` directly, where `exit 2` means "replace the tool output with compressed context". Codex uses a small wrapper that treats post-tool compression as success because Codex reports non-zero post hooks as failures. Filtering happens in two layers:
+tokenix compresses `Bash` and `ListDirectory` output via a `PostToolUse` hook before Claude sees it. Claude uses `hook-post` directly, where `exit 2` means "replace the tool output with compressed context". Codex uses a small wrapper that treats post-tool compression as success because Codex reports non-zero post hooks as failures. Filtering happens in three layers (highest priority first):
 
-1. **Bundled filters** — 59 RTK-compatible TOML filters shipped inside the binary, covering `uv sync`, `cargo build`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, and more. Applied automatically — no setup needed.
-2. **User filters** — drop `.toml` files in `~/.tokenix/filters/`. They take priority over bundled filters.
+1. **Local project filters** — drop `.toml` files in `.tokenix/filters/` inside the repository. Scoped to the project, committed to version control, shared with the team.
+2. **User filters** — drop `.toml` files in `~/.tokenix/filters/`. Take priority over bundled filters, apply to all projects.
+3. **Bundled filters** — 59 RTK-compatible TOML filters shipped inside the binary, covering `uv sync`, `cargo build`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -490,21 +515,36 @@ tokenix filter generate "cargo test"
 ```
 src/
 ├── main.rs        CLI entry (clap), command dispatch, install-hook helpers
-├── chunker.rs     Symbol-aware AST chunking (Tree-sitter) + outline generation
-├── embed.rs       fastembed ONNX: embed_documents(), embed_query() — no server needed
-├── store.rs       SQLite schema, CRUD, FTS5 virtual table, hybrid search (dense + sparse RRF)
+├── chunker.rs     Symbol-aware AST chunking (Tree-sitter) + dynamic language config (.tokenix.toml)
+├── embed.rs       fastembed ONNX: embed_documents(), embed_query() — optional GPU via ort features
+├── store.rs       SQLite schema, CRUD, FTS5, hybrid search, incremental branch fingerprint check
 ├── indexer.rs     File walker + incremental index pipeline (parallel chunking + batch embedding)
 ├── query.rs       Hybrid semantic + sparse FTS5 ranking, token-budget selection, result formatting
+├── graph.rs       Symbol relationship graph + export_relations_to_html() for vis.js HTML output
 ├── hook.rs        PreToolUse handler — Claude-style and Copilot-style JSON input
 ├── daemon.rs      Background TCP server — holds model + in-memory embedding cache
 ├── compress.rs    PostToolUse compression pipeline (Bash/ListDirectory output)
-├── filters.rs     FilterDef, active filter listing, load_user_filters(), load_bundled_filters(), apply_filter()
+├── filters.rs     FilterDef, load_local/user/bundled_filters(), priority merge, apply_filter()
 ├── cmd_filter.rs  `tokenix filter` subcommands (list, active, generate)
 └── gain.rs        Analytics from .tokenix/hook.log — per-model cost table
 
 assets/
 └── filters/       59 RTK-compatible TOML filters, embedded in the binary via rust-embed
 ```
+
+### GPU Acceleration (opt-in)
+
+By default tokenix runs embeddings on CPU. To use GPU:
+
+```bash
+# Windows — DirectML (works with any D3D12-capable GPU, no CUDA required)
+cargo install --path . --features directml
+
+# Linux / Windows — CUDA
+cargo install --path . --features cuda
+```
+
+> Requires the corresponding ONNX Runtime execution provider libraries on your system. CPU fallback is automatic if the provider is unavailable at runtime.
 
 Storage lives at `~/.tokenix/<project-id>.db` (global, one DB per project). Embeddings are stored as raw `float32` blobs. Cosine similarity is computed in Rust — no external vector database needed.
 
