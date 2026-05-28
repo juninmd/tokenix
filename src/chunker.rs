@@ -1,4 +1,3 @@
-#[cfg(not(test))]
 use once_cell::sync::OnceCell;
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -364,11 +363,15 @@ fn merge_missing_symbol_chunks(
     chunks.sort_by_key(|chunk| (chunk.start_line, chunk.end_line));
 }
 
+static TS_JS_SYMBOL_RE: OnceCell<Regex> = OnceCell::new();
+
 fn heuristic_ts_js_symbols(content: &str) -> Vec<SymbolNode> {
-    let re = Regex::new(
-        r"\b(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(class|interface|enum|function|type)\s+([A-Za-z_$][A-Za-z0-9_$]*)",
-    )
-    .unwrap();
+    let re = TS_JS_SYMBOL_RE.get_or_init(|| {
+        Regex::new(
+            r"\b(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(class|interface|enum|function|type)\s+([A-Za-z_$][A-Za-z0-9_$]*)",
+        )
+        .unwrap()
+    });
     let lines: Vec<&str> = content.lines().collect();
     let mut symbols = Vec::new();
     for cap in re.captures_iter(content) {

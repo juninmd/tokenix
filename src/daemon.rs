@@ -17,6 +17,25 @@ pub const DEFAULT_PORT: u16 = 47392;
 const CONNECT_TIMEOUT_MS: u64 = 200;
 const READ_TIMEOUT_MS: u64 = 15_000; // model load on first request can take ~500ms
 
+// ---- SIMD-friendly dot product (chunks of 8 floats → AVX2 auto-vectorized) --
+
+#[inline]
+fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    let chunks = a.chunks_exact(8).zip(b.chunks_exact(8));
+    let mut sum: f32 = chunks
+        .map(|(ca, cb)| ca.iter().zip(cb.iter()).map(|(x, y)| x * y).sum::<f32>())
+        .sum();
+    // handle remainder (768 % 8 == 0, so this is a no-op for nomic-embed-text-v1.5)
+    let rem_a = a.chunks_exact(8).remainder();
+    let rem_b = b.chunks_exact(8).remainder();
+    sum += rem_a
+        .iter()
+        .zip(rem_b.iter())
+        .map(|(x, y)| x * y)
+        .sum::<f32>();
+    sum
+}
+
 // ---- In-memory per-project cache --------------------------------------------
 
 const MAX_CACHED_PROJECTS: usize = 3;
@@ -46,7 +65,7 @@ impl ProjectCache {
         let entries = store::load_all_embeddings(conn)?
             .into_iter()
             .map(|e| {
-                let norm: f32 = e.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                let norm: f32 = dot_product(&e.embedding, &e.embedding).sqrt();
                 CachedEntry {
                     id: e.id,
                     path: e.path,
@@ -68,7 +87,7 @@ impl ProjectCache {
     }
 
     fn search_ids(&self, query: &[f32], k: usize, file_filter: Option<&str>) -> Vec<(usize, f32)> {
-        let q_norm: f32 = query.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let q_norm: f32 = dot_product(query, query).sqrt();
         if q_norm == 0.0 {
             return vec![];
         }
@@ -84,7 +103,7 @@ impl ProjectCache {
                 }
             })
             .map(|(i, e)| {
-                let dot: f32 = query.iter().zip(&e.embedding).map(|(a, b)| a * b).sum();
+                let dot = dot_product(query, &e.embedding);
                 let sim = if e.norm == 0.0 {
                     0.0
                 } else {
@@ -93,12 +112,17 @@ impl ProjectCache {
                 (sim, i)
             })
             .collect();
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        scored
-            .into_iter()
-            .take(k)
-            .map(|(sim, i)| (i, sim))
-            .collect()
+        // Top-k via partial selection: O(N) instead of O(N log N) full sort.
+        // Only the k best need ordering; the rest are discarded.
+        let desc = |a: &(f32, usize), b: &(f32, usize)| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        };
+        if k < scored.len() {
+            scored.select_nth_unstable_by(k, desc);
+            scored.truncate(k);
+        }
+        scored.sort_by(desc);
+        scored.into_iter().map(|(sim, i)| (i, sim)).collect()
     }
 }
 
