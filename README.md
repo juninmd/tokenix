@@ -108,7 +108,8 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
 | **Output filters** | 70+ RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, and more |
 | **Incremental branch indexing** | Branch/HEAD switches with identical code auto-update the git fingerprint without re-indexing |
-| **GPU acceleration (opt-in)** | Compile with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU via ONNX Runtime |
+| **GPU acceleration (opt-in)** | Build with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU (~10× faster indexing); GPU is used by default with automatic CPU fallback, or force CPU with `--only-cpu` |
+| **Environment diagnostics** | `tokenix doctor` reports the compiled backend, detected GPU, CUDA/cuDNN status, model cache, and daemon — with tailored recommendations |
 | **In-memory daemon** | `tokenix serve` keeps model + index in RAM — warm Grep calls drop from ~430ms to ~80ms |
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `1200`) |
@@ -375,6 +376,7 @@ tokenix install-hook --tool all
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix serve [--port N]` | Start background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
+| `tokenix doctor` | Diagnose embedding backend, GPU availability, model cache, and daemon |
 | `tokenix filter list` | Show top Bash commands by tokens wasted (no filter yet) |
 | `tokenix filter active` | Show active user and bundled output filters |
 | `tokenix filter generate [CMD]` | AI-generate a TOML output filter for a command |
@@ -387,6 +389,12 @@ tokenix install-hook --tool all
 <details>
 <summary>Flag reference</summary>
 
+**Global**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--only-cpu` | false | Force CPU embedding even on a GPU-enabled build (no-op on CPU-only builds) |
+
 **`tokenix index`**
 
 | Flag | Default | Description |
@@ -395,7 +403,7 @@ tokenix install-hook --tool all
 | `--low-cpu` | true | Use 1 worker, 1 ONNX thread, tiny embedding batches, and a short pause between batches |
 | `--high-cpu` | false | Opt out of the default low-CPU indexing profile |
 | `--jobs N` | env/default | Set max rayon worker threads for indexing |
-| `--embed-batch N` | env/default | Set embedding batch size for indexing |
+| `--embed-batch N` | 16 (CPU) / 64 (GPU) | Embedding batch size; drives peak memory — lower it if RAM/VRAM is tight |
 | `--if-stale` | false | Skip if index is fresh for the current Git worktree/branch/HEAD |
 
 **`tokenix query`**
@@ -534,17 +542,29 @@ assets/
 
 ### GPU Acceleration (opt-in)
 
-By default tokenix runs embeddings on CPU. To use GPU:
+A default build runs embeddings on CPU. Compile with a GPU feature to use the GPU — it then becomes the **default at runtime, with automatic CPU fallback** if the provider is unavailable:
 
 ```bash
-# Windows — DirectML (works with any D3D12-capable GPU, no CUDA required)
-cargo install --path . --features directml
+# Windows — DirectML (works with any D3D12-capable GPU, no CUDA toolkit required)
+cargo install --path . --features directml --locked
 
-# Linux / Windows — CUDA
-cargo install --path . --features cuda
+# Linux / Windows — CUDA (needs CUDA 12.x + cuDNN 9.x installed and on PATH;
+# ort rc.9 does not support CUDA 13 yet)
+cargo install --path . --features cuda --locked
 ```
 
-> Requires the corresponding ONNX Runtime execution provider libraries on your system. CPU fallback is automatic if the provider is unavailable at runtime.
+> **Use `--locked`.** `cargo install` otherwise re-resolves dependencies and can pull an incompatible `ureq` into the `ort-sys` build script. `--locked` builds against the committed `Cargo.lock`.
+
+On a GPU build, force CPU per-invocation with the global `--only-cpu` flag:
+
+```bash
+tokenix index .              # uses the GPU
+tokenix --only-cpu index .   # forces CPU on a GPU build
+```
+
+Run `tokenix doctor` to see the compiled backend, detected GPU, CUDA/cuDNN status, and tailored recommendations.
+
+> **GPU throughput (measured, RTX 4060 Ti / DirectML):** ~10× faster indexing than CPU (a 10k-chunk repo dropped from ~54 min to ~6 min). The CPU keeps RAM bounded by the embedding batch size — `--embed-batch` defaults to 16 on CPU (~2.8 GB peak) and 64 on GPU.
 
 Storage lives at `~/.tokenix/<project-id>.db` (global, one DB per project). Embeddings are stored as raw `float32` blobs. Cosine similarity is computed in Rust — no external vector database needed.
 
