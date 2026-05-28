@@ -22,11 +22,26 @@ fn force_cpu() -> bool {
     FORCE_CPU.load(Ordering::Relaxed)
 }
 
-fn model_cache_dir() -> PathBuf {
+pub fn model_cache_dir() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
         .join("tokenix")
         .join("models")
+}
+
+/// The GPU execution provider compiled into this binary, if any.
+/// `None` means a CPU-only build (no GPU code is present).
+pub fn gpu_backend() -> Option<&'static str> {
+    #[cfg(feature = "cuda")]
+    {
+        return Some("CUDA");
+    }
+    #[cfg(feature = "directml")]
+    {
+        return Some("DirectML");
+    }
+    #[allow(unreachable_code)]
+    None
 }
 
 fn open_query_cache_db() -> Option<Connection> {

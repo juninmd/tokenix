@@ -3,6 +3,7 @@ mod chunker;
 mod cmd_filter;
 mod compress;
 mod daemon;
+mod doctor;
 mod embed;
 mod filters;
 mod gain;
@@ -233,6 +234,8 @@ enum Commands {
     },
     /// Stop the background embedding daemon
     Stop,
+    /// Diagnose embedding backend, GPU availability, model cache, and daemon
+    Doctor,
     /// Generate and manage per-command output filters
     Filter {
         #[command(subcommand)]
@@ -405,6 +408,7 @@ fn main() -> Result<()> {
         Commands::Stats { path } => cmd_stats(&path),
         Commands::Serve { port } => daemon::run_serve(port),
         Commands::Stop => daemon::run_stop(),
+        Commands::Doctor => doctor::run_doctor(),
         Commands::Filter { action } => {
             let repo_root = find_repo_root(&PathBuf::from("."));
             match action {
