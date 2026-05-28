@@ -43,8 +43,28 @@ pub const IGNORED_DIRS: &[&str] = &[
 
 pub const INDEXED_EXTS: &[&str] = &[
     ".rs", ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".go", ".sh", ".bash", ".toml",
-    ".yaml", ".yml", ".json", ".md", ".txt", ".c", ".cpp", ".h", ".hpp", ".cc", ".cxx",
+    ".md", ".txt", ".c", ".cpp", ".h", ".hpp", ".cc", ".cxx",
 ];
+
+/// Data/config extensions indexed only when `[index] data_files = true`.
+/// Off by default: these are usually generated/config noise (e.g. thousands of
+/// JSON files) that bloat the index and pollute semantic results.
+pub const DATA_EXTS: &[&str] = &[".json", ".yaml", ".yml"];
+
+/// Filename substrings that are never indexed — likely to contain secrets.
+const SENSITIVE_NAMES: &[&str] = &[
+    ".env",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "secrets.",
+    ".secret",
+    "credentials",
+];
+
+/// Sensitive file extensions, never indexed (keys, certs).
+const SENSITIVE_EXTS: &[&str] = &[".pem", ".key", ".pfx", ".p12", ".keystore", ".jks"];
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -70,10 +90,60 @@ pub fn count_tokens(text: &str) -> usize {
     text.len().div_ceil(4)
 }
 
+static SECRET_RE: OnceCell<Vec<Regex>> = OnceCell::new();
+
+/// Mask obvious secrets (private keys, cloud keys, bearer tokens, and
+/// `key = value` assignments for sensitive names) with `[REDACTED]`.
+/// Opt-in via `[index] redact_secrets = true`.
+pub fn redact_secrets(content: &str) -> String {
+    let patterns = SECRET_RE.get_or_init(|| {
+        [
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+            r"AKIA[0-9A-Z]{16}",
+            r"(?i)bearer\s+[A-Za-z0-9._\-]{16,}",
+            r#"(?i)(?:api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key)\s*[:=]\s*['"]?[A-Za-z0-9._\-/+]{8,}['"]?"#,
+        ]
+        .iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect()
+    });
+    let mut out = content.to_string();
+    for re in patterns {
+        out = re.replace_all(&out, "[REDACTED]").into_owned();
+    }
+    out
+}
+
 #[derive(serde::Deserialize, Default, Clone)]
 struct ProjectConfig {
     #[serde(default)]
     languages: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    index: IndexConfig,
+}
+
+/// `[index]` section of `.tokenix.toml`. All fields optional.
+#[derive(serde::Deserialize, Default, Clone)]
+pub struct IndexConfig {
+    /// Extra directory names to ignore, in addition to the built-in list.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    /// Extra file extensions to index, e.g. `["proto", "sql"]` (no leading dot).
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    /// Index `.json` / `.yaml` / `.yml` data files (off by default).
+    #[serde(default)]
+    pub data_files: bool,
+    /// Mask obvious secrets (keys, tokens, passwords) in chunk content.
+    #[serde(default)]
+    pub redact_secrets: bool,
+    /// Override the default 1.5 MB max indexed file size.
+    pub max_file_bytes: Option<u64>,
+}
+
+/// The resolved `[index]` config for the current project (defaults if absent).
+pub fn index_config() -> IndexConfig {
+    load_project_config().map(|c| c.index).unwrap_or_default()
 }
 
 fn load_project_config() -> Option<ProjectConfig> {
@@ -132,9 +202,14 @@ fn detect_custom_lang(path: &Path) -> Option<Lang> {
 }
 
 pub fn should_index(path: &Path) -> bool {
+    let cfg = load_project_config();
+    let extra_excludes = cfg.as_ref().map(|c| &c.index.exclude);
     for component in path.components() {
         let s = component.as_os_str().to_string_lossy();
         if IGNORED_DIRS.contains(&s.as_ref()) {
+            return false;
+        }
+        if extra_excludes.is_some_and(|ex| ex.iter().any(|d| d == s.as_ref())) {
             return false;
         }
     }
@@ -142,19 +217,45 @@ pub fn should_index(path: &Path) -> bool {
     if name.ends_with(".min.js") || name.ends_with(".min.css") || name.ends_with(".map") {
         return false;
     }
-    // Check extension
-    let has_ext = INDEXED_EXTS.iter().any(|ext| name.ends_with(ext));
-    if has_ext {
+    if is_sensitive_file(&name) {
+        return false;
+    }
+
+    // Built-in code/doc extensions are always indexed.
+    if INDEXED_EXTS.iter().any(|ext| name.ends_with(ext)) {
+        return true;
+    }
+    // Data files (.json/.yaml/.yml) only when opted in.
+    let data_files = cfg.as_ref().map(|c| c.index.data_files).unwrap_or(false);
+    if data_files && DATA_EXTS.iter().any(|ext| name.ends_with(ext)) {
         return true;
     }
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        if let Some(config) = load_project_config() {
-            if config.languages.contains_key(&ext.to_lowercase()) {
+        let ext = ext.to_lowercase();
+        if let Some(config) = cfg.as_ref() {
+            if config.languages.contains_key(&ext) {
+                return true;
+            }
+            if config
+                .index
+                .extensions
+                .iter()
+                .any(|e| e.to_lowercase() == ext)
+            {
                 return true;
             }
         }
     }
     false
+}
+
+/// True for files whose name suggests they hold secrets (keys, env, certs).
+fn is_sensitive_file(name_lower: &str) -> bool {
+    let base = name_lower.rsplit(['/', '\\']).next().unwrap_or(name_lower);
+    if SENSITIVE_NAMES.iter().any(|p| base.contains(p)) {
+        return true;
+    }
+    SENSITIVE_EXTS.iter().any(|ext| name_lower.ends_with(ext))
 }
 
 #[derive(Debug)]
@@ -956,6 +1057,24 @@ mod tests {
         assert_eq!(count_tokens("abcd"), 1);
         assert_eq!(count_tokens("abcde"), 2);
         assert_eq!(count_tokens("hello world"), 3); // 11 chars → (11+3)/4 = 3
+    }
+
+    #[test]
+    fn sensitive_files_are_never_indexed() {
+        assert!(!should_index(Path::new("src/.env")));
+        assert!(!should_index(Path::new("config/prod.env")));
+        assert!(!should_index(Path::new("certs/server.pem")));
+        assert!(!should_index(Path::new("keys/private.key")));
+        assert!(!should_index(Path::new(".ssh/id_rsa")));
+        assert!(should_index(Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn redact_secrets_masks_common_patterns() {
+        let input = "let token = \"AKIAIOSFODNN7EXAMPLE\";\napi_key = \"abcd1234efgh5678\"";
+        let out = redact_secrets(input);
+        assert!(out.contains("[REDACTED]"));
+        assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"));
     }
 
     #[test]

@@ -11,7 +11,10 @@ use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::chunker::{chunk_file, file_hash, should_index, Chunk, IGNORED_DIRS};
+use crate::chunker::{
+    chunk_file, count_tokens, file_hash, index_config, redact_secrets, should_index, Chunk,
+    IGNORED_DIRS,
+};
 use crate::embed::embed_documents;
 use crate::store::{
     cached_embeddings, count_stats, delete_chunks_for_file, init_schema, insert_chunk,
@@ -83,6 +86,10 @@ fn rel_path(repo_root: &Path, abs: &Path) -> String {
 }
 
 fn walk_indexable_files(repo_root: &Path) -> Vec<(PathBuf, String)> {
+    // Allow projects to raise/lower the cap via `[index] max_file_bytes`.
+    let max_bytes = index_config()
+        .max_file_bytes
+        .unwrap_or(MAX_INDEX_FILE_BYTES);
     WalkBuilder::new(repo_root)
         .hidden(true)
         .git_ignore(true)
@@ -91,7 +98,7 @@ fn walk_indexable_files(repo_root: &Path) -> Vec<(PathBuf, String)> {
         // Skip oversized files (generated lock files, bundled/minified data, etc.).
         // Hand-written source is virtually never this large; this avoids wasting
         // embedding budget on machine-generated noise.
-        .max_filesize(Some(MAX_INDEX_FILE_BYTES))
+        .max_filesize(Some(max_bytes))
         .filter_entry(|e| {
             if e.file_type().is_some_and(|t| t.is_dir()) {
                 let name = e.file_name().to_string_lossy();
@@ -178,6 +185,7 @@ fn chunk_only(
     abs_path: &Path,
     rel: &str,
     force: bool,
+    redact: bool,
     existing: &HashMap<String, (i64, f64, String)>,
 ) -> ChunkedFile {
     let raw = match std::fs::read(abs_path) {
@@ -213,11 +221,21 @@ fn chunk_only(
     }
 
     let content = String::from_utf8_lossy(&raw).into_owned();
+    let mut chunks = chunk_file(rel, &content);
+    if redact {
+        for c in &mut chunks {
+            let masked = redact_secrets(&c.content);
+            if masked != c.content {
+                c.token_count = count_tokens(&masked);
+                c.content = masked;
+            }
+        }
+    }
     ChunkedFile {
         rel: rel.to_string(),
         mtime,
         hash: chash,
-        chunks: chunk_file(rel, &content),
+        chunks,
         skipped: false,
         error: None,
     }
@@ -291,10 +309,11 @@ where
             .progress_chars("=>-"),
     );
 
+    let redact = index_config().redact_secrets;
     let chunked: Vec<ChunkedFile> = files
         .par_iter()
         .map(|(abs, rel)| {
-            let r = chunk_only(abs, rel, options.force, &existing);
+            let r = chunk_only(abs, rel, options.force, redact, &existing);
             pb.inc(1);
             r
         })
