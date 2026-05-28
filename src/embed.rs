@@ -29,6 +29,42 @@ pub fn model_cache_dir() -> PathBuf {
         .join("models")
 }
 
+static TOKENIZER: OnceCell<Option<tokenizers::Tokenizer>> = OnceCell::new();
+
+/// Accurate token count using the model's own tokenizer (loaded from the
+/// cached `tokenizer.json`). Falls back to the fast `count_tokens` heuristic if
+/// the model has not been downloaded yet. Use this for budget decisions where
+/// precision matters; the hot chunker path keeps the cheap approximation.
+pub fn count_tokens_accurate(text: &str) -> usize {
+    let tok = TOKENIZER.get_or_init(|| {
+        let dir = model_cache_dir();
+        let path = find_tokenizer_json(&dir)?;
+        tokenizers::Tokenizer::from_file(path).ok()
+    });
+    match tok {
+        Some(t) => t
+            .encode(text, false)
+            .map(|e| e.len())
+            .unwrap_or_else(|_| crate::chunker::count_tokens(text)),
+        None => crate::chunker::count_tokens(text),
+    }
+}
+
+fn find_tokenizer_json(dir: &std::path::Path) -> Option<PathBuf> {
+    let rd = std::fs::read_dir(dir).ok()?;
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            if let Some(found) = find_tokenizer_json(&p) {
+                return Some(found);
+            }
+        } else if p.file_name().is_some_and(|n| n == "tokenizer.json") {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// The GPU execution provider compiled into this binary, if any.
 /// `None` means a CPU-only build (no GPU code is present).
 pub fn gpu_backend() -> Option<&'static str> {

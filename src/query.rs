@@ -31,11 +31,9 @@ pub fn query_index(
     let mut used_tokens = 0usize;
 
     for r in results.into_iter().take(k) {
-        let tokens = if r.token_count > 0 {
-            r.token_count
-        } else {
-            count_tokens(&r.content)
-        };
+        // Use the model's real tokenizer for budget accuracy (falls back to the
+        // approximation if the model isn't downloaded yet).
+        let tokens = crate::embed::count_tokens_accurate(&r.content);
         if used_tokens + tokens > budget {
             continue;
         }
