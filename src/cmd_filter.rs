@@ -543,7 +543,15 @@ mod tests {
 
     #[test]
     fn validate_command_name_accepts_real_commands() {
-        for ok in ["cargo", "npm", "git", "uv", "docker-compose", "go.test", "a"] {
+        for ok in [
+            "cargo",
+            "npm",
+            "git",
+            "uv",
+            "docker-compose",
+            "go.test",
+            "a",
+        ] {
             assert!(validate_command_name(ok).is_ok(), "{ok} should be allowed");
         }
     }
