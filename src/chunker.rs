@@ -192,7 +192,7 @@ pub fn chunk_file(path: &str, content: &str) -> Vec<Chunk> {
     let p = Path::new(path);
     let lang = detect_lang(p);
 
-    match lang {
+    let chunks = match lang {
         Lang::Rust => chunk_rust(content, path),
         Lang::Python => chunk_python(content, path),
         Lang::TypeScript | Lang::JavaScript => chunk_ts_js(content, path),
@@ -202,7 +202,46 @@ pub fn chunk_file(path: &str, content: &str) -> Vec<Chunk> {
             let lines: Vec<&str> = content.lines().collect();
             chunk_by_lines(&lines, path)
         }
+    };
+    enforce_token_cap(chunks)
+}
+
+/// Hard guarantee that no single chunk exceeds `MAX_CHUNK_TOKENS`. The
+/// language chunkers split on line boundaries, but a single very long line
+/// (minified JS/JSON, generated data) can still produce one oversized chunk —
+/// which inflates the padded ONNX embedding batch and was the historical
+/// PC-freeze trigger. Here we split such chunks by character windows (never
+/// truncating), preserving 100% of the content.
+fn enforce_token_cap(chunks: Vec<Chunk>) -> Vec<Chunk> {
+    let max_chars = MAX_CHUNK_TOKENS * 4; // count_tokens(s) == s.len().div_ceil(4)
+    let mut out = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        if chunk.content.len() <= max_chars {
+            out.push(chunk);
+            continue;
+        }
+        let content = &chunk.content;
+        let len = content.len();
+        let mut start = 0;
+        while start < len {
+            let mut end = (start + max_chars).min(len);
+            while end < len && !content.is_char_boundary(end) {
+                end += 1;
+            }
+            let piece = &content[start..end];
+            out.push(Chunk {
+                path: chunk.path.clone(),
+                start_line: chunk.start_line,
+                end_line: chunk.end_line,
+                symbol: chunk.symbol.clone(),
+                kind: chunk.kind.clone(),
+                content: piece.to_string(),
+                token_count: count_tokens(piece),
+            });
+            start = end;
+        }
     }
+    out
 }
 
 struct SymbolNode {
@@ -917,6 +956,24 @@ mod tests {
         assert_eq!(count_tokens("abcd"), 1);
         assert_eq!(count_tokens("abcde"), 2);
         assert_eq!(count_tokens("hello world"), 3); // 11 chars → (11+3)/4 = 3
+    }
+
+    #[test]
+    fn giant_single_line_is_split_and_content_preserved() {
+        // A minified-style single line that would otherwise be one huge chunk.
+        let payload = "x".repeat(MAX_CHUNK_TOKENS * 4 * 5 + 123);
+        let content = format!("{{\"data\":\"{payload}\"}}");
+        let chunks = chunk_file("data.json", &content);
+        assert!(chunks.len() > 1, "oversized chunk must be split");
+        for c in &chunks {
+            assert!(
+                c.token_count <= MAX_CHUNK_TOKENS + 1,
+                "every chunk must respect the token cap, got {}",
+                c.token_count
+            );
+        }
+        let rejoined: String = chunks.iter().map(|c| c.content.as_str()).collect();
+        assert_eq!(rejoined, content, "no content may be lost when splitting");
     }
 
     #[test]
