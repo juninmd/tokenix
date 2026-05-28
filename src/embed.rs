@@ -3,8 +3,24 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use once_cell::sync::OnceCell;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 static MODEL: OnceCell<TextEmbedding> = OnceCell::new();
+
+/// When true, the GPU execution provider is skipped even on a GPU-enabled build.
+/// Set by `main()` from the `--only-cpu` flag before the model is first used.
+static FORCE_CPU: AtomicBool = AtomicBool::new(false);
+
+/// Force CPU-only embedding. Must be called before the first embed call.
+/// No-op on CPU-only builds (no GPU provider is compiled in).
+pub fn set_force_cpu(force: bool) {
+    FORCE_CPU.store(force, Ordering::Relaxed);
+}
+
+#[allow(dead_code)]
+fn force_cpu() -> bool {
+    FORCE_CPU.load(Ordering::Relaxed)
+}
 
 fn model_cache_dir() -> PathBuf {
     dirs::cache_dir()
@@ -59,17 +75,22 @@ fn model() -> Result<&'static TextEmbedding> {
             let mut options =
                 InitOptions::new(EmbeddingModel::NomicEmbedTextV15Q).with_cache_dir(cache_dir);
 
+            // GPU-by-default with automatic CPU fallback. Register the GPU provider
+            // first and CPU second, so ORT uses the GPU when available and falls back
+            // to CPU otherwise. `--only-cpu` (FORCE_CPU) skips the GPU provider entirely.
             #[cfg(feature = "cuda")]
-            {
+            if !force_cpu() {
                 options = options.with_execution_providers(vec![
                     ort::execution_providers::CUDAExecutionProvider::default().build(),
+                    ort::execution_providers::CPUExecutionProvider::default().build(),
                 ]);
             }
 
             #[cfg(feature = "directml")]
-            {
+            if !force_cpu() {
                 options = options.with_execution_providers(vec![
                     ort::execution_providers::DirectMLExecutionProvider::default().build(),
+                    ort::execution_providers::CPUExecutionProvider::default().build(),
                 ]);
             }
 

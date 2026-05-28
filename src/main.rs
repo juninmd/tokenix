@@ -24,6 +24,11 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Parser)]
 #[command(name = "tokenix", version = VERSION, about = "Local semantic index for LLM token optimization")]
 struct Cli {
+    /// Force CPU-only embedding, skipping the GPU even on a GPU-enabled build.
+    /// GPU (DirectML/CUDA) is used by default when compiled with that support.
+    #[arg(long, global = true)]
+    only_cpu: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -314,6 +319,10 @@ fn tokenix_bin_path() -> Result<String> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Must be set before the embedding model is first initialized.
+    let only_cpu = cli.only_cpu;
+    crate::embed::set_force_cpu(only_cpu);
+
     let res = match cli.command {
         Commands::Index {
             path,
@@ -325,7 +334,7 @@ fn main() -> Result<()> {
             embed_batch,
             no_embed,
         } => {
-            configure_index_limits(low_cpu, jobs, embed_batch);
+            configure_index_limits(low_cpu, only_cpu, jobs, embed_batch);
             cmd_index(&path, force, if_stale, no_embed)
         }
         Commands::Query {
@@ -459,7 +468,12 @@ fn set_env_override(key: &str, value: impl ToString) {
     }
 }
 
-fn configure_index_limits(low_cpu: bool, jobs: Option<usize>, embed_batch: Option<usize>) {
+fn configure_index_limits(
+    low_cpu: bool,
+    only_cpu: bool,
+    jobs: Option<usize>,
+    embed_batch: Option<usize>,
+) {
     if low_cpu {
         set_env_override("RAYON_NUM_THREADS", jobs.unwrap_or(1).max(1));
         set_env_override("OMP_NUM_THREADS", 1);
@@ -473,15 +487,20 @@ fn configure_index_limits(low_cpu: bool, jobs: Option<usize>, embed_batch: Optio
         .unwrap_or(4);
     let rayon_threads = jobs.unwrap_or(cpus).max(1);
     set_env_default("RAYON_NUM_THREADS", rayon_threads);
-    set_env_default("OMP_NUM_THREADS", rayon_threads.min(4));
+    // Cap ONNX OpenMP threads at 8: enough to use a strong CPU without the
+    // diminishing returns / contention of very high thread counts.
+    set_env_default("OMP_NUM_THREADS", rayon_threads.min(8));
 
+    // Embedding batch size drives ONNX peak memory (the historical PC-freeze
+    // cause on CPU). Keep CPU small (≈2.8 GB RAM) and GPU moderate (fits 8 GB
+    // VRAM). GPU build run with --only-cpu falls back to the CPU default.
+    let gpu_active = cfg!(any(feature = "cuda", feature = "directml")) && !only_cpu;
     if let Some(batch) = embed_batch {
         set_env_override("TOKENIX_EMBED_BATCH", batch.max(1));
-    } else {
-        #[cfg(any(feature = "cuda", feature = "directml"))]
-        set_env_default("TOKENIX_EMBED_BATCH", 128);
-        #[cfg(not(any(feature = "cuda", feature = "directml")))]
+    } else if gpu_active {
         set_env_default("TOKENIX_EMBED_BATCH", 64);
+    } else {
+        set_env_default("TOKENIX_EMBED_BATCH", 16);
     }
 }
 
