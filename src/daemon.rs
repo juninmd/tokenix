@@ -40,6 +40,10 @@ fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 
 const MAX_CACHED_PROJECTS: usize = 3;
 
+/// Above this many cached chunks, the cosine scan is parallelized across cores.
+/// Below it, the rayon overhead outweighs the gain, so a plain loop is used.
+const PARALLEL_SCAN_THRESHOLD: usize = 2000;
+
 struct CachedEntry {
     id: i64,
     path: String,
@@ -91,27 +95,36 @@ impl ProjectCache {
         if q_norm == 0.0 {
             return vec![];
         }
-        let mut scored: Vec<(f32, usize)> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| {
-                if let Some(filter) = file_filter {
-                    e.path.contains(filter)
-                } else {
-                    true
+        let score = |i: usize, e: &CachedEntry| -> Option<(f32, usize)> {
+            if let Some(filter) = file_filter {
+                if !e.path.contains(filter) {
+                    return None;
                 }
-            })
-            .map(|(i, e)| {
-                let dot = dot_product(query, &e.embedding);
-                let sim = if e.norm == 0.0 {
-                    0.0
-                } else {
-                    dot / (q_norm * e.norm)
-                };
-                (sim, i)
-            })
-            .collect();
+            }
+            let dot = dot_product(query, &e.embedding);
+            let sim = if e.norm == 0.0 {
+                0.0
+            } else {
+                dot / (q_norm * e.norm)
+            };
+            Some((sim, i))
+        };
+        // Parallelize the O(N) scan on large projects; stay single-threaded on
+        // small ones where rayon's overhead would dominate.
+        let mut scored: Vec<(f32, usize)> = if self.entries.len() >= PARALLEL_SCAN_THRESHOLD {
+            use rayon::prelude::*;
+            self.entries
+                .par_iter()
+                .enumerate()
+                .filter_map(|(i, e)| score(i, e))
+                .collect()
+        } else {
+            self.entries
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| score(i, e))
+                .collect()
+        };
         // Top-k via partial selection: O(N) instead of O(N log N) full sort.
         // Only the k best need ordering; the rest are discarded.
         let desc = |a: &(f32, usize), b: &(f32, usize)| {
@@ -233,6 +246,19 @@ pub fn run_serve(port: Option<u16>) -> Result<()> {
         if std::env::var("OMP_NUM_THREADS").is_err() {
             std::env::set_var("OMP_NUM_THREADS", "2");
         }
+    }
+
+    // The daemon is often autostarted by a hook that set RAYON_NUM_THREADS=1.
+    // Override (before the global rayon pool is first built) so the cosine scan
+    // can use multiple cores on large projects. Bounded to avoid oversubscribing
+    // the 4-thread connection pool.
+    #[allow(unused_unsafe)]
+    unsafe {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .min(8);
+        std::env::set_var("RAYON_NUM_THREADS", threads.to_string());
     }
 
     let port = port.unwrap_or_else(daemon_port);

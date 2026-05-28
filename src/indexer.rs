@@ -19,6 +19,11 @@ use crate::store::{
     write_project_name, IndexStats, NewChunk,
 };
 
+/// Upper bound on file size to index (1.5 MB). Above this, files are almost
+/// always machine-generated (lock files, bundles, data dumps) and only bloat
+/// the index. Skipped during the directory walk.
+const MAX_INDEX_FILE_BYTES: u64 = 1_500_000;
+
 #[allow(dead_code)]
 pub struct IndexResult {
     pub total: usize,
@@ -83,6 +88,10 @@ fn walk_indexable_files(repo_root: &Path) -> Vec<(PathBuf, String)> {
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
+        // Skip oversized files (generated lock files, bundled/minified data, etc.).
+        // Hand-written source is virtually never this large; this avoids wasting
+        // embedding budget on machine-generated noise.
+        .max_filesize(Some(MAX_INDEX_FILE_BYTES))
         .filter_entry(|e| {
             if e.file_type().is_some_and(|t| t.is_dir()) {
                 let name = e.file_name().to_string_lossy();
