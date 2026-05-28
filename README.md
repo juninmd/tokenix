@@ -73,7 +73,7 @@ Download the latest binary for your platform from [GitHub Releases](https://gith
 ### From crates.io
 
 ```bash
-cargo install tokenix
+cargo install tokenix --locked
 ```
 
 ### From source
@@ -81,8 +81,10 @@ cargo install tokenix
 ```bash
 git clone https://github.com/juninmd/tokenix
 cd tokenix
-cargo install --path .
+cargo install --path . --locked
 ```
+
+> **Use `--locked`.** It builds against the committed `Cargo.lock`; without it `cargo install` re-resolves dependencies and can pull an incompatible `ureq` into the `ort-sys` build script.
 
 > **Requirements:** [Rust](https://www.rust-lang.org/tools/install) `>= 1.75` — that's all. No Ollama, no Python, no external services.
 

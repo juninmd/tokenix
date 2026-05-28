@@ -119,6 +119,14 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact: tokenix-windows-x86_64.exe
+          # GPU-accelerated Windows build. DirectML ships in the pyke ORT
+          # prebuilt, so no extra toolkit is needed on the runner. CUDA is
+          # intentionally omitted — its toolkit install is too fragile for an
+          # auto-release pipeline; CUDA users build from source with --locked.
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: tokenix-windows-x86_64-directml.exe
+            features: "--features directml"
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -142,12 +150,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.artifact }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
+            ${{ runner.os }}-${{ matrix.artifact }}-cargo-
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }} ${{ matrix.features }}
 
       - name: Prepare artifact (Unix)
         if: runner.os != 'Windows'
@@ -214,6 +222,7 @@ jobs:
             artifacts/tokenix-macos-x86_64
             artifacts/tokenix-macos-aarch64
             artifacts/tokenix-windows-x86_64.exe
+            artifacts/tokenix-windows-x86_64-directml.exe
             artifacts/sha256sums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
