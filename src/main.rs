@@ -34,6 +34,19 @@ struct Cli {
     command: Commands,
 }
 
+/// CPU usage profile for indexing. Embedding batch size (which drives peak
+/// memory) stays bounded across all profiles; profiles mainly scale thread use.
+#[derive(Clone, Copy, ValueEnum, Debug, Default)]
+enum CpuProfile {
+    /// 1 worker, 1 ONNX thread, tiny batches — minimal footprint.
+    Low,
+    /// Use available cores with a bounded ONNX thread count (safe default).
+    #[default]
+    Default,
+    /// Use cores aggressively (higher ONNX thread cap) for strong machines.
+    Max,
+}
+
 #[derive(Clone, ValueEnum, Debug)]
 enum Tool {
     #[value(name = "claude-code")]
@@ -60,11 +73,11 @@ enum Commands {
         if_stale: bool,
         #[arg(
             long,
-            help = "Use the lowest CPU settings: 1 worker, 1 ONNX thread, tiny embedding batches"
+            value_enum,
+            default_value = "default",
+            help = "CPU usage profile: low | default | max"
         )]
-        low_cpu: bool,
-        #[arg(long, help = "Use the high-CPU indexing profile (default)")]
-        high_cpu: bool,
+        cpu_profile: CpuProfile,
         #[arg(
             long,
             help = "Max rayon worker threads for chunking/search during indexing"
@@ -331,13 +344,12 @@ fn main() -> Result<()> {
             path,
             force,
             if_stale,
-            low_cpu,
-            high_cpu: _,
+            cpu_profile,
             jobs,
             embed_batch,
             no_embed,
         } => {
-            configure_index_limits(low_cpu, only_cpu, jobs, embed_batch);
+            configure_index_limits(cpu_profile, only_cpu, jobs, embed_batch);
             cmd_index(&path, force, if_stale, no_embed)
         }
         Commands::Query {
@@ -473,27 +485,30 @@ fn set_env_override(key: &str, value: impl ToString) {
 }
 
 fn configure_index_limits(
-    low_cpu: bool,
+    profile: CpuProfile,
     only_cpu: bool,
     jobs: Option<usize>,
     embed_batch: Option<usize>,
 ) {
-    if low_cpu {
+    if matches!(profile, CpuProfile::Low) {
         set_env_override("RAYON_NUM_THREADS", jobs.unwrap_or(1).max(1));
         set_env_override("OMP_NUM_THREADS", 1);
         set_env_override("TOKENIX_EMBED_BATCH", embed_batch.unwrap_or(8).max(1));
         return;
     }
 
-    // High/Default CPU profile:
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
     let rayon_threads = jobs.unwrap_or(cpus).max(1);
     set_env_default("RAYON_NUM_THREADS", rayon_threads);
-    // Cap ONNX OpenMP threads at 8: enough to use a strong CPU without the
-    // diminishing returns / contention of very high thread counts.
-    set_env_default("OMP_NUM_THREADS", rayon_threads.min(8));
+    // Cap ONNX OpenMP threads: `default` stays conservative; `max` lets a
+    // strong CPU use more cores. Memory is bounded by batch size, not threads.
+    let omp_cap = match profile {
+        CpuProfile::Max => 16,
+        _ => 8,
+    };
+    set_env_default("OMP_NUM_THREADS", rayon_threads.min(omp_cap));
 
     // Embedding batch size drives ONNX peak memory (the historical PC-freeze
     // cause on CPU). Keep CPU small (≈2.8 GB RAM) and GPU moderate (fits 8 GB
