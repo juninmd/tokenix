@@ -23,6 +23,7 @@ pub const IGNORED_DIRS: &[&str] = &[
     ".ruff_cache",
     "dist",
     "build",
+    "out",
     "obj",
     "target",
     ".next",
