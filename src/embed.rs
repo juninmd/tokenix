@@ -54,9 +54,26 @@ fn model() -> Result<&'static TextEmbedding> {
             }
             let cache_dir = model_cache_dir();
             std::fs::create_dir_all(&cache_dir).ok();
-            TextEmbedding::try_new(
-                InitOptions::new(EmbeddingModel::NomicEmbedTextV15Q).with_cache_dir(cache_dir),
-            )
+
+            #[allow(unused_mut)]
+            let mut options =
+                InitOptions::new(EmbeddingModel::NomicEmbedTextV15Q).with_cache_dir(cache_dir);
+
+            #[cfg(feature = "cuda")]
+            {
+                options = options.with_execution_providers(vec![
+                    ort::execution_providers::CUDAExecutionProvider::default().build(),
+                ]);
+            }
+
+            #[cfg(feature = "directml")]
+            {
+                options = options.with_execution_providers(vec![
+                    ort::execution_providers::DirectMLExecutionProvider::default().build(),
+                ]);
+            }
+
+            TextEmbedding::try_new(options)
         })
         .map_err(|e| anyhow!("Embedding model init failed: {e}"))
 }

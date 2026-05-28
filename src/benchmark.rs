@@ -850,7 +850,7 @@ fn print_targeted_workflows(rows: &[WorkflowRow]) {
         }
         println!(
             "  {:<24} {:>9} {:>9} {:>9} {:>9} {:>7.1}% {:>5}",
-            truncate(&row.label, 24),
+            truncate(row.label, 24),
             format_num(row.raw_tokens as i64),
             format_num(row.outline_tokens as i64),
             format_num(row.target_tokens as i64),

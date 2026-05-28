@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -248,17 +248,41 @@ pub fn insert_embedding(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> 
     Ok(())
 }
 
-pub fn cached_embedding(conn: &Connection, content_hash: &str) -> Result<Option<Vec<f32>>> {
-    let res = conn.query_row(
-        "SELECT embedding FROM embedding_cache WHERE content_hash=?1",
-        params![content_hash],
-        |row| row.get::<_, Vec<u8>>(0),
-    );
-    match res {
-        Ok(bytes) => Ok(Some(deserialize_vec(&bytes))),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
+pub fn cached_embeddings(
+    conn: &Connection,
+    content_hashes: &[String],
+) -> Result<HashMap<String, Vec<f32>>> {
+    const SQLITE_IN_BATCH: usize = 500;
+
+    let mut seen = HashSet::new();
+    let unique_hashes: Vec<&str> = content_hashes
+        .iter()
+        .map(String::as_str)
+        .filter(|hash| seen.insert(*hash))
+        .collect();
+
+    let mut cached = HashMap::new();
+    for batch in unique_hashes.chunks(SQLITE_IN_BATCH) {
+        if batch.is_empty() {
+            continue;
+        }
+
+        let placeholders = batch.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT content_hash, embedding FROM embedding_cache WHERE content_hash IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(batch.iter().copied()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+
+        for row in rows {
+            let (hash, bytes) = row?;
+            cached.insert(hash, deserialize_vec(&bytes));
+        }
     }
+
+    Ok(cached)
 }
 
 pub fn upsert_embedding_cache(
@@ -910,9 +934,10 @@ pub fn index_staleness(repo_root: &Path) -> IndexStaleness {
         match meta_value(&conn, "git_fingerprint") {
             Some(stored) if stored == current => {}
             Some(stored) => {
-                if let (Some(stored_head), Some(current_head)) =
-                    (stored.split(':').last(), current.split(':').last())
-                {
+                if let (Some(stored_head), Some(current_head)) = (
+                    stored.split(':').next_back(),
+                    current.split(':').next_back(),
+                ) {
                     if let (Some(diff), Some(status)) = (
                         git_output(
                             repo_root,
@@ -920,18 +945,19 @@ pub fn index_staleness(repo_root: &Path) -> IndexStaleness {
                         ),
                         git_output(repo_root, &["status", "--porcelain"]),
                     ) {
-                        if diff.trim().is_empty() && status.trim().is_empty() {
-                            if set_meta(&conn, "git_fingerprint", &current).is_ok() {
-                                let now = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs_f64();
-                                let _ = set_meta(&conn, "indexed_at", &now.to_string());
-                                return IndexStaleness {
-                                    stale: false,
-                                    reason: "git HEAD changed but code is identical (fingerprint auto-updated)".to_string(),
-                                };
-                            }
+                        if diff.trim().is_empty()
+                            && status.trim().is_empty()
+                            && set_meta(&conn, "git_fingerprint", &current).is_ok()
+                        {
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs_f64();
+                            let _ = set_meta(&conn, "indexed_at", &now.to_string());
+                            return IndexStaleness {
+                                stale: false,
+                                reason: "git HEAD changed but code is identical (fingerprint auto-updated)".to_string(),
+                            };
                         }
                     }
                 }
@@ -1146,6 +1172,30 @@ mod tests {
         let sim2 = cosine_similarity_to_bytes(&q, q_norm, &bytes);
 
         assert!((sim1 - sim2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_cached_embeddings_batch_lookup() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn, 4).unwrap();
+
+        let first = vec![1.0, 2.0, 3.0, 4.0];
+        let second = vec![0.25, 0.5, 0.75, 1.0];
+        upsert_embedding_cache(&conn, "hash-a", &first).unwrap();
+        upsert_embedding_cache(&conn, "hash-b", &second).unwrap();
+
+        let hashes = vec![
+            "hash-a".to_string(),
+            "missing".to_string(),
+            "hash-a".to_string(),
+            "hash-b".to_string(),
+        ];
+        let cached = cached_embeddings(&conn, &hashes).unwrap();
+
+        assert_eq!(cached.len(), 2);
+        assert_eq!(cached.get("hash-a").unwrap(), &first);
+        assert_eq!(cached.get("hash-b").unwrap(), &second);
+        assert!(!cached.contains_key("missing"));
     }
 
     #[test]

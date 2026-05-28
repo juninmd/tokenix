@@ -3,8 +3,9 @@ use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use sha2::Digest;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -13,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::chunker::{chunk_file, file_hash, should_index, Chunk, IGNORED_DIRS};
 use crate::embed::embed_documents;
 use crate::store::{
-    cached_embedding, count_stats, delete_chunks_for_file, init_schema, insert_chunk,
+    cached_embeddings, count_stats, delete_chunks_for_file, init_schema, insert_chunk,
     insert_embedding, load_all_file_info, open_db, upsert_embedding_cache, upsert_file,
     write_project_name, IndexStats, NewChunk,
 };
@@ -48,6 +49,12 @@ struct EmbedJob {
     text: String,
 }
 
+struct FilePlan {
+    files: Vec<(PathBuf, String)>,
+    deleted: HashSet<String>,
+    git_incremental: bool,
+}
+
 fn mtime_of(path: &Path) -> f64 {
     std::fs::metadata(path)
         .ok()
@@ -61,6 +68,101 @@ fn chunk_embedding_key(text: &str) -> String {
     let mut hasher = sha2::Sha256::new();
     hasher.update(text.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+fn rel_path(repo_root: &Path, abs: &Path) -> String {
+    abs.strip_prefix(repo_root)
+        .unwrap_or(abs)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn walk_indexable_files(repo_root: &Path) -> Vec<(PathBuf, String)> {
+    WalkBuilder::new(repo_root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .filter_entry(|e| {
+            if e.file_type().is_some_and(|t| t.is_dir()) {
+                let name = e.file_name().to_string_lossy();
+                return !IGNORED_DIRS.contains(&name.as_ref());
+            }
+            true
+        })
+        .build()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+        .filter(|e| should_index(e.path()))
+        .map(|e| {
+            let abs = e.into_path();
+            let rel = rel_path(repo_root, &abs);
+            (abs, rel)
+        })
+        .collect()
+}
+
+fn git_changed_files(repo_root: &Path) -> Option<FilePlan> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let mut files = Vec::new();
+    let mut deleted = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut fields = output.stdout.split(|b| *b == 0).filter(|f| !f.is_empty());
+
+    while let Some(field) = fields.next() {
+        if field.len() < 4 {
+            continue;
+        }
+        let x = field[0] as char;
+        let y = field[1] as char;
+        let rel = String::from_utf8_lossy(&field[3..]).replace('\\', "/");
+
+        if x == 'R' || x == 'C' {
+            let _ = fields.next();
+        }
+
+        if x == 'D' || y == 'D' {
+            deleted.insert(rel);
+            continue;
+        }
+
+        let abs = repo_root.join(&rel);
+        if abs.is_file() && should_index(&abs) && seen.insert(rel.clone()) {
+            files.push((abs, rel));
+        }
+    }
+
+    Some(FilePlan {
+        files,
+        deleted,
+        git_incremental: true,
+    })
+}
+
+fn plan_files(
+    repo_root: &Path,
+    force: bool,
+    existing: &HashMap<String, (i64, f64, String)>,
+) -> FilePlan {
+    if !force && !existing.is_empty() {
+        if let Some(plan) = git_changed_files(repo_root) {
+            return plan;
+        }
+    }
+
+    FilePlan {
+        files: walk_indexable_files(repo_root),
+        deleted: HashSet::new(),
+        git_incremental: false,
+    }
 }
 
 fn chunk_only(
@@ -140,36 +242,16 @@ where
 {
     let conn = open_db(repo_root, true)?.unwrap();
     init_schema(&conn, 768)?;
+    let existing: Arc<HashMap<String, (i64, f64, String)>> = Arc::new(load_all_file_info(&conn)?);
 
-    let files: Vec<(PathBuf, String)> = WalkBuilder::new(repo_root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .filter_entry(|e| {
-            if e.file_type().is_some_and(|t| t.is_dir()) {
-                let name = e.file_name().to_string_lossy();
-                return !IGNORED_DIRS.contains(&name.as_ref());
-            }
-            true
-        })
-        .build()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
-        .filter(|e| should_index(e.path()))
-        .map(|e| {
-            let abs = e.into_path();
-            let rel = abs
-                .strip_prefix(repo_root)
-                .unwrap_or(&abs)
-                .to_string_lossy()
-                .replace('\\', "/");
-            (abs, rel)
-        })
-        .collect();
+    let file_plan = plan_files(repo_root, options.force, &existing);
+    let files = file_plan.files;
 
     let total = files.len();
-    if total == 0 {
+    if total == 0 && file_plan.deleted.is_empty() {
+        if file_plan.git_incremental {
+            progress_cb("git incremental: no changed files");
+        }
         let stats = count_stats(&conn)?;
         return Ok((
             IndexResult {
@@ -182,9 +264,15 @@ where
         ));
     }
 
-    let existing: Arc<HashMap<String, (i64, f64, String)>> = Arc::new(load_all_file_info(&conn)?);
-
-    progress_cb(&format!("discovered {} file(s) — chunking", total));
+    if file_plan.git_incremental {
+        progress_cb(&format!(
+            "git incremental: {} changed file(s), {} deleted file(s)",
+            total,
+            file_plan.deleted.len()
+        ));
+    } else {
+        progress_cb(&format!("discovered {} file(s) — chunking", total));
+    }
 
     // Phase 1: parallel file read + chunk (no embedding)
     let pb = ProgressBar::new(total as u64);
@@ -212,26 +300,37 @@ where
     if options.no_embed {
         progress_cb("skipping embeddings (--no-embed); updating chunks and graph only");
     } else {
+        let mut candidate_jobs = Vec::new();
+        let mut candidate_keys = Vec::new();
+
         for (fi, f) in chunked.iter().enumerate() {
             if f.skipped || f.error.is_some() || f.chunks.is_empty() {
                 continue;
             }
-            let mut embeddings = vec![None; f.chunks.len()];
+            let embeddings = vec![None; f.chunks.len()];
             for (ci, chunk) in f.chunks.iter().enumerate() {
                 let text = format!("{}\n{}", f.rel, chunk.content);
                 let cache_key = chunk_embedding_key(&text);
-                if let Some(embedding) = cached_embedding(&conn, &cache_key)? {
-                    embeddings[ci] = Some(embedding);
-                } else {
-                    embed_jobs.push(EmbedJob {
-                        file_idx: fi,
-                        chunk_idx: ci,
-                        cache_key,
-                        text,
-                    });
-                }
+                candidate_keys.push(cache_key.clone());
+                candidate_jobs.push(EmbedJob {
+                    file_idx: fi,
+                    chunk_idx: ci,
+                    cache_key,
+                    text,
+                });
             }
             file_embeddings.insert(fi, embeddings);
+        }
+
+        let cached = cached_embeddings(&conn, &candidate_keys)?;
+        for job in candidate_jobs {
+            if let Some(embedding) = cached.get(&job.cache_key) {
+                if let Some(file_embs) = file_embeddings.get_mut(&job.file_idx) {
+                    file_embs[job.chunk_idx] = Some(embedding.clone());
+                }
+            } else {
+                embed_jobs.push(job);
+            }
         }
     }
 
@@ -348,14 +447,23 @@ where
     let _ = conn.execute_batch("COMMIT");
 
     // Phase 6: clean up removed files from index
-    let walked_files: std::collections::HashSet<&str> =
-        files.iter().map(|(_, r)| r.as_str()).collect();
     let mut removed = false;
-    for (rel_path, (file_id, _, _)) in existing.iter() {
-        if !walked_files.contains(rel_path.as_str()) {
-            progress_cb(&format!("removing deleted file from index: {}", rel_path));
-            let _ = crate::store::delete_file(&conn, *file_id);
-            removed = true;
+    if file_plan.git_incremental {
+        for rel_path in &file_plan.deleted {
+            if let Some((file_id, _, _)) = existing.get(rel_path) {
+                progress_cb(&format!("removing deleted file from index: {}", rel_path));
+                let _ = crate::store::delete_file(&conn, *file_id);
+                removed = true;
+            }
+        }
+    } else {
+        let walked_files: HashSet<&str> = files.iter().map(|(_, r)| r.as_str()).collect();
+        for (rel_path, (file_id, _, _)) in existing.iter() {
+            if !walked_files.contains(rel_path.as_str()) {
+                progress_cb(&format!("removing deleted file from index: {}", rel_path));
+                let _ = crate::store::delete_file(&conn, *file_id);
+                removed = true;
+            }
         }
     }
 

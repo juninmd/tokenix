@@ -54,10 +54,10 @@ enum Commands {
         if_stale: bool,
         #[arg(
             long,
-            help = "Use the lowest CPU settings: 1 worker, 1 ONNX thread, tiny embedding batches (default)"
+            help = "Use the lowest CPU settings: 1 worker, 1 ONNX thread, tiny embedding batches"
         )]
         low_cpu: bool,
-        #[arg(long, help = "Opt out of the default low-CPU indexing profile")]
+        #[arg(long, help = "Use the high-CPU indexing profile (default)")]
         high_cpu: bool,
         #[arg(
             long,
@@ -314,18 +314,18 @@ fn tokenix_bin_path() -> Result<String> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command {
+    let res = match cli.command {
         Commands::Index {
             path,
             force,
             if_stale,
             low_cpu,
-            high_cpu,
+            high_cpu: _,
             jobs,
             embed_batch,
             no_embed,
         } => {
-            configure_index_limits(low_cpu || !high_cpu, jobs, embed_batch);
+            configure_index_limits(low_cpu, jobs, embed_batch);
             cmd_index(&path, force, if_stale, no_embed)
         }
         Commands::Query {
@@ -433,6 +433,13 @@ fn main() -> Result<()> {
             }
             mcp::run_mcp_server()
         }
+    };
+
+    if let Err(ref e) = res {
+        eprintln!("Error: {:?}", e);
+        std::process::exit(1);
+    } else {
+        std::process::exit(0);
     }
 }
 
@@ -460,13 +467,21 @@ fn configure_index_limits(low_cpu: bool, jobs: Option<usize>, embed_batch: Optio
         return;
     }
 
-    // High-CPU profile: more parallel workers, larger ONNX batches.
-    set_env_default("RAYON_NUM_THREADS", jobs.unwrap_or(2).max(1));
-    set_env_default("OMP_NUM_THREADS", 1);
+    // High/Default CPU profile:
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let rayon_threads = jobs.unwrap_or(cpus).max(1);
+    set_env_default("RAYON_NUM_THREADS", rayon_threads);
+    set_env_default("OMP_NUM_THREADS", rayon_threads.min(4));
+
     if let Some(batch) = embed_batch {
         set_env_override("TOKENIX_EMBED_BATCH", batch.max(1));
     } else {
-        set_env_default("TOKENIX_EMBED_BATCH", 32);
+        #[cfg(any(feature = "cuda", feature = "directml"))]
+        set_env_default("TOKENIX_EMBED_BATCH", 128);
+        #[cfg(not(any(feature = "cuda", feature = "directml")))]
+        set_env_default("TOKENIX_EMBED_BATCH", 64);
     }
 }
 

@@ -1,3 +1,5 @@
+#[cfg(not(test))]
+use once_cell::sync::OnceCell;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -51,26 +53,50 @@ pub fn count_tokens(text: &str) -> usize {
     text.len().div_ceil(4)
 }
 
-#[derive(serde::Deserialize, Default)]
+#[derive(serde::Deserialize, Default, Clone)]
 struct ProjectConfig {
     #[serde(default)]
     languages: std::collections::HashMap<String, String>,
 }
 
 fn load_project_config() -> Option<ProjectConfig> {
-    let cwd = std::env::current_dir().ok()?;
-    let root = crate::store::find_project_root(&cwd);
-    let config_path = root.join(".tokenix.toml");
-    if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path).ok()?;
-        return toml::from_str(&content).ok();
+    #[cfg(test)]
+    {
+        let cwd = std::env::current_dir().ok()?;
+        let root = crate::store::find_project_root(&cwd);
+        let config_path = root.join(".tokenix.toml");
+        if config_path.exists() {
+            let content = std::fs::read_to_string(&config_path).ok()?;
+            return toml::from_str(&content).ok();
+        }
+        let config_path2 = root.join("tokenix.toml");
+        if config_path2.exists() {
+            let content = std::fs::read_to_string(&config_path2).ok()?;
+            return toml::from_str(&content).ok();
+        }
+        None
     }
-    let config_path2 = root.join("tokenix.toml");
-    if config_path2.exists() {
-        let content = std::fs::read_to_string(&config_path2).ok()?;
-        return toml::from_str(&content).ok();
+    #[cfg(not(test))]
+    {
+        static PROJECT_CONFIG: OnceCell<Option<ProjectConfig>> = OnceCell::new();
+        PROJECT_CONFIG
+            .get_or_init(|| {
+                let cwd = std::env::current_dir().ok()?;
+                let root = crate::store::find_project_root(&cwd);
+                let config_path = root.join(".tokenix.toml");
+                if config_path.exists() {
+                    let content = std::fs::read_to_string(&config_path).ok()?;
+                    return toml::from_str(&content).ok();
+                }
+                let config_path2 = root.join("tokenix.toml");
+                if config_path2.exists() {
+                    let content = std::fs::read_to_string(&config_path2).ok()?;
+                    return toml::from_str(&content).ok();
+                }
+                None
+            })
+            .clone()
     }
-    None
 }
 
 fn detect_custom_lang(path: &Path) -> Option<Lang> {
@@ -917,7 +943,7 @@ mod tests {
         // Create a temporary .tokenix.toml in the current directory
         let toml_path = std::path::Path::new(".tokenix.toml");
         std::fs::write(
-            &toml_path,
+            toml_path,
             r#"
 [languages]
 customrs = "rust"
@@ -942,7 +968,7 @@ custompy = "python"
         ));
 
         // Clean up
-        let _ = std::fs::remove_file(&toml_path);
+        let _ = std::fs::remove_file(toml_path);
     }
 
     #[test]
