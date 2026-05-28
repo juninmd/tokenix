@@ -1239,6 +1239,102 @@ mod tests {
         assert_eq!(results[0].symbol, "my_cool_function");
     }
 
+    /// Retrieval quality gate. Builds a tiny in-memory index from labeled
+    /// (path, content) docs using the REAL embedding model, then runs labeled
+    /// queries through `hybrid_search` and asserts Hit@1 / Hit@3 thresholds.
+    /// No repo walk, no daemon — just a handful of short embeds, so it is safe
+    /// to run. Model-gated so the default offline `cargo test` stays fast.
+    #[test]
+    #[cfg_attr(
+        not(feature = "model-tests"),
+        ignore = "needs model download; run with --features model-tests"
+    )]
+    fn retrieval_eval_meets_hit_rate_thresholds() {
+        // Mirror the indexer's embedded-text format: "<path>\n<content>".
+        let docs: &[(&str, &str)] = &[
+            (
+                "src/auth.rs",
+                "fn validate_jwt_token(token: &str) -> bool { verify the signature and expiry of a json web token }",
+            ),
+            (
+                "src/db.rs",
+                "struct ConnectionPool { establishes postgres database connections and reuses them via pooling }",
+            ),
+            (
+                "src/cache.rs",
+                "fn evict_lru_entry() { remove the least recently used item from the in-memory cache }",
+            ),
+            (
+                "src/http.rs",
+                "async fn handle_request(req: Request) { route an incoming http request to the right handler }",
+            ),
+            (
+                "src/math.rs",
+                "fn dot_product(a: &[f32], b: &[f32]) -> f32 { sum of the elementwise multiplication of two vectors }",
+            ),
+        ];
+        let queries: &[(&str, &str)] = &[
+            ("how are json web tokens validated", "src/auth.rs"),
+            ("database connection pooling", "src/db.rs"),
+            ("least recently used cache eviction", "src/cache.rs"),
+            ("routing incoming http requests", "src/http.rs"),
+            ("vector dot product", "src/math.rs"),
+        ];
+
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn, 768).unwrap();
+
+        let texts: Vec<String> = docs
+            .iter()
+            .map(|(path, content)| format!("{path}\n{content}"))
+            .collect();
+        let embeddings = crate::embed::embed_documents(&texts).expect("embed docs");
+
+        for (i, (path, content)) in docs.iter().enumerate() {
+            let file_id = upsert_file(&conn, path, i as f64, "hash").unwrap();
+            let chunk_id = insert_chunk(
+                &conn,
+                NewChunk {
+                    file_id,
+                    path,
+                    start: 1,
+                    end: 1,
+                    symbol: "",
+                    kind: "function",
+                    content,
+                    token_count: 10,
+                },
+            )
+            .unwrap();
+            insert_embedding(&conn, chunk_id, &embeddings[i]).unwrap();
+        }
+
+        let mut hit1 = 0usize;
+        let mut hit3 = 0usize;
+        for (query, expected) in queries {
+            let qvec = crate::embed::embed_query(query).expect("embed query");
+            let results = hybrid_search(&conn, &qvec, query, 3, None).unwrap();
+            if results.first().is_some_and(|r| &r.path == expected) {
+                hit1 += 1;
+            }
+            if results.iter().any(|r| &r.path == expected) {
+                hit3 += 1;
+            }
+        }
+
+        let n = queries.len();
+        let hit1_rate = hit1 as f32 / n as f32;
+        let hit3_rate = hit3 as f32 / n as f32;
+        assert!(
+            hit1_rate >= 0.8,
+            "Hit@1 {hit1_rate:.2} below 0.80 threshold ({hit1}/{n})"
+        );
+        assert!(
+            hit3_rate >= 1.0,
+            "Hit@3 {hit3_rate:.2} below 1.00 threshold ({hit3}/{n})"
+        );
+    }
+
     #[test]
     fn test_index_staleness_fingerprint_auto_update() {
         let now = SystemTime::now()
