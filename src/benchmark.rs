@@ -280,10 +280,7 @@ fn matches_expected_path(output: &str, expected_paths: &[String]) -> bool {
 }
 
 fn run_codegraph_context(root: &Path, repo_root: &Path, task: &str) -> Result<String> {
-    let candidates = [
-        root.join("dist/bin/codegraph.js"),
-        PathBuf::from("D:/Solutions/pessoal/codegraph/dist/bin/codegraph.js"),
-    ];
+    let candidates = [root.join("dist/bin/codegraph.js")];
     let Some(cli) = candidates.iter().find(|path| path.exists()) else {
         return Ok(String::new());
     };
@@ -464,7 +461,7 @@ fn sample_git_log(repo_root: &Path) -> String {
 
 fn sample_cargo_check() -> String {
     [
-        "    Checking tokenix v0.1.0 (D:\\Solutions\\pessoal\\tokenix)",
+        "    Checking tokenix v0.1.0 (/path/to/tokenix)",
         "warning: unused variable: `candidate`",
         "   --> src/query.rs:214:9",
         "    |",
@@ -991,12 +988,9 @@ fn print_codegraph_comparison(
     let flow_raw: usize = workflow_rows.iter().map(|r| r.raw_tokens).sum();
     let flow_tokenix: usize = workflow_rows.iter().map(|r| r.total_tokens).sum();
     let readme = read_readme(codegraph_path);
-    let codegraph_cli = [
-        codegraph_path.join("dist/bin/codegraph.js"),
-        PathBuf::from("D:/Solutions/pessoal/codegraph/dist/bin/codegraph.js"),
-    ]
-    .into_iter()
-    .find(|path| path.exists());
+    let codegraph_cli = [codegraph_path.join("dist/bin/codegraph.js")]
+        .into_iter()
+        .find(|path| path.exists());
     let tokenix_stats = open_db(repo_root, false)?
         .as_ref()
         .and_then(|conn| count_stats(conn).ok());

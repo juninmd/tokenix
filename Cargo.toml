@@ -42,4 +42,7 @@ tree-sitter-cpp = "0.20"
 default = []
 cuda = ["dep:ort", "ort/cuda"]
 directml = ["dep:ort", "ort/directml"]
+# Enables tests that download the embedding model (~130 MB) and run inference.
+# Excluded from the default `cargo test` so CI stays fast and offline.
+model-tests = []
 

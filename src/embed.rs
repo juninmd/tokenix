@@ -173,6 +173,10 @@ mod tests {
     /// Verifies the fastembed model loads and returns 768-dim vectors.
     /// Downloads ~130MB on first run; cached in %LOCALAPPDATA%\tokenix\models.
     #[test]
+    #[cfg_attr(
+        not(feature = "model-tests"),
+        ignore = "needs model download; run with --features model-tests"
+    )]
     fn embed_query_returns_768_dims() {
         let vec = embed_query("hello world").expect("embed_query failed");
         assert_eq!(
@@ -189,6 +193,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "model-tests"),
+        ignore = "needs model download; run with --features model-tests"
+    )]
     fn embed_documents_returns_correct_count() {
         let texts = vec![
             "fn main() {}".to_string(),
@@ -202,6 +210,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "model-tests"),
+        ignore = "needs model download; run with --features model-tests"
+    )]
     fn similar_texts_have_higher_cosine_similarity() {
         let q = embed_query("database connection pool").unwrap();
         let doc_similar =
@@ -222,6 +234,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "model-tests"),
+        ignore = "needs model download; run with --features model-tests"
+    )]
     fn test_query_cache_persistence() {
         let query = "test_persistent_cache_query_string_12345";
 
