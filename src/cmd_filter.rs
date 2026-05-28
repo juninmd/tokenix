@@ -21,6 +21,25 @@ fn extract_base_command(input_preview: &str) -> Option<String> {
     cmd.split_whitespace().next().map(str::to_string)
 }
 
+/// Reject command names that aren't plain executable identifiers. `base_cmd`
+/// reaches `cmd /C <base_cmd> --help` (Windows shell metacharacter injection),
+/// a `<base_cmd>.toml` filename (path traversal), and a git branch / PR head.
+/// Allow only a leading alphanumeric followed by `[A-Za-z0-9._-]` — no spaces,
+/// no `& | ; > < $ ` ( ) `, no path separators.
+fn validate_command_name(cmd: &str) -> Result<()> {
+    let mut chars = cmd.chars();
+    let valid = matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && cmd.len() <= 64;
+    if !valid {
+        bail!(
+            "refusing unsafe command name {cmd:?}: only [A-Za-z0-9._-] (≤64 chars, \
+             alphanumeric start) are allowed for filter generation"
+        );
+    }
+    Ok(())
+}
+
 fn format_num(n: i64) -> String {
     let s = n.to_string();
     let mut result = String::new();
@@ -144,6 +163,9 @@ pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<
             stats[idx - 1].base_cmd.clone()
         }
     };
+
+    // Security gate: base_cmd reaches a shell, a filename, and git/PR args.
+    validate_command_name(&base_cmd)?;
 
     // Get sample output by running `<cmd> --help`
     println!(
@@ -513,4 +535,36 @@ fn print_contribution_instructions(cmd: &str, toml_content: &str) {
     println!("{}", toml_content);
     println!("{}", "─".repeat(60));
     println!("  3. PR title: \"filter: add {} filter\"", cmd);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_command_name_accepts_real_commands() {
+        for ok in ["cargo", "npm", "git", "uv", "docker-compose", "go.test", "a"] {
+            assert!(validate_command_name(ok).is_ok(), "{ok} should be allowed");
+        }
+    }
+
+    #[test]
+    fn validate_command_name_rejects_injection_and_traversal() {
+        for bad in [
+            "cargo & calc",     // command chaining
+            "foo|bar",          // pipe
+            "rm;ls",            // semicolon
+            "$(whoami)",        // substitution
+            "../../etc/passwd", // path traversal
+            "a/b",              // path separator
+            "-rf",              // leading dash (flag injection)
+            "",                 // empty
+            "foo bar",          // space
+        ] {
+            assert!(
+                validate_command_name(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
 }
