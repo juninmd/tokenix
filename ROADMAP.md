@@ -125,6 +125,85 @@ tokenix/
 
 ---
 
+---
+
+## Session-Validated Patterns (2026-05-29 cluster recovery)
+
+Real token-burning sequences observed while bringing 38 ArgoCD apps to Synced+Healthy.
+Each maps to a concrete proposed `tokenix k8s` subcommand that collapses N verbose calls
+into one structured answer.
+
+### P1. ArgoCD drift triage — the biggest sink
+**Observed**: Diagnosing why an app was OutOfSync required a chain of ~6 calls per app:
+`get application -o wide` → `jsonpath conditions` → `jsonpath operationState.message` →
+`jsonpath resources[?(@.status=="OutOfSync")]` → per-resource `get -o jsonpath managedFields`
+→ live-vs-git field compare. Repeated for 3 apps = ~18 calls, most returning huge JSON.
+
+**Proposed**: `tokenix k8s drift <app>` → one line per OutOfSync resource with the *minimal*
+diff and a root-cause classifier:
+```
+prometheus-stack/Prometheus  CSA-migration-blocked (manager: kubectl-client-side-apply)
+monitoring-stack/ExternalSecret×3  operator-defaulted-fields (/spec/data, /spec/target/deletionPolicy)
+cluster-config/PriorityClass app-low  missing-on-cluster (immutable value=100)
+```
+Classifier dictionary (seed from this session):
+- `immutable-field` (PriorityClass value, resourceVersion:0 on update)
+- `operator-defaulted-fields` (external-secrets conversionStrategy/decodingStrategy/metadataPolicy)
+- `CSA-migration-blocked` (kubectl-client-side-apply manager + ServerSideApply=true)
+- `annotation-too-long` (>262144 bytes last-applied on large CRDs)
+- `managed-by-root-app` (local edits will be reverted by selfHeal — warn before editing)
+
+Estimated saving: ~18 calls → 3 calls, ~85% fewer tokens on the dominant workflow.
+
+### P2. "Local edit silently reverted" detector
+**Observed**: Editing an ArgoCD-managed Application (monitoring-app.yaml) via `kubectl apply`
+appeared to work ("configured") but root-app selfHeal reverted it; confirmed only after a
+later `jsonpath spec.helm.values` showed the old content. Pure wasted round-trip.
+
+**Proposed**: `tokenix k8s owner <resource>` returns `argocd:root-app (selfHeal=true)` and a
+warning: "edits here revert unless pushed to git <repoURL>@<path>". Reads the
+`argocd.argoproj.io/tracking-id` annotation; zero guessing.
+
+### P3. YAML structural lint that matches the cluster's strictness
+**Observed**: A duplicate `spec:` key in 4 cronjobs was tolerated by `kubectl apply`
+(non-strict) but broke ArgoCD's `kustomize build` → app stuck Unknown for hours. Detecting it
+cost a full `kubectl kustomize` run + per-file `sed`/`grep` hunting.
+
+**Proposed**: `tokenix lint k8s <dir>` — strict-mode YAML/kustomize pre-flight that flags
+duplicate keys, misplaced fields (e.g. `activeDeadlineSeconds` at CronJob.spec vs
+jobTemplate.spec), and renders the same errors ArgoCD would, before commit. One call,
+line-accurate.
+
+### P4. Job/Pod failure rollup
+**Observed**: `kubectl get jobs -A` + `awk` filtering + per-job `logs -l job-name=...` to find
+the one error line, repeated for postgres-backup-verify, evo-agent, github-assistance. Logs
+returned 20-30 lines to surface a single causal line ("Connection refused", "401 Unauthorized").
+
+**Proposed**: `tokenix k8s failures [--since 24h]` → table of failed jobs with the *single*
+extracted error line (regex: `error|failed|refused|unauthorized|timeout`), de-duplicated by
+root cause. Turns ~10 calls of multi-line dumps into one rollup.
+
+### P5. Orphan detector
+**Observed**: Stray CronJobs in `default` ns (evo-agent-crawl, akitemquiz-cuts-daily) — not in
+git, no ArgoCD tracking — spawned Pending pods hourly (missing PVC). Found only by manually
+cross-checking tracking labels vs git.
+
+**Proposed**: `tokenix k8s orphans` — lists live workloads with no `argocd.argoproj.io/tracking-id`
+and no matching git manifest. Surfaces exactly this class of silent resource leak.
+
+### Output-discipline lessons (apply to tokenix's own CLI)
+- Default to **single-line-per-item** with a `--wide`/`--json` opt-in, never the reverse.
+- Extract-then-show: for logs, return the matched causal line + ±1 context, not the tail.
+- Always prefer `jsonpath`/projection over full `-o yaml`/`-o json` dumps (a single Prometheus
+  CR or large CRD `-o yaml` is thousands of tokens; the needed field is ~10).
+
+### Suggested first implementation slice
+`tokenix k8s drift <app>` (P1) + `tokenix k8s failures` (P4) cover the two dominant sinks of
+this session and reuse the same kube client + a small root-cause classifier table. Ship those
+before the broader indexing work in Phases 1–3 above.
+
+---
+
 **Last updated**: 2026-05-29  
 **Owner**: Tokenix optimization initiative  
-**Status**: In planning
+**Status**: In planning (session-validated patterns added from app-charts cluster recovery)
