@@ -8,7 +8,7 @@
   <p>
     <a href="https://github.com/juninmd/tokenix/releases"><img src="https://img.shields.io/github/v/release/juninmd/tokenix?style=flat-square&color=orange&label=release" alt="Latest Release" /></a>
     <a href="https://crates.io/crates/tokenix"><img src="https://img.shields.io/crates/v/tokenix?style=flat-square&color=orange" alt="crates.io" /></a>
-    <a href="Cargo.toml"><img src="https://img.shields.io/badge/cargo-0.9.0-orange?style=flat-square" alt="Cargo.toml" /></a>
+    <a href="Cargo.toml"><img src="https://img.shields.io/badge/cargo-0.12.0-orange?style=flat-square" alt="Cargo.toml" /></a>
     <a href="https://github.com/juninmd/tokenix/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License" /></a>
     <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust" alt="Built with Rust" /></a>
     <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platforms" />
@@ -69,6 +69,7 @@ Download the latest binary for your platform from [GitHub Releases](https://gith
 | macOS x86_64 | `tokenix-macos-x86_64` |
 | macOS arm64 (M1/M2/M3) | `tokenix-macos-aarch64` |
 | Windows x86_64 | `tokenix-windows-x86_64.exe` |
+| Windows x86_64 (GPU / DirectML) | `tokenix-windows-x86_64-directml.exe` |
 
 ### From crates.io
 
@@ -402,8 +403,7 @@ tokenix install-hook --tool all
 | Flag | Default | Description |
 |---|---|---|
 | `--force`, `-f` | false | Reindex all files, ignoring cache |
-| `--low-cpu` | true | Use 1 worker, 1 ONNX thread, tiny embedding batches, and a short pause between batches |
-| `--high-cpu` | false | Opt out of the default low-CPU indexing profile |
+| `--cpu-profile` | `default` | Resource profile: `low` (1 worker, tiny batches, pause between batches), `default`, `max` (all cores, large batches) |
 | `--jobs N` | env/default | Set max rayon worker threads for indexing |
 | `--embed-batch N` | 16 (CPU) / 64 (GPU) | Embedding batch size; drives peak memory — lower it if RAM/VRAM is tight |
 | `--if-stale` | false | Skip if index is fresh for the current Git worktree/branch/HEAD |
@@ -447,7 +447,8 @@ tokenix install-hook --tool all
 | JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | `function`, `class`, arrow functions |
 | Go | `.go` | `func`, `type` |
 | C / C++ | `.c`, `.cpp`, `.h`, `.hpp`, `.cc`, `.cxx` | `function`, `class`, `struct`, `namespace` |
-| Config / Docs | `.toml`, `.yaml`, `.yml`, `.json`, `.md`, `.txt`, `.sh`, `.bash` | 400-token line blocks |
+| Config / Docs | `.toml`, `.md`, `.txt`, `.sh`, `.bash` | 400-token line blocks |
+| Data files (opt-in) | `.json`, `.yaml`, `.yml` | Indexed only when `data_files = true` in `.tokenix.toml` |
 | **Custom** | any extension | Mapped to an existing parser via `.tokenix.toml` |
 
 Languages without a symbol-aware chunker (Java, C#, Ruby, Swift, Kotlin, Scala, …) are not indexed — blind line-block chunking produces low-quality search results and is intentionally excluded.
