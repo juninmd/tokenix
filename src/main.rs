@@ -1776,6 +1776,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(windows)] // codex_hook_ps1 is Windows-only; the test must be too.
     fn codex_wrapper_fails_post_open_but_preserves_pre_intercepts() {
         let ps1 = codex_hook_ps1("C:/tokenix/tokenix.exe");
 
