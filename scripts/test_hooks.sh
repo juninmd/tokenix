@@ -13,7 +13,10 @@
 set -euo pipefail
 
 TOKENIX="${1:-${TOKENIX_BIN:-tokenix}}"
-if [[ "$TOKENIX" != /* ]] && ! command -v "$TOKENIX" &>/dev/null; then
+# Make the binary path absolute before we cd into the temp repo. A relative path
+# with a slash (e.g. ./bin/tokenix) stops resolving after cd; a bare name not on
+# PATH also needs anchoring. A bare name on PATH is left for PATH lookup.
+if [[ "$TOKENIX" != /* ]] && { [[ "$TOKENIX" == */* ]] || ! command -v "$TOKENIX" &>/dev/null; }; then
   TOKENIX="$(pwd)/$TOKENIX"
 fi
 TMPDIR_ROOT=$(mktemp -d)
