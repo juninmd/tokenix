@@ -97,37 +97,19 @@ jobs:
           path: /tmp/tokenix-*
           retention-days: 7
 
-  # ─── Job 3: Binary sanity across architectures (build only) ─────────────
+  # ─── Job 3: Binary sanity on aarch64 (native build) ─────────────────────
+  # Built natively on an ARM runner, matching the release workflow. Cross-compiling
+  # aarch64/musl from x86 pulls openssl-sys (via hf-hub native-tls), which has no
+  # cross OpenSSL available on the runner.
   cross-compile-check:
-    name: Cross-compile check (${{ matrix.target }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - aarch64-unknown-linux-gnu
-          - x86_64-unknown-linux-musl
+    name: Binary sanity (aarch64 native)
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust + cross target
-        run: |
-          rustup update stable
-          rustup target add ${{ matrix.target }}
-
-      - name: Install cross-compilation toolchain
-        run: |
-          sudo apt-get update -qq
-          case "${{ matrix.target }}" in
-            aarch64-unknown-linux-gnu)
-              sudo apt-get install -y gcc-aarch64-linux-gnu
-              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-              ;;
-            x86_64-unknown-linux-musl)
-              sudo apt-get install -y musl-tools
-              ;;
-          esac
+      - name: Install Rust stable
+        run: rustup update stable && rustup default stable
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -136,26 +118,18 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cross-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-cross-${{ matrix.target }}-
+          key: linux-arm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-arm-
 
-      - name: Build for ${{ matrix.target }}
-        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Build release (native aarch64)
+        run: cargo build --release --locked
 
       - name: Verify ELF header and architecture
         run: |
-          BIN="target/${{ matrix.target }}/release/tokenix"
+          BIN="target/release/tokenix"
           file "$BIN"
-          case "${{ matrix.target }}" in
-            aarch64-unknown-linux-gnu)
-              file "$BIN" | grep -q "ARM aarch64" || { echo "FAIL: wrong arch"; exit 1; }
-              ;;
-            x86_64-unknown-linux-musl)
-              file "$BIN" | grep -q "x86-64" || { echo "FAIL: wrong arch"; exit 1; }
-              file "$BIN" | grep -qi "static" || echo "WARN: not statically linked (musl target)"
-              ;;
-          esac
-          echo "PASS: binary matches expected target"
+          file "$BIN" | grep -q "ARM aarch64" || { echo "FAIL: wrong arch"; exit 1; }
+          echo "PASS: aarch64 binary built natively"
 
   # ─── Job 4: Cargo unit tests on Linux (fast) ────────────────────────────
   unit-tests-linux:
