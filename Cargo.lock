@@ -2714,7 +2714,7 @@ dependencies = [
 
 [[package]]
 name = "tokenix"
-version = "0.9.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "chrono",

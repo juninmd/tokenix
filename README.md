@@ -474,7 +474,7 @@ tokenix compresses `Bash` and `ListDirectory` output via a `PostToolUse` hook be
 
 1. **Local project filters** — drop `.toml` files in `.tokenix/filters/` inside the repository. Scoped to the project, committed to version control, shared with the team.
 2. **User filters** — drop `.toml` files in `~/.tokenix/filters/`. Take priority over bundled filters, apply to all projects.
-3. **Bundled filters** — 59 RTK-compatible TOML filters shipped inside the binary, covering `uv sync`, `cargo build`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 70 RTK-compatible TOML filters shipped inside the binary, covering `uv sync`, `cargo build`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -539,7 +539,7 @@ src/
 └── gain.rs        Analytics from .tokenix/hook.log — per-model cost table
 
 assets/
-└── filters/       59 RTK-compatible TOML filters, embedded in the binary via rust-embed
+└── filters/       70 RTK-compatible TOML filters, embedded in the binary via rust-embed
 ```
 
 ### GPU Acceleration (opt-in)
