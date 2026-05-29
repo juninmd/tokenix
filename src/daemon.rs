@@ -488,7 +488,9 @@ fn is_process_alive(pid: u32) -> bool {
         if rc == 0 {
             return true;
         }
-        unsafe { *libc::__errno_location() != libc::ESRCH }
+        // Read errno portably: glibc's __errno_location is not available on macOS.
+        // EPERM (process owned by another user) still means the process is alive.
+        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
 }
 

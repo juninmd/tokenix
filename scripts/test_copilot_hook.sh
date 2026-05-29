@@ -60,6 +60,69 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
+section "Copilot hook-post: Bash output compression (modifiedResult JSON)"
+
+# Copilot postToolUse sends: {"toolName":"bash","toolArgs":{...},"toolResult":{"textResultForLlm":"..."}}
+# tokenix must reply on stdout with {"modifiedResult":{"resultType":"success","textResultForLlm":"<compressed>"}}
+# and exit 0 (Copilot parses stdout JSON only on exit 0).
+
+# git status → git-status filter strips the "no changes added to commit" help hint.
+GIT_STATUS='On branch main\nYour branch is up to date.\n\nChanges not staged for commit:\n\tmodified:   src/a.rs\n\tmodified:   src/b.rs\n\tmodified:   src/c.rs\nno changes added to commit (use \"git add\" and/or \"git commit -a\")\n'
+PAYLOAD="{\"toolName\":\"bash\",\"toolArgs\":{\"command\":\"git status\"},\"toolResult\":{\"resultType\":\"success\",\"textResultForLlm\":\"$GIT_STATUS\"}}"
+OUT=$(printf '%s' "$PAYLOAD" | "$TOKENIX" hook-post 2>/dev/null); CODE=$?
+if [ "$CODE" = "0" ] && echo "$OUT" | grep -q '"modifiedResult"' && echo "$OUT" | grep -q '"textResultForLlm"'; then
+  pass "git status → modifiedResult JSON, exit 0"
+else
+  fail "git status post-hook (code=$CODE)" "out: $OUT"
+fi
+if echo "$OUT" | grep -q "no changes added to commit"; then
+  fail "git status filter did not strip help-hint line" "out: $OUT"
+else
+  pass "git status RTK filter stripped help-hint line"
+fi
+
+# git diff → git-diff filter strips diff headers (diff --git, index, ---, +++).
+GIT_DIFF='diff --git a/src/a.rs b/src/a.rs\nindex 1234567..89abcde 100644\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,3 +1,3 @@\n-old line\n+new line\n context\n'
+PAYLOAD="{\"toolName\":\"bash\",\"toolArgs\":{\"command\":\"git diff\"},\"toolResult\":{\"textResultForLlm\":\"$GIT_DIFF\"}}"
+OUT=$(printf '%s' "$PAYLOAD" | "$TOKENIX" hook-post 2>/dev/null); CODE=$?
+if [ "$CODE" = "0" ] && echo "$OUT" | grep -q '"modifiedResult"'; then
+  pass "git diff → modifiedResult JSON, exit 0"
+else
+  fail "git diff post-hook (code=$CODE)" "out: $OUT"
+fi
+if echo "$OUT" | grep -q "diff --git"; then
+  fail "git diff filter did not strip 'diff --git' header" "out: $OUT"
+else
+  pass "git diff RTK filter stripped 'diff --git' header"
+fi
+
+# toolArgs as a JSON-encoded string (Copilot sometimes does this).
+PAYLOAD='{"toolName":"bash","toolArgs":"{\"command\":\"git status\"}","toolResult":{"textResultForLlm":"On branch main\nno changes added to commit (use \"git add\")\n"}}'
+OUT=$(printf '%s' "$PAYLOAD" | "$TOKENIX" hook-post 2>/dev/null); CODE=$?
+if [ "$CODE" = "0" ] && echo "$OUT" | grep -q '"modifiedResult"'; then
+  pass "string-encoded toolArgs → command parsed, compressed"
+else
+  fail "string-encoded toolArgs post-hook (code=$CODE)" "out: $OUT"
+fi
+
+# Unknown post tool (view) → pass through: exit 0, no modifiedResult.
+PAYLOAD='{"toolName":"view","toolArgs":{"path":"x"},"toolResult":{"textResultForLlm":"small"}}'
+OUT=$(printf '%s' "$PAYLOAD" | "$TOKENIX" hook-post 2>/dev/null); CODE=$?
+if [ "$CODE" = "0" ] && ! echo "$OUT" | grep -q "modifiedResult"; then
+  pass "view post-hook passes through (exit 0, no modifiedResult)"
+else
+  fail "view post-hook should pass through (code=$CODE)" "out: $OUT"
+fi
+
+# Post-hook must also never exit 1 (would corrupt Copilot's result handling).
+printf '%s' '{not json}' | "$TOKENIX" hook-post >/dev/null 2>&1; CODE=$?
+if [ "$CODE" = "1" ]; then
+  fail "CRITICAL: hook-post exits 1 on invalid JSON (breaks Copilot)"
+else
+  pass "hook-post never exits 1 on invalid input (got $CODE)"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
 section "Copilot hook: installation"
 
 TESTDIR="$TMPDIR_ROOT/install"
@@ -82,6 +145,12 @@ if [ -f ".github/hooks/hooks.json" ]; then
     pass ".github/hooks/hooks.json has preToolUse and bash"
   else
     fail "hooks.json missing preToolUse or bash"
+  fi
+  # postToolUse wires Bash-output (git status/diff/log) compression for Copilot.
+  if grep -q '"postToolUse"' ".github/hooks/hooks.json" && grep -q 'hook-post' ".github/hooks/hooks.json"; then
+    pass ".github/hooks/hooks.json has postToolUse and hook-post"
+  else
+    fail "hooks.json missing postToolUse or hook-post"
   fi
 else
   fail ".github/hooks/hooks.json not created"

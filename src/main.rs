@@ -1240,9 +1240,13 @@ Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
     std::fs::create_dir_all(&hooks_dir)?;
     let hooks_path = hooks_dir.join("hooks.json");
 
-    // Use platform-specific command fields; Copilot passes tool context via env vars
+    // Copilot passes tool context as JSON on stdin (camelCase toolName/toolArgs/toolResult).
+    // preToolUse: intercept Read/Grep before they run. postToolUse: compress Bash output
+    // (git status/diff/log, cargo, etc.) after it runs, via {"modifiedResult":{...}}.
     let hook_bash = format!("{} hook", tokenix_bin);
     let hook_ps = format!("{} hook", tokenix_bin);
+    let hook_post_bash = format!("{} hook-post", tokenix_bin);
+    let hook_post_ps = format!("{} hook-post", tokenix_bin);
 
     let hooks_json = serde_json::json!({
         "version": 1,
@@ -1251,6 +1255,12 @@ Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
                 "type": "command",
                 "bash": hook_bash,
                 "powershell": hook_ps,
+                "timeoutSec": 10
+            }],
+            "postToolUse": [{
+                "type": "command",
+                "bash": hook_post_bash,
+                "powershell": hook_post_ps,
                 "timeoutSec": 10
             }]
         }
@@ -1272,6 +1282,14 @@ Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
         );
     }
 
+    println!(
+        "  preToolUse:  {} hook       (Read/Grep interception)",
+        tokenix_bin
+    );
+    println!(
+        "  postToolUse: {} hook-post  (Bash output compression)",
+        tokenix_bin
+    );
     println!("  Note: commit .github/ to enable for all contributors.");
     Ok(())
 }
@@ -1523,8 +1541,8 @@ fn upsert_codex_hook(slot: &mut serde_json::Value, hook: serde_json::Value) {
     arr.retain(|entry| {
         let s = entry.to_string();
         !s.contains("tokenix-codex-hook.ps1")
-                && !s.contains("tokenix hook")
-                && !s.contains("tokenix hook-post")
+            && !s.contains("tokenix hook")
+            && !s.contains("tokenix hook-post")
     });
     arr.push(hook);
 }
