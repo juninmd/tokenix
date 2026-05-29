@@ -72,7 +72,7 @@ pub fn gpu_backend() -> Option<&'static str> {
     {
         return Some("CUDA");
     }
-    #[cfg(feature = "directml")]
+    #[cfg(all(feature = "directml", target_os = "windows"))]
     {
         return Some("DirectML");
     }

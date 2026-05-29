@@ -1372,16 +1372,23 @@ function tx-query {{ & "{tokenix_bin}" query @args }}
         ps1_path.display()
     );
 
-    let hook_ps1_path = codex_dir.join("tokenix-codex-hook.ps1");
-    std::fs::write(&hook_ps1_path, codex_hook_ps1(&tokenix_bin))?;
-    println!(
-        "{} Codex hook wrapper ->  {}",
-        "ok".green(),
-        hook_ps1_path.display()
-    );
-
     let hooks_path = codex_dir.join("hooks.json");
-    install_codex_hooks_json(&hooks_path, &hook_ps1_path)?;
+
+    #[cfg(windows)]
+    {
+        let hook_ps1_path = codex_dir.join("tokenix-codex-hook.ps1");
+        std::fs::write(&hook_ps1_path, codex_hook_ps1(&tokenix_bin))?;
+        println!(
+            "{} Codex hook wrapper ->  {}",
+            "ok".green(),
+            hook_ps1_path.display()
+        );
+        install_codex_hooks_json_windows(&hooks_path, &hook_ps1_path)?;
+    }
+
+    #[cfg(not(windows))]
+    install_codex_hooks_json_unix(&hooks_path, &tokenix_bin)?;
+
     println!(
         "{} Codex hooks        ->  {}",
         "ok".green(),
@@ -1394,6 +1401,7 @@ function tx-query {{ & "{tokenix_bin}" query @args }}
     Ok(())
 }
 
+#[cfg(windows)]
 fn codex_hook_ps1(tokenix_bin: &str) -> String {
     format!(
         r#"param(
@@ -1447,48 +1455,63 @@ exit 0
     )
 }
 
-fn install_codex_hooks_json(hooks_path: &Path, hook_ps1_path: &Path) -> Result<()> {
-    let mut hooks: serde_json::Value = if hooks_path.exists() {
-        let raw = std::fs::read_to_string(hooks_path)?;
-        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
-
-    if !hooks["hooks"].is_object() {
-        hooks["hooks"] = serde_json::json!({});
-    }
-
+#[cfg(windows)]
+fn install_codex_hooks_json_windows(hooks_path: &Path, hook_ps1_path: &Path) -> Result<()> {
+    let mut hooks = load_codex_hooks_json(hooks_path);
     let command = format!(
         "powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
         hook_ps1_path.to_string_lossy().replace('\\', "/")
     );
-
     upsert_codex_hook(
         &mut hooks["hooks"]["PreToolUse"],
         serde_json::json!({
             "matcher": "^(Read|Grep)$",
-            "hooks": [{
-                "type": "command",
-                "command": format!("{command} pre"),
-                "timeout": 10
-            }]
+            "hooks": [{"type": "command", "command": format!("{command} pre"), "timeout": 10}]
         }),
     );
     upsert_codex_hook(
         &mut hooks["hooks"]["PostToolUse"],
         serde_json::json!({
             "matcher": "^(Bash|ListDirectory)$",
-            "hooks": [{
-                "type": "command",
-                "command": format!("{command} post"),
-                "timeout": 10
-            }]
+            "hooks": [{"type": "command", "command": format!("{command} post"), "timeout": 10}]
         }),
     );
-
     std::fs::write(hooks_path, serde_json::to_string_pretty(&hooks)?)?;
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn install_codex_hooks_json_unix(hooks_path: &Path, tokenix_bin: &str) -> Result<()> {
+    let mut hooks = load_codex_hooks_json(hooks_path);
+    upsert_codex_hook(
+        &mut hooks["hooks"]["PreToolUse"],
+        serde_json::json!({
+            "matcher": "^(Read|Grep)$",
+            "hooks": [{"type": "command", "command": format!("{tokenix_bin} hook"), "timeout": 10}]
+        }),
+    );
+    upsert_codex_hook(
+        &mut hooks["hooks"]["PostToolUse"],
+        serde_json::json!({
+            "matcher": "^(Bash|ListDirectory)$",
+            "hooks": [{"type": "command", "command": format!("{tokenix_bin} hook-post"), "timeout": 10}]
+        }),
+    );
+    std::fs::write(hooks_path, serde_json::to_string_pretty(&hooks)?)?;
+    Ok(())
+}
+
+fn load_codex_hooks_json(hooks_path: &Path) -> serde_json::Value {
+    let mut hooks: serde_json::Value = if hooks_path.exists() {
+        let raw = std::fs::read_to_string(hooks_path).unwrap_or_default();
+        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    if !hooks["hooks"].is_object() {
+        hooks["hooks"] = serde_json::json!({});
+    }
+    hooks
 }
 
 fn upsert_codex_hook(slot: &mut serde_json::Value, hook: serde_json::Value) {
@@ -1496,7 +1519,13 @@ fn upsert_codex_hook(slot: &mut serde_json::Value, hook: serde_json::Value) {
         *slot = serde_json::json!([]);
     }
     let arr = slot.as_array_mut().unwrap();
-    arr.retain(|entry| !entry.to_string().contains("tokenix-codex-hook.ps1"));
+    // Remove any prior tokenix codex hook (Windows .ps1 path or Unix direct binary)
+    arr.retain(|entry| {
+        let s = entry.to_string();
+        !s.contains("tokenix-codex-hook.ps1")
+                && !s.contains("tokenix hook")
+                && !s.contains("tokenix hook-post")
+    });
     arr.push(hook);
 }
 
@@ -1597,7 +1626,10 @@ fn remove_codex_hooks_json(json: &mut serde_json::Value) {
         let Some(arr) = json["hooks"][phase].as_array_mut() else {
             continue;
         };
-        arr.retain(|entry| !entry.to_string().contains("tokenix-codex-hook.ps1"));
+        arr.retain(|entry| {
+            let s = entry.to_string();
+            !s.contains("tokenix-codex-hook.ps1") && !s.contains("tokenix hook")
+        });
     }
 }
 
@@ -1786,5 +1818,30 @@ mod tests {
         assert!(json.to_string().contains("other pre"));
         assert!(json.to_string().contains("other post"));
         assert!(!json.to_string().contains("tokenix-codex-hook.ps1"));
+    }
+
+    #[test]
+    fn remove_codex_hook_json_removes_unix_style_hooks() {
+        let mut json = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {"hooks": [{"command": "other pre"}]},
+                    {"hooks": [{"command": "/usr/local/bin/tokenix hook"}]}
+                ],
+                "PostToolUse": [
+                    {"hooks": [{"command": "other post"}]},
+                    {"hooks": [{"command": "/usr/local/bin/tokenix hook-post"}]}
+                ]
+            }
+        });
+
+        remove_codex_hooks_json(&mut json);
+
+        assert_eq!(json["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(json["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
+        assert!(json.to_string().contains("other pre"));
+        assert!(json.to_string().contains("other post"));
+        assert!(!json.to_string().contains("tokenix hook"));
+        assert!(!json.to_string().contains("tokenix hook-post"));
     }
 }

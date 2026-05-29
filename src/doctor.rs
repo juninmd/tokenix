@@ -135,23 +135,39 @@ fn detect_cuda_toolkit() -> Option<String> {
 }
 
 fn detect_cudnn() -> bool {
-    // Windows: cudnn64_*.dll near CUDA_PATH; Unix: libcudnn.so on common paths.
     let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(p) = std::env::var("CUDA_PATH") {
-        roots.push(PathBuf::from(p));
+
+    #[cfg(windows)]
+    {
+        // cudnn64_*.dll lives in %CUDA_PATH%\bin on Windows.
+        if let Ok(p) = std::env::var("CUDA_PATH") {
+            roots.push(PathBuf::from(&p).join("bin"));
+            roots.push(PathBuf::from(p));
+        }
     }
+
     #[cfg(unix)]
     {
+        // libcudnn.so.* on standard Linux paths and common CUDA install locations.
         roots.push(PathBuf::from("/usr/lib"));
         roots.push(PathBuf::from("/usr/lib/x86_64-linux-gnu"));
-        roots.push(PathBuf::from("/usr/local/cuda"));
+        roots.push(PathBuf::from("/usr/local/cuda/lib64"));
+        roots.push(PathBuf::from("/usr/local/cuda/lib"));
+        if let Ok(p) = std::env::var("CUDA_PATH") {
+            roots.push(PathBuf::from(p).join("lib64"));
+        }
     }
-    let needle_dll = "cudnn";
+
     for root in roots {
-        if let Ok(rd) = std::fs::read_dir(root.join("bin")).or_else(|_| std::fs::read_dir(&root)) {
+        if let Ok(rd) = std::fs::read_dir(&root) {
             for e in rd.flatten() {
                 let n = e.file_name().to_string_lossy().to_lowercase();
-                if n.contains(needle_dll) && (n.ends_with(".dll") || n.contains(".so")) {
+                let is_cudnn = n.contains("cudnn");
+                #[cfg(windows)]
+                let is_lib = n.ends_with(".dll");
+                #[cfg(unix)]
+                let is_lib = n.contains(".so");
+                if is_cudnn && is_lib {
                     return true;
                 }
             }

@@ -33,12 +33,10 @@ struct CopilotHookInput {
 
 impl HookInput {
     fn from_env() -> Option<Self> {
-        let tool_name = std::env::var("COPILOT_TOOL_NAME")
-            .or_else(|_| std::env::var("TOOL_NAME"))
-            .ok()?;
-        let tool_input_raw = std::env::var("COPILOT_TOOL_INPUT")
-            .or_else(|_| std::env::var("TOOL_INPUT"))
-            .unwrap_or_default();
+        // Env vars are a fallback for non-standard tools; Copilot uses stdin.
+        // Only support generic TOOL_NAME/TOOL_INPUT (not COPILOT_* which can't normalize).
+        let tool_name = std::env::var("TOOL_NAME").ok()?;
+        let tool_input_raw = std::env::var("TOOL_INPUT").unwrap_or_default();
         let tool_input = serde_json::from_str(&tool_input_raw).unwrap_or(serde_json::Value::Null);
         Some(HookInput {
             tool_name,

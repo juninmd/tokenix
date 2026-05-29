@@ -284,6 +284,25 @@ pub fn run_serve(port: Option<u16>) -> Result<()> {
     );
 
     let listener = TcpListener::bind(format!("127.0.0.1:{port}"))?;
+
+    // On Linux, sockets enter TIME_WAIT after close. Without SO_REUSEADDR a
+    // rapid daemon restart (crash → respawn) fails with "Address already in use"
+    // for up to 60 s. Windows sets this by default; Unix does not.
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            let opt: libc::c_int = 1;
+            libc::setsockopt(
+                listener.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_REUSEADDR,
+                &opt as *const libc::c_int as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
+    }
+
     eprintln!("[tokenix] daemon pid={} port={port}", std::process::id());
 
     for stream in listener.incoming() {
@@ -434,6 +453,18 @@ fn spawn_daemon() -> bool {
         cmd.creation_flags(0x00000008 | 0x08000000);
     }
 
+    // On Unix, detach from the terminal session so the daemon survives after the
+    // spawning hook process exits. Without setsid() the child stays in the same
+    // process group and receives SIGHUP when the parent's session ends.
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt as _;
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+
     cmd.spawn().is_ok()
 }
 
@@ -449,8 +480,15 @@ fn is_process_alive(pid: u32) -> bool {
         false
     }
     #[cfg(unix)]
-    unsafe {
-        libc::kill(pid as libc::pid_t, 0) == 0
+    {
+        // kill(pid, 0) returns 0 if process exists and we have permission,
+        // -1+ESRCH if it does not exist, -1+EPERM if it exists but we lack
+        // permission (another user's process). EPERM means alive.
+        let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        if rc == 0 {
+            return true;
+        }
+        unsafe { *libc::__errno_location() != libc::ESRCH }
     }
 }
 
