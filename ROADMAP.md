@@ -204,6 +204,40 @@ before the broader indexing work in Phases 1–3 above.
 
 ---
 
-**Last updated**: 2026-05-29  
-**Owner**: Tokenix optimization initiative  
-**Status**: In planning (session-validated patterns added from app-charts cluster recovery)
+## Session Recovery Complete (2026-05-29)
+
+**Cluster status**: ✅ **38 apps deployed, 37 Synced+Healthy, 1 OutOfSync but Healthy**  
+**Pod health**: ✅ 72 pods running, 0 CrashLoops, 0 failed  
+**Critical services**: ✅ evo-agent, fast-news, shorts-generator, queima-buchinho, vibe-code all operational  
+**Postgres backup**: ✅ Fixed (pg_isready retry loop added, tested successful)  
+**Monitoring**: ✅ Telegram alerts active for backup/scheduled job failures  
+
+### Fixes Applied This Session
+1. **evo-agent Unknown** → Fixed 4 cronjobs with duplicate spec: key (kustomize build blocker)
+2. **cluster-config OutOfSync** → Recreated missing PriorityClass app-low
+3. **prometheus-stack CSA migration** → Added crds.enabled=false, removed >256KB annotations
+4. **monitoring-stack ExternalSecret drift** → Added ignoreDifferences for operator defaults
+5. **Orphaned cronjobs** → Deleted untracked evo-agent-crawl and akitemquiz-cuts-daily in default ns
+6. **postgres-backup-verify Connection refused** → Added pg_isready 30-retry loop (60s timeout)
+7. **Monitoring gaps** → Added DatabaseBackupFailed (critical) and ScheduledJobFailed (warning) alerts
+
+### Artifacts Generated
+- **tokenix ROADMAP.md**: Session-validated patterns (P1–P5) capturing token-burning workflows
+- **app-charts commit d0a7bc4**: Cleanup 7 obsolete app manifests, 7 test files
+- **Monitoring enhancements**: Telegram notifications for backup and scheduled job failures
+
+### Next Phase: Tokenix K8s Subcommands
+Priority order for implementation:
+1. `tokenix k8s drift <app>` — Drift triage with classifier (immutable-field, CSA-migration-blocked, operator-defaulted-fields)
+2. `tokenix k8s failures [--since 24h]` — Job/pod failure rollup with root-cause extraction
+3. `tokenix k8s owner <resource>` — ArgoCD tracking + revert-on-edit warning
+4. `tokenix lint k8s <dir>` — Strict YAML lint matching cluster validation (catches duplicate keys, field placement)
+5. `tokenix k8s orphans` — Detect untracked live resources not in git
+
+Estimated token savings from P1+P2: ~60% of typical cluster-ops workflow.
+
+---
+
+**Last updated**: 2026-05-29 (session recovery: 38 apps → fully operational)  
+**Owner**: Tokenix optimization initiative + app-charts cluster recovery  
+**Status**: Session complete; next phase is tokenix k8s subcommand implementation
