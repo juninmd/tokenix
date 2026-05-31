@@ -14,10 +14,29 @@ pub fn global_preferences_path() -> Result<PathBuf> {
 }
 
 pub fn project_preferences_path(repo_root: &Path) -> Result<PathBuf> {
-    Ok(tokenix_home()?.join(format!(
-        "{}.preferences.md",
+    let name = repo_root
+        .file_name()
+        .map(|n| sanitize_repo_name(&n.to_string_lossy()))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "repo".to_string());
+    // Human-readable name + short project id keeps files browsable while staying
+    // unique across same-named folders. Grouped under preferences/.
+    Ok(tokenix_home()?.join("preferences").join(format!(
+        "{}-{}.md",
+        name,
         crate::store::project_id(repo_root)
     )))
+}
+
+/// Keep filesystem-safe, readable characters; collapse the rest to `_`.
+fn sanitize_repo_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+            c
+        } else {
+            '_'
+        })
+        .collect()
 }
 
 pub fn add_preference(repo_root: &Path, scope: PreferenceScope, text: &str) -> Result<PathBuf> {
@@ -311,6 +330,22 @@ mod tests {
         assert_eq!(extract_preference_lines(&content).len(), 1);
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn project_preferences_path_is_readable_and_grouped() {
+        let repo = Path::new("D:/Solutions/pessoal/tokenix");
+        let path = project_preferences_path(repo).unwrap();
+        assert_eq!(path.parent().unwrap().file_name().unwrap(), "preferences");
+        let fname = path.file_name().unwrap().to_string_lossy();
+        assert!(fname.starts_with("tokenix-"), "got {fname}");
+        assert!(fname.ends_with(".md"));
+    }
+
+    #[test]
+    fn sanitize_repo_name_collapses_unsafe_chars() {
+        assert_eq!(sanitize_repo_name("my repo!@#"), "my_repo___");
+        assert_eq!(sanitize_repo_name("ok-name_1.2"), "ok-name_1.2");
     }
 
     #[test]
