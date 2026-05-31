@@ -439,7 +439,7 @@ pub fn run_hook() -> Result<()> {
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| "tokenix".to_string());
             
-            let rewritten = format!("{} run {}", exe_path, format!("{:?}", command));
+            let rewritten = format!("{} run {:?}", exe_path, command);
 
             let out = bash_rewrite_output(&rewritten, "wrapped in tokenix compression run");
 

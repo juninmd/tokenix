@@ -681,11 +681,11 @@ pub fn run_hook_post() -> Result<()> {
 pub fn run_command_and_compress(command_str: &str) -> Result<i32> {
     let mut cmd = if cfg!(windows) {
         let mut c = std::process::Command::new("cmd");
-        c.args(&["/C", command_str]);
+        c.args(["/C", command_str]);
         c
     } else {
         let mut c = std::process::Command::new("sh");
-        c.args(&["-c", command_str]);
+        c.args(["-c", command_str]);
         c
     };
 
