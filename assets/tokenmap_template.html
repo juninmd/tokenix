@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Tokenix Token Map</title>
+    <!-- Modern Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Apache ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: #111827;
+            --border-color: #1f2937;
+            --accent-color: #3b82f6;
+            --text-primary: #f9fafb;
+            --text-secondary: #9ca3af;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: 'Outfit', sans-serif;
+            margin: 0;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+
+        .title-area h1 {
+            margin: 0;
+            font-size: 26px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .title-area p {
+            margin: 4px 0 0 0;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .badge {
+            background-color: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            padding: 4px 10px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 500;
+            display: inline-block;
+            margin-left: 8px;
+        }
+
+        .stats-area {
+            text-align: right;
+        }
+
+        .stats-area .tokens-val {
+            font-size: 24px;
+            font-weight: 700;
+            color: #10b981;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .stats-area .tokens-lbl {
+            font-size: 11px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-top: 2px;
+        }
+
+        #chart-container {
+            flex-grow: 1;
+            width: 100%;
+            background-color: var(--card-bg);
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            padding: 16px;
+            box-sizing: border-box;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        /* Tooltip styling */
+        .tooltip-path {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+            margin-bottom: 4px;
+            word-break: break-all;
+            white-space: normal;
+            max-width: 300px;
+        }
+        .tooltip-tokens {
+            font-size: 16px;
+            font-weight: 600;
+            color: #10b981;
+        }
+        .tooltip-pct {
+            font-size: 12px;
+            color: #3b82f6;
+            margin-left: 8px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="title-area">
+            <h1>Tokenix Token Map <span class="badge">Treemap</span></h1>
+            <p>Project: <span id="project-path" style="font-family: 'JetBrains Mono', monospace;">{{PROJECT_PATH}}</span></p>
+        </div>
+        <div class="stats-area">
+            <div class="tokens-val">{{TOTAL_TOKENS}}</div>
+            <div class="tokens-lbl">Total Tokens</div>
+        </div>
+    </header>
+
+    <div id="chart-container"></div>
+
+    <script>
+        const chartData = {{CHART_DATA}};
+
+        const chartDom = document.getElementById('chart-container');
+        const myChart = echarts.init(chartDom, 'dark', { renderer: 'canvas' });
+
+        // Beautiful palette for top-level nodes
+        const colors = [
+            '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+            '#06b6d4', '#ec4899', '#14b8a6', '#f97316', '#a855f7'
+        ];
+
+        // Apply distinct colors to top-level modules
+        if (chartData.children) {
+            chartData.children.forEach((child, index) => {
+                child.itemStyle = {
+                    color: colors[index % colors.length]
+                };
+            });
+        }
+
+        const option = {
+            backgroundColor: 'transparent',
+            tooltip: {
+                trigger: 'item',
+                backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                borderColor: '#1f2937',
+                borderWidth: 1,
+                borderRadius: 8,
+                padding: [10, 14],
+                textStyle: {
+                    color: '#f9fafb',
+                    fontFamily: 'Outfit, sans-serif'
+                },
+                formatter: function (info) {
+                    const value = info.value;
+                    const treePathInfo = info.treePathInfo;
+                    const treePath = [];
+                    // Skip root name
+                    for (let i = 2; i < treePathInfo.length; i++) {
+                        treePath.push(treePathInfo[i].name);
+                    }
+                    const path = treePath.join('/');
+                    const total = {{TOTAL_TOKENS_RAW}};
+                    const pct = total > 0 ? ((value / total) * 100).toFixed(1) : '0.0';
+
+                    return `
+                        <div class="tooltip-path">${path || info.name}</div>
+                        <div>
+                            <span class="tooltip-tokens">${value.toLocaleString()} tokens</span>
+                            <span class="tooltip-pct">(${pct}%)</span>
+                        </div>
+                    `;
+                }
+            },
+            series: [
+                {
+                    name: 'Root',
+                    type: 'treemap',
+                    visibleMin: 100,
+                    leafDepth: 2, // Pre-render 2 levels down, click to zoom
+                    label: {
+                        show: true,
+                        formatter: '{b}',
+                        fontFamily: 'Outfit',
+                        fontSize: 13,
+                        fontWeight: '500',
+                        color: '#f9fafb'
+                    },
+                    upperLabel: {
+                        show: true,
+                        height: 24,
+                        fontFamily: 'Outfit',
+                        fontSize: 12,
+                        fontWeight: '600',
+                        color: '#f9fafb',
+                        backgroundColor: '#1f2937',
+                        borderRadius: [4, 4, 0, 0]
+                    },
+                    itemStyle: {
+                        borderColor: '#111827',
+                        borderWidth: 2,
+                        gapWidth: 2
+                    },
+                    breadcrumb: {
+                        show: true,
+                        height: 24,
+                        bottom: 10,
+                        itemStyle: {
+                            textStyle: {
+                                fontFamily: 'Outfit',
+                                fontSize: 11,
+                                color: '#f9fafb'
+                            },
+                            backgroundColor: '#1f2937',
+                            borderColor: '#334155'
+                        }
+                    },
+                    levels: [
+                        {
+                            itemStyle: {
+                                borderWidth: 0,
+                                gapWidth: 8
+                            }
+                        },
+                        {
+                            itemStyle: {
+                                borderWidth: 2,
+                                gapWidth: 2,
+                                borderColor: '#111827'
+                            }
+                        },
+                        {
+                            colorSaturation: [0.3, 0.6],
+                            itemStyle: {
+                                borderWidth: 2,
+                                gapWidth: 1,
+                                borderColorSaturation: 0.6
+                            }
+                        }
+                    ],
+                    data: chartData.children || []
+                }
+            ]
+        };
+
+        myChart.setOption(option);
+
+        window.addEventListener('resize', function() {
+            myChart.resize();
+        });
+    </script>
+</body>
+</html>

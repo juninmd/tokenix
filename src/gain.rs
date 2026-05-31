@@ -152,9 +152,11 @@ mod tests {
     use crate::store::{log_hook_event, HookEvent};
 
     fn create_test_temp_dir(sub: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir()
-            .join("tokenix_test_gain")
-            .join(format!("{}_{}", sub, std::process::id()));
+        let p = std::env::temp_dir().join("tokenix_test_gain").join(format!(
+            "{}_{}",
+            sub,
+            std::process::id()
+        ));
         let _ = std::fs::create_dir_all(&p);
         p
     }
@@ -173,7 +175,7 @@ mod tests {
     #[test]
     fn test_compute_gain_with_events() {
         let temp_dir = create_test_temp_dir("events");
-        
+
         let ev1 = HookEvent {
             ts: 1234567.0,
             tool: "Bash".to_string(),

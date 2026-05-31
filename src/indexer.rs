@@ -541,7 +541,7 @@ mod tests {
         let text = "hello world";
         let key = chunk_embedding_key(text);
         assert_eq!(key.len(), 64); // SHA-256 hex is 64 chars
-        
+
         let key2 = chunk_embedding_key(text);
         assert_eq!(key, key2); // deterministic
     }

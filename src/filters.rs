@@ -253,10 +253,11 @@ pub fn unwrap_shell_runner(cmd: &str) -> Option<String> {
     if argv.is_empty() {
         return None;
     }
-    
+
     let first = &argv[0];
     let first_path = std::path::Path::new(first);
-    let launcher_name = first_path.file_name()
+    let launcher_name = first_path
+        .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or(first)
         .to_lowercase();
@@ -332,7 +333,8 @@ fn strip_leading_env_assignments(argv: &[String]) -> Vec<String> {
 
     if index < argv.len() {
         let cmd_path = std::path::Path::new(&argv[index]);
-        let cmd_name = cmd_path.file_name()
+        let cmd_name = cmd_path
+            .file_name()
             .and_then(|f| f.to_str())
             .unwrap_or(&argv[index]);
         if cmd_name == "env" {
@@ -351,11 +353,20 @@ fn strip_leading_env_assignments(argv: &[String]) -> Vec<String> {
                     index += 1;
                     continue;
                 }
-                if arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir" || arg == "-S" || arg == "--split-string" {
+                if arg == "-u"
+                    || arg == "--unset"
+                    || arg == "-C"
+                    || arg == "--chdir"
+                    || arg == "-S"
+                    || arg == "--split-string"
+                {
                     index += 2;
                     continue;
                 }
-                if arg.starts_with("--unset=") || arg.starts_with("--chdir=") || arg.starts_with("--split-string=") {
+                if arg.starts_with("--unset=")
+                    || arg.starts_with("--chdir=")
+                    || arg.starts_with("--split-string=")
+                {
                     index += 1;
                     continue;
                 }
@@ -390,7 +401,7 @@ fn strip_cd_and_operators(mut argv: &[String]) -> &[String] {
 
 pub fn get_effective_command(cmd: &str) -> String {
     let mut current = cmd.trim().to_string();
-    
+
     for _ in 0..16 {
         let unwrapped = unwrap_shell_runner(&current);
         if let Some(inner) = unwrapped {
@@ -412,29 +423,29 @@ pub fn get_effective_command(cmd: &str) -> String {
 
         current = stripped_cd.join(" ");
     }
-    
+
     current
 }
 
 pub fn derive_command_candidates(cmd: &str) -> Vec<String> {
     let mut candidates = Vec::new();
-    
+
     let original = cmd.trim().to_string();
     if !original.is_empty() {
         candidates.push(original);
     }
-    
+
     if let Some(shell_body) = unwrap_shell_runner(cmd) {
         if !shell_body.is_empty() && shell_body != cmd {
             candidates.push(shell_body.clone());
         }
     }
-    
+
     let effective = get_effective_command(cmd);
     if !effective.is_empty() && !candidates.contains(&effective) {
         candidates.push(effective);
     }
-    
+
     candidates
 }
 
@@ -446,7 +457,10 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
                 // `unless` guard: do not short-circuit when the output also matches
                 // this pattern, so errors/warnings are never masked as success.
                 if let Some(unless) = &mo.unless {
-                    if Regex::new(unless).map(|u| u.is_match(output)).unwrap_or(false) {
+                    if Regex::new(unless)
+                        .map(|u| u.is_match(output))
+                        .unwrap_or(false)
+                    {
                         continue;
                     }
                 }

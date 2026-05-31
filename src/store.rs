@@ -1161,6 +1161,21 @@ pub fn get_db_mtime(repo_root: &Path) -> f64 {
         .unwrap_or(0.0)
 }
 
+pub fn get_file_token_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT files.path, COALESCE(SUM(chunks.token_count), 0)
+         FROM files
+         LEFT JOIN chunks ON files.id = chunks.file_id
+         GROUP BY files.id",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    let mut res = Vec::new();
+    for row in rows {
+        res.push(row?);
+    }
+    Ok(res)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1200,6 +1215,77 @@ mod tests {
         assert_eq!(cached.get("hash-a").unwrap(), &first);
         assert_eq!(cached.get("hash-b").unwrap(), &second);
         assert!(!cached.contains_key("missing"));
+    }
+
+    #[test]
+    fn test_get_file_token_counts() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn, 4).unwrap();
+
+        let file_id1 = upsert_file(&conn, "src/main.rs", 123.45, "hash1").unwrap();
+        let file_id2 = upsert_file(&conn, "src/lib.rs", 123.45, "hash2").unwrap();
+
+        insert_chunk(
+            &conn,
+            NewChunk {
+                file_id: file_id1,
+                path: "src/main.rs",
+                start: 1,
+                end: 10,
+                symbol: "main",
+                kind: "function",
+                content: "fn main() {}",
+                token_count: 5,
+            },
+        )
+        .unwrap();
+
+        insert_chunk(
+            &conn,
+            NewChunk {
+                file_id: file_id1,
+                path: "src/main.rs",
+                start: 11,
+                end: 20,
+                symbol: "helper",
+                kind: "function",
+                content: "fn helper() {}",
+                token_count: 10,
+            },
+        )
+        .unwrap();
+
+        insert_chunk(
+            &conn,
+            NewChunk {
+                file_id: file_id2,
+                path: "src/lib.rs",
+                start: 1,
+                end: 5,
+                symbol: "lib_func",
+                kind: "function",
+                content: "fn lib_func() {}",
+                token_count: 7,
+            },
+        )
+        .unwrap();
+
+        let counts = get_file_token_counts(&conn).unwrap();
+        assert_eq!(counts.len(), 2);
+
+        let main_count = counts
+            .iter()
+            .find(|(path, _)| path == "src/main.rs")
+            .unwrap()
+            .1;
+        let lib_count = counts
+            .iter()
+            .find(|(path, _)| path == "src/lib.rs")
+            .unwrap()
+            .1;
+
+        assert_eq!(main_count, 15);
+        assert_eq!(lib_count, 7);
     }
 
     #[test]

@@ -595,10 +595,7 @@ mod tests {
     #[test]
     fn base_command_falls_back_to_legacy_preview() {
         let legacy = r#"{"tool_input":{"command":"git status"}}"#;
-        assert_eq!(
-            base_command(&ev("", legacy)),
-            Some("git".to_string())
-        );
+        assert_eq!(base_command(&ev("", legacy)), Some("git".to_string()));
     }
 
     #[test]

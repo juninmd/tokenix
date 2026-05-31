@@ -546,7 +546,13 @@ fn decode_tool_args(v: &serde_json::Value) -> serde_json::Value {
 /// Copilot uses `bash`/`powershell`; Claude Code already uses `Bash`/`ListDirectory`.
 fn normalize_post_tool(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
-        "bash" | "powershell" | "shell" | "run_shell_command" | "default_api:run_shell_command" | "run_command" | "default_api:run_command" => "Bash".to_string(),
+        "bash"
+        | "powershell"
+        | "shell"
+        | "run_shell_command"
+        | "default_api:run_shell_command"
+        | "run_command"
+        | "default_api:run_command" => "Bash".to_string(),
         "listdirectory" | "default_api:list_directory" => "ListDirectory".to_string(),
         _ => name.to_string(),
     }

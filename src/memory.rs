@@ -31,10 +31,12 @@ pub fn project_preferences_path(repo_root: &Path) -> Result<PathBuf> {
 /// Keep filesystem-safe, readable characters; collapse the rest to `_`.
 fn sanitize_repo_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
-            c
-        } else {
-            '_'
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
         })
         .collect()
 }

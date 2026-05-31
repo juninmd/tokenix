@@ -239,6 +239,20 @@ enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// Show a directory tree map with token counts per file/folder
+    Tokenmap {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+        #[arg(long, help = "Output format: text | html", default_value = "text")]
+        format: String,
+        #[arg(
+            short,
+            long,
+            help = "Output file path for html format",
+            default_value = "tokenmap.html"
+        )]
+        output: String,
+    },
     /// Start the background embedding daemon (keeps model in memory)
     Serve {
         #[arg(
@@ -420,6 +434,11 @@ fn main() -> Result<()> {
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
         Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),
         Commands::Stats { path } => cmd_stats(&path),
+        Commands::Tokenmap {
+            path,
+            format,
+            output,
+        } => cmd_tokenmap(&path, &format, &output),
         Commands::Serve { port } => daemon::run_serve(port),
         Commands::Stop => daemon::run_stop(),
         Commands::Doctor => doctor::run_doctor(),
@@ -1752,6 +1771,177 @@ fn cmd_stats(path: &Path) -> Result<()> {
     println!("  Chunks: {}", stats.chunks);
     println!("  Tokens: {}", format_num(stats.total_tokens));
     println!("  Age:    {}", age_str);
+    Ok(())
+}
+
+fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> {
+    let repo_root = find_repo_root(path);
+    let conn = store::open_db(&repo_root, false)?
+        .ok_or_else(|| anyhow::anyhow!("No index found. Run: tokenix index"))?;
+
+    let file_counts = store::get_file_token_counts(&conn)?;
+    if file_counts.is_empty() {
+        println!("No files found in index. Run: tokenix index");
+        return Ok(());
+    }
+
+    let root_name = repo_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(".")
+        .to_string();
+
+    struct TreeNode {
+        name: String,
+        token_count: i64,
+        is_file: bool,
+        children: std::collections::BTreeMap<String, TreeNode>,
+    }
+
+    impl TreeNode {
+        fn new(name: String, is_file: bool) -> Self {
+            TreeNode {
+                name,
+                token_count: 0,
+                is_file,
+                children: std::collections::BTreeMap::new(),
+            }
+        }
+
+        fn insert(&mut self, path_parts: &[&str], tokens: i64) {
+            self.token_count += tokens;
+            if path_parts.is_empty() {
+                return;
+            }
+
+            let name = path_parts[0];
+            let is_last = path_parts.len() == 1;
+
+            let child = self
+                .children
+                .entry(name.to_string())
+                .or_insert_with(|| TreeNode::new(name.to_string(), is_last));
+
+            child.insert(&path_parts[1..], tokens);
+        }
+    }
+
+    let mut root = TreeNode::new(root_name, false);
+    for (file_path, tokens) in file_counts {
+        let parts: Vec<&str> = file_path.split('/').filter(|s| !s.is_empty()).collect();
+        root.insert(&parts, tokens);
+    }
+
+    if format_opt == "html" {
+        #[derive(serde::Serialize)]
+        struct EChartsNode {
+            name: String,
+            value: i64,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            children: Vec<EChartsNode>,
+        }
+
+        fn to_echarts_node(node: &TreeNode) -> EChartsNode {
+            let mut children = Vec::new();
+            for child in node.children.values() {
+                children.push(to_echarts_node(child));
+            }
+            EChartsNode {
+                name: node.name.clone(),
+                value: node.token_count,
+                children,
+            }
+        }
+
+        let chart_data_serialized = serde_json::to_string(&to_echarts_node(&root))?;
+        let project_path_str = repo_root.to_string_lossy().replace('\\', "/");
+
+        let html_template = include_str!("../assets/tokenmap_template.html")
+            .replace("{{PROJECT_PATH}}", &project_path_str)
+            .replace("{{TOTAL_TOKENS}}", &format_num(root.token_count))
+            .replace("{{TOTAL_TOKENS_RAW}}", &root.token_count.to_string())
+            .replace("{{CHART_DATA}}", &chart_data_serialized);
+
+        std::fs::write(output_path, html_template)?;
+        println!(
+            "{} HTML Token Map successfully generated: {}",
+            "ok".green(),
+            output_path.bold().cyan()
+        );
+        return Ok(());
+    }
+
+    fn visual_bar(value: i64, total: i64, width: usize) -> String {
+        if total == 0 {
+            return format!("[{}]", "░".repeat(width));
+        }
+        let ratio = value as f64 / total as f64;
+        let filled = (ratio * width as f64).round() as usize;
+        let filled = filled.min(width);
+        let empty = width - filled;
+
+        let bar_text = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+        let colored_bar = if ratio > 0.4 {
+            bar_text.red()
+        } else if ratio > 0.15 {
+            bar_text.yellow()
+        } else {
+            bar_text.green()
+        };
+
+        format!("[{}]", colored_bar)
+    }
+
+    fn print_node(node: &TreeNode, prefix: &str, is_last: bool, total_tokens: i64) {
+        let name_style = if node.is_file {
+            node.name.normal()
+        } else {
+            node.name.bold().blue()
+        };
+
+        let percentage = if total_tokens > 0 {
+            (node.token_count as f64 / total_tokens as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let bar = visual_bar(node.token_count, total_tokens, 8);
+        let connector = if is_last { "└── " } else { "├── " };
+        println!(
+            "{}{} {} {} ({} tokens, {:.1}%)",
+            prefix,
+            connector,
+            bar,
+            name_style,
+            format_num(node.token_count),
+            percentage
+        );
+
+        let count = node.children.len();
+        let new_prefix = if is_last {
+            format!("{}    ", prefix)
+        } else {
+            format!("{}│   ", prefix)
+        };
+
+        for (i, child) in node.children.values().enumerate() {
+            let is_child_last = i == count - 1;
+            print_node(child, &new_prefix, is_child_last, total_tokens);
+        }
+    }
+
+    println!(
+        "\n{} ({} tokens)",
+        root.name.bold(),
+        format_num(root.token_count)
+    );
+    let count = root.children.len();
+    for (i, child) in root.children.values().enumerate() {
+        let is_child_last = i == count - 1;
+        print_node(child, "", is_child_last, root.token_count);
+    }
+    println!();
+
     Ok(())
 }
 
