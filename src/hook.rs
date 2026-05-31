@@ -321,6 +321,25 @@ fn estimate_original_tokens(
     800
 }
 
+/// Build the PreToolUse JSON output that rewrites a Bash command's input.
+/// `hookEventName` is required by Claude Code or the whole `hookSpecificOutput`
+/// is ignored and the rewrite silently does not apply.
+fn bash_rewrite_output(rewritten: &str, reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": reason,
+            "updatedInput": {
+                "command": rewritten,
+                "CommandLine": rewritten,
+                "commandLine": rewritten,
+                "command_line": rewritten,
+            }
+        }
+    })
+}
+
 fn is_bash_tool(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     matches!(
@@ -386,18 +405,10 @@ pub fn run_hook() -> Result<()> {
                 format!("git status --short {}", trimmed)
             };
 
-            let out = serde_json::json!({
-                "hookSpecificOutput": {
-                    "permissionDecision": "allow",
-                    "permissionDecisionReason": "rewrite git status to git status --short for token efficiency",
-                    "updatedInput": {
-                        "command": &rewritten,
-                        "CommandLine": &rewritten,
-                        "commandLine": &rewritten,
-                        "command_line": &rewritten,
-                    }
-                }
-            });
+            let out = bash_rewrite_output(
+                &rewritten,
+                "rewrite git status to git status --short for token efficiency",
+            );
 
             let _ = log_hook_event(
                 &repo_root,
@@ -430,18 +441,7 @@ pub fn run_hook() -> Result<()> {
             
             let rewritten = format!("{} run {}", exe_path, format!("{:?}", command));
 
-            let out = serde_json::json!({
-                "hookSpecificOutput": {
-                    "permissionDecision": "allow",
-                    "permissionDecisionReason": "wrapped in tokenix compression run",
-                    "updatedInput": {
-                        "command": rewritten,
-                        "CommandLine": rewritten,
-                        "commandLine": rewritten,
-                        "command_line": rewritten,
-                    }
-                }
-            });
+            let out = bash_rewrite_output(&rewritten, "wrapped in tokenix compression run");
 
             let _ = log_hook_event(
                 &repo_root,
@@ -608,5 +608,21 @@ mod tests {
         let input = HookInput::from_stdin(raw).unwrap();
         assert_eq!(input.tool_name, "Read");
         assert_eq!(input.tool_input["file_path"], "src/lib.rs");
+    }
+
+    #[test]
+    fn bash_rewrite_output_has_required_hook_event_name() {
+        // Claude Code ignores `hookSpecificOutput` (so the rewrite never applies)
+        // unless `hookEventName` is present and set to "PreToolUse".
+        let out = bash_rewrite_output("git status --short", "test reason");
+        let hso = &out["hookSpecificOutput"];
+        assert_eq!(hso["hookEventName"], "PreToolUse");
+        assert_eq!(hso["permissionDecision"], "allow");
+        assert_eq!(hso["permissionDecisionReason"], "test reason");
+        assert_eq!(hso["updatedInput"]["command"], "git status --short");
+        // Aliases for non-Claude harnesses (Copilot/Codex) carry the same value.
+        assert_eq!(hso["updatedInput"]["CommandLine"], "git status --short");
+        assert_eq!(hso["updatedInput"]["commandLine"], "git status --short");
+        assert_eq!(hso["updatedInput"]["command_line"], "git status --short");
     }
 }
