@@ -703,6 +703,58 @@ pub fn search_fts(
     Ok(ids)
 }
 
+/// Scan indexed chunk content with a regular expression — no embedding, no
+/// ranking. Returns chunks whose content matches `pattern`, ordered by path and
+/// start line so output reads top-to-bottom like a file. This is the exact /
+/// literal fallback for when semantic recall is not what the user wants.
+pub fn search_regex(
+    conn: &Connection,
+    pattern: &str,
+    limit: usize,
+    file_filter: Option<&str>,
+    case_insensitive: bool,
+) -> Result<Vec<SearchResult>> {
+    let full_pattern = if case_insensitive {
+        format!("(?i){pattern}")
+    } else {
+        pattern.to_string()
+    };
+    let re = regex::Regex::new(&full_pattern).context("compiling search regex")?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, path, start_line, end_line, symbol, kind, content, token_count
+         FROM chunks ORDER BY path, start_line",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(SearchResult {
+            id: row.get::<_, i64>(0)?,
+            path: row.get::<_, String>(1)?,
+            start_line: row.get::<_, i64>(2)? as usize,
+            end_line: row.get::<_, i64>(3)? as usize,
+            symbol: row.get::<_, String>(4)?,
+            kind: row.get::<_, String>(5)?,
+            content: row.get::<_, String>(6)?,
+            token_count: row.get::<_, i64>(7)? as usize,
+            distance: 0.0,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for r in rows {
+        let chunk = r?;
+        if file_filter.is_some_and(|f| !chunk.path.contains(f)) {
+            continue;
+        }
+        if re.is_match(&chunk.content) {
+            results.push(chunk);
+            if results.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(results)
+}
+
 pub fn fetch_chunks_by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<SearchResult>> {
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -1327,6 +1379,56 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, chunk_id);
         assert_eq!(results[0].symbol, "my_cool_function");
+    }
+
+    #[test]
+    fn search_regex_matches_literal_and_respects_case_and_filter() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn, 4).unwrap();
+        let file_id = upsert_file(&conn, "src/main.rs", 1.0, "h1").unwrap();
+        let other_id = upsert_file(&conn, "src/lib.rs", 1.0, "h2").unwrap();
+        let a = insert_chunk(
+            &conn,
+            NewChunk {
+                file_id,
+                path: "src/main.rs",
+                start: 1,
+                end: 2,
+                symbol: "alpha",
+                kind: "function",
+                content: "fn alpha() { let TOKEN = 1; }",
+                token_count: 9,
+            },
+        )
+        .unwrap();
+        insert_chunk(
+            &conn,
+            NewChunk {
+                file_id: other_id,
+                path: "src/lib.rs",
+                start: 1,
+                end: 2,
+                symbol: "beta",
+                kind: "function",
+                content: "fn beta() {}",
+                token_count: 4,
+            },
+        )
+        .unwrap();
+
+        // Regex metacharacters honored.
+        let hits = search_regex(&conn, r"alpha\(\)", 10, None, false).unwrap();
+        assert_eq!(hits.iter().map(|r| r.id).collect::<Vec<_>>(), vec![a]);
+
+        // Case-sensitive miss, case-insensitive hit.
+        assert!(search_regex(&conn, "token", 10, None, false).unwrap().is_empty());
+        assert_eq!(search_regex(&conn, "token", 10, None, true).unwrap().len(), 1);
+
+        // File filter scopes results.
+        assert!(search_regex(&conn, "fn ", 10, Some("lib.rs"), false)
+            .unwrap()
+            .iter()
+            .all(|r| r.path == "src/lib.rs"));
     }
 
     /// Retrieval quality gate. Builds a tiny in-memory index from labeled

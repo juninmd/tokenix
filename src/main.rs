@@ -102,6 +102,18 @@ enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// Exact regex/literal search over indexed content (no embedding)
+    Grep {
+        pattern: String,
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+        #[arg(short = 'i', long, help = "Case-insensitive match")]
+        ignore_case: bool,
+        #[arg(short, long, help = "Filter to specific file path")]
+        file: Option<String>,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
     /// Build focused task context in one call
     Context {
         task: String,
@@ -375,6 +387,13 @@ fn main() -> Result<()> {
             file,
             path,
         } => cmd_query(&text, budget, k, file.as_deref(), &path),
+        Commands::Grep {
+            pattern,
+            limit,
+            ignore_case,
+            file,
+            path,
+        } => cmd_grep(&pattern, limit, ignore_case, file.as_deref(), &path),
         Commands::Context {
             task,
             budget,
@@ -698,6 +717,19 @@ fn cmd_query(text: &str, budget: usize, k: usize, file: Option<&str>, path: &Pat
     let results = query::query_index(&repo_root, text, budget, k, file)?
         .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))?;
     println!("{}", query::format_results(&results, text));
+    Ok(())
+}
+
+fn cmd_grep(
+    pattern: &str,
+    limit: usize,
+    ignore_case: bool,
+    file: Option<&str>,
+    path: &Path,
+) -> Result<()> {
+    let conn = open_existing_index(path)?;
+    let results = store::search_regex(&conn, pattern, limit, file, ignore_case)?;
+    println!("{}", query::format_results(&results, pattern));
     Ok(())
 }
 
