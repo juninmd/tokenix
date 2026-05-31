@@ -9,9 +9,17 @@ strip_lines_matching = [
   "^\\s+Preparing ",
 ]
 match_output = [
-  { pattern = "Audited \\d+ package", message = "ok (up to date)" },
+  { pattern = "Audited \\d+ package", message = "ok (up to date)", unless = "[Ee]rror|[Ff]ailed|No solution" },
 ]
 max_lines = 20
+
+[[tests.uv-sync]]
+name = "error not masked when 'Audited' present"
+input = """
+error: Failed to resolve dependencies
+Audited 10 packages in 5ms
+"""
+expected = "error: Failed to resolve dependencies\nAudited 10 packages in 5ms"
 
 [[tests.uv-sync]]
 name = "audited packages short-circuits to ok"

@@ -11,9 +11,17 @@ strip_lines_matching = [
   "^==> Fetching",
 ]
 match_output = [
-  { pattern = "already installed", message = "ok (already installed)" },
+  { pattern = "already installed", message = "ok (already installed)", unless = "[Ee]rror|[Ff]ailed|fatal" },
 ]
 max_lines = 20
+
+[[tests.brew-install]]
+name = "error not masked when 'already installed' present"
+input = """
+Error: Permission denied @ rb_sysopen
+already installed but verification failed
+"""
+expected = "Error: Permission denied @ rb_sysopen\nalready installed but verification failed"
 
 [[tests.brew-install]]
 name = "already installed short-circuits"

@@ -13,9 +13,17 @@ strip_lines_matching = [
   "^  Resolving",
 ]
 match_output = [
-  { pattern = "Output created:", message = "ok (output created)" },
+  { pattern = "Output created:", message = "ok (output created)", unless = "ERROR|[Ee]rror|[Ff]ailed" },
 ]
 max_lines = 20
+
+[[tests.quarto-render]]
+name = "error not masked when 'Output created:' present"
+input = """
+ERROR: chunk 3 failed to execute
+Output created: _site/index.html
+"""
+expected = "ERROR: chunk 3 failed to execute\nOutput created: _site/index.html"
 
 [[tests.quarto-render]]
 name = "success short-circuits to ok"

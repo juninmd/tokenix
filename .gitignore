@@ -5,3 +5,7 @@
 tokenix.egg-info/
 *.pyc
 __pycache__/
+.gemini/
+*_hook_triggered.log
+stdin_dump.txt
+dump_gemini.json

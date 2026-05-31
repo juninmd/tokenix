@@ -521,3 +521,43 @@ where
         stats,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rel_path() {
+        let root = Path::new("/workspace/project");
+        let abs = Path::new("/workspace/project/src/main.rs");
+        assert_eq!(rel_path(root, abs), "src/main.rs");
+
+        let abs_windows = Path::new("/workspace/project/src\\main.rs");
+        assert_eq!(rel_path(root, abs_windows), "src/main.rs");
+    }
+
+    #[test]
+    fn test_chunk_embedding_key() {
+        let text = "hello world";
+        let key = chunk_embedding_key(text);
+        assert_eq!(key.len(), 64); // SHA-256 hex is 64 chars
+        
+        let key2 = chunk_embedding_key(text);
+        assert_eq!(key, key2); // deterministic
+    }
+
+    #[test]
+    fn test_mtime_of() {
+        let temp_dir = std::env::temp_dir()
+            .join("tokenix_test_indexer")
+            .join(format!("mtime_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let file_path = temp_dir.join("test_mtime.txt");
+        std::fs::write(&file_path, "test").unwrap();
+
+        let mtime = mtime_of(&file_path);
+        assert!(mtime > 0.0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}

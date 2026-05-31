@@ -9,9 +9,19 @@ strip_lines_matching = [
   "^  Determining projects",
 ]
 match_output = [
-  { pattern = "0 Warning\\(s\\)\\n\\s+0 Error\\(s\\)", message = "ok (build succeeded)" },
+  { pattern = "0 Warning\\(s\\)\\n\\s+0 Error\\(s\\)", message = "ok (build succeeded)", unless = ": error|Build FAILED" },
 ]
 max_lines = 40
+
+[[tests.dotnet-build]]
+name = "error not masked when zero-error summary also present"
+input = """
+src/Program.cs(10,5): error CS1002: ; expected
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+"""
+expected = "src/Program.cs(10,5): error CS1002: ; expected\nBuild succeeded.\n    0 Warning(s)\n    0 Error(s)"
 
 [[tests.dotnet-build]]
 name = "successful build short-circuits to ok"

@@ -217,3 +217,37 @@ fn tip(msg: &str) {
 fn warn(msg: &str) {
     println!("  {} {}", "!".yellow(), msg.yellow());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_temp_dir(sub: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir()
+            .join("tokenix_test_doctor")
+            .join(format!("{}_{}", sub, std::process::id()));
+        let _ = std::fs::create_dir_all(&p);
+        p
+    }
+
+    #[test]
+    fn test_dir_size() {
+        let temp_dir = create_test_temp_dir("dir_size");
+        let file_path = temp_dir.join("test_file.txt");
+        std::fs::write(&file_path, "hello world").unwrap(); // 11 bytes
+
+        let size = dir_size(&temp_dir).unwrap();
+        assert_eq!(size, 11);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_formatting_no_panic() {
+        // Just verify formatting calls don't panic
+        section("Test Section");
+        kv("Key", "Value");
+        tip("Tip message");
+        warn("Warn message");
+    }
+}

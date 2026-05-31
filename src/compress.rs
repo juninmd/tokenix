@@ -533,8 +533,8 @@ fn decode_tool_args(v: &serde_json::Value) -> serde_json::Value {
 /// Copilot uses `bash`/`powershell`; Claude Code already uses `Bash`/`ListDirectory`.
 fn normalize_post_tool(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
-        "bash" | "powershell" | "shell" => "Bash".to_string(),
-        "listdirectory" => "ListDirectory".to_string(),
+        "bash" | "powershell" | "shell" | "run_shell_command" | "default_api:run_shell_command" | "run_command" | "default_api:run_command" => "Bash".to_string(),
+        "listdirectory" | "default_api:list_directory" => "ListDirectory".to_string(),
         _ => name.to_string(),
     }
 }
@@ -557,9 +557,16 @@ fn parse_post_input(v: &serde_json::Value) -> Option<PostHookInput> {
     // GitHub Copilot CLI: camelCase toolName + toolResult + (maybe string-encoded) toolArgs.
     if let Some(raw_name) = v["toolName"].as_str() {
         let args = decode_tool_args(&v["toolArgs"]);
+        let command = args["command"]
+            .as_str()
+            .or_else(|| args["CommandLine"].as_str())
+            .or_else(|| args["commandLine"].as_str())
+            .or_else(|| args["command_line"].as_str())
+            .unwrap_or("")
+            .to_string();
         return Some(PostHookInput {
             tool_name: normalize_post_tool(raw_name),
-            command: args["command"].as_str().unwrap_or("").to_string(),
+            command,
             text: extract_copilot_result(&v["toolResult"])?,
             dialect: PostDialect::CopilotJson,
         });
@@ -567,12 +574,16 @@ fn parse_post_input(v: &serde_json::Value) -> Option<PostHookInput> {
 
     // Claude Code / Codex: snake_case tool_name + tool_response.
     let raw_name = v["tool_name"].as_str()?;
+    let command = v["tool_input"]["command"]
+        .as_str()
+        .or_else(|| v["tool_input"]["CommandLine"].as_str())
+        .or_else(|| v["tool_input"]["commandLine"].as_str())
+        .or_else(|| v["tool_input"]["command_line"].as_str())
+        .unwrap_or("")
+        .to_string();
     Some(PostHookInput {
         tool_name: normalize_post_tool(raw_name),
-        command: v["tool_input"]["command"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
+        command,
         text: extract_response_text(&v["tool_response"])?,
         dialect: PostDialect::ClaudeExit2,
     })
@@ -862,7 +873,23 @@ mod tests {
         assert_eq!(normalize_post_tool("bash"), "Bash");
         assert_eq!(normalize_post_tool("powershell"), "Bash");
         assert_eq!(normalize_post_tool("Bash"), "Bash"); // Claude casing preserved
+        assert_eq!(normalize_post_tool("run_command"), "Bash");
+        assert_eq!(normalize_post_tool("default_api:run_command"), "Bash");
         assert_eq!(normalize_post_tool("ListDirectory"), "ListDirectory");
         assert_eq!(normalize_post_tool("view"), "view"); // unmapped → unchanged
+    }
+
+    #[test]
+    fn parses_claude_post_input_run_command() {
+        let v = serde_json::json!({
+            "tool_name": "default_api:run_command",
+            "tool_input": {"CommandLine": "git diff"},
+            "tool_response": "diff output"
+        });
+        let input = parse_post_input(&v).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.command, "git diff");
+        assert_eq!(input.text, "diff output");
+        assert_eq!(input.dialect, PostDialect::ClaudeExit2);
     }
 }

@@ -645,3 +645,21 @@ fn open_existing_index(repo_root: &Path) -> Result<rusqlite::Connection> {
     crate::store::open_db(repo_root, false)?
         .ok_or_else(|| anyhow!("Index not found. Please index the workspace first."))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_memory_scope() {
+        assert!(matches!(
+            parse_memory_scope("global").unwrap(),
+            crate::memory::PreferenceScope::Global
+        ));
+        assert!(matches!(
+            parse_memory_scope("project").unwrap(),
+            crate::memory::PreferenceScope::Project
+        ));
+        assert!(parse_memory_scope("invalid").is_err());
+    }
+}

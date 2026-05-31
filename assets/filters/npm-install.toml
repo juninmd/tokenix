@@ -13,9 +13,32 @@ strip_lines_matching = [
   "Checking",
   "up to date",
   "packages in",
-  "found \\d+ vulnerabilities",
+  "found 0 vulnerabilities",
   "audited \\d+ packages",
   "npm WARN deprecated"
 ]
 max_lines = 40
 on_empty = "npm install: ok"
+
+[[tests.npm-install]]
+name = "clean install collapses to ok"
+input = """
+added 120 packages in 3s
+
+up to date
+
+found 0 vulnerabilities
+"""
+expected = "npm install: ok"
+
+[[tests.npm-install]]
+name = "vulnerabilities survive"
+input = """
+added 120 packages in 3s
+
+found 7 vulnerabilities (2 moderate, 5 high)
+  run `npm audit fix` to address them
+"""
+expected = """
+found 7 vulnerabilities (2 moderate, 5 high)
+  run `npm audit fix` to address them"""

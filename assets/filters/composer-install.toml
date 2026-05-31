@@ -10,9 +10,18 @@ strip_lines_matching = [
   "^Updating dependencies",
 ]
 match_output = [
-  { pattern = "Nothing to install, update or remove", message = "ok (up to date)" },
+  { pattern = "Nothing to install, update or remove", message = "ok (up to date)", unless = "[Ee]rror|[Ff]ailed|fatal|Problem \\d" },
 ]
 max_lines = 30
+
+[[tests.composer-install]]
+name = "error not masked when 'Nothing to install' present"
+input = """
+Your requirements could not be resolved to an installable set.
+Problem 1: error in dependency tree
+Nothing to install, update or remove
+"""
+expected = "Your requirements could not be resolved to an installable set.\nProblem 1: error in dependency tree\nNothing to install, update or remove"
 
 [[tests.composer-install]]
 name = "nothing to do short-circuits"

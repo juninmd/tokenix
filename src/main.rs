@@ -57,6 +57,8 @@ enum Tool {
     Codex,
     #[value(name = "mcp")]
     Mcp,
+    #[value(name = "gemini")]
+    Gemini,
     #[value(name = "all")]
     All,
 }
@@ -1061,6 +1063,7 @@ fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
         Tool::Copilot => install_copilot()?,
         Tool::Codex => install_codex()?,
         Tool::Mcp => install_mcp_server()?,
+        Tool::Gemini => install_copilot()?,
         Tool::All => {
             install_claude_code(local)?;
             install_copilot()?;
@@ -1121,7 +1124,7 @@ fn install_claude_code(local: bool) -> Result<()> {
 
     if !post_already {
         let hook = serde_json::json!({
-            "matcher": "Bash|ListDirectory",
+            "matcher": "Bash|ListDirectory|run_command|default_api:run_command|default_api:list_directory|run_shell_command|default_api:run_shell_command",
             "hooks": [{"type": "command", "command": format!("{} hook-post", tokenix_bin)}]
         });
         if settings["hooks"]["PostToolUse"].is_array() {
@@ -1555,6 +1558,7 @@ fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
         Tool::Copilot => remove_copilot()?,
         Tool::Codex => remove_codex()?,
         Tool::Mcp => remove_mcp_server()?,
+        Tool::Gemini => remove_copilot()?,
         Tool::All => {
             remove_claude_code(local)?;
             remove_copilot()?;

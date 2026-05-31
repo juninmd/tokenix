@@ -698,3 +698,72 @@ fn err_json(msg: String) -> String {
     })
     .unwrap()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dot_product() {
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let b = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        assert_eq!(dot_product(&a, &b), 36.0);
+
+        let c = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let d = vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        assert_eq!(dot_product(&c, &d), 0.0);
+    }
+
+    #[test]
+    fn test_cache_state_lru() {
+        let mut state = CacheState::new();
+        assert_eq!(state.lru.len(), 0);
+
+        let pc1 = ProjectCache {
+            entries: vec![],
+            db_mtime: 1.0,
+            content: HashMap::new(),
+        };
+        let pc2 = ProjectCache {
+            entries: vec![],
+            db_mtime: 2.0,
+            content: HashMap::new(),
+        };
+        let pc3 = ProjectCache {
+            entries: vec![],
+            db_mtime: 3.0,
+            content: HashMap::new(),
+        };
+        let pc4 = ProjectCache {
+            entries: vec![],
+            db_mtime: 4.0,
+            content: HashMap::new(),
+        };
+
+        state.insert("p1".to_string(), pc1);
+        state.insert("p2".to_string(), pc2);
+        state.insert("p3".to_string(), pc3);
+
+        assert_eq!(state.lru, vec!["p3", "p2", "p1"]);
+
+        // Touch p1 to make it most recent
+        state.touch("p1");
+        assert_eq!(state.lru, vec!["p1", "p3", "p2"]);
+
+        // Insert p4, causing eviction of the oldest (p2)
+        state.insert("p4".to_string(), pc4);
+        assert_eq!(state.lru, vec!["p4", "p1", "p3"]);
+        assert!(!state.projects.contains_key("p2"));
+        assert!(state.projects.contains_key("p1"));
+        assert!(state.projects.contains_key("p3"));
+        assert!(state.projects.contains_key("p4"));
+    }
+
+    #[test]
+    fn test_daemon_port() {
+        std::env::set_var("TOKENIX_DAEMON_PORT", "12345");
+        assert_eq!(daemon_port(), 12345);
+        std::env::remove_var("TOKENIX_DAEMON_PORT");
+        assert_eq!(daemon_port(), DEFAULT_PORT);
+    }
+}

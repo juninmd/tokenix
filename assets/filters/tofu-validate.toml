@@ -3,8 +3,13 @@ description = "Compact OpenTofu validate output"
 match_command = "^tofu\\s+validate(\\s|$)"
 strip_ansi = true
 match_output = [
-  { pattern = "Success! The configuration is valid", message = "ok (valid)" },
+  { pattern = "Success! The configuration is valid", message = "ok (valid)", unless = "[Ee]rror|[Ff]ailed" },
 ]
+
+[[tests.tofu-validate]]
+name = "error not masked when success line also present"
+input = "Error: Invalid value\nSuccess! The configuration is valid"
+expected = "Error: Invalid value\nSuccess! The configuration is valid"
 
 [[tests.tofu-validate]]
 name = "success short-circuits to ok"

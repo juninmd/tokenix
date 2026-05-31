@@ -10,9 +10,17 @@ strip_lines_matching = [
   "^Using virtualenv",
 ]
 match_output = [
-  { pattern = "No dependencies to install or update|No changes\\.", message = "ok (up to date)" },
+  { pattern = "No dependencies to install or update|No changes\\.", message = "ok (up to date)", unless = "[Ee]rror|[Ff]ailed|[Cc]annot" },
 ]
 max_lines = 30
+
+[[tests.poetry-install]]
+name = "error not masked when 'No dependencies' present"
+input = """
+No dependencies to install or update
+error: SolverProblemError cannot resolve
+"""
+expected = "No dependencies to install or update\nerror: SolverProblemError cannot resolve"
 
 [[tests.poetry-install]]
 name = "up to date short-circuits"

@@ -145,3 +145,74 @@ pub fn compute_gain(repo_root: &Path) -> GainStats {
         by_phase,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::{log_hook_event, HookEvent};
+
+    fn create_test_temp_dir(sub: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir()
+            .join("tokenix_test_gain")
+            .join(format!("{}_{}", sub, std::process::id()));
+        let _ = std::fs::create_dir_all(&p);
+        p
+    }
+
+    #[test]
+    fn test_compute_gain_empty() {
+        let temp_dir = create_test_temp_dir("empty");
+        let stats = compute_gain(&temp_dir);
+        assert_eq!(stats.total_calls, 0);
+        assert_eq!(stats.intercepted, 0);
+        assert_eq!(stats.passed, 0);
+        assert_eq!(stats.tokens_saved, 0);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_compute_gain_with_events() {
+        let temp_dir = create_test_temp_dir("events");
+        
+        let ev1 = HookEvent {
+            ts: 1234567.0,
+            tool: "Bash".to_string(),
+            action: "intercepted".to_string(),
+            phase: "post".to_string(),
+            reason: "".to_string(),
+            saved_tokens: 100,
+            actual_tokens: 20,
+            original_estimate: 120,
+            input_preview: "".to_string(),
+        };
+        let ev2 = HookEvent {
+            ts: 1234568.0,
+            tool: "Read".to_string(),
+            action: "pass".to_string(),
+            phase: "pre".to_string(),
+            reason: "not intercepted".to_string(),
+            saved_tokens: 0,
+            actual_tokens: 0,
+            original_estimate: 0,
+            input_preview: "".to_string(),
+        };
+
+        log_hook_event(&temp_dir, &ev1).unwrap();
+        log_hook_event(&temp_dir, &ev2).unwrap();
+
+        let stats = compute_gain(&temp_dir);
+        assert_eq!(stats.total_calls, 2);
+        assert_eq!(stats.intercepted, 1);
+        assert_eq!(stats.passed, 1);
+        assert_eq!(stats.tokens_saved, 100);
+        assert_eq!(stats.tokens_used, 20);
+        assert_eq!(stats.tokens_original, 120);
+        assert!((stats.pct_saved - 83.333).abs() < 0.01);
+        assert_eq!(stats.by_tool.len(), 1);
+        assert_eq!(stats.by_tool[0], ("Bash".to_string(), 1, 100));
+        assert_eq!(stats.by_phase.len(), 1);
+        assert_eq!(stats.by_phase[0], ("post".to_string(), 1, 100));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}

@@ -9,10 +9,18 @@ strip_lines_matching = [
   "^Resolving dependencies",
 ]
 match_output = [
-  { pattern = "Bundle complete!", message = "ok bundle: complete" },
-  { pattern = "Bundle updated!", message = "ok bundle: updated" },
+  { pattern = "Bundle complete!", message = "ok bundle: complete", unless = "[Ee]rror|[Ff]ailed|[Cc]ould not find|[Cc]onflict" },
+  { pattern = "Bundle updated!", message = "ok bundle: updated", unless = "[Ee]rror|[Ff]ailed|[Cc]ould not find|[Cc]onflict" },
 ]
 max_lines = 30
+
+[[tests.bundle-install]]
+name = "error not masked when 'Bundle complete!' present"
+input = """
+error: could not find gem 'sqlite3'
+Bundle complete!
+"""
+expected = "error: could not find gem 'sqlite3'\nBundle complete!"
 
 [[tests.bundle-install]]
 name = "all cached short-circuits"
