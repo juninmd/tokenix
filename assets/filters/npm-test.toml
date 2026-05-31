@@ -6,8 +6,77 @@ strip_lines_matching = [
   "^\\s*$",
   "^>\\s+\\S+@\\S+\\s+test\\b",
   "^>\\s+\\S+\\s+\\S+\\b",
+  "^>\\s+\\S+\\s*$",
   "^platform\\s+",
   "^PASS\\s+"
 ]
 max_lines = 80
 on_empty = "npm test: all tests passed"
+
+[[tests.npm-test]]
+name = "All JS tests pass"
+input = """
+> project@1.0.0 test
+> jest
+
+PASS  src/sum.test.js
+  ✓ adds 1 + 2 to equal 3 (2 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       1 passed, 1 total
+Snapshots:   0 total
+Time:        0.18 s
+Ran all test suites.
+"""
+expected = """  ✓ adds 1 + 2 to equal 3 (2 ms)
+Test Suites: 1 passed, 1 total
+Tests:       1 passed, 1 total
+Snapshots:   0 total
+Time:        0.18 s
+Ran all test suites."""
+
+[[tests.npm-test]]
+name = "JS test failure"
+input = """
+> project@1.0.0 test
+> jest
+
+FAIL  src/sum.test.js
+  ✕ adds 1 + 2 to equal 3 (5 ms)
+
+  ● adds 1 + 2 to equal 3
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 4
+
+      2 | test('adds 1 + 2 to equal 3', () => {
+    > 3 |   expect(sum(1, 2)).toBe(4);
+        |                     ^
+      4 | });
+
+      at Object.toBe (src/sum.test.js:3:21)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 1 total
+Snapshots:   0 total
+Time:        0.22 s
+Ran all test suites.
+"""
+expected = """FAIL  src/sum.test.js
+  ✕ adds 1 + 2 to equal 3 (5 ms)
+  ● adds 1 + 2 to equal 3
+    expect(received).toBe(expected) // Object.is equality
+    Expected: 3
+    Received: 4
+      2 | test('adds 1 + 2 to equal 3', () => {
+    > 3 |   expect(sum(1, 2)).toBe(4);
+        |                     ^
+      4 | });
+      at Object.toBe (src/sum.test.js:3:21)
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 1 total
+Snapshots:   0 total
+Time:        0.22 s
+Ran all test suites."""

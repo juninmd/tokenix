@@ -282,6 +282,13 @@ enum Commands {
         #[command(subcommand)]
         action: FilterAction,
     },
+    /// Run a command and compress its output using tokenix filters (used by PreToolUse rewrite)
+    Run {
+        /// Command to execute
+        command: String,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
     /// Hook handler called by AI tools (not for direct use)
     Hook,
     /// PostToolUse hook handler for output compression (not for direct use)
@@ -470,6 +477,10 @@ fn main() -> Result<()> {
                     cmd_filter::cmd_filter_generate(command, &repo_root)
                 }
             }
+        }
+        Commands::Run { command, path: _ } => {
+            let code = compress::run_command_and_compress(&command)?;
+            std::process::exit(code);
         }
         Commands::Hook => {
             // Hook is a short-lived subprocess: limit thread pools before any init.
@@ -1143,49 +1154,27 @@ fn install_claude_code(local: bool) -> Result<()> {
 
     let removed_legacy_auto_index = remove_legacy_claude_auto_index_hook(&mut settings);
 
-    let pre_already = settings["hooks"]["PreToolUse"]
-        .as_array()
-        .map(|arr| arr.iter().any(|h| h.to_string().contains("tokenix")))
-        .unwrap_or(false);
-
-    let post_already = settings["hooks"]["PostToolUse"]
-        .as_array()
-        .map(|arr| arr.iter().any(|h| h.to_string().contains("tokenix")))
-        .unwrap_or(false);
-
-    if pre_already && post_already && !removed_legacy_auto_index {
-        println!("{} Claude Code hooks already installed.", "~".yellow());
-        return Ok(());
+    // Clean up existing tokenix hook configuration to ensure a clean reinstallation.
+    if let Some(arr) = settings["hooks"]["PreToolUse"].as_array_mut() {
+        arr.retain(|h| !h.to_string().contains("tokenix"));
+    }
+    if let Some(arr) = settings["hooks"]["PostToolUse"].as_array_mut() {
+        arr.retain(|h| !h.to_string().contains("tokenix"));
     }
 
-    if !pre_already {
-        let hook = serde_json::json!({
-            "matcher": "Read|Grep",
-            "hooks": [{"type": "command", "command": format!("{} hook", tokenix_bin)}]
-        });
-        if settings["hooks"]["PreToolUse"].is_array() {
-            settings["hooks"]["PreToolUse"]
-                .as_array_mut()
-                .unwrap()
-                .push(hook);
-        } else {
-            settings["hooks"]["PreToolUse"] = serde_json::json!([hook]);
-        }
-    }
-
-    if !post_already {
-        let hook = serde_json::json!({
-            "matcher": "Bash|ListDirectory|run_command|default_api:run_command|default_api:list_directory|run_shell_command|default_api:run_shell_command",
-            "hooks": [{"type": "command", "command": format!("{} hook-post", tokenix_bin)}]
-        });
-        if settings["hooks"]["PostToolUse"].is_array() {
-            settings["hooks"]["PostToolUse"]
-                .as_array_mut()
-                .unwrap()
-                .push(hook);
-        } else {
-            settings["hooks"]["PostToolUse"] = serde_json::json!([hook]);
-        }
+    // Install PreToolUse hook for Reading, Grepping, and Command Execution
+    let matcher = "Read|Grep|Bash|run_command|default_api:run_command|run_shell_command|default_api:run_shell_command";
+    let hook = serde_json::json!({
+        "matcher": matcher,
+        "hooks": [{"type": "command", "command": format!("{} hook", tokenix_bin)}]
+    });
+    if settings["hooks"]["PreToolUse"].is_array() {
+        settings["hooks"]["PreToolUse"]
+            .as_array_mut()
+            .unwrap()
+            .push(hook);
+    } else {
+        settings["hooks"]["PreToolUse"] = serde_json::json!([hook]);
     }
 
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
@@ -1194,8 +1183,7 @@ fn install_claude_code(local: bool) -> Result<()> {
         "ok".green(),
         settings_path.display()
     );
-    println!("  PreToolUse:  {} hook", tokenix_bin);
-    println!("  PostToolUse: {} hook-post", tokenix_bin);
+    println!("  PreToolUse:  {} hook (Read/Grep/Bash output compression)", tokenix_bin);
     if removed_legacy_auto_index {
         println!("  Removed legacy UserPromptSubmit auto-index hook");
     }

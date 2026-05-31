@@ -13,3 +13,50 @@ strip_lines_matching = [
 ]
 max_lines = 100
 on_empty = "cargo test: all tests passed"
+
+[[tests.cargo-test]]
+name = "All tests pass"
+input = """
+   Compiling tokenix v0.12.0
+    Finished test [unoptimized + debuginfo] target(s) in 0.95s
+     Running unittests src/main.rs
+
+running 3 tests
+test a ... ok
+test b ... ok
+test c ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+"""
+expected = """     Running unittests src/main.rs
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"""
+
+[[tests.cargo-test]]
+name = "Test failure"
+input = """
+     Running unittests src/main.rs
+
+running 2 tests
+test a ... ok
+test b ... FAILED
+
+failures:
+
+---- b stdout ----
+thread 'b' panicked at src/main.rs:10:5:
+assertion failed: false
+
+failures:
+    b
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+"""
+expected = """     Running unittests src/main.rs
+test b ... FAILED
+failures:
+---- b stdout ----
+thread 'b' panicked at src/main.rs:10:5:
+assertion failed: false
+failures:
+    b
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"""

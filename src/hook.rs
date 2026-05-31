@@ -321,6 +321,20 @@ fn estimate_original_tokens(
     800
 }
 
+fn is_bash_tool(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "bash"
+            | "powershell"
+            | "shell"
+            | "run_shell_command"
+            | "default_api:run_shell_command"
+            | "run_command"
+            | "default_api:run_command"
+    )
+}
+
 pub fn run_hook() -> Result<()> {
     // Read input: prefer env vars (Copilot), fall back to stdin (Claude Code / Codex)
     let raw_stdin = std::io::read_to_string(std::io::stdin()).unwrap_or_default();
@@ -330,11 +344,127 @@ pub fn run_hook() -> Result<()> {
         .unwrap_or_default();
 
     // Unknown or unsupported tool: pass through silently.
-    if input.tool_name != "Read" && input.tool_name != "Grep" {
+    let is_bash = is_bash_tool(&input.tool_name);
+    if input.tool_name != "Read" && input.tool_name != "Grep" && !is_bash {
         std::process::exit(0);
     }
 
     let repo_root = find_repo_root();
+
+    if is_bash {
+        let command = input.tool_input["command"]
+            .as_str()
+            .or_else(|| input.tool_input["CommandLine"].as_str())
+            .or_else(|| input.tool_input["commandLine"].as_str())
+            .or_else(|| input.tool_input["command_line"].as_str())
+            .unwrap_or("")
+            .trim();
+
+        if command.is_empty() {
+            std::process::exit(0);
+        }
+
+        // Avoid infinite recursion: do not rewrite if it's already a tokenix command execution
+        if command.contains("tokenix") {
+            std::process::exit(0);
+        }
+
+        // 1. Optimize git status -> git status --short. Let it pass through natively
+        // on the second pass when the short flag is already present.
+        let is_short_git_status = (command.starts_with("git status") || command.starts_with("git  status"))
+            && (command.contains("-s") || command.contains("--short"));
+        if is_short_git_status {
+            std::process::exit(0);
+        }
+
+        let status_re = regex::Regex::new(r"^git\s+status(\s+.*)?$").unwrap();
+        if status_re.is_match(command) && !command.contains("-") {
+            let trimmed = command.strip_prefix("git status").unwrap_or("").trim();
+            let rewritten = if trimmed.is_empty() {
+                "git status --short".to_string()
+            } else {
+                format!("git status --short {}", trimmed)
+            };
+
+            let out = serde_json::json!({
+                "hookSpecificOutput": {
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": "rewrite git status to git status --short for token efficiency",
+                    "updatedInput": {
+                        "command": &rewritten,
+                        "CommandLine": &rewritten,
+                        "commandLine": &rewritten,
+                        "command_line": &rewritten,
+                    }
+                }
+            });
+
+            let _ = log_hook_event(
+                &repo_root,
+                &HookEvent {
+                    ts: now_ts(),
+                    tool: "Bash".to_string(),
+                    action: "intercepted".to_string(),
+                    phase: "pre".to_string(),
+                    reason: "rewrote git status to git status --short".to_string(),
+                    saved_tokens: 0,
+                    actual_tokens: 0,
+                    original_estimate: 0,
+                    input_preview: command.chars().take(200).collect(),
+                    command: command.to_string(),
+                },
+            );
+
+            println!("{}", serde_json::to_string(&out).unwrap_or_default());
+            std::process::exit(0);
+        }
+
+        // 2. Otherwise check for other active filters to wrap in tokenix run
+        let filters = crate::filters::load_all_filters();
+        let unwrapped = crate::filters::unwrap_shell_runner(command).unwrap_or_else(|| command.to_string());
+        
+        if crate::filters::find_filter(&unwrapped, &filters).is_some() {
+            let exe_path = std::env::current_exe()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| "tokenix".to_string());
+            
+            let rewritten = format!("{} run {}", exe_path, format!("{:?}", command));
+
+            let out = serde_json::json!({
+                "hookSpecificOutput": {
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": "wrapped in tokenix compression run",
+                    "updatedInput": {
+                        "command": rewritten,
+                        "CommandLine": rewritten,
+                        "commandLine": rewritten,
+                        "command_line": rewritten,
+                    }
+                }
+            });
+
+            let _ = log_hook_event(
+                &repo_root,
+                &HookEvent {
+                    ts: now_ts(),
+                    tool: "Bash".to_string(),
+                    action: "intercepted".to_string(),
+                    phase: "pre".to_string(),
+                    reason: "rewrote command to tokenix run".to_string(),
+                    saved_tokens: 0,
+                    actual_tokens: 0,
+                    original_estimate: 0,
+                    input_preview: command.chars().take(200).collect(),
+                    command: command.to_string(),
+                },
+            );
+
+            println!("{}", serde_json::to_string(&out).unwrap_or_default());
+            std::process::exit(0);
+        }
+
+        std::process::exit(0);
+    }
 
     let staleness = index_staleness(&repo_root);
 

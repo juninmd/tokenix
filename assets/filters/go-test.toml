@@ -4,9 +4,36 @@ match_command = "^go\\s+test\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
+  "^go\\s+test\\b",
   "^ok\\s+\\S+\\s+\\d+\\.\\d+s",
   "^\\?\\s+\\S+\\s+\\[no test files\\]",
   "^PASS$"
 ]
 max_lines = 80
 on_empty = "go test: all tests passed"
+
+[[tests.go-test]]
+name = "All go tests pass"
+input = """
+go test ./...
+?   	github.com/user/project/pkg	[no test files]
+ok  	github.com/user/project/src	0.150s
+PASS
+"""
+expected = "go test: all tests passed"
+
+[[tests.go-test]]
+name = "Go test failure"
+input = """
+go test ./...
+--- FAIL: TestSum (0.00s)
+    main_test.go:12: Sum(2, 2) = 5; want 4
+FAIL
+FAIL	github.com/user/project/src	0.005s
+FAIL
+"""
+expected = """--- FAIL: TestSum (0.00s)
+    main_test.go:12: Sum(2, 2) = 5; want 4
+FAIL
+FAIL	github.com/user/project/src	0.005s
+FAIL"""

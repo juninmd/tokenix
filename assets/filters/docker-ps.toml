@@ -4,3 +4,11 @@ match_command = "^docker\\s+ps\\b"
 strip_ansi = true
 truncate_lines_at = 120
 max_lines = 40
+
+[[tests.docker-ps]]
+name = "docker ps status output"
+input = """CONTAINER ID   IMAGE          COMMAND                  CREATED         STATUS         PORTS     NAMES
+1a2b3c4d5e6f   redis:alpine   "docker-entrypoint.s…"   2 hours ago     Up 2 hours     6379/tcp   my-redis
+"""
+expected = """CONTAINER ID   IMAGE          COMMAND                  CREATED         STATUS         PORTS     NAMES
+1a2b3c4d5e6f   redis:alpine   "docker-entrypoint.s…"   2 hours ago     Up 2 hours     6379/tcp   my-redis"""

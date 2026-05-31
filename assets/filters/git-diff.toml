@@ -9,3 +9,20 @@ strip_lines_matching = [
   "^\\+\\+\\+ "
 ]
 max_lines = 100
+
+[[tests.git-diff]]
+name = "Standard git diff"
+input = """
+diff --git a/src/main.rs b/src/main.rs
+index 1234567..89abcde 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -10,3 +10,4 @@ fn main() {
+     println!("hello");
++    println!("world");
+ }
+"""
+expected = """@@ -10,3 +10,4 @@ fn main() {
+     println!("hello");
++    println!("world");
+ }"""

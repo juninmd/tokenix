@@ -4,14 +4,43 @@ match_command = "^cargo\\s+(check|clippy)\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
+  "^\\s*Checking\\s+",
   "^\\s*Compiling\\s+",
-  "^\\s*Finished\\s+",
-  "^\\s*Checking\\s+"
+  "^\\s*Fresh\\s+",
+  "^\\s*Finished\\s+"
 ]
-keep_lines_matching = [
-  "^warning",
-  "^error",
-  "^\\s*-->"
-]
-max_lines = 60
+max_lines = 100
 on_empty = "cargo check/clippy: ok"
+
+[[tests.cargo-check]]
+name = "Successful check"
+input = """
+    Checking libc v0.2.150
+    Checking tokenix v0.12.0
+    Finished dev [unoptimized + debuginfo] target(s) in 0.85s
+"""
+expected = "cargo check/clippy: ok"
+
+[[tests.cargo-check]]
+name = "Check with clippy warnings"
+input = """
+    Checking tokenix v0.12.0
+warning: unused variable: `x`
+  --> src/main.rs:12:9
+   |
+12 |     let x = 42;
+   |         ^ help: if this is intentional, prefix it with an underscore: `_x`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: `tokenix` (bin "tokenix") generated 1 warning
+    Finished dev [unoptimized + debuginfo] target(s) in 0.9s
+"""
+expected = """warning: unused variable: `x`
+  --> src/main.rs:12:9
+   |
+12 |     let x = 42;
+   |         ^ help: if this is intentional, prefix it with an underscore: `_x`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+warning: `tokenix` (bin "tokenix") generated 1 warning"""

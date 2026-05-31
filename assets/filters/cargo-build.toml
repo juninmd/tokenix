@@ -12,3 +12,32 @@ strip_lines_matching = [
 ]
 max_lines = 80
 on_empty = "cargo build: build succeeded"
+
+[[tests.cargo-build]]
+name = "Successful clean build"
+input = """
+    Downloading crates ...
+     Compiling libc v0.2.150
+     Compiling tokenix v0.12.0
+    Finished dev [unoptimized + debuginfo] target(s) in 1.25s
+"""
+expected = "cargo build: build succeeded"
+
+[[tests.cargo-build]]
+name = "Build with warning/error"
+input = """
+   Compiling tokenix v0.12.0
+error[E0425]: cannot find value `foo` in this scope
+  --> src/main.rs:42:5
+   |
+42 |     foo
+   |     ^^^ not found in this scope
+
+error: could not compile `tokenix` due to previous error
+"""
+expected = """error[E0425]: cannot find value `foo` in this scope
+  --> src/main.rs:42:5
+   |
+42 |     foo
+   |     ^^^ not found in this scope
+error: could not compile `tokenix` due to previous error"""

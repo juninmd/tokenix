@@ -520,8 +520,9 @@ fn extract_response_text(response: &serde_json::Value) -> Option<String> {
 /// Output dialect for a PostToolUse hook, selected by which agent invoked it.
 #[derive(Debug, PartialEq)]
 enum PostDialect {
-    /// Claude Code / Codex: print compressed text on stdout, exit 2 to replace the result.
-    ClaudeExit2,
+    /// Claude Code / Codex: PostToolUse cannot replace or shorten a tool result,
+    /// so compression here is a no-op — exit 0 silently without logging savings.
+    ClaudeNoop,
     /// GitHub Copilot CLI: print `{"modifiedResult":{...}}` JSON on stdout, exit 0.
     CopilotJson,
 }
@@ -604,7 +605,7 @@ fn parse_post_input(v: &serde_json::Value) -> Option<PostHookInput> {
         tool_name: normalize_post_tool(raw_name),
         command,
         text: extract_response_text(&v["tool_response"])?,
-        dialect: PostDialect::ClaudeExit2,
+        dialect: PostDialect::ClaudeNoop,
     })
 }
 
@@ -632,6 +633,20 @@ pub fn run_hook_post() -> Result<()> {
         std::process::exit(0);
     }
 
+    // Claude Code PostToolUse hooks cannot shorten or replace a tool result:
+    // exit 2 surfaces stderr (not stdout) as a blocking error, and the supported
+    // `hookSpecificOutput.additionalContext` only appends next to the original
+    // output. So compressing Bash output here can never reduce the tokens Claude
+    // Code sends to the model. Exit 0 silently to avoid the empty-stderr blocking
+    // error, and do NOT log savings the model never actually receives. Real Bash
+    // compression must move to a PreToolUse command rewrite (run the command
+    // through tokenix before execution), the way rtk wraps `rtk <cmd>`.
+    if input.dialect == PostDialect::ClaudeNoop {
+        std::process::exit(0);
+    }
+
+    // Only Copilot reaches here, and its modifiedResult JSON genuinely replaces
+    // the tool result — so the logged savings are real for this dialect.
     let repo_root = find_repo_root();
     let original_tokens = count_tokens(&input.text) as i64;
     let actual_tokens = count_tokens(&compressed) as i64;
@@ -653,24 +668,66 @@ pub fn run_hook_post() -> Result<()> {
         },
     );
 
-    // Emit in the caller's dialect. Copilot parses stdout JSON on exit 0; Claude Code
-    // replaces the tool result from stdout on exit 2.
-    match input.dialect {
-        PostDialect::CopilotJson => {
-            let out = serde_json::json!({
-                "modifiedResult": {
-                    "resultType": "success",
-                    "textResultForLlm": compressed,
-                }
-            });
-            println!("{}", serde_json::to_string(&out).unwrap_or_default());
-            std::process::exit(0);
+    let out = serde_json::json!({
+        "modifiedResult": {
+            "resultType": "success",
+            "textResultForLlm": compressed,
         }
-        PostDialect::ClaudeExit2 => {
-            println!("{}", compressed);
-            std::process::exit(2);
-        }
+    });
+    println!("{}", serde_json::to_string(&out).unwrap_or_default());
+    std::process::exit(0);
+}
+
+pub fn run_command_and_compress(command_str: &str) -> Result<i32> {
+    let mut cmd = if cfg!(windows) {
+        let mut c = std::process::Command::new("cmd");
+        c.args(&["/C", command_str]);
+        c
+    } else {
+        let mut c = std::process::Command::new("sh");
+        c.args(&["-c", command_str]);
+        c
+    };
+
+    // Capture stdout and stderr
+    let output = cmd.output()?;
+
+    let stdout_raw = String::from_utf8_lossy(&output.stdout);
+    let stderr_raw = String::from_utf8_lossy(&output.stderr);
+
+    // Apply tokenix compression to stdout and stderr
+    let stdout_compressed = compress_bash_output(command_str, &stdout_raw);
+    let stderr_compressed = compress_bash_output(command_str, &stderr_raw);
+
+    // Print to standard streams
+    print!("{}", stdout_compressed);
+    eprint!("{}", stderr_compressed);
+
+    // Write log event of the actual execution savings
+    let repo_root = find_repo_root();
+    let original_tokens = (count_tokens(&stdout_raw) + count_tokens(&stderr_raw)) as i64;
+    let actual_tokens = (count_tokens(&stdout_compressed) + count_tokens(&stderr_compressed)) as i64;
+    let saved = (original_tokens - actual_tokens).max(0);
+
+    if saved > 0 {
+        let _ = log_hook_event(
+            &repo_root,
+            &HookEvent {
+                ts: now_ts(),
+                tool: "Bash".to_string(),
+                action: "intercepted".to_string(),
+                phase: "pre_run".to_string(),
+                reason: "compressed command output".to_string(),
+                saved_tokens: saved,
+                actual_tokens,
+                original_estimate: original_tokens,
+                input_preview: command_str.chars().take(200).collect(),
+                command: command_str.to_string(),
+            },
+        );
     }
+
+    Ok(output.status.code().unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -847,7 +904,7 @@ mod tests {
         assert_eq!(input.tool_name, "Bash");
         assert_eq!(input.command, "git status");
         assert_eq!(input.text, "On branch main\n");
-        assert_eq!(input.dialect, PostDialect::ClaudeExit2);
+        assert_eq!(input.dialect, PostDialect::ClaudeNoop);
     }
 
     #[test]
@@ -869,7 +926,7 @@ mod tests {
         assert_eq!(input.command, "npm install");
         assert!(input.text.contains("added 120 packages"));
         assert!(input.text.contains("npm warn deprecated foo"));
-        assert_eq!(input.dialect, PostDialect::ClaudeExit2);
+        assert_eq!(input.dialect, PostDialect::ClaudeNoop);
     }
 
     #[test]
@@ -932,6 +989,6 @@ mod tests {
         assert_eq!(input.tool_name, "Bash");
         assert_eq!(input.command, "git diff");
         assert_eq!(input.text, "diff output");
-        assert_eq!(input.dialect, PostDialect::ClaudeExit2);
+        assert_eq!(input.dialect, PostDialect::ClaudeNoop);
     }
 }
