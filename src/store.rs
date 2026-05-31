@@ -119,7 +119,8 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
             name TEXT NOT NULL,
             kind TEXT,
             start_line INTEGER,
-            end_line INTEGER
+            end_line INTEGER,
+            rank REAL NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS graph_edges (
             id INTEGER PRIMARY KEY,
@@ -162,6 +163,13 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
         INSERT OR IGNORE INTO chunks_fts(rowid, content, symbol, path) SELECT id, content, symbol, path FROM chunks;
         "#,
     )?;
+    // Migration for indexes created before graph centrality: add the rank
+    // column if it is missing. Errors when the column already exists are
+    // expected and ignored.
+    let _ = conn.execute(
+        "ALTER TABLE graph_nodes ADD COLUMN rank REAL NOT NULL DEFAULT 0",
+        [],
+    );
     Ok(())
 }
 
@@ -326,6 +334,17 @@ pub fn clear_symbol_graph(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Persist PageRank centrality scores onto graph nodes. Called after the edge
+/// set is rebuilt so `search_graph_nodes` can break ties by how central a
+/// symbol is in the reference graph.
+pub fn set_node_ranks(conn: &Connection, ranks: &[(i64, f32)]) -> Result<()> {
+    let mut stmt = conn.prepare("UPDATE graph_nodes SET rank = ?2 WHERE chunk_id = ?1")?;
+    for (chunk_id, rank) in ranks {
+        stmt.execute(params![chunk_id, rank])?;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn insert_graph_node(
     conn: &Connection,
@@ -374,7 +393,7 @@ pub fn search_graph_nodes(conn: &Connection, query: &str, limit: usize) -> Resul
         "SELECT chunk_id,path,name,kind,start_line,end_line
          FROM graph_nodes
          WHERE name = ?1 COLLATE NOCASE OR name LIKE ?2 COLLATE NOCASE OR path LIKE ?2 COLLATE NOCASE
-         ORDER BY CASE WHEN name = ?1 COLLATE NOCASE THEN 0 ELSE 1 END, path, start_line
+         ORDER BY CASE WHEN name = ?1 COLLATE NOCASE THEN 0 ELSE 1 END, rank DESC, path, start_line
          LIMIT ?3",
     )?;
     let rows = stmt.query_map(params![query, pattern, limit as i64], graph_node_from_row)?;

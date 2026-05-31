@@ -88,7 +88,55 @@ pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
         }
     }
 
+    let node_ids: Vec<i64> = chunks.iter().map(|c| c.chunk_id).collect();
+    let edges: Vec<(i64, i64)> = inserted.into_iter().collect();
+    let ranks = pagerank(&node_ids, &edges);
+    store::set_node_ranks(conn, &ranks)?;
+
     Ok(())
+}
+
+/// Classic PageRank over the reference graph. An edge `caller -> callee` lets a
+/// caller's importance flow to the symbols it references, so widely-referenced
+/// symbols accumulate higher rank. Used only to break ties when surfacing
+/// symbols — not as a hard filter. Damping 0.85, fixed iteration count.
+fn pagerank(node_ids: &[i64], edges: &[(i64, i64)]) -> Vec<(i64, f32)> {
+    let n = node_ids.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    const DAMPING: f32 = 0.85;
+    const ITERATIONS: usize = 20;
+
+    let index: HashMap<i64, usize> = node_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let mut out_degree = vec![0u32; n];
+    let mut in_edges: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (caller, callee) in edges {
+        let (Some(&u), Some(&v)) = (index.get(caller), index.get(callee)) else {
+            continue;
+        };
+        out_degree[u] += 1;
+        in_edges[v].push(u);
+    }
+
+    let base = (1.0 - DAMPING) / n as f32;
+    let mut rank = vec![1.0f32 / n as f32; n];
+    for _ in 0..ITERATIONS {
+        // Dangling nodes (no out-edges) redistribute their mass uniformly.
+        let dangling: f32 = (0..n)
+            .filter(|&i| out_degree[i] == 0)
+            .map(|i| rank[i])
+            .sum();
+        let mut next = vec![base + DAMPING * dangling / n as f32; n];
+        for v in 0..n {
+            for &u in &in_edges[v] {
+                next[v] += DAMPING * rank[u] / out_degree[u] as f32;
+            }
+        }
+        rank = next;
+    }
+
+    node_ids.iter().copied().zip(rank).collect()
 }
 
 fn resolve_reference_targets<'a>(
@@ -467,6 +515,24 @@ mod tests {
         assert!(refs.contains(&"crate::bar::baz".to_string()));
         assert!(refs.contains(&"ready".to_string()));
         assert!(!refs.contains(&"if".to_string()));
+    }
+
+    #[test]
+    fn pagerank_ranks_widely_referenced_node_highest() {
+        // 1,2,3 all reference 4; 4 references nothing. Node 4 must rank highest.
+        let nodes = vec![1, 2, 3, 4];
+        let edges = vec![(1, 4), (2, 4), (3, 4)];
+        let ranks: HashMap<i64, f32> = pagerank(&nodes, &edges).into_iter().collect();
+        let central = ranks[&4];
+        assert!(
+            [1, 2, 3].iter().all(|id| central > ranks[id]),
+            "central node should outrank its callers: {ranks:?}"
+        );
+    }
+
+    #[test]
+    fn pagerank_empty_graph_is_safe() {
+        assert!(pagerank(&[], &[]).is_empty());
     }
 
     #[test]
