@@ -643,6 +643,7 @@ pub fn run_hook_post() -> Result<()> {
             actual_tokens,
             original_estimate: original_tokens,
             input_preview: clean.chars().take(200).collect(),
+            command: input.command,
         },
     );
 

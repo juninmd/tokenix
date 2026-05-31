@@ -184,6 +184,7 @@ mod tests {
             actual_tokens: 20,
             original_estimate: 120,
             input_preview: "".to_string(),
+            command: "".to_string(),
         };
         let ev2 = HookEvent {
             ts: 1234568.0,
@@ -195,6 +196,7 @@ mod tests {
             actual_tokens: 0,
             original_estimate: 0,
             input_preview: "".to_string(),
+            command: "".to_string(),
         };
 
         log_hook_event(&temp_dir, &ev1).unwrap();

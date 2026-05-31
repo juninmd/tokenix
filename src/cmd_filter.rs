@@ -15,6 +15,16 @@ struct CmdStats {
     total_saved: i64,
 }
 
+/// Base command for a Bash event. Prefers the stored `command` field (set at
+/// log time); falls back to parsing legacy logs' input_preview, which only works
+/// when the preview wasn't truncated before `tool_input.command`.
+fn base_command(ev: &store::HookEvent) -> Option<String> {
+    if !ev.command.is_empty() {
+        return ev.command.split_whitespace().next().map(str::to_string);
+    }
+    extract_base_command(&ev.input_preview)
+}
+
 fn extract_base_command(input_preview: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(input_preview).ok()?;
     let cmd = v["tool_input"]["command"].as_str()?;
@@ -59,7 +69,7 @@ fn collect_stats(repo_root: &Path) -> Vec<CmdStats> {
         .iter()
         .filter(|e| e.tool == "Bash" && e.phase == "post")
     {
-        if let Some(cmd) = extract_base_command(&ev.input_preview) {
+        if let Some(cmd) = base_command(ev) {
             let entry = map.entry(cmd.clone()).or_insert(CmdStats {
                 base_cmd: cmd,
                 count: 0,
@@ -554,6 +564,41 @@ mod tests {
         ] {
             assert!(validate_command_name(ok).is_ok(), "{ok} should be allowed");
         }
+    }
+
+    fn ev(command: &str, input_preview: &str) -> store::HookEvent {
+        store::HookEvent {
+            ts: 0.0,
+            tool: "Bash".to_string(),
+            action: "intercepted".to_string(),
+            reason: String::new(),
+            saved_tokens: 0,
+            actual_tokens: 0,
+            original_estimate: 0,
+            input_preview: input_preview.to_string(),
+            phase: "post".to_string(),
+            command: command.to_string(),
+        }
+    }
+
+    #[test]
+    fn base_command_prefers_stored_command_field() {
+        // The real Claude payload front-loads session_id/cwd, so input_preview is
+        // truncated before tool_input.command — the stored field must win.
+        let truncated = r#"{"session_id":"abc","transcript_path":"x","cwd":"y","#;
+        assert_eq!(
+            base_command(&ev("cargo build --release", truncated)),
+            Some("cargo".to_string())
+        );
+    }
+
+    #[test]
+    fn base_command_falls_back_to_legacy_preview() {
+        let legacy = r#"{"tool_input":{"command":"git status"}}"#;
+        assert_eq!(
+            base_command(&ev("", legacy)),
+            Some("git".to_string())
+        );
     }
 
     #[test]

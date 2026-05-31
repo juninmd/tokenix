@@ -1039,6 +1039,10 @@ pub struct HookEvent {
     pub input_preview: String,
     #[serde(default = "default_phase")]
     pub phase: String,
+    /// Parsed base command for Bash events; empty for non-Bash. Stored directly
+    /// so `filter list` need not re-parse the (truncated) input_preview.
+    #[serde(default)]
+    pub command: String,
 }
 
 fn default_phase() -> String {

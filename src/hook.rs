@@ -351,6 +351,7 @@ pub fn run_hook() -> Result<()> {
                 actual_tokens: 0,
                 original_estimate: 0,
                 input_preview: String::new(),
+                command: String::new(),
             },
         );
         std::process::exit(0);
@@ -375,6 +376,7 @@ pub fn run_hook() -> Result<()> {
                 actual_tokens: 0,
                 original_estimate: 0,
                 input_preview: String::new(),
+                command: String::new(),
             },
         );
         std::process::exit(0);
@@ -396,6 +398,7 @@ pub fn run_hook() -> Result<()> {
             actual_tokens,
             original_estimate: original_tokens,
             input_preview: raw_stdin.chars().take(200).collect(),
+            command: String::new(),
         },
     );
 
