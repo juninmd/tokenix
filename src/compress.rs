@@ -485,6 +485,19 @@ fn extract_response_text(response: &serde_json::Value) -> Option<String> {
     if let Some(s) = response["output"].as_str() {
         return Some(s.to_string());
     }
+    // Claude Code Bash tool_response: { stdout, stderr, interrupted, ... }.
+    let stdout = response["stdout"].as_str().unwrap_or("");
+    let stderr = response["stderr"].as_str().unwrap_or("");
+    if !stdout.is_empty() || !stderr.is_empty() {
+        let mut combined = stdout.to_string();
+        if !stderr.is_empty() {
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(stderr);
+        }
+        return Some(combined);
+    }
     if let Some(arr) = response["content"].as_array() {
         let text: String = arr
             .iter()
@@ -827,6 +840,28 @@ mod tests {
         assert_eq!(input.tool_name, "Bash");
         assert_eq!(input.command, "git status");
         assert_eq!(input.text, "On branch main\n");
+        assert_eq!(input.dialect, PostDialect::ClaudeExit2);
+    }
+
+    #[test]
+    fn parses_claude_bash_stdout_stderr_shape() {
+        // Real Claude Code Bash PostToolUse payload: tool_response is an object
+        // with stdout/stderr, not `output`/`content`.
+        let v = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": "npm install"},
+            "tool_response": {
+                "stdout": "added 120 packages in 3s\n",
+                "stderr": "npm warn deprecated foo\n",
+                "interrupted": false,
+                "isImage": false
+            }
+        });
+        let input = parse_post_input(&v).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.command, "npm install");
+        assert!(input.text.contains("added 120 packages"));
+        assert!(input.text.contains("npm warn deprecated foo"));
         assert_eq!(input.dialect, PostDialect::ClaudeExit2);
     }
 
