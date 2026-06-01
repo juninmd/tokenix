@@ -8,6 +8,13 @@ on:
 permissions:
   contents: write
 
+# Serialize releases: a second semantic push waits rather than racing the
+# in-flight release for tag/artifact creation. cancel-in-progress is false so a
+# release that is mid cross-compile is never aborted half-published.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   check-version:
     runs-on: ubuntu-latest
@@ -97,8 +104,52 @@ jobs:
           echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
           echo "Next release: $TAG ($BUMP from $PREVIOUS_TAG)"
 
-  build:
+  bump-version:
     needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Write release version into Cargo.toml + Cargo.lock
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.check-version.outputs.version }}"
+          # [package] version is the first `version = ` line in Cargo.toml
+          sed -i "0,/^version = \".*\"/s//version = \"${VERSION}\"/" Cargo.toml
+          # keep the crate's own entry in Cargo.lock in sync so --locked builds pass
+          sed -i "/^name = \"tokenix\"$/{n;s/^version = \".*\"/version = \"${VERSION}\"/}" Cargo.lock
+          echo "Cargo.toml -> $(grep -m1 '^version' Cargo.toml)"
+          # Fail fast if either sed missed: a stale Cargo.lock breaks every
+          # downstream `--locked` build, and we want a clear signal here.
+          grep -q "^version = \"${VERSION}\"$" Cargo.toml \
+            || { echo "::error::Cargo.toml version not updated to ${VERSION}"; exit 1; }
+          grep -A1 '^name = "tokenix"$' Cargo.lock | grep -q "version = \"${VERSION}\"" \
+            || { echo "::error::Cargo.lock tokenix version not updated to ${VERSION}"; exit 1; }
+
+      - name: Commit and push bump
+        id: commit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "Cargo.toml already at the release version; nothing to commit."
+          else
+            # [skip ci] so this bump commit does not re-trigger the release pipeline
+            git commit -am "chore(release): ${{ needs.check-version.outputs.tag }} [skip ci]"
+            git push origin HEAD:main
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [check-version, bump-version]
     if: needs.check-version.outputs.should_release == 'true'
     strategy:
       fail-fast: false
@@ -131,6 +182,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-version.outputs.sha }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -175,12 +228,13 @@ jobs:
           path: ${{ matrix.artifact }}
 
   release:
-    needs: [check-version, build]
+    needs: [check-version, bump-version, build]
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.bump-version.outputs.sha }}
           fetch-depth: 0
 
       - name: Download all artifacts
@@ -202,7 +256,9 @@ jobs:
           PREVIOUS_TAG="${{ needs.check-version.outputs.previous_tag }}"
           NOTES="Release v${VERSION}\n\nSemantic bump: \`${{ needs.check-version.outputs.bump }}\`.\nBuilt from commit \`${{ github.sha }}\` on \`${{ github.ref_name }}\`."
           if [ "$PREVIOUS_TAG" != "v0.0.0" ]; then
-            NOTES="${NOTES}\n\nChanges since ${PREVIOUS_TAG}:\n$(git log --format='- %s (%h)' ${PREVIOUS_TAG}..HEAD)"
+            # Exclude the auto-generated chore(release) bump commit from the notes.
+            CHANGES=$(git log --format='- %s (%h)' "${PREVIOUS_TAG}..HEAD" | grep -v 'chore(release):' || true)
+            NOTES="${NOTES}\n\nChanges since ${PREVIOUS_TAG}:\n${CHANGES}"
           fi
           echo "notes<<EOF" >> $GITHUB_OUTPUT
           echo -e "$NOTES" >> $GITHUB_OUTPUT
@@ -212,6 +268,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check-version.outputs.tag }}
+          target_commitish: ${{ needs.bump-version.outputs.sha }}
           name: tokenix ${{ needs.check-version.outputs.tag }}
           body: ${{ steps.changelog.outputs.notes }}
           draft: false
