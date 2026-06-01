@@ -7,26 +7,26 @@ pub struct ModelPrice {
     pub reference: bool,
 }
 
-pub const PRICING_COLLECTED_AT: &str = "2026-05-07";
+pub const PRICING_COLLECTED_AT: &str = "2026-06-01";
 
 pub const MODELS: &[ModelPrice] = &[
-    // Anthropic (source: anthropic.com/pricing, collected 2026-05-07)
+    // Anthropic (source: platform.claude.com/docs/about-claude/pricing, collected 2026-06-01)
     ModelPrice {
         name: "claude-haiku-4-5",
         input_per_1m: 1.00,
         reference: false,
     },
     ModelPrice {
-        name: "claude-sonnet-4.6",
+        name: "claude-sonnet-4-6",
         input_per_1m: 3.00,
         reference: true,
     },
     ModelPrice {
-        name: "claude-opus-4.7",
+        name: "claude-opus-4-8",
         input_per_1m: 5.00,
         reference: false,
     },
-    // OpenAI (source: openai.com/api/pricing, collected 2026-05-07)
+    // OpenAI (source: developers.openai.com/api/docs/pricing, collected 2026-06-01)
     ModelPrice {
         name: "gpt-5.4-mini",
         input_per_1m: 0.75,
@@ -37,10 +37,20 @@ pub const MODELS: &[ModelPrice] = &[
         input_per_1m: 2.50,
         reference: false,
     },
-    // Google (source: ai.google.dev/pricing, collected 2026-05-07)
     ModelPrice {
-        name: "gemini-3.1-flash-preview",
+        name: "gpt-5.5",
+        input_per_1m: 5.00,
+        reference: false,
+    },
+    // Google (source: ai.google.dev/gemini-api/docs/pricing, collected 2026-06-01)
+    ModelPrice {
+        name: "gemini-3.1-flash-lite",
         input_per_1m: 0.25,
+        reference: false,
+    },
+    ModelPrice {
+        name: "gemini-3.5-flash",
+        input_per_1m: 1.50,
         reference: false,
     },
     ModelPrice {

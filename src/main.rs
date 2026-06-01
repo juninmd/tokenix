@@ -207,6 +207,8 @@ enum Commands {
         path: PathBuf,
         #[arg(long, help = "Show per-call history")]
         history: bool,
+        #[arg(long, help = "Show the per-model cost-estimate table")]
+        cost_estimate: bool,
     },
     /// Run a reproducible token-savings and retrieval-quality benchmark
     Benchmark {
@@ -446,7 +448,11 @@ fn main() -> Result<()> {
             path,
         } => cmd_impact(&symbol, depth, limit, &format, &output, &path),
         Commands::RebuildGraph { path } => cmd_rebuild_graph(&path),
-        Commands::Gain { path, history } => cmd_gain(&path, history),
+        Commands::Gain {
+            path,
+            history,
+            cost_estimate,
+        } => cmd_gain(&path, history, cost_estimate),
         Commands::Benchmark {
             path,
             refresh_index,
@@ -919,7 +925,7 @@ fn cmd_read(
     Ok(())
 }
 
-fn cmd_gain(path: &Path, history: bool) -> Result<()> {
+fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
     let repo_root = find_repo_root(path);
     let stats = gain::compute_gain(&repo_root);
 
@@ -988,90 +994,98 @@ fn cmd_gain(path: &Path, history: bool) -> Result<()> {
     );
 
     // ── cost table ────────────────────────────────────────────────────────────
-    println!();
-    println!(
-        "  {}",
-        "COST ESTIMATE  (input tokens · USD)".bold().underline()
-    );
-    println!(
-        "  {}",
-        format!(
-            "  Prices per 1M input tokens from public provider pricing pages. Collected: {}.",
-            gain::PRICING_COLLECTED_AT
-        )
-        .dimmed()
-    );
-    println!();
-
-    let col_model = 27usize;
-    let col_price = 9usize;
-    let col_val = 12usize;
-
-    let sep = format!(
-        "    {}  {}  {}  {}  {}",
-        "─".repeat(col_model),
-        "─".repeat(col_price),
-        "─".repeat(col_val),
-        "─".repeat(col_val),
-        "─".repeat(col_val)
-    );
-    // table header
-    println!(
-        "  {}",
-        format!(
-            "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
-            "Model",
-            "$/1M in",
-            "Without",
-            "With",
-            "Saved",
-            col_model = col_model,
-            col_price = col_price,
-            col_val = col_val
-        )
-        .bold()
-        .bright_black()
-    );
-    println!("  {}", sep.bright_black());
-
-    for row in &stats.cost_rows {
-        let marker = if row.reference { " ★" } else { "  " };
-        let name = format!("{}{}", row.model, marker);
-        let price_str = {
-            let m = gain::MODELS.iter().find(|m| m.name == row.model).unwrap();
-            format!("${:.2}", m.input_per_1m)
-        };
-        let without = format!("${:.4}", row.without_usd);
-        let with_ = format!("${:.4}", row.with_usd);
-        let saved = format!("${:.4}", row.saved_usd);
-
-        let line = format!(
-            "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
-            name,
-            price_str,
-            without,
-            with_,
-            saved,
-            col_model = col_model,
-            col_price = col_price,
-            col_val = col_val
+    if cost_estimate {
+        println!();
+        println!(
+            "  {}",
+            "COST ESTIMATE  (input tokens · USD)".bold().underline()
         );
-        if row.reference {
-            println!("  {}", line.bold());
-        } else {
-            println!("  {}", line);
-        }
-    }
+        println!(
+            "  {}",
+            format!(
+                "  Prices per 1M input tokens from public provider pricing pages. Collected: {}.",
+                gain::PRICING_COLLECTED_AT
+            )
+            .dimmed()
+        );
+        println!();
 
-    println!("  {}", sep.bright_black());
-    println!(
-        "  {}",
-        format!(
-            "    ★ reference model · prices collected {}",
-            gain::PRICING_COLLECTED_AT
-        )
-        .dimmed()
-    );
+        let col_model = 27usize;
+        let col_price = 9usize;
+        let col_val = 12usize;
+
+        let sep = format!(
+            "    {}  {}  {}  {}  {}",
+            "─".repeat(col_model),
+            "─".repeat(col_price),
+            "─".repeat(col_val),
+            "─".repeat(col_val),
+            "─".repeat(col_val)
+        );
+        // table header
+        println!(
+            "  {}",
+            format!(
+                "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
+                "Model",
+                "$/1M in",
+                "Without",
+                "With",
+                "Saved",
+                col_model = col_model,
+                col_price = col_price,
+                col_val = col_val
+            )
+            .bold()
+            .bright_black()
+        );
+        println!("  {}", sep.bright_black());
+
+        for row in &stats.cost_rows {
+            let marker = if row.reference { " ★" } else { "  " };
+            let name = format!("{}{}", row.model, marker);
+            let price_str = {
+                let m = gain::MODELS.iter().find(|m| m.name == row.model).unwrap();
+                format!("${:.2}", m.input_per_1m)
+            };
+            let without = format!("${:.4}", row.without_usd);
+            let with_ = format!("${:.4}", row.with_usd);
+            let saved = format!("${:.4}", row.saved_usd);
+
+            let line = format!(
+                "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
+                name,
+                price_str,
+                without,
+                with_,
+                saved,
+                col_model = col_model,
+                col_price = col_price,
+                col_val = col_val
+            );
+            if row.reference {
+                println!("  {}", line.bold());
+            } else {
+                println!("  {}", line);
+            }
+        }
+
+        println!("  {}", sep.bright_black());
+        println!(
+            "  {}",
+            format!(
+                "    ★ reference model · prices collected {}",
+                gain::PRICING_COLLECTED_AT
+            )
+            .dimmed()
+        );
+    } else {
+        println!();
+        println!(
+            "  {}",
+            "Run with --cost-estimate to show the per-model cost table.".dimmed()
+        );
+    }
 
     // ── by tool / by phase ────────────────────────────────────────────────────
     if !stats.by_tool.is_empty() {

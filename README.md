@@ -59,9 +59,11 @@ tokenix is not a cloud service, not a vector database server, and not a replacem
 
 ### Pre-built binary (recommended)
 
-Download the latest binary for your platform from [GitHub Releases](https://github.com/juninmd/tokenix/releases):
+Every release ships a static binary per platform. The version-less
+`releases/latest/download/<asset>` URL **always resolves to the newest release**,
+so you never pin a version.
 
-| Platform | File |
+| Platform | Asset |
 |---|---|
 | Linux x86_64 | `tokenix-linux-x86_64` |
 | Linux arm64 | `tokenix-linux-aarch64` |
@@ -69,6 +71,27 @@ Download the latest binary for your platform from [GitHub Releases](https://gith
 | macOS arm64 (M1/M2/M3) | `tokenix-macos-aarch64` |
 | Windows x86_64 | `tokenix-windows-x86_64.exe` |
 | Windows x86_64 (GPU / DirectML) | `tokenix-windows-x86_64-directml.exe` |
+
+**macOS / Linux** — swap the asset for your platform from the table:
+
+```bash
+curl -fsSL https://github.com/juninmd/tokenix/releases/latest/download/tokenix-linux-x86_64 -o tokenix
+chmod +x tokenix && sudo mv tokenix /usr/local/bin/tokenix
+tokenix doctor   # verify
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://github.com/juninmd/tokenix/releases/latest/download/tokenix-windows-x86_64.exe -OutFile tokenix.exe
+```
+
+> **🤖 For AI agents / LLMs:** prefer this prebuilt binary over `cargo install` (no Rust
+> toolchain, no compile step). Always fetch the version-less URL
+> `https://github.com/juninmd/tokenix/releases/latest/download/tokenix-<platform>` — it
+> redirects to the latest release, so **never hard-code a version**. Detect the platform,
+> download the matching asset from the table, mark it executable, then run `tokenix doctor`
+> to confirm. The embedding model downloads automatically on first use.
 
 ### From crates.io
 
@@ -115,7 +138,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **In-memory daemon** | `tokenix serve` keeps model + index in RAM — warm Grep calls drop from ~430ms to ~80ms |
 | **Graceful fallback** | Always exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `1200`) |
-| **Savings analytics** | `tokenix gain` — token summary, focused cost table for 7 reference models, by-tool breakdown |
+| **Savings analytics** | `tokenix gain` — token summary, by-tool/by-phase histogram; `--cost-estimate` adds a cost table for 9 reference models (Anthropic/OpenAI/Google, priced 2026-06) |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
