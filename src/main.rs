@@ -133,6 +133,8 @@ enum Commands {
         budget: usize,
         #[arg(long, default_value_t = 8)]
         max_symbols: usize,
+        #[arg(long, help = "Print per-section token breakdown to stderr")]
+        budget_breakdown: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -414,8 +416,9 @@ fn main() -> Result<()> {
             query,
             budget,
             max_symbols,
+            budget_breakdown,
             path,
-        } => cmd_explore(&query, budget, max_symbols, &path),
+        } => cmd_explore(&query, budget, max_symbols, budget_breakdown, &path),
         Commands::Memory { action } => cmd_memory(action),
         Commands::Read {
             file,
@@ -629,25 +632,40 @@ fn cmd_context(
     let out = query::build_task_context(&repo_root, task, budget, max_files)?;
     println!("{}", out);
     if breakdown {
-        let sections = query::budget_breakdown(&out);
-        let total: usize = sections.iter().map(|(_, t)| *t).sum();
-        eprintln!("\ntokenix budget breakdown ({total}/{budget} tokens):");
-        for (section, tokens) in &sections {
-            let pct = if total > 0 {
-                (*tokens as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            };
-            eprintln!("  {section:<22} {tokens:>6}  ({pct:.0}%)");
-        }
+        print_budget_breakdown(&out, budget);
     }
     Ok(())
 }
 
-fn cmd_explore(query_text: &str, budget: usize, max_symbols: usize, path: &Path) -> Result<()> {
+/// Print a per-section token breakdown of a generated context to stderr, so the
+/// agent-facing stdout stays clean. Shared by `context` and `explore`.
+fn print_budget_breakdown(context: &str, budget: usize) {
+    let sections = query::budget_breakdown(context);
+    let total: usize = sections.iter().map(|(_, t)| *t).sum();
+    eprintln!("\ntokenix budget breakdown ({total}/{budget} tokens):");
+    for (section, tokens) in &sections {
+        let pct = if total > 0 {
+            (*tokens as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        eprintln!("  {section:<22} {tokens:>6}  ({pct:.0}%)");
+    }
+}
+
+fn cmd_explore(
+    query_text: &str,
+    budget: usize,
+    max_symbols: usize,
+    breakdown: bool,
+    path: &Path,
+) -> Result<()> {
     let repo_root = find_repo_root(path);
     let out = query::build_explore_context(&repo_root, query_text, budget, max_symbols)?;
     println!("{}", out);
+    if breakdown {
+        print_budget_breakdown(&out, budget);
+    }
     Ok(())
 }
 
