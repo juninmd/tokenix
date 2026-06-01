@@ -4,6 +4,12 @@ version = "0.21.0"
 edition = "2021"
 description = "Local semantic index CLI for LLM token optimization"
 license = "MIT"
+repository = "https://github.com/juninmd/tokenix"
+homepage = "https://github.com/juninmd/tokenix"
+readme = "README.md"
+keywords = ["llm", "embeddings", "code-search", "semantic-search", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["/tokenix-logo.png", "/assets/screenshots", "/benchmark", "/docs", "/.github"]
 
 [[bin]]
 name = "tokenix"

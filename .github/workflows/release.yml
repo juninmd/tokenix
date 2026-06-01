@@ -283,3 +283,31 @@ jobs:
             artifacts/sha256sums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publishes the same version to crates.io alongside the GitHub release.
+  # Requires a CARGO_REGISTRY_TOKEN repo secret (crates.io API token). When the
+  # secret is absent the job no-ops with a warning so releases are never blocked.
+  publish-crate:
+    needs: [check-version, bump-version, release]
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-version.outputs.sha }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::warning::CARGO_REGISTRY_TOKEN not set — skipping crates.io publish. Add the secret to enable it (Settings → Secrets and variables → Actions)."
+            exit 0
+          fi
+          # Builds in default (no-GPU) config, runs the verify build, then uploads.
+          # The checked-out bump commit already carries the release version.
+          cargo publish --locked
