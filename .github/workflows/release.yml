@@ -155,11 +155,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Build on 22.04 (glibc 2.35) not 24.04 (glibc 2.39): a dynamically
+          # linked binary inherits the build host's glibc floor, so 24.04 made
+          # binaries fail with "GLIBC_2.39 not found" on Ubuntu 22.04 / Debian 12
+          # / RHEL 9. 2.35 covers all current mainstream distros. (musl static is
+          # not an option — fastembed's ONNX Runtime is glibc C++.)
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
             artifact: tokenix-linux-x86_64
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
+            os: ubuntu-22.04-arm
             artifact: tokenix-linux-aarch64
           - target: x86_64-apple-darwin
             os: macos-latest
