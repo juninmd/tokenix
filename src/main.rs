@@ -121,6 +121,8 @@ enum Commands {
         budget: usize,
         #[arg(long, default_value_t = 4)]
         max_files: usize,
+        #[arg(long, help = "Print per-section token breakdown to stderr")]
+        budget_breakdown: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -405,8 +407,9 @@ fn main() -> Result<()> {
             task,
             budget,
             max_files,
+            budget_breakdown,
             path,
-        } => cmd_context(&task, budget, max_files, &path),
+        } => cmd_context(&task, budget, max_files, budget_breakdown, &path),
         Commands::Explore {
             query,
             budget,
@@ -615,10 +618,29 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result
     Ok(())
 }
 
-fn cmd_context(task: &str, budget: usize, max_files: usize, path: &Path) -> Result<()> {
+fn cmd_context(
+    task: &str,
+    budget: usize,
+    max_files: usize,
+    breakdown: bool,
+    path: &Path,
+) -> Result<()> {
     let repo_root = find_repo_root(path);
     let out = query::build_task_context(&repo_root, task, budget, max_files)?;
     println!("{}", out);
+    if breakdown {
+        let sections = query::budget_breakdown(&out);
+        let total: usize = sections.iter().map(|(_, t)| *t).sum();
+        eprintln!("\ntokenix budget breakdown ({total}/{budget} tokens):");
+        for (section, tokens) in &sections {
+            let pct = if total > 0 {
+                (*tokens as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+            eprintln!("  {section:<22} {tokens:>6}  ({pct:.0}%)");
+        }
+    }
     Ok(())
 }
 
@@ -1039,11 +1061,18 @@ fn cmd_gain(path: &Path, history: bool) -> Result<()> {
         println!("  {}", "BY TOOL".bold().underline());
         for (tool, count, saved) in &stats.by_tool {
             let bar = mini_bar(*saved, stats.tokens_saved, 20);
+            let pct = if stats.tokens_saved > 0 {
+                (*saved as f64 / stats.tokens_saved as f64) * 100.0
+            } else {
+                0.0
+            };
+            let avg = if *count > 0 { *saved / *count as i64 } else { 0 };
             println!(
-                "  {:<14} {:>5} calls   {} {}",
+                "  {:<14} {:>5} calls   {} {}  {}",
                 tool.bold(),
                 count,
                 format_num(*saved).green(),
+                format!("({:.0}% · avg {}/call)", pct, format_num(avg)).dimmed(),
                 bar.bright_black()
             );
         }
@@ -1058,11 +1087,17 @@ fn cmd_gain(path: &Path, history: bool) -> Result<()> {
                 "post" => ("PostToolUse", "Bash / ListDirectory compression"),
                 other => (other, ""),
             };
+            let pct = if stats.tokens_saved > 0 {
+                (*saved as f64 / stats.tokens_saved as f64) * 100.0
+            } else {
+                0.0
+            };
             println!(
-                "  {}  {:>5} calls   {}  {}",
+                "  {}  {:>5} calls   {} {}  {}",
                 label.bold(),
                 count,
                 format_num(*saved).green(),
+                format!("({:.0}%)", pct).dimmed(),
                 detail.dimmed()
             );
         }

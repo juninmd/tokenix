@@ -738,6 +738,30 @@ pub fn build_task_context(
     Ok(out)
 }
 
+/// Break a generated context down by top-level `## ` section, counting tokens
+/// per section. Backs `--budget-breakdown` so callers can see where the budget
+/// actually goes (preferences vs entry points vs source vs outlines). Empty
+/// sections are dropped.
+pub fn budget_breakdown(context: &str) -> Vec<(String, usize)> {
+    let mut sections: Vec<(String, String)> = Vec::new();
+    let mut current = String::from("(preamble)");
+    let mut body = String::new();
+    for line in context.lines() {
+        if let Some(title) = line.strip_prefix("## ") {
+            sections.push((std::mem::take(&mut current), std::mem::take(&mut body)));
+            current = title.trim().to_string();
+        }
+        body.push_str(line);
+        body.push('\n');
+    }
+    sections.push((current, body));
+    sections
+        .into_iter()
+        .filter(|(_, b)| !b.trim().is_empty())
+        .map(|(title, b)| (title, count_tokens(&b)))
+        .collect()
+}
+
 pub fn build_explore_context(
     repo_root: &Path,
     task: &str,
@@ -916,6 +940,19 @@ mod tests {
         let out = format_results(&[], "test query");
         assert!(out.contains("No relevant context found"));
         assert!(out.contains("test query"));
+    }
+
+    #[test]
+    fn budget_breakdown_splits_by_section() {
+        let ctx = "<!-- tokenix_context: 'x' -->\n\n## Preference Memory\n- a saved pref line\n\n## Entry Points\n- foo:1-2 [fn] foo\n\n## Relevant Source\nfn foo() { do_work() }\n";
+        let sections = budget_breakdown(ctx);
+        let names: Vec<&str> = sections.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"Preference Memory"));
+        assert!(names.contains(&"Entry Points"));
+        assert!(names.contains(&"Relevant Source"));
+        // `### path` sub-headers must not be treated as new sections.
+        assert!(!names.iter().any(|n| n.starts_with('#')));
+        assert!(sections.iter().all(|(_, t)| *t > 0));
     }
 
     #[test]

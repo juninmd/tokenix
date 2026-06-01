@@ -139,7 +139,11 @@ pub fn preferences_for_context(repo_root: &Path, task: &str, max_items: usize) -
             break;
         }
     }
-    rank_preference_lines(&mut lines, task);
+    // Rank by embedding similarity to the task; fall back to keyword scoring when
+    // the model is unavailable (e.g. not downloaded yet) so memory still works.
+    if !rank_preferences_semantic(&mut lines, task) {
+        rank_preference_lines(&mut lines, task);
+    }
     lines.truncate(max_items);
     Ok(lines.join("\n"))
 }
@@ -284,6 +288,59 @@ fn preference_score(line: &str, terms: &[String]) -> usize {
         .count()
 }
 
+/// Rank preference lines by embedding cosine similarity to the task. Returns
+/// `false` (leaving order untouched) when embeddings are unavailable — e.g. the
+/// model is not downloaded yet — so the caller can fall back to keyword ranking
+/// and keep the graceful-fallback contract. The embedder is already warm on the
+/// context/explore paths that call this, so the extra cost is negligible.
+fn rank_preferences_semantic(lines: &mut [String], task: &str) -> bool {
+    if lines.len() < 2 || task.trim().is_empty() {
+        return false;
+    }
+    let task_vec = match crate::embed::embed_query(task) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let bodies: Vec<String> = lines.iter().map(|l| preference_body(l)).collect();
+    let doc_vecs = match crate::embed::embed_documents(&bodies) {
+        Ok(v) if v.len() == lines.len() => v,
+        _ => return false,
+    };
+    let scores: Vec<f32> = doc_vecs.iter().map(|v| cosine(&task_vec, v)).collect();
+    let mut order: Vec<usize> = (0..lines.len()).collect();
+    order.sort_by(|&a, &b| {
+        scores[b]
+            .partial_cmp(&scores[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| lines[a].cmp(&lines[b]))
+    });
+    let reordered: Vec<String> = order.iter().map(|&i| lines[i].clone()).collect();
+    lines.clone_from_slice(&reordered);
+    true
+}
+
+/// Strip the "- [date] " markup so only the meaningful preference text is embedded.
+fn preference_body(line: &str) -> String {
+    let trimmed = line.trim_start_matches("- ").trim();
+    if let Some(rest) = trimmed.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            return rest[end + 1..].trim().to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
+}
+
 fn reject_sensitive_preference(text: &str) -> Result<()> {
     let lower = text.to_ascii_lowercase();
     let sensitive = [
@@ -354,6 +411,23 @@ mod tests {
     fn rejects_sensitive_preferences() {
         let err = reject_sensitive_preference("use api_key abc for tests").unwrap_err();
         assert!(err.to_string().contains("sensitive"));
+    }
+
+    #[test]
+    fn preference_body_strips_markup() {
+        assert_eq!(
+            preference_body("- [2026-05-24] Prefer Biome over ESLint"),
+            "Prefer Biome over ESLint"
+        );
+        assert_eq!(preference_body("- plain text"), "plain text");
+    }
+
+    #[test]
+    fn cosine_identical_is_one_orthogonal_is_zero() {
+        let v = [1.0f32, 2.0, 3.0];
+        assert!((cosine(&v, &v) - 1.0).abs() < 1e-6);
+        assert_eq!(cosine(&[1.0, 0.0], &[0.0, 1.0]), 0.0);
+        assert_eq!(cosine(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
     }
 
     #[test]
