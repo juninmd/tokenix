@@ -108,7 +108,11 @@ fn pagerank(node_ids: &[i64], edges: &[(i64, i64)]) -> Vec<(i64, f32)> {
     const DAMPING: f32 = 0.85;
     const ITERATIONS: usize = 20;
 
-    let index: HashMap<i64, usize> = node_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let index: HashMap<i64, usize> = node_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (*id, i))
+        .collect();
     let mut out_degree = vec![0u32; n];
     let mut in_edges: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (caller, callee) in edges {

@@ -1440,8 +1440,13 @@ mod tests {
         assert_eq!(hits.iter().map(|r| r.id).collect::<Vec<_>>(), vec![a]);
 
         // Case-sensitive miss, case-insensitive hit.
-        assert!(search_regex(&conn, "token", 10, None, false).unwrap().is_empty());
-        assert_eq!(search_regex(&conn, "token", 10, None, true).unwrap().len(), 1);
+        assert!(search_regex(&conn, "token", 10, None, false)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            search_regex(&conn, "token", 10, None, true).unwrap().len(),
+            1
+        );
 
         // File filter scopes results.
         assert!(search_regex(&conn, "fn ", 10, Some("lib.rs"), false)

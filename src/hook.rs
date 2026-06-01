@@ -390,7 +390,8 @@ pub fn run_hook() -> Result<()> {
 
         // 1. Optimize git status -> git status --short. Let it pass through natively
         // on the second pass when the short flag is already present.
-        let is_short_git_status = (command.starts_with("git status") || command.starts_with("git  status"))
+        let is_short_git_status = (command.starts_with("git status")
+            || command.starts_with("git  status"))
             && (command.contains("-s") || command.contains("--short"));
         if is_short_git_status {
             std::process::exit(0);
@@ -432,13 +433,14 @@ pub fn run_hook() -> Result<()> {
 
         // 2. Otherwise check for other active filters to wrap in tokenix run
         let filters = crate::filters::load_all_filters();
-        let unwrapped = crate::filters::unwrap_shell_runner(command).unwrap_or_else(|| command.to_string());
-        
+        let unwrapped =
+            crate::filters::unwrap_shell_runner(command).unwrap_or_else(|| command.to_string());
+
         if crate::filters::find_filter(&unwrapped, &filters).is_some() {
             let exe_path = std::env::current_exe()
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| "tokenix".to_string());
-            
+
             let rewritten = format!("{} run {:?}", exe_path, command);
 
             let out = bash_rewrite_output(&rewritten, "wrapped in tokenix compression run");

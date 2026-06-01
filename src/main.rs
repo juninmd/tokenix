@@ -1066,7 +1066,11 @@ fn cmd_gain(path: &Path, history: bool) -> Result<()> {
             } else {
                 0.0
             };
-            let avg = if *count > 0 { *saved / *count as i64 } else { 0 };
+            let avg = if *count > 0 {
+                *saved / *count as i64
+            } else {
+                0
+            };
             println!(
                 "  {:<14} {:>5} calls   {} {}  {}",
                 tool.bold(),
@@ -1218,7 +1222,10 @@ fn install_claude_code(local: bool) -> Result<()> {
         "ok".green(),
         settings_path.display()
     );
-    println!("  PreToolUse:  {} hook (Read/Grep/Bash output compression)", tokenix_bin);
+    println!(
+        "  PreToolUse:  {} hook (Read/Grep/Bash output compression)",
+        tokenix_bin
+    );
     if removed_legacy_auto_index {
         println!("  Removed legacy UserPromptSubmit auto-index hook");
     }

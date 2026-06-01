@@ -706,7 +706,8 @@ pub fn run_command_and_compress(command_str: &str) -> Result<i32> {
     // Write log event of the actual execution savings
     let repo_root = find_repo_root();
     let original_tokens = (count_tokens(&stdout_raw) + count_tokens(&stderr_raw)) as i64;
-    let actual_tokens = (count_tokens(&stdout_compressed) + count_tokens(&stderr_compressed)) as i64;
+    let actual_tokens =
+        (count_tokens(&stdout_compressed) + count_tokens(&stderr_compressed)) as i64;
     let saved = (original_tokens - actual_tokens).max(0);
 
     if saved > 0 {
