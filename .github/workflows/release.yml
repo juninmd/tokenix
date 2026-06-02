@@ -5,8 +5,11 @@ on:
     branches:
       - main
 
+# Least privilege by default: the pipeline reads the repo. Each job opts into the
+# narrow extra scope it needs (bump-version/release: contents:write; build &
+# publish: id-token for attestation/Trusted Publishing).
 permissions:
-  contents: write
+  contents: read
 
 # Serialize releases: a second semantic push waits rather than racing the
 # in-flight release for tag/artifact creation. cancel-in-progress is false so a
@@ -25,9 +28,14 @@ jobs:
       bump: ${{ steps.version.outputs.bump }}
       previous_tag: ${{ steps.version.outputs.previous_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Compute next semantic version
         id: version
@@ -113,14 +121,23 @@ jobs:
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
-          fetch-depth: 0
+          egress-policy: audit
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        # bump-version pushes the release commit, so the checkout credentials must
+        # persist — persist-credentials:false would break `git push`.
+        with:
+          fetch-depth: 0 # zizmor: ignore[artipacked]
 
       - name: Write release version into Cargo.toml + Cargo.lock
+        # Pass workflow data through env, never interpolated into the script body,
+        # so a crafted value can never break out into shell (template injection).
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ needs.check-version.outputs.version }}"
           # [package] version is the first `version = ` line in Cargo.toml
           sed -i "0,/^version = \".*\"/s//version = \"${VERSION}\"/" Cargo.toml
           # keep the crate's own entry in Cargo.lock in sync so --locked builds pass
@@ -135,6 +152,8 @@ jobs:
 
       - name: Commit and push bump
         id: commit
+        env:
+          TAG: ${{ needs.check-version.outputs.tag }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -143,7 +162,7 @@ jobs:
             echo "Cargo.toml already at the release version; nothing to commit."
           else
             # [skip ci] so this bump commit does not re-trigger the release pipeline
-            git commit -am "chore(release): ${{ needs.check-version.outputs.tag }} [skip ci]"
+            git commit -am "chore(release): ${TAG} [skip ci]"
             git push origin HEAD:main
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -151,6 +170,12 @@ jobs:
   build:
     needs: [check-version, bump-version]
     if: needs.check-version.outputs.should_release == 'true'
+    # Provenance attestation needs to mint an OIDC token and write the attestation;
+    # the source checkout is read-only.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -186,13 +211,21 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      # harden-runner is Linux-only; skip on the macOS/Windows matrix legs.
+      - name: Harden runner
+        if: runner.os == 'Linux'
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ needs.bump-version.outputs.sha }}
+          persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Install Linux build dependencies
@@ -202,7 +235,7 @@ jobs:
           sudo apt-get install -y pkg-config libssl-dev
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -226,8 +259,16 @@ jobs:
         run: |
           Copy-Item "target\${{ matrix.target }}\release\tokenix.exe" "${{ matrix.artifact }}"
 
+      # SLSA build provenance: cryptographically binds this exact binary's digest
+      # to the workflow + commit that produced it. Consumers verify with
+      # `gh attestation verify <file> --repo juninmd/tokenix`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: ${{ matrix.artifact }}
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
@@ -236,14 +277,22 @@ jobs:
     needs: [check-version, bump-version, build]
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    # Creating the GitHub Release + tag needs write to repo contents.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ needs.bump-version.outputs.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           merge-multiple: true
@@ -256,10 +305,14 @@ jobs:
 
       - name: Extract changelog entry
         id: changelog
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+          PREVIOUS_TAG: ${{ needs.check-version.outputs.previous_tag }}
+          BUMP: ${{ needs.check-version.outputs.bump }}
+          COMMIT_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          VERSION="${{ needs.check-version.outputs.version }}"
-          PREVIOUS_TAG="${{ needs.check-version.outputs.previous_tag }}"
-          NOTES="Release v${VERSION}\n\nSemantic bump: \`${{ needs.check-version.outputs.bump }}\`.\nBuilt from commit \`${{ github.sha }}\` on \`${{ github.ref_name }}\`."
+          NOTES="Release v${VERSION}\n\nSemantic bump: \`${BUMP}\`.\nBuilt from commit \`${COMMIT_SHA}\` on \`${REF_NAME}\`."
           if [ "$PREVIOUS_TAG" != "v0.0.0" ]; then
             # Exclude the auto-generated chore(release) bump commit from the notes.
             CHANGES=$(git log --format='- %s (%h)' "${PREVIOUS_TAG}..HEAD" | grep -v 'chore(release):' || true)
@@ -270,7 +323,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2 # zizmor: ignore[superfluous-actions]
         with:
           tag_name: ${{ needs.check-version.outputs.tag }}
           target_commitish: ${{ needs.bump-version.outputs.sha }}
@@ -290,29 +343,54 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Publishes the same version to crates.io alongside the GitHub release.
-  # Requires a CARGO_REGISTRY_TOKEN repo secret (crates.io API token). When the
-  # secret is absent the job no-ops with a warning so releases are never blocked.
+  # Prefers OIDC Trusted Publishing (no standing secret); falls back to a
+  # CARGO_REGISTRY_TOKEN secret if Trusted Publishing is not yet configured on
+  # crates.io. When neither is available the job no-ops with a warning so releases
+  # are never blocked.
   publish-crate:
     needs: [check-version, bump-version, release]
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # mint the OIDC token for crates.io Trusted Publishing
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ needs.bump-version.outputs.sha }}
+          persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: stable
+
+      # Exchanges the workflow's OIDC identity for a short-lived (30 min) crates.io
+      # token. Requires a one-time Trusted Publisher config on crates.io
+      # (crate Settings -> Trusted Publishing -> repo juninmd/tokenix, this
+      # workflow). continue-on-error lets the token fallback run until then.
+      - name: Authenticate to crates.io (Trusted Publishing)
+        id: auth
+        continue-on-error: true
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
 
       - name: Publish to crates.io
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          TP_TOKEN: ${{ steps.auth.outputs.token }}
+          FALLBACK_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
-            echo "::warning::CARGO_REGISTRY_TOKEN not set — skipping crates.io publish. Add the secret to enable it (Settings → Secrets and variables → Actions)."
-            exit 0
-          fi
-          # Builds in default (no-GPU) config, runs the verify build, then uploads.
           # The checked-out bump commit already carries the release version.
-          cargo publish --locked
+          if [ -n "${TP_TOKEN:-}" ]; then
+            echo "Publishing to crates.io via Trusted Publishing (OIDC)."
+            CARGO_REGISTRY_TOKEN="$TP_TOKEN" cargo publish --locked
+          elif [ -n "${FALLBACK_TOKEN:-}" ]; then
+            echo "::warning::Trusted Publishing unavailable; using CARGO_REGISTRY_TOKEN. Configure Trusted Publishing on crates.io to drop the standing secret."
+            CARGO_REGISTRY_TOKEN="$FALLBACK_TOKEN" cargo publish --locked
+          else
+            echo "::warning::Neither Trusted Publishing nor CARGO_REGISTRY_TOKEN is available — skipping crates.io publish."
+          fi

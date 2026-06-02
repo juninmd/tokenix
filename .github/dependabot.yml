@@ -1,18 +1,25 @@
-﻿version: 2
+version: 2
 updates:
-  - package-ecosystem: "npm"
+  # Rust dependency updates — the core supply-chain channel for this crate.
+  # (npm/pip/docker were removed: no package.json/requirements.txt/Dockerfile exist.)
+  - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "weekly"
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
+    open-pull-requests-limit: 10
+    # Keep the committed Cargo.lock in sync so --locked CI builds stay green.
+    versioning-strategy: lockfile-only
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions are pinned to commit SHAs; Dependabot bumps the SHA and keeps
+  # the trailing `# vX` version comment current, so pinning costs no manual upkeep.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-  - package-ecosystem: "docker"
-    directory: "/"
-    schedule:
-      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      github-actions:
+        patterns: ["*"]

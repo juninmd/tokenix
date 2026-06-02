@@ -1,0 +1,21 @@
+# Code owners — GitHub requests review from these owners on matching changes.
+# To make this binding, enable "Require review from Code Owners" in the main
+# branch protection rule. The supply-chain-critical paths below are the ones an
+# attacker would target to subvert CI, releases, or dependency provenance.
+
+# Default owner for everything.
+*                       @juninmd
+
+# CI/CD and release pipeline — a change here can run arbitrary code with the
+# repo's GITHUB_TOKEN and publish/release artifacts.
+/.github/               @juninmd
+/.github/workflows/     @juninmd
+
+# Dependency + supply-chain policy. Cargo.lock is the pinned dependency set;
+# deny.toml is the allowlist gate; touching either changes what ships.
+/Cargo.toml             @juninmd
+/Cargo.lock             @juninmd
+/deny.toml              @juninmd
+
+# CI helper scripts execute in the runner.
+/scripts/               @juninmd

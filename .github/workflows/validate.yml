@@ -6,11 +6,22 @@ on:
 concurrency:
   group: validate-${{ github.ref }}
   cancel-in-progress: true
+
+# Gitleaks/validate-pr only need to read the repo to scan it.
+permissions:
+  contents: read
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0 # Full history for reliable Gitleaks incremental scans
-      - uses: juninmd/base-actions/validate-pr@main
+          persist-credentials: false
+      # Pinned to a commit SHA of juninmd/base-actions@main: an external action on a
+      # mutable branch is a direct code-execution path into this pipeline.
+      - uses: juninmd/base-actions/validate-pr@2edcc396f63bd14b5e8c32dc9ddec68ca492cd8a # main
