@@ -251,7 +251,15 @@ pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<
             io::stdout().flush()?;
             let mut line = String::new();
             io::stdin().lock().read_line(&mut line)?;
-            let idx: usize = line.trim().parse().unwrap_or(0);
+            let line = line.trim();
+            if line.is_empty() {
+                bail!(
+                    "Interactive selection unavailable. Specify the command:\n\
+                     tokenix filter generate <command>\n\
+                     Example: tokenix filter generate cargo"
+                );
+            }
+            let idx: usize = line.parse().unwrap_or(0);
             if idx == 0 || idx > stats.len() {
                 bail!("invalid selection");
             }

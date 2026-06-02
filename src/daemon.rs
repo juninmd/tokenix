@@ -335,6 +335,8 @@ pub fn run_stop() -> Result<()> {
     #[cfg(windows)]
     std::process::Command::new("taskkill")
         .args(["/F", "/PID", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()?;
 
     if let Some(p) = pid_path() {

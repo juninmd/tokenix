@@ -619,6 +619,13 @@ fn configure_index_limits(
 }
 
 fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result<()> {
+    if !path.exists() {
+        eprintln!(
+            "{} Path does not exist: {}",
+            "warning:".yellow(),
+            path.display()
+        );
+    }
     let repo_root = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     if if_stale && !force {
@@ -715,6 +722,9 @@ fn cmd_memory(action: MemoryAction) -> Result<()> {
             project,
             path,
         } => {
+            if global && project {
+                anyhow::bail!("Use --global OR --project, not both");
+            }
             let repo_root = find_repo_root(&path);
             let mut saved = Vec::new();
             if global {
@@ -795,6 +805,9 @@ fn selected_memory_scopes(global: bool, project: bool) -> Vec<memory::Preference
 }
 
 fn cmd_query(text: &str, budget: usize, k: usize, file: Option<&str>, path: &Path) -> Result<()> {
+    if k == 0 {
+        anyhow::bail!("k must be >= 1");
+    }
     let repo_root = find_repo_root(path);
 
     // Try to query via daemon if it's running
@@ -829,6 +842,9 @@ fn open_existing_index(path: &Path) -> Result<rusqlite::Connection> {
 }
 
 fn cmd_symbols(query: &str, limit: usize, path: &Path) -> Result<()> {
+    if limit == 0 {
+        anyhow::bail!("limit must be >= 1");
+    }
     let conn = open_existing_index(path)?;
     let nodes = store::search_graph_nodes(&conn, query, limit)?;
     println!(
@@ -839,6 +855,9 @@ fn cmd_symbols(query: &str, limit: usize, path: &Path) -> Result<()> {
 }
 
 fn cmd_graph_relations(symbol: &str, limit: usize, path: &Path, callers: bool) -> Result<()> {
+    if limit == 0 {
+        anyhow::bail!("limit must be >= 1");
+    }
     let conn = open_existing_index(path)?;
     let relations = if callers {
         store::graph_callers(&conn, symbol, limit)?
@@ -913,7 +932,15 @@ fn cmd_read(
         let parts: Vec<&str> = range.split('-').collect();
         if parts.len() == 2 {
             if let (Ok(s), Ok(e)) = (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
-                let slice = file_lines[s.saturating_sub(1)..e.min(file_lines.len())].join("\n");
+                let total = file_lines.len();
+                if s == 0 || e == 0 || s > total || e > total || s > e {
+                    eprintln!(
+                        "{}",
+                        format!("Invalid line range. File has {total} lines (1-{total})").red()
+                    );
+                    std::process::exit(1);
+                }
+                let slice = file_lines[s - 1..e].join("\n");
                 println!("{}", slice);
                 return Ok(());
             }
@@ -1937,6 +1964,9 @@ fn cmd_stats(path: &Path) -> Result<()> {
 }
 
 fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> {
+    if format_opt != "html" && format_opt != "text" {
+        anyhow::bail!("Invalid format '{format_opt}'. Use: text | html");
+    }
     let repo_root = find_repo_root(path);
     let conn = store::open_db(&repo_root, false)?
         .ok_or_else(|| anyhow::anyhow!("No index found. Run: tokenix index"))?;
