@@ -1,4 +1,4 @@
-﻿name: Validate
+name: Validate
 on:
   pull_request:
   push:
@@ -8,4 +8,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   check:
-    uses: juninmd/base-actions/.github/workflows/reusable-validate.yml@main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for reliable Gitleaks incremental scans
+      - uses: juninmd/base-actions/validate-pr@main
