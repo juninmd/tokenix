@@ -306,8 +306,10 @@ if "$TOKENIX" install-hook --tool claude-code --local &>/dev/null; then
   SETTINGS="$HOOK_DIR/.claude/settings.local.json"
   if [ -f "$SETTINGS" ]; then
     pass "install-hook --local creates .claude/settings.local.json"
-    # Verify the hook path inside settings doesn't contain backslashes or .exe
-    if grep -q "\\\\" "$SETTINGS"; then
+    # The hook path must use forward slashes (cross-platform). The only legitimate
+    # backslashes are JSON quote escapes (\") around the binary path; a real Windows
+    # path separator shows up as an escaped backslash (\\) in JSON, so match that.
+    if grep -qF '\\' "$SETTINGS"; then
       fail "settings.json contains Windows backslashes"
     else
       pass "settings.json uses forward slashes"
