@@ -415,6 +415,7 @@ fn is_bash_tool(name: &str) -> bool {
         lower.as_str(),
         "bash"
             | "powershell"
+            | "cmd"
             | "shell"
             | "run_shell_command"
             | "default_api:run_shell_command"
@@ -431,13 +432,33 @@ pub fn run_hook() -> Result<()> {
         .or_else(|| HookInput::from_stdin(&raw_stdin))
         .unwrap_or_default();
 
-    // Unknown or unsupported tool: pass through silently.
+    let repo_root = find_repo_root();
+
     let is_bash = is_bash_tool(&input.tool_name);
-    if input.tool_name != "Read" && input.tool_name != "Grep" && !is_bash {
+    let is_supported = input.tool_name == "Read" || input.tool_name == "Grep" || is_bash;
+
+    if input.tool_name.is_empty() {
         std::process::exit(0);
     }
 
-    let repo_root = find_repo_root();
+    if !is_supported {
+        let _ = log_hook_event(
+            &repo_root,
+            &HookEvent {
+                ts: now_ts(),
+                tool: input.tool_name,
+                action: "pass".to_string(),
+                phase: "pre".to_string(),
+                reason: "unsupported tool".to_string(),
+                saved_tokens: 0,
+                actual_tokens: 0,
+                original_estimate: 0,
+                input_preview: raw_stdin.chars().take(200).collect(),
+                command: String::new(),
+            },
+        );
+        std::process::exit(0);
+    }
 
     if is_bash {
         let command = input.tool_input["command"]
@@ -454,6 +475,40 @@ pub fn run_hook() -> Result<()> {
 
         // Avoid infinite recursion: do not rewrite if it's already a tokenix command execution
         if command.contains("tokenix") {
+            std::process::exit(0);
+        }
+
+        // Recording session active: route every in-scope command through
+        // `tokenix run` so its raw output is captured to .tokenix/recordings.
+        // PreToolUse is the only path that sees command output under Claude Code,
+        // so this is what makes `tokenix filter record` feed filter generation.
+        if crate::recordings::is_in_scope(&repo_root, command) {
+            let exe_path = std::env::current_exe()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| "tokenix".to_string());
+            let rewritten = format!("{:?} run {:?}", exe_path, command);
+            let out = bash_rewrite_output(
+                &rewritten,
+                "recording: capturing output for filter generation",
+            );
+
+            let _ = log_hook_event(
+                &repo_root,
+                &HookEvent {
+                    ts: now_ts(),
+                    tool: "Bash".to_string(),
+                    action: "intercepted".to_string(),
+                    phase: "pre".to_string(),
+                    reason: "recording capture".to_string(),
+                    saved_tokens: 0,
+                    actual_tokens: 0,
+                    original_estimate: 0,
+                    input_preview: command.chars().take(200).collect(),
+                    command: command.to_string(),
+                },
+            );
+
+            println!("{}", serde_json::to_string(&out).unwrap_or_default());
             std::process::exit(0);
         }
 
@@ -510,7 +565,7 @@ pub fn run_hook() -> Result<()> {
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| "tokenix".to_string());
 
-            let rewritten = format!("{} run {:?}", exe_path, command);
+            let rewritten = format!("{:?} run {:?}", exe_path, command);
 
             let out = bash_rewrite_output(&rewritten, "wrapped in tokenix compression run");
 

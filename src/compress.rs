@@ -469,7 +469,7 @@ fn find_repo_root() -> PathBuf {
     crate::store::find_project_root(&cwd)
 }
 
-fn now_ts() -> f64 {
+pub fn now_ts() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -705,6 +705,8 @@ pub fn run_command_and_compress(command_str: &str) -> Result<i32> {
 
     // Write log event of the actual execution savings
     let repo_root = find_repo_root();
+    // Capture raw output if a `tokenix filter record` session is active.
+    crate::recordings::capture(&repo_root, command_str, &stdout_raw, &stderr_raw);
     let original_tokens = (count_tokens(&stdout_raw) + count_tokens(&stderr_raw)) as i64;
     let actual_tokens =
         (count_tokens(&stdout_compressed) + count_tokens(&stderr_compressed)) as i64;

@@ -6,13 +6,14 @@ use std::process::{Command, Stdio};
 use anyhow::{bail, Result};
 use colored::Colorize;
 
-use crate::{filters, store};
+use crate::{filters, recordings, store};
 
 struct CmdStats {
     base_cmd: String,
     count: usize,
     total_original: i64,
     total_saved: i64,
+    unique_commands: HashMap<String, (usize, i64)>,
 }
 
 /// Base command for a Bash event. Prefers the stored `command` field (set at
@@ -69,16 +70,27 @@ fn collect_stats(repo_root: &Path) -> Vec<CmdStats> {
         .iter()
         .filter(|e| e.tool == "Bash" && e.phase == "post")
     {
-        if let Some(cmd) = base_command(ev) {
-            let entry = map.entry(cmd.clone()).or_insert(CmdStats {
-                base_cmd: cmd,
+        if let Some(base) = base_command(ev) {
+            let entry = map.entry(base.clone()).or_insert(CmdStats {
+                base_cmd: base,
                 count: 0,
                 total_original: 0,
                 total_saved: 0,
+                unique_commands: HashMap::new(),
             });
             entry.count += 1;
             entry.total_original += ev.original_estimate;
             entry.total_saved += ev.saved_tokens;
+
+            let full_cmd = if !ev.command.is_empty() {
+                ev.command.clone()
+            } else {
+                "(unknown arguments)".to_string()
+            };
+
+            let cmd_entry = entry.unique_commands.entry(full_cmd).or_insert((0, 0));
+            cmd_entry.0 += 1;
+            cmd_entry.1 += ev.original_estimate - ev.saved_tokens;
         }
     }
     let mut stats: Vec<CmdStats> = map.into_values().collect();
@@ -87,9 +99,55 @@ fn collect_stats(repo_root: &Path) -> Vec<CmdStats> {
     stats
 }
 
-pub fn cmd_filter_list(repo_root: &Path) -> Result<()> {
+pub fn cmd_filter_list(index: Option<usize>, repo_root: &Path) -> Result<()> {
     let stats = collect_stats(repo_root);
+
+    if let Some(idx) = index {
+        if idx == 0 || idx > stats.len() {
+            bail!(
+                "invalid index {} — choose between 1 and {}",
+                idx,
+                stats.len()
+            );
+        }
+        let s = &stats[idx - 1];
+        print_box_header(&format!("filter · {}", s.base_cmd));
+        println!(
+            "  wasted {}   ·   {} calls",
+            format_num(s.total_original - s.total_saved).red().bold(),
+            s.count
+        );
+        println!("\n  {}", "Top unique invocations:".bold());
+        println!("  {:>6} {:>10}  {}", "Calls", "Wasted", "Command".dimmed());
+        println!("  {}", "─".repeat(76).bright_black());
+
+        let mut unique: Vec<_> = s.unique_commands.iter().collect();
+        unique.sort_by_key(|(_, stats)| -stats.1);
+        for (cmd, (count, wasted)) in unique.iter().take(10) {
+            let cmd: &str = cmd;
+            println!(
+                "  {:>6} {:>10}  {}",
+                count,
+                format_num(*wasted),
+                truncate(cmd, 56).cyan()
+            );
+        }
+
+        println!(
+            "\n  {} build a filter from these:  {}",
+            "→".cyan(),
+            format!("tokenix filter generate {}", s.base_cmd).green()
+        );
+        println!();
+        return Ok(());
+    }
+
     print_stats_table(&stats);
+    println!(
+        "  {} drill into one:  {}",
+        "→".cyan(),
+        "tokenix filter list <#>".green()
+    );
     Ok(())
 }
 
@@ -100,8 +158,7 @@ pub fn cmd_filter_active() -> Result<()> {
         return Ok(());
     }
 
-    println!();
-    println!("{}", "ACTIVE OUTPUT FILTERS".bold().underline());
+    print_box_header("filter · active output filters");
     println!(
         "  {:<28} {:<8} {:<52} Description",
         "Name", "Source", "Match command"
@@ -127,7 +184,7 @@ fn print_stats_table(stats: &[CmdStats]) {
         println!("No Bash hook events found. Run some commands to populate the log.");
         return;
     }
-    println!("{}", "Top Bash commands by tokens wasted:".bold());
+    print_box_header("filter · commands by tokens wasted");
     println!(
         "{:<4} {:<18} {:>6} {:>15} {:>13}",
         "#", "Command", "Calls", "Tokens Wasted", "Tokens Saved"
@@ -151,6 +208,34 @@ fn truncate(s: &str, max: usize) -> String {
     }
     let keep = max.saturating_sub(1);
     format!("{}~", s.chars().take(keep).collect::<String>())
+}
+
+/// Titled box header in the same visual language as `tokenix gain`.
+fn print_box_header(title: &str) {
+    let inner = format!(" {} ", title);
+    let width = inner.chars().count().max(56);
+    let pad = width - inner.chars().count();
+    println!("\n{}", format!("╭{}╮", "─".repeat(width)).bright_black());
+    println!(
+        "{}{}{}{}",
+        "│".bright_black(),
+        inner.bold(),
+        " ".repeat(pad),
+        "│".bright_black()
+    );
+    println!("{}", format!("╰{}╯", "─".repeat(width)).bright_black());
+}
+
+fn human_bytes(n: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    if n >= MB {
+        format!("{:.1} MB", n as f64 / MB as f64)
+    } else if n >= KB {
+        format!("{:.1} KB", n as f64 / KB as f64)
+    } else {
+        format!("{} B", n)
+    }
 }
 
 pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<()> {
@@ -177,13 +262,30 @@ pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<
     // Security gate: base_cmd reaches a shell, a filename, and git/PR args.
     validate_command_name(&base_cmd)?;
 
-    // Get sample output by running `<cmd> --help`
-    println!(
-        "\n{} running `{} --help` for sample output...",
-        "→".cyan(),
-        base_cmd
-    );
-    let sample = run_command_sample(&base_cmd);
+    print_box_header(&format!("filter generate · {}", base_cmd));
+
+    // Prefer real outputs captured during a `tokenix filter record` session —
+    // they give the AI diverse, realistic noise instead of a single re-run.
+    let sample =
+        if let Some((recorded, used)) = recordings::read_samples(repo_root, &base_cmd, 64 * 1024) {
+            println!(
+                "  {} using {} recorded sample(s) from `tokenix filter record`",
+                "→".cyan(),
+                used
+            );
+            recorded
+        } else {
+            // No recordings — re-run the latest real invocation from the log, or the
+            // base command as-is (NEVER `--help`; it has the wrong noise profile).
+            let full_cmd_to_run = find_latest_unfiltered_command(repo_root, &base_cmd)
+                .unwrap_or_else(|| base_cmd.clone());
+            println!(
+                "  {} running `{}` for sample output...",
+                "→".cyan(),
+                full_cmd_to_run
+            );
+            run_command_sample(&full_cmd_to_run)
+        };
 
     // Show preview and let user confirm or replace
     let sample = preview_and_confirm_sample(&base_cmd, sample)?;
@@ -308,16 +410,36 @@ fn preview_and_confirm_sample(cmd: &str, sample: String) -> Result<String> {
     }
 }
 
-fn run_command_sample(cmd: &str) -> String {
+fn find_latest_unfiltered_command(repo_root: &Path, base_cmd: &str) -> Option<String> {
+    let log_path = repo_root.join(".tokenix").join("unfiltered_cmds.log");
+    if !log_path.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(&log_path).ok()?;
+    let mut latest_match = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Match exact command or command with arguments
+        if trimmed == base_cmd || trimmed.starts_with(&format!("{} ", base_cmd)) {
+            latest_match = Some(trimmed.to_string());
+        }
+    }
+
+    latest_match
+}
+
+fn run_command_sample(full_cmd: &str) -> String {
     let output = if cfg!(windows) {
         Command::new("cmd")
-            .args(["/C", cmd, "--help"])
+            .args(["/C", full_cmd])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
     } else {
-        Command::new(cmd)
-            .arg("--help")
+        Command::new("sh")
+            .args(["-c", full_cmd])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
@@ -335,7 +457,7 @@ fn run_command_sample(cmd: &str) -> String {
             // Cap at 150 lines
             combined.lines().take(150).collect::<Vec<_>>().join("\n")
         }
-        Err(_) => format!("(could not run `{} --help`)", cmd),
+        Err(_) => format!("(could not run `{}`)", full_cmd),
     }
 }
 
@@ -545,6 +667,112 @@ fn print_contribution_instructions(cmd: &str, toml_content: &str) {
     println!("{}", toml_content);
     println!("{}", "─".repeat(60));
     println!("  3. PR title: \"filter: add {} filter\"", cmd);
+}
+
+pub fn cmd_filter_record_start(command: Option<String>, repo_root: &Path) -> Result<()> {
+    if recordings::is_active(repo_root) {
+        println!(
+            "{} A recording session is already running. Stop it first with \
+             `tokenix filter record stop`.",
+            "⚠".yellow()
+        );
+        return Ok(());
+    }
+    if let Some(c) = &command {
+        validate_command_name(c)?;
+    }
+    let session = recordings::start(repo_root, command)?;
+    let scope = match &session.command {
+        Some(c) => format!("`{}`", c).bold().to_string(),
+        None => "all commands".bold().to_string(),
+    };
+
+    print_box_header("filter record · started");
+    println!("  {} capturing {} output", "●".green(), scope);
+    println!("  {} {}", "into".dimmed(), ".tokenix/recordings".cyan());
+    println!("\n  Run your commands as usual, then finish with:");
+    println!("    {}", "tokenix filter record stop".green());
+    println!();
+    Ok(())
+}
+
+pub fn cmd_filter_record_stop(repo_root: &Path) -> Result<()> {
+    if !recordings::is_active(repo_root) {
+        println!("{} No active recording session.", "⚠".yellow());
+        return Ok(());
+    }
+    recordings::stop(repo_root)?;
+    let summary = recordings::summary(repo_root);
+
+    print_box_header("filter record · stopped");
+    if summary.is_empty() {
+        println!("  {} No command output was captured.", "⚠".yellow());
+        println!(
+            "  {}",
+            "Did the recorded commands produce output? Is the hook installed?".dimmed()
+        );
+        println!();
+        return Ok(());
+    }
+
+    println!(
+        "  {:<20} {:>9} {:>12}",
+        "Command".bold(),
+        "Captures".bold(),
+        "Size".bold()
+    );
+    println!("  {}", "─".repeat(43).bright_black());
+    for (cmd, count, bytes) in &summary {
+        println!(
+            "  {:<20} {:>9} {:>12}",
+            truncate(cmd, 20),
+            count,
+            human_bytes(*bytes)
+        );
+    }
+
+    println!(
+        "\n  {} turn these into a filter:  {}",
+        "→".cyan(),
+        format!("tokenix filter generate {}", summary[0].0).green()
+    );
+    println!();
+    Ok(())
+}
+
+pub fn cmd_filter_record_status(repo_root: &Path) -> Result<()> {
+    match recordings::active_session(repo_root) {
+        Some(s) => {
+            let scope = match &s.command {
+                Some(c) => format!("`{}`", c).bold().to_string(),
+                None => "all commands".bold().to_string(),
+            };
+            print_box_header("filter record · active");
+            println!("  {} recording {}", "●".green(), scope);
+        }
+        None => {
+            print_box_header("filter record · idle");
+            println!(
+                "  {} no active session — start one with `tokenix filter record start`",
+                "○".yellow()
+            );
+        }
+    }
+
+    let summary = recordings::summary(repo_root);
+    if !summary.is_empty() {
+        println!("\n  {}", "Captured so far:".bold());
+        for (cmd, count, bytes) in &summary {
+            println!(
+                "    {:<18} {:>4} captures  {:>10}",
+                truncate(cmd, 18),
+                count,
+                human_bytes(*bytes)
+            );
+        }
+    }
+    println!();
+    Ok(())
 }
 
 #[cfg(test)]

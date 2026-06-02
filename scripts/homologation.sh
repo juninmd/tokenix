@@ -267,6 +267,18 @@ else
   pass "filter active exits without panic"
 fi
 
+# filter record lifecycle: start -> status -> stop must run clean and toggle state.
+REC_START=$("$TOKENIX" filter record start 2>&1)
+REC_STATUS=$("$TOKENIX" filter record status 2>&1)
+REC_STOP=$("$TOKENIX" filter record stop 2>&1)
+if echo "$REC_START$REC_STATUS$REC_STOP" | grep -qi "panic"; then
+  fail "filter record lifecycle panicked"
+elif echo "$REC_STATUS" | grep -qi "active"; then
+  pass "filter record start/status/stop runs and reports an active session"
+else
+  fail "filter record status did not report an active session after start" "status: $REC_STATUS"
+fi
+
 # ---------------------------------------------------------------------------
 # 7. doctor
 # ---------------------------------------------------------------------------

@@ -271,6 +271,20 @@ pub fn run_mcp_server() -> Result<()> {
                                     }
                                 },
                                 {
+                                    "name": "tokenix_run",
+                                    "description": "Execute a shell command with token-efficient output compression (removes noise, truncates long logs)",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "command": {
+                                                "type": "string",
+                                                "description": "Shell command to execute, e.g. 'npm install' or 'cargo test'"
+                                            }
+                                        },
+                                        "required": ["command"]
+                                    }
+                                },
+                                {
                                     "name": "tokenix_gain",
                                     "description": "Show estimated token savings statistics from tokenix hooks",
                                     "inputSchema": {
@@ -563,6 +577,79 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
             let (path, count) =
                 crate::memory::edit_preference(&repo_root, scope, query, replacement)?;
             Ok(format!("edited {} in {}", count, path.display()))
+        }
+        "tokenix_run" => {
+            let command = args
+                .get("command")
+                .and_then(|q| q.as_str())
+                .ok_or_else(|| anyhow!("Missing 'command' argument"))?;
+
+            // Avoid infinite recursion
+            if command.contains("tokenix")
+                && (command.contains(" run ") || command.contains(" hook"))
+            {
+                return Err(anyhow!("Cannot run tokenix recursively via MCP"));
+            }
+
+            let mut cmd = if cfg!(windows) {
+                let mut c = std::process::Command::new("cmd");
+                c.args(["/C", command]);
+                c
+            } else {
+                let mut c = std::process::Command::new("sh");
+                c.args(["-c", command]);
+                c
+            };
+
+            let output = cmd.output()?;
+            let stdout_raw = String::from_utf8_lossy(&output.stdout);
+            let stderr_raw = String::from_utf8_lossy(&output.stderr);
+
+            // Capture raw output if a `tokenix filter record` session is active.
+            crate::recordings::capture(&repo_root, command, &stdout_raw, &stderr_raw);
+
+            let stdout_compressed = crate::compress::compress_bash_output(command, &stdout_raw);
+            let stderr_compressed = crate::compress::compress_bash_output(command, &stderr_raw);
+
+            // Log savings
+            let original_tokens = (crate::chunker::count_tokens(&stdout_raw)
+                + crate::chunker::count_tokens(&stderr_raw))
+                as i64;
+            let actual_tokens = (crate::chunker::count_tokens(&stdout_compressed)
+                + crate::chunker::count_tokens(&stderr_compressed))
+                as i64;
+            let saved = (original_tokens - actual_tokens).max(0);
+
+            if saved > 0 {
+                let _ = crate::store::log_hook_event(
+                    &repo_root,
+                    &crate::store::HookEvent {
+                        ts: crate::compress::now_ts(),
+                        tool: "MCP".to_string(),
+                        action: "intercepted".to_string(),
+                        phase: "mcp_run".to_string(),
+                        reason: "compressed command output".to_string(),
+                        saved_tokens: saved,
+                        actual_tokens,
+                        original_estimate: original_tokens,
+                        input_preview: command.chars().take(200).collect(),
+                        command: command.to_string(),
+                    },
+                );
+            }
+
+            let mut combined = String::new();
+            if !stdout_compressed.is_empty() {
+                combined.push_str(&stdout_compressed);
+            }
+            if !stderr_compressed.is_empty() {
+                if !combined.is_empty() && !combined.ends_with('\n') {
+                    combined.push('\n');
+                }
+                combined.push_str(&stderr_compressed);
+            }
+
+            Ok(combined)
         }
         "tokenix_gain" => {
             let history = args

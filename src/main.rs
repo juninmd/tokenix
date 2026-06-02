@@ -13,6 +13,7 @@ mod indexer;
 mod mcp;
 mod memory;
 mod query;
+mod recordings;
 mod store;
 
 use anyhow::Result;
@@ -350,7 +351,10 @@ enum MemoryAction {
 #[derive(Subcommand)]
 enum FilterAction {
     /// List top Bash commands by tokens wasted (no custom filter yet)
-    List,
+    List {
+        /// Optional index from the list to see detailed command invocations
+        index: Option<usize>,
+    },
     /// List active user and bundled output filters
     Active,
     /// Generate a TOML filter for a command using an AI CLI
@@ -358,11 +362,28 @@ enum FilterAction {
         /// Base command name (e.g. cargo, git). Omit to select from the list.
         command: Option<String>,
     },
+    /// Record real command output into .tokenix/recordings for richer generation
+    Record {
+        #[command(subcommand)]
+        action: RecordAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum RecordAction {
+    /// Start capturing command output (optionally limited to one command)
+    Start {
+        /// Base command to capture (e.g. cargo). Omit to capture everything.
+        command: Option<String>,
+    },
+    /// Stop capturing and show a summary of what was recorded
+    Stop,
+    /// Show whether a session is active and what has been captured
+    Status,
 }
 
 fn find_repo_root(start: &Path) -> PathBuf {
-    let abs = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
-    store::find_project_root(&abs)
+    store::find_project_root(start)
 }
 
 /// Returns the tokenix binary path, normalized for use in config files.
@@ -487,11 +508,18 @@ fn main() -> Result<()> {
         Commands::Filter { action } => {
             let repo_root = find_repo_root(&PathBuf::from("."));
             match action {
-                FilterAction::List => cmd_filter::cmd_filter_list(&repo_root),
+                FilterAction::List { index } => cmd_filter::cmd_filter_list(index, &repo_root),
                 FilterAction::Active => cmd_filter::cmd_filter_active(),
                 FilterAction::Generate { command } => {
                     cmd_filter::cmd_filter_generate(command, &repo_root)
                 }
+                FilterAction::Record { action } => match action {
+                    RecordAction::Start { command } => {
+                        cmd_filter::cmd_filter_record_start(command, &repo_root)
+                    }
+                    RecordAction::Stop => cmd_filter::cmd_filter_record_stop(&repo_root),
+                    RecordAction::Status => cmd_filter::cmd_filter_record_status(&repo_root),
+                },
             }
         }
         Commands::Run { command, path: _ } => {
@@ -951,6 +979,18 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
         "│".bright_black()
     );
     println!("{}", format!("╰{}╯", "─".repeat(width)).bright_black());
+
+    if stats.total_calls == 0 {
+        println!("{}", "  No hook events found in this project.".yellow());
+        println!("\n  Possible causes:");
+        println!("  1. tokenix hook is not installed for your AI tool");
+        println!("     Run `tokenix install-hook` to fix this.");
+        println!("  2. The AI tool is not calling the hook yet");
+        println!("     Try reading a file or running a command in Claude Code / Copilot.");
+        println!("  3. The hook is running in a different directory");
+        println!("     Run `tokenix gain` in the project root (where .git exists).");
+        return Ok(());
+    }
 
     // ── token summary + hook calls (side by side) ─────────────────────────────
     println!();
