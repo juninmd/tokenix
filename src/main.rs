@@ -244,13 +244,35 @@ enum Commands {
             help = "For claude-code: install in .claude/settings.local.json instead of global"
         )]
         local: bool,
+        #[arg(
+            long,
+            short = 'g',
+            conflicts_with = "local",
+            help = "Install at user level: copilot -> ~/.copilot ($COPILOT_HOME); claude-code stays ~/.claude"
+        )]
+        global: bool,
     },
     /// Remove tokenix hooks
     RemoveHook {
-        #[arg(long, value_enum, default_value = "all")]
+        #[arg(
+            long,
+            value_enum,
+            default_value = "all",
+            help = "Target tool: claude-code | copilot | codex | all"
+        )]
         tool: Tool,
-        #[arg(long = "local")]
+        #[arg(
+            long = "local",
+            help = "For claude-code: remove from .claude/settings.local.json instead of global"
+        )]
         local: bool,
+        #[arg(
+            long,
+            short = 'g',
+            conflicts_with = "local",
+            help = "Remove the user-level install: copilot from ~/.copilot ($COPILOT_HOME)"
+        )]
+        global: bool,
     },
     /// Show index statistics
     Stats {
@@ -473,8 +495,16 @@ fn main() -> Result<()> {
                 cases.as_deref(),
             )
         }
-        Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
-        Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),
+        Commands::InstallHook {
+            tool,
+            local,
+            global,
+        } => cmd_install_hook(tool, local, global),
+        Commands::RemoveHook {
+            tool,
+            local,
+            global,
+        } => cmd_remove_hook(tool, local, global),
         Commands::Stats { path } => cmd_stats(&path),
         Commands::Tokenmap {
             path,
@@ -1209,16 +1239,16 @@ fn mini_bar(value: i64, total: i64, width: usize) -> String {
 
 // install-hook
 
-fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
+fn cmd_install_hook(tool: Tool, local: bool, global: bool) -> Result<()> {
     match tool {
         Tool::ClaudeCode => install_claude_code(local)?,
-        Tool::Copilot => install_copilot()?,
+        Tool::Copilot => install_copilot(global)?,
         Tool::Codex => install_codex()?,
         Tool::Mcp => install_mcp_server()?,
-        Tool::Gemini => install_copilot()?,
+        Tool::Gemini => install_copilot(global)?,
         Tool::All => {
             install_claude_code(local)?;
-            install_copilot()?;
+            install_copilot(global)?;
             install_codex()?;
             install_mcp_server()?;
         }
@@ -1313,18 +1343,32 @@ fn remove_legacy_claude_auto_index_hook(settings: &mut serde_json::Value) -> boo
     changed
 }
 
-fn install_copilot() -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let github_dir = cwd.join(".github");
-    std::fs::create_dir_all(&github_dir)?;
+fn install_copilot(global: bool) -> Result<()> {
+    // Scope decides the install root and how the hook resolves the binary:
+    //  - project `.github/`: committed and shared across the team, so the hook
+    //    command must resolve `tokenix` from PATH (bare name). Baking the absolute
+    //    exe path of the machine that ran install-hook would be invalid on every
+    //    other clone and in CI. A bare name resolves on Windows (tokenix.exe via
+    //    PATHEXT), Linux, and macOS alike.
+    //  - global `~/.copilot/` ($COPILOT_HOME): per-machine and untracked, so bake
+    //    the absolute exe path, like the claude-code/codex installers do.
+    let (base_dir, hook_cmd, scope_note) = if global {
+        (
+            copilot_user_dir()?,
+            hook_command(&tokenix_bin_path()?, "hook"),
+            "Applies to all Copilot sessions for this user.",
+        )
+    } else {
+        (
+            std::env::current_dir()?.join(".github"),
+            "tokenix hook".to_string(),
+            "Commit .github/ to enable for all contributors.",
+        )
+    };
+    std::fs::create_dir_all(&base_dir)?;
 
-    // 1. copilot-instructions.md - repository custom instructions
-    let instructions_path = github_dir.join("copilot-instructions.md");
-    // `.github/` is committed and shared across the team, so every generated
-    // reference must resolve `tokenix` from PATH rather than baking the absolute exe
-    // path of the machine that ran install-hook (which would be invalid on every
-    // other clone and in CI). A bare name resolves on Windows (tokenix.exe via
-    // PATHEXT), Linux, and macOS alike.
+    // 1. copilot-instructions.md - custom instructions (project or user scope)
+    let instructions_path = base_dir.join("copilot-instructions.md");
     let tokenix_bin = "tokenix";
     let instructions = format!(
         r#"# tokenix - Semantic Context Tool
@@ -1378,11 +1422,9 @@ Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
 
     // 2. hooks/hooks.json - VS Code workspace hooks for token-efficient reads and
     // shell rewrites. Bash compression is handled through PreToolUse updatedInput.
-    let hooks_dir = github_dir.join("hooks");
+    let hooks_dir = base_dir.join("hooks");
     std::fs::create_dir_all(&hooks_dir)?;
     let hooks_path = hooks_dir.join("hooks.json");
-
-    let hook_cmd = format!("{tokenix_bin} hook");
 
     let hooks_json = serde_json::json!({
         "hooks": {
@@ -1411,11 +1453,8 @@ Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
         );
     }
 
-    println!(
-        "  PreToolUse:  {} hook       (Read/Grep/Bash interception)",
-        tokenix_bin
-    );
-    println!("  Note: commit .github/ to enable for all contributors.");
+    println!("  PreToolUse:  {hook_cmd}   (Read/Grep/Bash interception)");
+    println!("  Note: {scope_note}");
     Ok(())
 }
 
@@ -1657,16 +1696,16 @@ fn upsert_codex_hook(slot: &mut serde_json::Value, hook: serde_json::Value) {
 
 // remove-hook
 
-fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
+fn cmd_remove_hook(tool: Tool, local: bool, global: bool) -> Result<()> {
     match tool {
         Tool::ClaudeCode => remove_claude_code(local)?,
-        Tool::Copilot => remove_copilot()?,
+        Tool::Copilot => remove_copilot(global)?,
         Tool::Codex => remove_codex()?,
         Tool::Mcp => remove_mcp_server()?,
-        Tool::Gemini => remove_copilot()?,
+        Tool::Gemini => remove_copilot(global)?,
         Tool::All => {
             remove_claude_code(local)?;
-            remove_copilot()?;
+            remove_copilot(global)?;
             remove_codex()?;
             remove_mcp_server()?;
         }
@@ -1697,10 +1736,14 @@ fn remove_claude_code(local: bool) -> Result<()> {
     Ok(())
 }
 
-fn remove_copilot() -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let instructions = cwd.join(".github/copilot-instructions.md");
-    let hooks = cwd.join(".github/hooks/hooks.json");
+fn remove_copilot(global: bool) -> Result<()> {
+    let base = if global {
+        copilot_user_dir()?
+    } else {
+        std::env::current_dir()?.join(".github")
+    };
+    let instructions = base.join("copilot-instructions.md");
+    let hooks = base.join("hooks").join("hooks.json");
     for path in [&instructions, &hooks] {
         if path.exists() {
             std::fs::remove_file(path)?;
@@ -1836,6 +1879,37 @@ fn claude_settings_path(local: bool) -> Result<PathBuf> {
             .join(".claude")
             .join("settings.json"))
     }
+}
+
+/// User-level Copilot config dir for `install-hook --tool copilot --global`.
+/// Honors `$COPILOT_HOME` (matching GitHub Copilot CLI), else `~/.copilot`.
+/// Same layout on Windows, Linux, and macOS.
+fn copilot_user_dir() -> Result<PathBuf> {
+    copilot_user_dir_from(
+        std::env::var_os("COPILOT_HOME").map(PathBuf::from),
+        dirs::home_dir(),
+    )
+}
+
+fn copilot_user_dir_from(
+    copilot_home: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
+) -> Result<PathBuf> {
+    // Treat an unset, empty, or whitespace-only $COPILOT_HOME as absent and fall
+    // back to ~/.copilot (a blank value would otherwise build a bogus root and make
+    // create_dir_all fail with a raw OS error). Non-UTF-8 values are kept as-is.
+    let override_dir = copilot_home.filter(|p| {
+        p.as_os_str()
+            .to_str()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(true)
+    });
+    if let Some(path) = override_dir {
+        return Ok(path);
+    }
+    home_dir
+        .map(|home| home.join(".copilot"))
+        .ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))
 }
 
 fn cmd_stats(path: &Path) -> Result<()> {
@@ -2065,6 +2139,36 @@ mod tests {
         assert!(ps1.contains("exit 0"));
         assert!(ps1.contains("exit 2"));
         assert!(ps1.contains("ReadToEndAsync()"));
+    }
+
+    #[test]
+    fn copilot_user_dir_prefers_env_override() {
+        let dir = copilot_user_dir_from(
+            Some(PathBuf::from("/custom/copilot")),
+            Some(PathBuf::from("/home/u")),
+        )
+        .unwrap();
+        assert_eq!(dir, PathBuf::from("/custom/copilot"));
+    }
+
+    #[test]
+    fn copilot_user_dir_falls_back_to_home_dotcopilot() {
+        let dir = copilot_user_dir_from(None, Some(PathBuf::from("/home/u"))).unwrap();
+        assert_eq!(dir, PathBuf::from("/home/u").join(".copilot"));
+    }
+
+    #[test]
+    fn copilot_user_dir_ignores_empty_override() {
+        let dir =
+            copilot_user_dir_from(Some(PathBuf::from("")), Some(PathBuf::from("/home/u"))).unwrap();
+        assert_eq!(dir, PathBuf::from("/home/u").join(".copilot"));
+    }
+
+    #[test]
+    fn copilot_user_dir_ignores_whitespace_override() {
+        let dir = copilot_user_dir_from(Some(PathBuf::from("   ")), Some(PathBuf::from("/home/u")))
+            .unwrap();
+        assert_eq!(dir, PathBuf::from("/home/u").join(".copilot"));
     }
 
     #[test]
