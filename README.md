@@ -362,8 +362,9 @@ Then use `tx-read` and `tx-query` as shell helpers.
 
 On Windows, this also installs `~/.codex/hooks.json` and
 `~/.codex/tokenix-codex-hook.ps1`. The wrapper forwards `PreToolUse`
-intercepts for Bash command rewrites without depending on post-tool result
-replacement.
+intercepts for Bash-like terminal tools, including `Bash` and
+`run_in_terminal`, without depending on post-tool result replacement.
+Search hooks also normalize `grep_search` to the same semantic path as `Grep`.
 
 ### All tools at once
 
@@ -407,7 +408,7 @@ tokenix install-hook --tool all
 | `tokenix filter generate [CMD]` | AI-generate a TOML output filter for a command |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
-| `tokenix hook` | `PreToolUse` handler — intercepts large reads and rewrites noisy Bash commands (called by AI tools) |
+| `tokenix hook` | `PreToolUse` handler — intercepts large reads, semantic grep/grep_search queries, and noisy Bash/run_in_terminal commands (called by AI tools) |
 | `tokenix hook-post` | Legacy `PostToolUse` compatibility handler for integrations that still support post-tool output rewriting |
 | `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools |
 
@@ -554,7 +555,7 @@ src/
 ├── indexer.rs     File walker + incremental index pipeline (parallel chunking + batch embedding)
 ├── query.rs       Hybrid semantic + sparse FTS5 ranking, token-budget selection, result formatting
 ├── graph.rs       Symbol relationship graph + export_relations_to_html() for vis.js HTML output
-├── hook.rs        PreToolUse handler — Claude-style and Copilot-style JSON input
+├── hook.rs        PreToolUse handler — Claude-style, Copilot-style, and grep_search/run_in_terminal JSON input
 ├── daemon.rs      Background TCP server — holds model + in-memory embedding cache
 ├── compress.rs    Legacy PostToolUse compatibility pipeline for integrations that can still rewrite tool output
 ├── filters.rs     FilterDef, load_local/user/bundled_filters(), priority merge, apply_filter()

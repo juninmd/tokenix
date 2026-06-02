@@ -70,14 +70,16 @@ fn find_tokenizer_json(dir: &std::path::Path) -> Option<PathBuf> {
 pub fn gpu_backend() -> Option<&'static str> {
     #[cfg(feature = "cuda")]
     {
-        return Some("CUDA");
+        Some("CUDA")
     }
-    #[cfg(all(feature = "directml", target_os = "windows"))]
+    #[cfg(all(not(feature = "cuda"), feature = "directml", target_os = "windows"))]
     {
-        return Some("DirectML");
+        Some("DirectML")
     }
-    #[allow(unreachable_code)]
-    None
+    #[cfg(not(any(feature = "cuda", all(feature = "directml", target_os = "windows"))))]
+    {
+        None
+    }
 }
 
 fn open_query_cache_db() -> Option<Connection> {
@@ -137,7 +139,7 @@ fn model() -> Result<&'static TextEmbedding> {
                 ]);
             }
 
-            #[cfg(feature = "directml")]
+            #[cfg(all(not(feature = "cuda"), feature = "directml"))]
             if !force_cpu() {
                 options = options.with_execution_providers(vec![
                     ort::execution_providers::DirectMLExecutionProvider::default().build(),

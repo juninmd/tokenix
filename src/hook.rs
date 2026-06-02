@@ -1,6 +1,8 @@
 use anyhow::Result;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunker::count_tokens;
@@ -9,6 +11,7 @@ use crate::store::{index_staleness, log_hook_event, search_by_symbol, HookEvent}
 
 const MIN_LINES_FOR_OUTLINE: usize = 200;
 const MIN_QUERY_WORDS: usize = 3;
+const DAEMON_HOOK_TIMEOUT_MS: u64 = 2_000;
 
 /// Normalized hook input used by tokenix.
 ///
@@ -56,11 +59,7 @@ impl HookInput {
                 // must still map to Read/Grep (and `path` -> `file_path`) or the tool
                 // is never recognized and interception is silently skipped.
                 let tool_name = canonical_tool_name(&input.tool_name);
-                let tool_input = if tool_name == "Read" {
-                    normalize_read_args(input.tool_input)
-                } else {
-                    input.tool_input
-                };
+                let tool_input = normalize_tool_input(&tool_name, input.tool_input);
                 return Some(HookInput {
                     tool_name,
                     tool_input,
@@ -83,7 +82,7 @@ impl HookInput {
 fn canonical_tool_name(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
         "read" | "view" => "Read".to_string(),
-        "grep" => "Grep".to_string(),
+        "grep" | "grep_search" => "Grep".to_string(),
         _ => name.to_string(),
     }
 }
@@ -96,14 +95,18 @@ fn normalize_copilot_input(tool_name: &str, tool_args: &serde_json::Value) -> Ho
     };
 
     let tool_name = canonical_tool_name(tool_name);
-    let tool_input = if tool_name == "Read" {
-        normalize_read_args(args)
-    } else {
-        args
-    };
+    let tool_input = normalize_tool_input(&tool_name, args);
     HookInput {
         tool_name,
         tool_input,
+    }
+}
+
+fn normalize_tool_input(tool_name: &str, args: serde_json::Value) -> serde_json::Value {
+    match tool_name {
+        "Read" => normalize_read_args(args),
+        "Grep" => normalize_grep_args(args),
+        _ => args,
     }
 }
 
@@ -121,6 +124,26 @@ fn normalize_read_args(mut args: serde_json::Value) -> serde_json::Value {
     if let Some(path) = path {
         if let Some(obj) = args.as_object_mut() {
             obj.insert("file_path".to_string(), serde_json::Value::String(path));
+        }
+    }
+    args
+}
+
+fn normalize_grep_args(mut args: serde_json::Value) -> serde_json::Value {
+    if args.get("pattern").and_then(|v| v.as_str()).is_some() {
+        return args;
+    }
+
+    let pattern = args
+        .get("query")
+        .or_else(|| args.get("regex"))
+        .or_else(|| args.get("search"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    if let Some(pattern) = pattern {
+        if let Some(obj) = args.as_object_mut() {
+            obj.insert("pattern".to_string(), serde_json::Value::String(pattern));
         }
     }
     args
@@ -310,6 +333,34 @@ fn release_embed_slot() {
     }
 }
 
+fn daemon_search_with_hook_timeout(
+    repo_root: &Path,
+    pattern: &str,
+    k: usize,
+    budget: usize,
+    file_filter: Option<&str>,
+) -> Option<String> {
+    let (tx, rx) = mpsc::channel();
+    let repo_root = repo_root.to_path_buf();
+    let pattern = pattern.to_string();
+    let file_filter = file_filter.map(str::to_string);
+
+    std::thread::spawn(move || {
+        let out = crate::daemon::daemon_search_with_autostart(
+            &repo_root,
+            &pattern,
+            k,
+            budget,
+            file_filter.as_deref(),
+        );
+        let _ = tx.send(out);
+    });
+
+    rx.recv_timeout(Duration::from_millis(DAEMON_HOOK_TIMEOUT_MS))
+        .ok()
+        .flatten()
+}
+
 fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String, String) {
     let pattern = match tool_input["pattern"].as_str() {
         Some(p) => p,
@@ -335,9 +386,7 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     }
 
     // Try daemon first: model stays resident, ~30ms vs ~430ms cold embed.
-    if let Some(output) =
-        crate::daemon::daemon_search_with_autostart(repo_root, pattern, 20, 2500, None)
-    {
+    if let Some(output) = daemon_search_with_hook_timeout(repo_root, pattern, 20, 2500, None) {
         return (true, output, "semantic search via daemon".to_string());
     }
 
@@ -419,6 +468,8 @@ fn is_bash_tool(name: &str) -> bool {
             | "shell"
             | "run_shell_command"
             | "default_api:run_shell_command"
+            | "run_in_terminal"
+            | "default_api:run_in_terminal"
             | "run_command"
             | "default_api:run_command"
     )
@@ -726,6 +777,28 @@ mod tests {
         let input = HookInput::from_stdin(raw).unwrap();
         assert_eq!(input.tool_name, "Grep");
         assert_eq!(input.tool_input["pattern"], "how does auth work");
+    }
+
+    #[test]
+    fn grep_search_query_normalized() {
+        let raw = r#"{"toolName":"grep_search","toolArgs":{"query":"how does auth work"}}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Grep");
+        assert_eq!(input.tool_input["pattern"], "how does auth work");
+    }
+
+    #[test]
+    fn snake_case_grep_search_regex_normalized() {
+        let raw = r#"{"tool_name":"grep_search","tool_input":{"regex":"fn.*main"}}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Grep");
+        assert_eq!(input.tool_input["pattern"], "fn.*main");
+    }
+
+    #[test]
+    fn run_in_terminal_is_bash_tool() {
+        assert!(is_bash_tool("run_in_terminal"));
+        assert!(is_bash_tool("default_api:run_in_terminal"));
     }
 
     #[test]

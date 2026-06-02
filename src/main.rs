@@ -1293,7 +1293,7 @@ fn install_claude_code(local: bool) -> Result<()> {
 
     // Claude Code uses matcher groups. Keep interception on canonical tool names
     // that tokenix can safely rewrite or compress before execution.
-    let matcher = "^(Read|Grep|Bash)$";
+    let matcher = "^(Read|Grep|Bash|grep_search|run_in_terminal)$";
     let hook = serde_json::json!({
         "matcher": matcher,
         "hooks": [{"type": "command", "command": hook_command(&tokenix_bin, "hook"), "timeout": 10}]
@@ -1681,7 +1681,7 @@ fn install_codex_hooks_json_windows(hooks_path: &Path, hook_ps1_path: &Path) -> 
     upsert_codex_hook(
         &mut hooks["hooks"]["PreToolUse"],
         serde_json::json!({
-            "matcher": "^Bash$",
+            "matcher": "^(Bash|run_in_terminal|grep_search)$",
             "hooks": [{"type": "command", "command": format!("{command} pre"), "timeout": 10}]
         }),
     );
@@ -1695,7 +1695,7 @@ fn install_codex_hooks_json_unix(hooks_path: &Path, tokenix_bin: &str) -> Result
     upsert_codex_hook(
         &mut hooks["hooks"]["PreToolUse"],
         serde_json::json!({
-            "matcher": "^Bash$",
+            "matcher": "^(Bash|run_in_terminal|grep_search)$",
             "hooks": [{"type": "command", "command": hook_command(tokenix_bin, "hook"), "timeout": 10}]
         }),
     );
