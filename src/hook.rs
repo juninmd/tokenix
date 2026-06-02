@@ -51,12 +51,40 @@ impl HookInput {
         }
         if let Ok(input) = serde_json::from_str::<HookInput>(clean) {
             if !input.tool_name.is_empty() {
-                return Some(input);
+                // Canonicalize here too: newer Copilot/Codex builds send the snake_case
+                // `tool_name`/`tool_input` shape with harness names like "view", which
+                // must still map to Read/Grep (and `path` -> `file_path`) or the tool
+                // is never recognized and interception is silently skipped.
+                let tool_name = canonical_tool_name(&input.tool_name);
+                let tool_input = if tool_name == "Read" {
+                    normalize_read_args(input.tool_input)
+                } else {
+                    input.tool_input
+                };
+                return Some(HookInput {
+                    tool_name,
+                    tool_input,
+                });
             }
         }
         serde_json::from_str::<CopilotHookInput>(clean)
             .ok()
             .map(|input| normalize_copilot_input(&input.tool_name, &input.tool_args))
+    }
+}
+
+/// Map a harness-specific tool name to tokenix's canonical name.
+///
+/// Claude Code already sends `Read`/`Grep`/`Bash`; GitHub Copilot (and some Codex
+/// builds) send `view`/`read`/`grep` in either the legacy `toolName` field or the
+/// newer snake_case `tool_name` field. Canonicalizing in one place means
+/// interception no longer depends on which field shape or casing a harness uses.
+/// Unrecognized names (Bash variants, Edit, etc.) pass through unchanged.
+fn canonical_tool_name(name: &str) -> String {
+    match name.to_ascii_lowercase().as_str() {
+        "read" | "view" => "Read".to_string(),
+        "grep" => "Grep".to_string(),
+        _ => name.to_string(),
     }
 }
 
@@ -67,19 +95,15 @@ fn normalize_copilot_input(tool_name: &str, tool_args: &serde_json::Value) -> Ho
         tool_args.clone()
     };
 
-    match tool_name.to_ascii_lowercase().as_str() {
-        "view" | "read" => HookInput {
-            tool_name: "Read".to_string(),
-            tool_input: normalize_read_args(args),
-        },
-        "grep" => HookInput {
-            tool_name: "Grep".to_string(),
-            tool_input: args,
-        },
-        _ => HookInput {
-            tool_name: tool_name.to_string(),
-            tool_input: args,
-        },
+    let tool_name = canonical_tool_name(tool_name);
+    let tool_input = if tool_name == "Read" {
+        normalize_read_args(args)
+    } else {
+        args
+    };
+    HookInput {
+        tool_name,
+        tool_input,
     }
 }
 
@@ -151,15 +175,19 @@ fn symbol_lookup(pattern: &str, repo_root: &Path) -> Option<String> {
     Some(lines.join("\n"))
 }
 
-fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String) {
+fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String, String) {
     let file_path = match tool_input["file_path"].as_str() {
         Some(p) => p,
-        None => return (false, String::new()),
+        None => return (false, String::new(), "missing file_path".to_string()),
     };
 
     // Let targeted reads through (offset or limit already specified)
     if !tool_input["offset"].is_null() || !tool_input["limit"].is_null() {
-        return (false, String::new());
+        return (
+            false,
+            String::new(),
+            "targeted read (offset/limit specified)".to_string(),
+        );
     }
 
     let full_path = {
@@ -172,22 +200,39 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     };
 
     if !full_path.exists() {
-        return (false, String::new());
+        return (
+            false,
+            String::new(),
+            format!("file not found: {}", file_path),
+        );
     }
 
     let content = match std::fs::read_to_string(&full_path) {
         Ok(c) => c,
-        Err(_) => return (false, String::new()),
+        Err(_) => return (false, String::new(), format!("read error: {}", file_path)),
     };
 
     let line_count = content.lines().count();
     if line_count < MIN_LINES_FOR_OUTLINE {
-        return (false, String::new());
+        return (
+            false,
+            String::new(),
+            format!(
+                "small file ({} < {} lines)",
+                line_count, MIN_LINES_FOR_OUTLINE
+            ),
+        );
     }
 
     let outline = match get_file_outline(&full_path) {
         Some(o) => o,
-        None => return (false, String::new()),
+        None => {
+            return (
+                false,
+                String::new(),
+                "failed to generate outline".to_string(),
+            )
+        }
     };
 
     let rel = full_path
@@ -203,7 +248,11 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     );
 
     if !is_code {
-        return (false, String::new());
+        return (
+            false,
+            String::new(),
+            format!("unsupported language: .{}", ext),
+        );
     }
 
     let msg = format!(
@@ -212,7 +261,7 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         To read specific lines:   use Read with offset/limit parameters.",
         outline, line_count, rel
     );
-    (true, msg)
+    (true, msg, "generated symbol outline".to_string())
 }
 
 /// Returns a path to use as a soft lock file for concurrent embed protection.
@@ -261,43 +310,63 @@ fn release_embed_slot() {
     }
 }
 
-fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String) {
+fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String, String) {
     let pattern = match tool_input["pattern"].as_str() {
         Some(p) => p,
-        None => return (false, String::new()),
+        None => return (false, String::new(), "missing pattern".to_string()),
     };
 
     // Short identifier-like patterns: try index symbol lookup before falling through
     if !is_semantic_query(pattern) {
         if looks_like_identifier(pattern) {
             if let Some(output) = symbol_lookup(pattern, repo_root) {
-                return (true, output);
+                return (
+                    true,
+                    output,
+                    format!("matched symbol exact lookup: {}", pattern),
+                );
             }
         }
-        return (false, String::new());
+        return (
+            false,
+            String::new(),
+            format!("lexical query: '{}'", pattern),
+        );
     }
 
     // Try daemon first: model stays resident, ~30ms vs ~430ms cold embed.
     if let Some(output) =
         crate::daemon::daemon_search_with_autostart(repo_root, pattern, 20, 2500, None)
     {
-        return (true, output);
+        return (true, output, "semantic search via daemon".to_string());
     }
 
     // Fallback: direct embed (daemon not running or failed to start).
     // Guard prevents N×293MB spikes from parallel hook processes.
     if !try_acquire_embed_slot() {
-        return (false, String::new());
+        return (
+            false,
+            String::new(),
+            "ONNX embed model slot locked".to_string(),
+        );
     }
     let results = match query_index(repo_root, pattern, 2500, 20, None) {
         Ok(Some(r)) if !r.is_empty() => r,
         _ => {
             release_embed_slot();
-            return (false, String::new());
+            return (
+                false,
+                String::new(),
+                "semantic search returned empty results".to_string(),
+            );
         }
     };
     release_embed_slot();
-    (true, format_results(&results, pattern))
+    (
+        true,
+        format_results(&results, pattern),
+        "semantic search via in-process embed".to_string(),
+    )
 }
 
 fn estimate_original_tokens(
@@ -489,10 +558,10 @@ pub fn run_hook() -> Result<()> {
         std::process::exit(0);
     }
 
-    let (intercepted, output) = match input.tool_name.as_str() {
+    let (intercepted, output, reason) = match input.tool_name.as_str() {
         "Read" => handle_read(&input.tool_input, &repo_root),
         "Grep" => handle_grep(&input.tool_input, &repo_root),
-        _ => (false, String::new()),
+        _ => (false, String::new(), "unsupported tool".to_string()),
     };
 
     if !intercepted {
@@ -503,7 +572,7 @@ pub fn run_hook() -> Result<()> {
                 tool: input.tool_name,
                 action: "pass".to_string(),
                 phase: "pre".to_string(),
-                reason: "not intercepted".to_string(),
+                reason,
                 saved_tokens: 0,
                 actual_tokens: 0,
                 original_estimate: 0,
@@ -525,7 +594,7 @@ pub fn run_hook() -> Result<()> {
             tool: input.tool_name.clone(),
             action: "intercepted".to_string(),
             phase: "pre".to_string(),
-            reason: String::new(),
+            reason,
             saved_tokens: saved,
             actual_tokens,
             original_estimate: original_tokens,
@@ -610,6 +679,16 @@ mod tests {
         let input = HookInput::from_stdin(raw).unwrap();
         assert_eq!(input.tool_name, "Read");
         assert_eq!(input.tool_input["file_path"], "src/lib.rs");
+    }
+
+    #[test]
+    fn snake_case_view_normalized_to_read() {
+        // Newer Copilot/Codex builds use the snake_case shape with harness tool
+        // names; it must canonicalize just like the legacy camelCase shape does.
+        let raw = r#"{"tool_name":"view","tool_input":{"path":"src/main.rs"}}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Read");
+        assert_eq!(input.tool_input["file_path"], "src/main.rs");
     }
 
     #[test]

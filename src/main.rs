@@ -241,7 +241,7 @@ enum Commands {
         tool: Tool,
         #[arg(
             long = "local",
-            help = "For claude-code: install in .claude/settings.json instead of global"
+            help = "For claude-code: install in .claude/settings.local.json instead of global"
         )]
         local: bool,
     },
@@ -371,6 +371,10 @@ fn tokenix_bin_path() -> Result<String> {
     let exe = std::env::current_exe()?;
     // Normalize to forward slashes so generated shell and JSON configs work on Windows too.
     Ok(exe.to_string_lossy().replace('\\', "/"))
+}
+
+fn hook_command(tokenix_bin: &str, subcommand: &str) -> String {
+    format!("\"{}\" {}", tokenix_bin, subcommand)
 }
 
 fn main() -> Result<()> {
@@ -1157,13 +1161,28 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
                 "post" => "post".dimmed().to_string(),
                 other => other.dimmed().to_string(),
             };
+            let saved_str = if e.saved_tokens > 0 {
+                format!("saved {:>6}", format_num(e.saved_tokens))
+                    .green()
+                    .to_string()
+            } else {
+                format!("saved {:>6}", "0").dimmed().to_string()
+            };
+            let reason_str = if !e.reason.is_empty() {
+                format!("  ({})", e.reason).dimmed().to_string()
+            } else if !e.command.is_empty() {
+                format!("  (cmd: {})", e.command).dimmed().to_string()
+            } else {
+                String::new()
+            };
             println!(
-                "  {} {} {:<8} {}  saved {}",
+                "  {} {} {:<8} {}  {} {}",
                 ts.bright_black(),
                 phase,
                 e.tool.bold(),
                 action,
-                format_num(e.saved_tokens).green()
+                saved_str,
+                reason_str
             );
         }
     }
@@ -1233,11 +1252,12 @@ fn install_claude_code(local: bool) -> Result<()> {
         arr.retain(|h| !h.to_string().contains("tokenix"));
     }
 
-    // Install PreToolUse hook for Reading, Grepping, and Command Execution
-    let matcher = "Read|Grep|Bash|run_command|default_api:run_command|run_shell_command|default_api:run_shell_command";
+    // Claude Code uses matcher groups. Keep interception on canonical tool names
+    // that tokenix can safely rewrite or compress before execution.
+    let matcher = "^(Read|Grep|Bash)$";
     let hook = serde_json::json!({
         "matcher": matcher,
-        "hooks": [{"type": "command", "command": format!("{} hook", tokenix_bin)}]
+        "hooks": [{"type": "command", "command": hook_command(&tokenix_bin, "hook"), "timeout": 10}]
     });
     if settings["hooks"]["PreToolUse"].is_array() {
         settings["hooks"]["PreToolUse"]
@@ -1255,7 +1275,7 @@ fn install_claude_code(local: bool) -> Result<()> {
         settings_path.display()
     );
     println!(
-        "  PreToolUse:  {} hook (Read/Grep/Bash output compression)",
+        "  PreToolUse:  {} hook (Read/Grep/Bash interception)",
         tokenix_bin
     );
     if removed_legacy_auto_index {
@@ -1300,7 +1320,12 @@ fn install_copilot() -> Result<()> {
 
     // 1. copilot-instructions.md - repository custom instructions
     let instructions_path = github_dir.join("copilot-instructions.md");
-    let tokenix_bin = tokenix_bin_path()?;
+    // `.github/` is committed and shared across the team, so every generated
+    // reference must resolve `tokenix` from PATH rather than baking the absolute exe
+    // path of the machine that ran install-hook (which would be invalid on every
+    // other clone and in CI). A bare name resolves on Windows (tokenix.exe via
+    // PATHEXT), Linux, and macOS alike.
+    let tokenix_bin = "tokenix";
     let instructions = format!(
         r#"# tokenix - Semantic Context Tool
 
@@ -1351,33 +1376,21 @@ Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
         );
     }
 
-    // 2. hooks/hooks.json - preToolUse hook for Copilot agent/workspace mode
+    // 2. hooks/hooks.json - VS Code workspace hooks for token-efficient reads and
+    // shell rewrites. Bash compression is handled through PreToolUse updatedInput.
     let hooks_dir = github_dir.join("hooks");
     std::fs::create_dir_all(&hooks_dir)?;
     let hooks_path = hooks_dir.join("hooks.json");
 
-    // Copilot passes tool context as JSON on stdin (camelCase toolName/toolArgs/toolResult).
-    // preToolUse: intercept Read/Grep before they run. postToolUse: compress Bash output
-    // (git status/diff/log, cargo, etc.) after it runs, via {"modifiedResult":{...}}.
-    let hook_bash = format!("{} hook", tokenix_bin);
-    let hook_ps = format!("{} hook", tokenix_bin);
-    let hook_post_bash = format!("{} hook-post", tokenix_bin);
-    let hook_post_ps = format!("{} hook-post", tokenix_bin);
+    let hook_cmd = format!("{tokenix_bin} hook");
 
     let hooks_json = serde_json::json!({
-        "version": 1,
         "hooks": {
-            "preToolUse": [{
+            "PreToolUse": [{
                 "type": "command",
-                "bash": hook_bash,
-                "powershell": hook_ps,
-                "timeoutSec": 10
-            }],
-            "postToolUse": [{
-                "type": "command",
-                "bash": hook_post_bash,
-                "powershell": hook_post_ps,
-                "timeoutSec": 10
+                "command": hook_cmd,
+                "windows": hook_cmd,
+                "timeout": 10
             }]
         }
     });
@@ -1399,11 +1412,7 @@ Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
     }
 
     println!(
-        "  preToolUse:  {} hook       (Read/Grep interception)",
-        tokenix_bin
-    );
-    println!(
-        "  postToolUse: {} hook-post  (Bash output compression)",
+        "  PreToolUse:  {} hook       (Read/Grep/Bash interception)",
         tokenix_bin
     );
     println!("  Note: commit .github/ to enable for all contributors.");
@@ -1540,14 +1549,14 @@ fn codex_hook_ps1(tokenix_bin: &str) -> String {
     format!(
         r#"param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("pre", "post")]
+    [ValidateSet("pre")]
   [string]$Phase
 )
 
 $ErrorActionPreference = "SilentlyContinue"
 $inputJson = [Console]::In.ReadToEnd()
 $tokenix = "{tokenix_bin}"
-$subcommand = if ($Phase -eq "post") {{ "hook-post" }} else {{ "hook" }}
+$subcommand = "hook"
 
 $psi = [System.Diagnostics.ProcessStartInfo]::new()
 $psi.FileName = $tokenix
@@ -1573,9 +1582,6 @@ $stdout = $stdoutTask.GetAwaiter().GetResult()
 $stderr = $stderrTask.GetAwaiter().GetResult()
 
 if ($proc.ExitCode -eq 2) {{
-  if ($Phase -eq "post") {{
-    exit 0
-  }}
   if (-not [string]::IsNullOrWhiteSpace($stderr)) {{
     [Console]::Error.Write($stderr)
   }} elseif (-not [string]::IsNullOrWhiteSpace($stdout)) {{
@@ -1599,15 +1605,8 @@ fn install_codex_hooks_json_windows(hooks_path: &Path, hook_ps1_path: &Path) -> 
     upsert_codex_hook(
         &mut hooks["hooks"]["PreToolUse"],
         serde_json::json!({
-            "matcher": "^(Read|Grep)$",
+            "matcher": "^Bash$",
             "hooks": [{"type": "command", "command": format!("{command} pre"), "timeout": 10}]
-        }),
-    );
-    upsert_codex_hook(
-        &mut hooks["hooks"]["PostToolUse"],
-        serde_json::json!({
-            "matcher": "^(Bash|ListDirectory)$",
-            "hooks": [{"type": "command", "command": format!("{command} post"), "timeout": 10}]
         }),
     );
     std::fs::write(hooks_path, serde_json::to_string_pretty(&hooks)?)?;
@@ -1620,15 +1619,8 @@ fn install_codex_hooks_json_unix(hooks_path: &Path, tokenix_bin: &str) -> Result
     upsert_codex_hook(
         &mut hooks["hooks"]["PreToolUse"],
         serde_json::json!({
-            "matcher": "^(Read|Grep)$",
-            "hooks": [{"type": "command", "command": format!("{tokenix_bin} hook"), "timeout": 10}]
-        }),
-    );
-    upsert_codex_hook(
-        &mut hooks["hooks"]["PostToolUse"],
-        serde_json::json!({
-            "matcher": "^(Bash|ListDirectory)$",
-            "hooks": [{"type": "command", "command": format!("{tokenix_bin} hook-post"), "timeout": 10}]
+            "matcher": "^Bash$",
+            "hooks": [{"type": "command", "command": hook_command(tokenix_bin, "hook"), "timeout": 10}]
         }),
     );
     std::fs::write(hooks_path, serde_json::to_string_pretty(&hooks)?)?;
@@ -1837,7 +1829,7 @@ fn claude_settings_path(local: bool) -> Result<PathBuf> {
     if local {
         Ok(std::env::current_dir()?
             .join(".claude")
-            .join("settings.json"))
+            .join("settings.local.json"))
     } else {
         Ok(dirs::home_dir()
             .ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?
@@ -2065,10 +2057,11 @@ mod tests {
 
     #[test]
     #[cfg(windows)] // codex_hook_ps1 is Windows-only; the test must be too.
-    fn codex_wrapper_fails_post_open_but_preserves_pre_intercepts() {
+    fn codex_wrapper_runs_pre_intercepts() {
         let ps1 = codex_hook_ps1("C:/tokenix/tokenix.exe");
 
-        assert!(ps1.contains("if ($Phase -eq \"post\")"));
+        assert!(ps1.contains("ValidateSet(\"pre\")"));
+        assert!(ps1.contains("$subcommand = \"hook\""));
         assert!(ps1.contains("exit 0"));
         assert!(ps1.contains("exit 2"));
         assert!(ps1.contains("ReadToEndAsync()"));
@@ -2088,7 +2081,7 @@ mod tests {
         upsert_codex_hook(
             &mut json["hooks"]["PreToolUse"],
             serde_json::json!({
-                "matcher": "^(Read|Grep)$",
+                "matcher": "^Bash$",
                 "hooks": [{"type": "command", "command": "powershell tokenix-codex-hook.ps1 pre"}]
             }),
         );

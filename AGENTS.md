@@ -29,7 +29,7 @@ tokenix --help
 | `src/query.rs` | Hybrid semantic/lexical ranking + result formatting |
 | `src/hook.rs` | `run_hook()` — called by PreToolUse hook. Tries daemon first for Grep |
 | `src/daemon.rs` | Background TCP server (port 47392). Holds model + embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads |
-| `src/compress.rs` | `PostToolUse` compression: ANSI strip, emoji removal, blank-line collapse, repeat grouping, JSON compaction, cargo/git-log heuristics |
+| `src/compress.rs` | Legacy `PostToolUse` compatibility compression: ANSI strip, emoji removal, blank-line collapse, repeat grouping, JSON compaction, cargo/git-log heuristics |
 | `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()` |
 | `src/cmd_filter.rs` | `tokenix filter list/active/generate` subcommands |
 | `src/gain.rs` | `compute_gain()`, `GainStats`, `MODELS` pricing table (Anthropic/OpenAI/Google) |
@@ -102,7 +102,7 @@ Warm Grep calls via daemon: ~80ms vs ~430ms cold in-process. Daemon auto-starts 
 
 ## Output Filters
 
-`PostToolUse` compression flows through (in order):
+Legacy `hook-post` compression flows through (in order):
 1. User TOML filters (`~/.tokenix/filters/*.toml`) — highest priority
 2. Bundled TOML filters (`assets/filters/*.toml`, rust-embed)
 3. Built-in heuristics in `compress.rs` — cargo, git-log, generic head/tail
@@ -165,7 +165,7 @@ tokenix gain --history
 
 After `cargo install --path .`, configure Claude Code globally:
 
-### 1. Hooks (`~/.claude/settings.json`)
+### 1. Hooks (`~/.claude/settings.json` or project `.claude/settings.local.json`)
 
 Add to the `hooks` key — merging with any existing entries:
 
@@ -174,22 +174,15 @@ Add to the `hooks` key — merging with any existing entries:
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Grep|Glob",
-        "hooks": [{ "type": "command", "command": "tokenix hook" }]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "tokenix hook-post" }]
+        "matcher": "^(Read|Grep|Bash)$",
+        "hooks": [{ "type": "command", "command": "tokenix hook", "timeout": 10 }]
       }
     ]
   }
 }
 ```
 
-`PreToolUse` intercepts large reads and semantic Grep queries (see intercept logic above).
-`PostToolUse` compresses Bash output via bundled filters + heuristics.
+`PreToolUse` intercepts large reads and semantic Grep queries, and rewrites noisy Bash commands so they execute through tokenix before the model sees the output.
 
 ### 2. Behavioral instruction (`~/.claude/CLAUDE.md`)
 
@@ -222,17 +215,16 @@ The daemon auto-starts on first Grep hook call. Run `tokenix serve` manually onl
 ## Tool Integration Model
 
 ### Claude Code
-- Config: `PreToolUse`/`PostToolUse` in `~/.claude/settings.json` (see setup above)
+- Config: `PreToolUse` in `~/.claude/settings.json` or project `.claude/settings.local.json` (see setup above)
 - Input: `{"tool_name":"Read","tool_input":{"file_path":"src/main.rs"}}`
 
 ### GitHub Copilot
-- Config: `.github/copilot-instructions.md` + `.github/hooks/hooks.json`
+- Config: `.github/copilot-instructions.md` + VS Code-compatible `.github/hooks/hooks.json`
 - Input: `{"toolName":"view","toolArgs":"{\"path\":\"src/main.rs\"}"}`
 - tokenix normalizes `view`/`read` → `Read`
 
 ### OpenAI Codex CLI
-- No native hook protocol. Prefer project `AGENTS.md` and direct `tokenix read`/`tokenix query` calls.
-- `tokenix install-hook --tool codex` writes helpers under `~/.codex/`
+- Config: `~/.codex/hooks.json` for `PreToolUse` Bash rewrites + optional shell helpers under `~/.codex/`
 
 ## Agent Workflow (when working on this repo)
 

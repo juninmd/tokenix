@@ -299,13 +299,13 @@ section "install-hook / remove-hook"
 HOOK_DIR="$TMPDIR_ROOT/hooktest"
 mkdir -p "$HOOK_DIR"
 
-# Use --local so it writes to $HOOK_DIR/.claude/settings.json, not $HOME
+# Use --local so it writes to $HOOK_DIR/.claude/settings.local.json, not $HOME
 pushd "$HOOK_DIR" &>/dev/null
 
 if "$TOKENIX" install-hook --tool claude-code --local &>/dev/null; then
-  SETTINGS="$HOOK_DIR/.claude/settings.json"
+  SETTINGS="$HOOK_DIR/.claude/settings.local.json"
   if [ -f "$SETTINGS" ]; then
-    pass "install-hook --local creates .claude/settings.json"
+    pass "install-hook --local creates .claude/settings.local.json"
     # Verify the hook path inside settings doesn't contain backslashes or .exe
     if grep -q "\\\\" "$SETTINGS"; then
       fail "settings.json contains Windows backslashes"
@@ -318,7 +318,7 @@ if "$TOKENIX" install-hook --tool claude-code --local &>/dev/null; then
       pass "settings.json has no .exe on Linux"
     fi
   else
-    fail "install-hook --local did not create .claude/settings.json"
+    fail "install-hook --local did not create .claude/settings.local.json"
   fi
 else
   fail "install-hook --tool claude-code --local failed"

@@ -144,16 +144,15 @@ git config user.name "T"
 
 # Verify hooks.json exists with correct structure
 if [ -f ".github/hooks/hooks.json" ]; then
-  if grep -q '"preToolUse"' ".github/hooks/hooks.json" && grep -q '"bash"' ".github/hooks/hooks.json"; then
-    pass ".github/hooks/hooks.json has preToolUse and bash"
+  if grep -q '"PreToolUse"' ".github/hooks/hooks.json" && grep -q '"windows"' ".github/hooks/hooks.json"; then
+    pass ".github/hooks/hooks.json has PreToolUse and windows"
   else
-    fail "hooks.json missing preToolUse or bash"
+    fail "hooks.json missing PreToolUse or windows"
   fi
-  # postToolUse wires Bash-output (git status/diff/log) compression for Copilot.
-  if grep -q '"postToolUse"' ".github/hooks/hooks.json" && grep -q 'hook-post' ".github/hooks/hooks.json"; then
-    pass ".github/hooks/hooks.json has postToolUse and hook-post"
+  if grep -q '"timeout"' ".github/hooks/hooks.json" && grep -q '"command"' ".github/hooks/hooks.json"; then
+    pass ".github/hooks/hooks.json uses documented timeout and command fields"
   else
-    fail "hooks.json missing postToolUse or hook-post"
+    fail "hooks.json missing documented timeout or command fields"
   fi
 else
   fail ".github/hooks/hooks.json not created"

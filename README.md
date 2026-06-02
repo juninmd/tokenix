@@ -128,7 +128,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 | **Dynamic language detection** | Map custom file extensions to any built-in parser via a project `.tokenix.toml` — no recompile needed |
 | **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C++ |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
-| **Hook-based interception** | `PreToolUse` intercepts large reads; `PostToolUse` compresses Bash/ListDirectory output |
+| **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash commands before execution |
 | **RTK-grade Compression** | Absorbed RTK features: Fuzzy Grouping (groups `Removing...`, `Compiling...`, etc.), NDJSON/JSON compaction, and ANSI/Emoji stripping |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
 | **Output filters** | 70+ RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, and more |
@@ -147,9 +147,9 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 
 | Tool | Integration |
 |---|---|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `PreToolUse` + `PostToolUse` hooks in `~/.claude/settings.json` |
-| [GitHub Copilot](https://docs.github.com/en/copilot) | `.github/copilot-instructions.md` + `.github/hooks/hooks.json` |
-| [OpenAI Codex CLI](https://help.openai.com/en/articles/11096431-openai-codex-cli-getting-started) | `~/.codex/hooks.json` + Windows wrapper + optional shell helpers |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `PreToolUse` hooks in `~/.claude/settings.json` or project `.claude/settings.local.json` |
+| [GitHub Copilot](https://docs.github.com/en/copilot) | `.github/copilot-instructions.md` + VS Code-compatible `.github/hooks/hooks.json` |
+| [OpenAI Codex CLI](https://help.openai.com/en/articles/11096431-openai-codex-cli-getting-started) | `~/.codex/hooks.json` for `PreToolUse` Bash rewrites + optional shell helpers |
 
 ---
 
@@ -158,7 +158,7 @@ The embedding model (`nomic-embed-text-v1.5-Q`, ~130 MB) is downloaded automatic
 tokenix has two modes:
 
 1. **Manual mode**: run `tokenix query` and `tokenix read` directly when you want compact context.
-2. **Hook mode**: install hooks so supported AI tools call tokenix automatically before large reads and after noisy tool output.
+2. **Hook mode**: install hooks so supported AI tools call tokenix automatically before large reads and before noisy Bash commands execute.
 
 ### Real-world Compression (RTK Mode)
 
@@ -335,7 +335,7 @@ The cost table intentionally stays small: 7 reference models across Anthropic, O
 tokenix install-hook --tool claude-code
 ```
 
-Writes a `PreToolUse` hook to `~/.claude/settings.json` (or `.claude/settings.json` with `--local`). Large reads and semantic greps are intercepted automatically — no changes to your prompts needed.
+Writes a `PreToolUse` hook to `~/.claude/settings.json` (or `.claude/settings.local.json` with `--local`). Large reads, semantic greps, and noisy Bash commands are intercepted automatically — no changes to your prompts needed.
 
 ### GitHub Copilot
 
@@ -361,9 +361,9 @@ echo '. ~/.codex/tokenix-init.ps1' >> $PROFILE
 Then use `tx-read` and `tx-query` as shell helpers.
 
 On Windows, this also installs `~/.codex/hooks.json` and
-`~/.codex/tokenix-codex-hook.ps1`. The wrapper keeps `PreToolUse` intercepts
-active, but makes `PostToolUse` fail open so Codex does not report compressed
-Bash output as a failed hook.
+`~/.codex/tokenix-codex-hook.ps1`. The wrapper forwards `PreToolUse`
+intercepts for Bash command rewrites without depending on post-tool result
+replacement.
 
 ### All tools at once
 
@@ -407,8 +407,8 @@ tokenix install-hook --tool all
 | `tokenix filter generate [CMD]` | AI-generate a TOML output filter for a command |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
-| `tokenix hook` | `PreToolUse` handler — intercepts large reads (called by AI tools) |
-| `tokenix hook-post` | `PostToolUse` handler — compresses Bash/ListDirectory output (called by AI tools) |
+| `tokenix hook` | `PreToolUse` handler — intercepts large reads and rewrites noisy Bash commands (called by AI tools) |
+| `tokenix hook-post` | Legacy `PostToolUse` compatibility handler for integrations that still support post-tool output rewriting |
 | `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools |
 
 <details>
@@ -453,7 +453,7 @@ tokenix install-hook --tool all
 | Flag | Values | Description |
 |---|---|---|
 | `--tool` | `claude-code`, `copilot`, `codex`, `all` | Target tool (default `all`) |
-| `--local` | — | Claude Code: use `.claude/settings.json` instead of global |
+| `--local` | — | Claude Code: use `.claude/settings.local.json` instead of global |
 
 </details>
 
@@ -493,7 +493,7 @@ Valid parser values: `rust`, `python`, `typescript`, `javascript`, `go`, `cpp`, 
 
 ## 🔧 Output Filters
 
-tokenix compresses `Bash` and `ListDirectory` output via a `PostToolUse` hook before Claude sees it. Claude uses `hook-post` directly, where `exit 2` means "replace the tool output with compressed context". Codex uses a small wrapper that treats post-tool compression as success because Codex reports non-zero post hooks as failures. Filtering happens in three layers (highest priority first):
+tokenix primarily reduces noisy shell output by rewriting matching `Bash` commands in `PreToolUse` so they run through `tokenix run` before the agent sees the result. `tokenix hook-post` remains available for legacy integrations that still support post-tool output rewriting. Filtering happens in three layers (highest priority first):
 
 1. **Local project filters** — drop `.toml` files in `.tokenix/filters/` inside the repository. Scoped to the project, committed to version control, shared with the team.
 2. **User filters** — drop `.toml` files in `~/.tokenix/filters/`. Take priority over bundled filters, apply to all projects.
@@ -556,7 +556,7 @@ src/
 ├── graph.rs       Symbol relationship graph + export_relations_to_html() for vis.js HTML output
 ├── hook.rs        PreToolUse handler — Claude-style and Copilot-style JSON input
 ├── daemon.rs      Background TCP server — holds model + in-memory embedding cache
-├── compress.rs    PostToolUse compression pipeline (Bash/ListDirectory output)
+├── compress.rs    Legacy PostToolUse compatibility pipeline for integrations that can still rewrite tool output
 ├── filters.rs     FilterDef, load_local/user/bundled_filters(), priority merge, apply_filter()
 ├── cmd_filter.rs  `tokenix filter` subcommands (list, active, generate)
 └── gain.rs        Analytics from .tokenix/hook.log — per-model cost table
