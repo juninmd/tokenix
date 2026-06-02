@@ -93,6 +93,19 @@ irm https://github.com/juninmd/tokenix/releases/latest/download/tokenix-windows-
 > download the matching asset from the table, mark it executable, then run `tokenix doctor`
 > to confirm. The embedding model downloads automatically on first use.
 
+**🤖 Agent one-shot setup** — from a freshly installed binary to active hooks:
+
+```bash
+tokenix index                     # build the local index (embedding model auto-downloads)
+tokenix install-hook --tool all   # Claude Code + Copilot (.github/) + Codex + MCP
+```
+
+Prefer a user-level install that applies to every project (Copilot → `~/.copilot`, honoring `$COPILOT_HOME`)? Add `--global`:
+
+```bash
+tokenix install-hook --tool all --global
+```
+
 ### From crates.io
 
 ```bash
@@ -299,23 +312,25 @@ tokenix gain --history   # includes last 20 hook events
 
   TOKEN SUMMARY                              HOOK CALLS
   Original (would-be)               332,068    Total                       349
-  After optimization                214,646    Intercepted            148  (42%)
+  After optimization                 91,977    Intercepted            148  (42%)
   Saved                             240,091    Passed through              201
   Reduction                  72.3%  [█████████████░░░░░]
 
   COST ESTIMATE  (input tokens · USD)
-    Prices per 1M input tokens from public provider pricing pages. Collected: 2026-05-07.
+    Prices per 1M input tokens from public provider pricing pages. Collected: 2026-06-01.
 
       Model                          $/1M in       Without          With         Saved
       ───────────────────────────  ─────────  ────────────  ────────────  ────────────
-      claude-haiku-4-5                 $1.00       $0.3321       $0.2146       $0.1174
-      claude-sonnet-4.6 ★              $3.00       $0.9962       $0.6439       $0.3523
-      claude-opus-4.7                  $5.00       $1.6603       $1.0732       $0.5871
-      gpt-5.4-mini                     $0.75       $0.2491       $0.1610       $0.0881
-      gpt-5.4                          $2.50       $0.8302       $0.5366       $0.2936
-      gemini-3.1-flash-preview         $0.25       $0.0830       $0.0537       $0.0294
-      gemini-3.1-pro-preview           $2.00       $0.6641       $0.4293       $0.2348
-      ★ reference model · prices collected 2026-05-07
+      claude-haiku-4-5                 $1.00       $0.3321       $0.0920       $0.2401
+      claude-sonnet-4-6 ★              $3.00       $0.9962       $0.2759       $0.7203
+      claude-opus-4-8                  $5.00       $1.6603       $0.4599       $1.2005
+      gpt-5.4-mini                     $0.75       $0.2491       $0.0690       $0.1801
+      gpt-5.4                          $2.50       $0.8302       $0.2299       $0.6002
+      gpt-5.5                          $5.00       $1.6603       $0.4599       $1.2005
+      gemini-3.1-flash-lite            $0.25       $0.0830       $0.0230       $0.0600
+      gemini-3.5-flash                 $1.50       $0.4981       $0.1380       $0.3601
+      gemini-3.1-pro-preview           $2.00       $0.6641       $0.1840       $0.4802
+      ★ reference model · prices collected 2026-06-01
 
   BY TOOL
   Read    59 calls   228,974 ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░
@@ -323,7 +338,7 @@ tokenix gain --history   # includes last 20 hook events
   Bash     2 calls        23 ░░░░░░░░░░░░░░░░░░░░
 ```
 
-The cost table intentionally stays small: 7 reference models across Anthropic, OpenAI, and Google. Prices are shown with the collection date so benchmark reports stay auditable.
+The cost table intentionally stays small: 9 models across Anthropic, OpenAI, and Google. Prices are shown with the collection date so benchmark reports stay auditable.
 
 ---
 
@@ -347,6 +362,14 @@ git commit -m "chore: add tokenix context instructions"
 ```
 
 Creates `.github/copilot-instructions.md` and `.github/hooks/hooks.json`.
+
+For a user-level install that applies to every project (no commit needed), add `--global`:
+
+```bash
+tokenix install-hook --tool copilot --global
+```
+
+Writes `~/.copilot/copilot-instructions.md` and `~/.copilot/hooks/hooks.json` (override the root with `$COPILOT_HOME`). The global hook bakes the absolute `tokenix` path, so it works without `tokenix` on `PATH`.
 
 ### OpenAI Codex CLI
 
@@ -454,6 +477,7 @@ tokenix install-hook --tool all
 |---|---|---|
 | `--tool` | `claude-code`, `copilot`, `codex`, `all` | Target tool (default `all`) |
 | `--local` | — | Claude Code: use `.claude/settings.local.json` instead of global |
+| `--global`, `-g` | — | User-level install: Copilot → `~/.copilot/` (`$COPILOT_HOME`); Claude Code stays `~/.claude`. Conflicts with `--local` |
 
 </details>
 
