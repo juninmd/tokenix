@@ -1272,13 +1272,14 @@ fn install_claude_code(local: bool) -> Result<()> {
         serde_json::json!({})
     };
 
-    let removed_legacy_auto_index = remove_legacy_claude_auto_index_hook(&mut settings);
-
-    // Clean up existing tokenix hook configuration to ensure a clean reinstallation.
-    if let Some(arr) = settings["hooks"]["PreToolUse"].as_array_mut() {
+    // Ensure hooks object exists and clean up existing tokenix hook configuration.
+    if !settings["hooks"].is_object() {
+        settings["hooks"] = serde_json::json!({});
+    }
+    if let Some(arr) = settings["hooks"].get_mut("PreToolUse").and_then(|v| v.as_array_mut()) {
         arr.retain(|h| !h.to_string().contains("tokenix"));
     }
-    if let Some(arr) = settings["hooks"]["PostToolUse"].as_array_mut() {
+    if let Some(arr) = settings["hooks"].get_mut("PostToolUse").and_then(|v| v.as_array_mut()) {
         arr.retain(|h| !h.to_string().contains("tokenix"));
     }
 
@@ -1289,13 +1290,11 @@ fn install_claude_code(local: bool) -> Result<()> {
         "matcher": matcher,
         "hooks": [{"type": "command", "command": hook_command(&tokenix_bin, "hook"), "timeout": 10}]
     });
-    if settings["hooks"]["PreToolUse"].is_array() {
-        settings["hooks"]["PreToolUse"]
-            .as_array_mut()
-            .unwrap()
-            .push(hook);
+    let hooks_obj = settings["hooks"].as_object_mut().unwrap();
+    if let Some(arr) = hooks_obj.get_mut("PreToolUse").and_then(|v| v.as_array_mut()) {
+        arr.push(hook);
     } else {
-        settings["hooks"]["PreToolUse"] = serde_json::json!([hook]);
+        hooks_obj.insert("PreToolUse".to_string(), serde_json::json!([hook]));
     }
 
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
@@ -1308,39 +1307,7 @@ fn install_claude_code(local: bool) -> Result<()> {
         "  PreToolUse:  {} hook (Read/Grep/Bash interception)",
         tokenix_bin
     );
-    if removed_legacy_auto_index {
-        println!("  Removed legacy UserPromptSubmit auto-index hook");
-    }
     Ok(())
-}
-
-fn remove_legacy_claude_auto_index_hook(settings: &mut serde_json::Value) -> bool {
-    let Some(entries) = settings["hooks"]["UserPromptSubmit"].as_array_mut() else {
-        return false;
-    };
-
-    let mut changed = false;
-    for entry in entries.iter_mut() {
-        let Some(hooks) = entry["hooks"].as_array_mut() else {
-            continue;
-        };
-        let before = hooks.len();
-        hooks.retain(|hook| {
-            let text = hook.to_string();
-            !(text.contains("tokenix") && text.contains("--if-stale") && text.contains("index"))
-        });
-        changed |= hooks.len() != before;
-    }
-
-    let before = entries.len();
-    entries.retain(|entry| {
-        entry["hooks"]
-            .as_array()
-            .map(|hooks| !hooks.is_empty())
-            .unwrap_or(true)
-    });
-    changed |= entries.len() != before;
-    changed
 }
 
 fn install_copilot(global: bool) -> Result<()> {
