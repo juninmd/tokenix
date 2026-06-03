@@ -1,6 +1,6 @@
 [package]
 name = "tokenix"
-version = "0.23.4"
+version = "0.23.5"
 edition = "2021"
 description = "Local semantic index CLI for LLM token optimization"
 license = "MIT"
