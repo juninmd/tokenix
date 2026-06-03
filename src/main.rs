@@ -536,14 +536,20 @@ fn main() -> Result<()> {
                 std::env::set_var("OMP_NUM_THREADS", "1");
                 std::env::set_var("RAYON_NUM_THREADS", "1");
             }
-            hook::run_hook()
+            if let Err(e) = hook::run_hook() {
+                eprintln!("tokenix hook fail-open: {e:?}");
+            }
+            std::process::exit(0);
         }
         Commands::HookPost => {
             #[allow(unused_unsafe)]
             unsafe {
                 std::env::set_var("RAYON_NUM_THREADS", "1")
             };
-            compress::run_hook_post()
+            if let Err(e) = compress::run_hook_post() {
+                eprintln!("tokenix hook-post fail-open: {e:?}");
+            }
+            std::process::exit(0);
         }
         Commands::Mcp => {
             #[allow(unused_unsafe)]
