@@ -738,7 +738,7 @@ pub fn search_fts(
             "SELECT c.id FROM chunks c JOIN chunks_fts f ON c.id = f.rowid
              WHERE chunks_fts MATCH ?1 AND instr(c.path, ?2) > 0 LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![sanitized, filter, limit], |row| {
+        let rows = stmt.query_map(params![sanitized, filter, limit as i64], |row| {
             row.get::<_, i64>(0)
         })?;
         for id in rows.flatten() {
@@ -747,7 +747,7 @@ pub fn search_fts(
     } else {
         let mut stmt =
             conn.prepare("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?1 LIMIT ?2")?;
-        let rows = stmt.query_map(params![sanitized, limit], |row| row.get::<_, i64>(0))?;
+        let rows = stmt.query_map(params![sanitized, limit as i64], |row| row.get::<_, i64>(0))?;
         for id in rows.flatten() {
             ids.push(id);
         }
