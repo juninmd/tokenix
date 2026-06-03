@@ -738,16 +738,20 @@ pub fn search_fts(
             "SELECT c.id FROM chunks c JOIN chunks_fts f ON c.id = f.rowid
              WHERE chunks_fts MATCH ?1 AND instr(c.path, ?2) > 0 LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![sanitized, filter, i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
-            row.get::<_, i64>(0)
-        })?;
+        let rows = stmt.query_map(
+            params![sanitized, filter, i64::try_from(limit).unwrap_or(i64::MAX)],
+            |row| row.get::<_, i64>(0),
+        )?;
         for id in rows.flatten() {
             ids.push(id);
         }
     } else {
         let mut stmt =
             conn.prepare("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?1 LIMIT ?2")?;
-        let rows = stmt.query_map(params![sanitized, i64::try_from(limit).unwrap_or(i64::MAX)], |row| row.get::<_, i64>(0))?;
+        let rows = stmt.query_map(
+            params![sanitized, i64::try_from(limit).unwrap_or(i64::MAX)],
+            |row| row.get::<_, i64>(0),
+        )?;
         for id in rows.flatten() {
             ids.push(id);
         }
