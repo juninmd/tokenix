@@ -389,6 +389,7 @@ pub fn insert_graph_edge(
 
 pub fn search_graph_nodes(conn: &Connection, query: &str, limit: usize) -> Result<Vec<GraphNode>> {
     let pattern = format!("%{}%", query);
+    let query_limit = (limit.max(1) * 4) as i64;
     let mut stmt = conn.prepare(
         "SELECT chunk_id,path,name,kind,start_line,end_line
          FROM graph_nodes
@@ -396,8 +397,25 @@ pub fn search_graph_nodes(conn: &Connection, query: &str, limit: usize) -> Resul
          ORDER BY CASE WHEN name = ?1 COLLATE NOCASE THEN 0 ELSE 1 END, rank DESC, path, start_line
          LIMIT ?3",
     )?;
-    let rows = stmt.query_map(params![query, pattern, limit as i64], graph_node_from_row)?;
-    Ok(rows.filter_map(|row| row.ok()).collect())
+    let rows = stmt.query_map(params![query, pattern, query_limit], graph_node_from_row)?;
+    let mut seen = HashSet::new();
+    let mut nodes = Vec::new();
+    for row in rows.filter_map(|row| row.ok()) {
+        let key = (
+            row.path.clone(),
+            row.name.clone(),
+            row.kind.clone(),
+            row.start_line,
+            row.end_line,
+        );
+        if seen.insert(key) {
+            nodes.push(row);
+            if nodes.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(nodes)
 }
 
 pub fn graph_callers(conn: &Connection, symbol: &str, limit: usize) -> Result<Vec<GraphRelation>> {
@@ -414,7 +432,7 @@ pub fn graph_impact(
     depth: usize,
     limit: usize,
 ) -> Result<Vec<GraphRelation>> {
-    let start_ids: Vec<i64> = search_graph_nodes(conn, symbol, 20)?
+    let start_ids: Vec<i64> = exact_nodes_if_present(search_graph_nodes(conn, symbol, 20)?, symbol)
         .into_iter()
         .map(|node| node.chunk_id)
         .collect();
@@ -437,11 +455,7 @@ pub fn graph_impact(
                 .into_iter()
                 .chain(relations_for_node(conn, *node_id, false)?)
             {
-                let edge_key = (
-                    relation.from.chunk_id,
-                    relation.to.chunk_id,
-                    relation.reference.clone(),
-                );
+                let edge_key = graph_relation_key(&relation);
                 if seen_edges.insert(edge_key) {
                     next.push(relation.from.chunk_id);
                     next.push(relation.to.chunk_id);
@@ -467,17 +481,12 @@ fn graph_relations(
     limit: usize,
     callers: bool,
 ) -> Result<Vec<GraphRelation>> {
-    let nodes = search_graph_nodes(conn, symbol, 20)?;
+    let nodes = exact_nodes_if_present(search_graph_nodes(conn, symbol, 20)?, symbol);
     let mut relations = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for node in nodes {
         for relation in relations_for_node(conn, node.chunk_id, callers)? {
-            let key = (
-                relation.from.chunk_id,
-                relation.to.chunk_id,
-                relation.reference.clone(),
-            );
-            if seen.insert(key) {
+            if seen.insert(graph_relation_key(&relation)) {
                 relations.push(relation);
                 if relations.len() >= limit {
                     return Ok(relations);
@@ -486,6 +495,16 @@ fn graph_relations(
         }
     }
     Ok(relations)
+}
+
+fn exact_nodes_if_present(mut nodes: Vec<GraphNode>, symbol: &str) -> Vec<GraphNode> {
+    if nodes
+        .iter()
+        .any(|node| node.name.eq_ignore_ascii_case(symbol))
+    {
+        nodes.retain(|node| node.name.eq_ignore_ascii_case(symbol));
+    }
+    nodes
 }
 
 fn relations_for_node(
@@ -512,6 +531,20 @@ fn relations_for_node(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params![chunk_id], graph_relation_from_row)?;
     Ok(rows.filter_map(|row| row.ok()).collect())
+}
+
+fn graph_relation_key(
+    relation: &GraphRelation,
+) -> (String, usize, String, String, usize, String, String) {
+    (
+        relation.from.path.clone(),
+        relation.from.start_line,
+        relation.from.name.clone(),
+        relation.to.path.clone(),
+        relation.to.start_line,
+        relation.to.name.clone(),
+        relation.reference.clone(),
+    )
 }
 
 fn graph_node_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphNode> {
@@ -1453,6 +1486,129 @@ mod tests {
             .unwrap()
             .iter()
             .all(|r| r.path == "src/lib.rs"));
+    }
+
+    #[test]
+    fn graph_search_and_relations_dedupe_duplicate_visible_symbols() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn, 4).unwrap();
+        let file_id = upsert_file(&conn, "src/hook.rs", 1.0, "h1").unwrap();
+        let caller_id = upsert_file(&conn, "src/main.rs", 1.0, "h2").unwrap();
+        let first_run_hook = insert_chunk(
+            &conn,
+            NewChunk {
+                file_id,
+                path: "src/hook.rs",
+                start: 478,
+                end: 714,
+                symbol: "run_hook",
+                kind: "function",
+                content: "fn run_hook() {}",
+                token_count: 4,
+            },
+        )
+        .unwrap();
+        let second_run_hook = insert_chunk(
+            &conn,
+            NewChunk {
+                file_id,
+                path: "src/hook.rs",
+                start: 478,
+                end: 714,
+                symbol: "run_hook",
+                kind: "function",
+                content: "fn run_hook() {}",
+                token_count: 4,
+            },
+        )
+        .unwrap();
+        let main = insert_chunk(
+            &conn,
+            NewChunk {
+                file_id: caller_id,
+                path: "src/main.rs",
+                start: 401,
+                end: 420,
+                symbol: "main",
+                kind: "function",
+                content: "fn main() { hook::run_hook(); }",
+                token_count: 8,
+            },
+        )
+        .unwrap();
+        let run_hook_post = insert_chunk(
+            &conn,
+            NewChunk {
+                file_id,
+                path: "src/compress.rs",
+                start: 612,
+                end: 679,
+                symbol: "run_hook_post",
+                kind: "function",
+                content: "fn run_hook_post() {}",
+                token_count: 5,
+            },
+        )
+        .unwrap();
+
+        insert_graph_node(
+            &conn,
+            first_run_hook,
+            file_id,
+            "src/hook.rs",
+            "run_hook",
+            "function",
+            478,
+            714,
+        )
+        .unwrap();
+        insert_graph_node(
+            &conn,
+            second_run_hook,
+            file_id,
+            "src/hook.rs",
+            "run_hook",
+            "function",
+            478,
+            714,
+        )
+        .unwrap();
+        insert_graph_node(
+            &conn,
+            main,
+            caller_id,
+            "src/main.rs",
+            "main",
+            "function",
+            401,
+            420,
+        )
+        .unwrap();
+        insert_graph_node(
+            &conn,
+            run_hook_post,
+            file_id,
+            "src/compress.rs",
+            "run_hook_post",
+            "function",
+            612,
+            679,
+        )
+        .unwrap();
+        insert_graph_edge(&conn, main, first_run_hook, "hook::run_hook", "references").unwrap();
+        insert_graph_edge(&conn, main, second_run_hook, "hook::run_hook", "references").unwrap();
+        insert_graph_edge(&conn, main, run_hook_post, "run_hook_post", "references").unwrap();
+
+        let nodes = search_graph_nodes(&conn, "run_hook", 10).unwrap();
+        assert_eq!(
+            nodes.iter().filter(|node| node.name == "run_hook").count(),
+            1
+        );
+        assert!(nodes.iter().any(|node| node.name == "run_hook_post"));
+
+        let callers = graph_callers(&conn, "run_hook", 10).unwrap();
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0].from.name, "main");
     }
 
     /// Retrieval quality gate. Builds a tiny in-memory index from labeled

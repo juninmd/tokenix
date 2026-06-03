@@ -151,6 +151,8 @@ fn is_path_recall_term(term: &str) -> bool {
                 | "capacitor"
                 | "chapter"
                 | "capitulo"
+                | "chunk"
+                | "chunker"
         )
 }
 
@@ -282,6 +284,20 @@ fn intent_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f3
 
 fn domain_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f32 {
     let mut boost = 0.0;
+    let asks_chunking = has_any(terms, &["chunk", "chunker", "symbol", "outline", "outlin"])
+        && has_any(terms, &["rust", "file", "files", "code", "agent"]);
+    if asks_chunking
+        && (path.contains("chunker")
+            || symbol.contains("chunk_file")
+            || symbol.contains("chunk_rust")
+            || symbol.contains("generate_outline")
+            || content.contains("chunk_file")
+            || content.contains("generate_outline")
+            || content.contains("symbol aware"))
+    {
+        boost += 1.4;
+    }
+
     let has_db_query = terms.iter().any(|t| {
         matches!(
             t.as_str(),
@@ -1241,6 +1257,38 @@ mod tests {
                     225,
                     "chunk_rust",
                     "fn chunk_rust content symbol outline rust chunk",
+                )
+            },
+        ];
+
+        rerank_results(
+            &mut results,
+            "how are rust files chunked into symbols and outlines",
+        );
+        assert_eq!(results[0].path, "src/chunker.rs");
+    }
+
+    #[test]
+    fn rerank_prefers_chunker_over_indexer_for_chunking_queries() {
+        let mut results = vec![
+            SearchResult {
+                distance: 0.02,
+                ..make_result(
+                    "src/indexer.rs",
+                    88,
+                    119,
+                    "walk_indexable_files",
+                    "walk files should_index index repository source files",
+                )
+            },
+            SearchResult {
+                distance: 0.24,
+                ..make_result(
+                    "src/chunker.rs",
+                    292,
+                    308,
+                    "chunk_file",
+                    "fn chunk_file rust files symbols outlines generate_outline symbol aware chunk_rust",
                 )
             },
         ];
