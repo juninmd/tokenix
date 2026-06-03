@@ -7,8 +7,13 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
-    # Keep the committed Cargo.lock in sync so --locked CI builds stay green.
-    versioning-strategy: lockfile-only
+    # increase-if-necessary: bump the Cargo.toml requirement ONLY when the new
+    # version falls outside the current range, and always keep Cargo.lock in sync.
+    # This keeps manifest + lockfile consistent so `cargo --locked` CI never fails
+    # with "cannot update the lock file because --locked was passed".
+    # (lockfile-only could bump the lock past the manifest range — e.g. dirs 5→6 —
+    # leaving Cargo.toml="5" but Cargo.lock=6.0.0, which breaks every --locked build.)
+    versioning-strategy: increase-if-necessary
     groups:
       cargo-minor-patch:
         update-types: ["minor", "patch"]
