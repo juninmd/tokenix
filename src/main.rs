@@ -1279,13 +1279,13 @@ fn mini_bar(value: i64, total: i64, width: usize) -> String {
 fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
     match tool {
         Tool::ClaudeCode => install_claude_code(local)?,
-        Tool::Copilot => install_copilot()?,
+        Tool::Copilot => install_copilot(local)?,
         Tool::Codex => install_codex()?,
         Tool::Mcp => install_mcp_server()?,
-        Tool::Gemini => install_copilot()?,
+        Tool::Gemini => install_copilot(local)?,
         Tool::All => {
             install_claude_code(local)?;
-            install_copilot()?;
+            install_copilot(local)?;
             install_codex()?;
             install_mcp_server()?;
         }
@@ -1416,22 +1416,43 @@ fn remove_legacy_claude_auto_index_hook(settings: &mut serde_json::Value) -> boo
     changed
 }
 
-fn install_copilot() -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let repo_root = store::find_project_root(&cwd);
-    let github_dir = repo_root.join(".github");
-    std::fs::create_dir_all(&github_dir)?;
+fn install_copilot(local: bool) -> Result<()> {
+    // Global path: ~/.copilot/hooks/tokenix.json (user-level, picked up by VS Code for all repos).
+    // Local path:  .github/hooks/hooks.json       (workspace-level, commit to share with team).
+    // copilot-instructions.md is a workspace-only feature; only written for local installs.
 
-    // 1. copilot-instructions.md - repository custom instructions
-    let instructions_path = github_dir.join("copilot-instructions.md");
-    // `.github/` is committed and shared across the team, so every generated
-    // reference must resolve `tokenix` from PATH rather than baking the absolute exe
-    // path of the machine that ran install-hook (which would be invalid on every
-    // other clone and in CI). A bare name resolves on Windows (tokenix.exe via
-    // PATHEXT), Linux, and macOS alike.
+    // `tokenix` must resolve from PATH in any committed file so it works on every clone.
     let tokenix_bin = "tokenix";
-    let instructions = format!(
-        r#"# tokenix - Semantic Context Tool
+    let hook_cmd = format!("{tokenix_bin} hook");
+    let hook_post_cmd = format!("{tokenix_bin} hook-post");
+
+    let hooks_json = serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "type": "command",
+                "command": hook_cmd,
+                "windows": hook_cmd,
+                "timeout": 10
+            }],
+            "PostToolUse": [{
+                "type": "command",
+                "command": hook_post_cmd,
+                "windows": hook_post_cmd,
+                "timeout": 10
+            }]
+        }
+    });
+
+    if local {
+        let cwd = std::env::current_dir()?;
+        let repo_root = store::find_project_root(&cwd);
+        let github_dir = repo_root.join(".github");
+        std::fs::create_dir_all(&github_dir)?;
+
+        // copilot-instructions.md — workspace custom instructions (committed to repo)
+        let instructions_path = github_dir.join("copilot-instructions.md");
+        let instructions = format!(
+            r#"# tokenix - Semantic Context Tool
 
 This repository is indexed by **tokenix** for token-efficient code understanding.
 
@@ -1462,64 +1483,74 @@ tokenix binary: `{tokenix_bin}`
 Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
 
 "#
-    );
-
-    let already_instructions = instructions_path.exists();
-    std::fs::write(&instructions_path, &instructions)?;
-    if already_instructions {
-        println!(
-            "{} Copilot instructions updated  ->  {}",
-            "ok".green(),
-            instructions_path.display()
         );
-    } else {
-        println!(
-            "{} Copilot instructions  ->  {}",
-            "ok".green(),
-            instructions_path.display()
-        );
-    }
 
-    // 2. hooks/hooks.json - VS Code workspace hooks for token-efficient reads and
-    // shell rewrites. Bash compression is handled through PreToolUse updatedInput.
-    let hooks_dir = github_dir.join("hooks");
-    std::fs::create_dir_all(&hooks_dir)?;
-    let hooks_path = hooks_dir.join("hooks.json");
-
-    let hook_cmd = format!("{tokenix_bin} hook");
-
-    let hooks_json = serde_json::json!({
-        "hooks": {
-            "PreToolUse": [{
-                "type": "command",
-                "command": hook_cmd,
-                "windows": hook_cmd,
-                "timeout": 10
-            }]
+        let already_instructions = instructions_path.exists();
+        std::fs::write(&instructions_path, &instructions)?;
+        if already_instructions {
+            println!(
+                "{} Copilot instructions updated  ->  {}",
+                "ok".green(),
+                instructions_path.display()
+            );
+        } else {
+            println!(
+                "{} Copilot instructions  ->  {}",
+                "ok".green(),
+                instructions_path.display()
+            );
         }
-    });
 
-    let already_hooks = hooks_path.exists();
-    std::fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_json)?)?;
-    if already_hooks {
-        println!(
-            "{} Copilot hooks updated         ->  {}",
-            "ok".green(),
-            hooks_path.display()
-        );
+        let hooks_dir = github_dir.join("hooks");
+        std::fs::create_dir_all(&hooks_dir)?;
+        let hooks_path = hooks_dir.join("hooks.json");
+
+        let already_hooks = hooks_path.exists();
+        std::fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_json)?)?;
+        if already_hooks {
+            println!(
+                "{} Copilot hooks updated         ->  {}",
+                "ok".green(),
+                hooks_path.display()
+            );
+        } else {
+            println!(
+                "{} Copilot hooks                 ->  {}",
+                "ok".green(),
+                hooks_path.display()
+            );
+        }
+
+        println!("  PreToolUse:  {tokenix_bin} hook       (Read/Grep/Bash interception)");
+        println!("  PostToolUse: {tokenix_bin} hook-post  (Bash/ListDirectory output compression)");
+        println!("  Note: commit .github/ to enable for all contributors.");
     } else {
-        println!(
-            "{} Copilot hooks                 ->  {}",
-            "ok".green(),
-            hooks_path.display()
-        );
+        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+        let hooks_dir = home.join(".copilot").join("hooks");
+        std::fs::create_dir_all(&hooks_dir)?;
+        let hooks_path = hooks_dir.join("tokenix.json");
+
+        let already_hooks = hooks_path.exists();
+        std::fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_json)?)?;
+        if already_hooks {
+            println!(
+                "{} Copilot hooks updated         ->  {}",
+                "ok".green(),
+                hooks_path.display()
+            );
+        } else {
+            println!(
+                "{} Copilot hooks                 ->  {}",
+                "ok".green(),
+                hooks_path.display()
+            );
+        }
+
+        println!("  PreToolUse:  {tokenix_bin} hook       (Read/Grep/Bash interception)");
+        println!("  PostToolUse: {tokenix_bin} hook-post  (Bash/ListDirectory output compression)");
+        println!("  Note: applies to all repos for this user (user-level hooks).");
     }
 
-    println!(
-        "  PreToolUse:  {} hook       (Read/Grep/Bash interception)",
-        tokenix_bin
-    );
-    println!("  Note: commit .github/ to enable for all contributors.");
     Ok(())
 }
 
@@ -1764,13 +1795,13 @@ fn upsert_codex_hook(slot: &mut serde_json::Value, hook: serde_json::Value) {
 fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
     match tool {
         Tool::ClaudeCode => remove_claude_code(local)?,
-        Tool::Copilot => remove_copilot()?,
+        Tool::Copilot => remove_copilot(local)?,
         Tool::Codex => remove_codex()?,
         Tool::Mcp => remove_mcp_server()?,
-        Tool::Gemini => remove_copilot()?,
+        Tool::Gemini => remove_copilot(local)?,
         Tool::All => {
             remove_claude_code(local)?;
-            remove_copilot()?;
+            remove_copilot(local)?;
             remove_codex()?;
             remove_mcp_server()?;
         }
@@ -1801,15 +1832,24 @@ fn remove_claude_code(local: bool) -> Result<()> {
     Ok(())
 }
 
-fn remove_copilot() -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let repo_root = store::find_project_root(&cwd);
-    let instructions = repo_root.join(".github/copilot-instructions.md");
-    let hooks = repo_root.join(".github/hooks/hooks.json");
-    for path in [&instructions, &hooks] {
-        if path.exists() {
-            std::fs::remove_file(path)?;
-            println!("{} Removed {}", "ok".green(), path.display());
+fn remove_copilot(local: bool) -> Result<()> {
+    if local {
+        let cwd = std::env::current_dir()?;
+        let repo_root = store::find_project_root(&cwd);
+        let instructions = repo_root.join(".github/copilot-instructions.md");
+        let hooks = repo_root.join(".github/hooks/hooks.json");
+        for path in [&instructions, &hooks] {
+            if path.exists() {
+                std::fs::remove_file(path)?;
+                println!("{} Removed {}", "ok".green(), path.display());
+            }
+        }
+    } else {
+        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+        let hooks = home.join(".copilot/hooks/tokenix.json");
+        if hooks.exists() {
+            std::fs::remove_file(&hooks)?;
+            println!("{} Removed {}", "ok".green(), hooks.display());
         }
     }
     Ok(())
