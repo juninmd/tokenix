@@ -359,7 +359,7 @@ fn find_first_identifier<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> O
             return Some(text.to_string());
         }
     }
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             if let Some(name) = find_first_identifier(child, source) {
                 return Some(name);
@@ -370,13 +370,13 @@ fn find_first_identifier<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> O
 }
 
 fn chunk_with_parser(
-    language: tree_sitter::Language,
+    language: impl Into<tree_sitter::Language>,
     content: &str,
     path: &str,
     is_symbol_node: fn(&str) -> Option<&'static str>,
 ) -> Vec<Chunk> {
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(language).is_err() {
+    if parser.set_language(&language.into()).is_err() {
         let lines: Vec<&str> = content.lines().collect();
         return chunk_by_lines(&lines, path);
     }
@@ -410,7 +410,7 @@ fn chunk_with_parser(
                 kind: kind.to_string(),
             });
         }
-        for i in 0..node.child_count() {
+        for i in 0..node.child_count() as u32 {
             if let Some(child) = node.child(i) {
                 traverse(child, source, is_symbol_node, symbols);
             }
@@ -452,7 +452,7 @@ fn is_rust_symbol(kind: &str) -> Option<&'static str> {
 }
 
 fn chunk_rust(content: &str, path: &str) -> Vec<Chunk> {
-    chunk_with_parser(tree_sitter_rust::language(), content, path, is_rust_symbol)
+    chunk_with_parser(tree_sitter_rust::LANGUAGE, content, path, is_rust_symbol)
 }
 
 fn is_python_symbol(kind: &str) -> Option<&'static str> {
@@ -465,7 +465,7 @@ fn is_python_symbol(kind: &str) -> Option<&'static str> {
 
 fn chunk_python(content: &str, path: &str) -> Vec<Chunk> {
     chunk_with_parser(
-        tree_sitter_python::language(),
+        tree_sitter_python::LANGUAGE,
         content,
         path,
         is_python_symbol,
@@ -485,7 +485,7 @@ fn is_js_ts_symbol(kind: &str) -> Option<&'static str> {
 
 fn chunk_ts_js(content: &str, path: &str) -> Vec<Chunk> {
     let mut chunks = chunk_with_parser(
-        tree_sitter_javascript::language(),
+        tree_sitter_javascript::LANGUAGE,
         content,
         path,
         is_js_ts_symbol,
@@ -584,7 +584,7 @@ fn is_go_symbol(kind: &str) -> Option<&'static str> {
 }
 
 fn chunk_go(content: &str, path: &str) -> Vec<Chunk> {
-    chunk_with_parser(tree_sitter_go::language(), content, path, is_go_symbol)
+    chunk_with_parser(tree_sitter_go::LANGUAGE, content, path, is_go_symbol)
 }
 
 fn is_cpp_symbol(kind: &str) -> Option<&'static str> {
@@ -598,7 +598,7 @@ fn is_cpp_symbol(kind: &str) -> Option<&'static str> {
 }
 
 fn chunk_cpp(content: &str, path: &str) -> Vec<Chunk> {
-    chunk_with_parser(tree_sitter_cpp::language(), content, path, is_cpp_symbol)
+    chunk_with_parser(tree_sitter_cpp::LANGUAGE, content, path, is_cpp_symbol)
 }
 
 fn make_chunk(
