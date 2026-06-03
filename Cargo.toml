@@ -25,7 +25,7 @@ fastembed = { version = "4" }
 # default-features off: drops esaxx-rs/onig (static-CRT C/C++) which clash with
 # ort-sys's dynamic CRT at link time. nomic-embed's BERT WordPiece tokenizer
 # needs none of them; from_file + encode work with the pure-Rust core.
-tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 ort = { version = "=2.0.0-rc.9", optional = true }
 once_cell = "1"
 walkdir = "2"
