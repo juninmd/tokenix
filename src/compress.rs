@@ -15,10 +15,12 @@ fn log_unfiltered_cmd(cmd: &str) {
     if cmd.is_empty() {
         return;
     }
-    let root = crate::store::find_project_root(
-        &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-    );
-    let log_path = root.join(".tokenix").join("unfiltered_cmds.log");
+    // Write to the global ~/.tokenix/ dir, not the project dir, to avoid
+    // accidentally committing internal tokenix logs.
+    let log_path = match dirs::home_dir() {
+        Some(h) => h.join(".tokenix").join("unfiltered_cmds.log"),
+        None => return,
+    };
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -74,7 +76,23 @@ pub fn compress_bash_output(cmd: &str, s: &str) -> String {
 
 fn is_path_listing_command(cmd: &str) -> bool {
     let trimmed = cmd.trim();
-    trimmed == "ls -R" || trimmed.starts_with("find ")
+    // Plain ls / ls with flags / recursive find
+    trimmed == "ls"
+        || trimmed == "ls -R"
+        || trimmed.starts_with("ls ")
+        // POSIX find
+        || trimmed.starts_with("find ")
+        // Windows cmd / PowerShell dir
+        || trimmed == "dir"
+        || trimmed.starts_with("dir ")
+        // PowerShell Get-ChildItem and its aliases
+        || trimmed.starts_with("Get-ChildItem")
+        || trimmed.starts_with("get-childitem")
+        || trimmed == "gci"
+        || trimmed.starts_with("gci ")
+        // tree command (Unix and Windows)
+        || trimmed == "tree"
+        || trimmed.starts_with("tree ")
 }
 
 fn is_cargo_output(lines: &[&str]) -> bool {
@@ -553,7 +571,9 @@ fn normalize_post_tool(name: &str) -> String {
         | "run_shell_command"
         | "default_api:run_shell_command"
         | "run_command"
-        | "default_api:run_command" => "Bash".to_string(),
+        | "default_api:run_command"
+        | "get_terminal_output"
+        | "default_api:get_terminal_output" => "Bash".to_string(),
         "listdirectory" | "default_api:list_directory" => "ListDirectory".to_string(),
         _ => name.to_string(),
     }
@@ -719,7 +739,7 @@ pub fn run_command_and_compress(command_str: &str) -> Result<i32> {
                 ts: now_ts(),
                 tool: "Bash".to_string(),
                 action: "intercepted".to_string(),
-                phase: "pre_run".to_string(),
+                phase: "ToolOutputCompressed".to_string(),
                 reason: "compressed command output".to_string(),
                 saved_tokens: saved,
                 actual_tokens,

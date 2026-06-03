@@ -4,9 +4,7 @@ use std::path::Path;
 
 use crate::chunker::count_tokens;
 use crate::embed::embed_query;
-use crate::store::{
-    fetch_chunks_by_ids, hybrid_search, open_db, search_fts, search_graph_nodes, SearchResult,
-};
+use crate::store::{fetch_chunks_by_ids, hybrid_search, open_db, search_graph_nodes, SearchResult};
 
 pub fn query_index(
     repo_root: &Path,
@@ -63,34 +61,6 @@ fn add_symbol_recall_candidates(
         }
     }
     add_path_recall_candidates(conn, &mut seen, &mut ids, query_text, file_filter)?;
-    let terms = query_terms(query_text);
-    let asks_token_savings =
-        terms.iter().any(|t| t == "token") && terms.iter().any(|t| t.starts_with("sav"));
-    let asks_hook_log = terms.iter().any(|t| t == "hook") && terms.iter().any(|t| t == "log");
-    if asks_token_savings && asks_hook_log {
-        let mut stmt = conn.prepare(
-            "SELECT id FROM chunks
-             WHERE path IN ('src/gain.rs', 'src/store.rs')
-             ORDER BY CASE path WHEN 'src/gain.rs' THEN 0 ELSE 1 END, start_line
-             LIMIT 12",
-        )?;
-        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
-        for id in rows.flatten() {
-            if seen.insert(id) {
-                ids.push(id);
-            }
-        }
-        for id in search_fts(
-            conn,
-            "compute_gain read_hook_log tokens_saved original_estimate",
-            12,
-            file_filter,
-        )? {
-            if seen.insert(id) {
-                ids.push(id);
-            }
-        }
-    }
     for mut chunk in fetch_chunks_by_ids(conn, &ids)? {
         chunk.distance = 0.45;
         results.push(chunk);
@@ -142,17 +112,7 @@ fn is_path_recall_term(term: &str) -> bool {
     term.chars().all(|c| c.is_ascii_digit())
         || matches!(
             term,
-            "pwa"
-                | "coerencia"
-                | "coherence"
-                | "composer"
-                | "pipeline"
-                | "manifest"
-                | "capacitor"
-                | "chapter"
-                | "capitulo"
-                | "chunk"
-                | "chunker"
+            "coherence" | "composer" | "pipeline" | "manifest" | "chapter" | "chunk" | "chunker"
         )
 }
 
@@ -213,7 +173,6 @@ fn lexical_boost(result: &SearchResult, terms: &[String]) -> f32 {
     boost += (matched_terms as f32 * 0.08).min(0.5);
     boost += intent_boost(&path, &symbol, &content, terms);
     boost += domain_boost(&path, &symbol, &content, terms);
-    boost += project_intent_boost(&path, terms);
     boost += language_boost(&path, terms);
     boost += benchmark_leak_penalty(&path, terms);
     boost += test_leak_penalty(&symbol, &content, terms);
@@ -328,110 +287,6 @@ fn domain_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f3
     {
         boost += 1.0;
     }
-    boost
-}
-
-fn project_intent_boost(path: &str, terms: &[String]) -> f32 {
-    let mut boost = 0.0;
-    let asks_test = has_any(
-        terms,
-        &[
-            "test",
-            "tests",
-            "pytest",
-            "spec",
-            "pwa",
-            "capacitor",
-            "manifest",
-            "mobile",
-        ],
-    );
-    if asks_test {
-        if path.starts_with("tests ") {
-            boost += 0.55;
-        }
-        if path.contains("test pwa") {
-            boost += 2.2;
-        }
-        if has_any(terms, &["pwa", "capacitor", "manifest"]) && path.contains("links") {
-            boost -= 1.1;
-        }
-    }
-
-    let asks_pipeline = has_any(
-        terms,
-        &[
-            "pipeline",
-            "generator",
-            "generation",
-            "geracao",
-            "imagem",
-            "image",
-            "video",
-            "composer",
-            "client",
-        ],
-    );
-    if asks_pipeline {
-        if path.starts_with("scripts ") {
-            boost += 0.5;
-        }
-        if path.contains("art gen") || path.contains("video gen") {
-            boost += 0.45;
-        }
-        if path.ends_with(" md") && !has_any(terms, &["capitulo", "chapter", "narrativa"]) {
-            boost -= 0.75;
-        }
-    }
-
-    let asks_report = has_any(
-        terms,
-        &[
-            "analise",
-            "analysis",
-            "coerencia",
-            "coherence",
-            "relatorio",
-            "report",
-            "recomendacoes",
-            "recommendations",
-            "auditoria",
-            "audit",
-        ],
-    );
-    if asks_report {
-        if path.starts_with("docs ") {
-            boost += 0.45;
-        }
-        if path.contains("analise coerencia") {
-            boost += 1.0;
-        }
-    }
-
-    let asks_narrative = has_any(
-        terms,
-        &[
-            "capitulo",
-            "chapter",
-            "personagem",
-            "personagens",
-            "narrativa",
-            "cronologia",
-            "gabo",
-            "valeria",
-            "aria",
-            "rangel",
-        ],
-    );
-    if asks_narrative {
-        if path.starts_with("docs public ") || path.starts_with("cronologia ") {
-            boost += 0.65;
-        }
-        if path.starts_with("scripts ") && !asks_pipeline {
-            boost -= 0.45;
-        }
-    }
-
     boost
 }
 
@@ -1330,79 +1185,6 @@ mod tests {
             "how does hook fail open when index is stale or missing",
         );
         assert_eq!(results[0].path, "src/hook.rs");
-    }
-
-    #[test]
-    fn rerank_prefers_project_intent_matches() {
-        let cases = [
-            (
-                "pwa mobile capacitor tests links app manifest build",
-                (
-                    "tests/test_links.py",
-                    "test_links",
-                    "pytest validates public links",
-                ),
-                (
-                    "tests/test_pwa.py",
-                    "test_pwa_manifest",
-                    "pytest pwa mobile capacitor manifest service worker build",
-                ),
-            ),
-            (
-                "geracao de arte imagem capitulo personagens local art pipeline",
-                (
-                    "Cronologia/analise_capitulo_122.md",
-                    "",
-                    "analise capitulo personagens arte imagem narrativa",
-                ),
-                (
-                    "scripts/art_gen/local_pipeline.py",
-                    "LocalPipelineManager",
-                    "local pipeline image generator personagens chapter art",
-                ),
-            ),
-            (
-                "analise de coerencia narrativa capitulos cronologia fumo Gabo recomendacoes",
-                (
-                    "Cronologia/analise_capitulo_121.md",
-                    "",
-                    "analise capitulo fumo gabo evidencia narrativa",
-                ),
-                (
-                    "docs/analise_coerencia.md",
-                    "",
-                    "analise coerencia relatorio recomendacoes narrativa fumo gabo",
-                ),
-            ),
-            (
-                "capitulo 133 materia prima personagens gabo valeria aria rangel taxidermista",
-                (
-                    "scripts/generate_chapter_art.py",
-                    "generate_chapter_art",
-                    "capitulo personagens gabo valeria aria rangel art generator",
-                ),
-                (
-                    "docs/public/capitulo-133.md",
-                    "",
-                    "capitulo 133 materia prima personagens gabo valeria aria rangel taxidermista",
-                ),
-            ),
-        ];
-
-        for (query, close_semantic, expected) in cases {
-            let mut results = vec![
-                SearchResult {
-                    distance: 0.01,
-                    ..make_result(close_semantic.0, 1, 80, close_semantic.1, close_semantic.2)
-                },
-                SearchResult {
-                    distance: 0.24,
-                    ..make_result(expected.0, 1, 90, expected.1, expected.2)
-                },
-            ];
-            rerank_results(&mut results, query);
-            assert_eq!(results[0].path, expected.0, "query: {query}");
-        }
     }
 
     #[test]

@@ -204,8 +204,10 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         None => return (false, String::new(), "missing file_path".to_string()),
     };
 
-    // Let targeted reads through (offset or limit already specified)
-    if !tool_input["offset"].is_null() || !tool_input["limit"].is_null() {
+    // Let targeted reads through (offset or limit already specified with a numeric value)
+    let has_offset = tool_input["offset"].is_number();
+    let has_limit = tool_input["limit"].is_number();
+    if has_offset || has_limit {
         return (
             false,
             String::new(),
@@ -319,12 +321,21 @@ fn try_acquire_embed_slot() -> bool {
         if !stale {
             return false; // another embed is in progress
         }
+        // Remove stale lock before attempting to re-acquire
+        let _ = std::fs::remove_file(&path);
     }
 
-    // Claim the slot (best-effort write — race window is tiny)
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(&path));
-    let _ = std::fs::write(&path, std::process::id().to_string());
-    true
+    // create_new is atomic: exactly one concurrent caller succeeds
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map(|mut f| {
+            let _ = f.write_all(std::process::id().to_string().as_bytes());
+        })
+        .is_ok()
 }
 
 fn release_embed_slot() {
@@ -458,6 +469,12 @@ fn bash_rewrite_output(rewritten: &str, reason: &str) -> serde_json::Value {
     })
 }
 
+/// Quote a string for use as a shell argument (bash and PowerShell native-exe calls).
+/// Wraps in double quotes and escapes internal double-quotes as `\"`.
+fn shell_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\\\""))
+}
+
 fn is_bash_tool(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     matches!(
@@ -472,6 +489,8 @@ fn is_bash_tool(name: &str) -> bool {
             | "default_api:run_in_terminal"
             | "run_command"
             | "default_api:run_command"
+            | "get_terminal_output"
+            | "default_api:get_terminal_output"
     )
 }
 
@@ -537,7 +556,7 @@ pub fn run_hook() -> Result<()> {
             let exe_path = std::env::current_exe()
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| "tokenix".to_string());
-            let rewritten = format!("{:?} run {:?}", exe_path, command);
+            let rewritten = format!("{} run {}", shell_quote(&exe_path), shell_quote(command));
             let out = bash_rewrite_output(
                 &rewritten,
                 "recording: capturing output for filter generation",
@@ -616,7 +635,7 @@ pub fn run_hook() -> Result<()> {
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| "tokenix".to_string());
 
-            let rewritten = format!("{:?} run {:?}", exe_path, command);
+            let rewritten = format!("{} run {}", shell_quote(&exe_path), shell_quote(command));
 
             let out = bash_rewrite_output(&rewritten, "wrapped in tokenix compression run");
 

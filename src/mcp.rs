@@ -25,8 +25,11 @@ pub fn run_mcp_server() -> Result<()> {
         let request: Value = match serde_json::from_str(request_str) {
             Ok(val) => val,
             Err(_) => {
+                // JSON-RPC 2.0 §5: error response MUST include id; use null when
+                // the request could not be parsed and no id is available.
                 let response = json!({
                     "jsonrpc": "2.0",
+                    "id": Value::Null,
                     "error": {
                         "code": -32700,
                         "message": "Parse error"
@@ -60,7 +63,8 @@ pub fn run_mcp_server() -> Result<()> {
                         }
                     })
                 }
-                "notifications/initialized" => {
+                // Silently discard all notification messages (no response required per JSON-RPC)
+                n if n.starts_with("notifications/") => {
                     line.clear();
                     continue;
                 }

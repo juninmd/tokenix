@@ -91,7 +91,7 @@ fn print_recommendations(nvidia: &Option<(String, String)>, cuda: bool, cudnn: b
                     "      {}",
                     "cargo install --path . --features directml --locked".cyan()
                 );
-                tip("CUDA can be ~2-3x faster than DirectML but needs CUDA 12.x + cuDNN 9.x installed (ort rc.9 does not support CUDA 13 yet):");
+                tip("CUDA can be ~2-3x faster than DirectML but needs CUDA 12.x + cuDNN 9.x installed:");
                 println!(
                     "      {}",
                     "cargo install --path . --features cuda --locked".cyan()

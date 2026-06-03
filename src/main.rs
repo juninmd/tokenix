@@ -927,8 +927,7 @@ fn cmd_read(
     };
 
     if !fp.exists() {
-        eprintln!("{} {}", "File not found:".red(), file);
-        std::process::exit(1);
+        anyhow::bail!("File not found: {}", file);
     }
 
     let content = std::fs::read_to_string(&fp)?;
@@ -940,19 +939,14 @@ fn cmd_read(
             if let (Ok(s), Ok(e)) = (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
                 let total = file_lines.len();
                 if s == 0 || e == 0 || s > total || e > total || s > e {
-                    eprintln!(
-                        "{}",
-                        format!("Invalid line range. File has {total} lines (1-{total})").red()
-                    );
-                    std::process::exit(1);
+                    anyhow::bail!("Invalid line range. File has {} lines (1-{})", total, total);
                 }
                 let slice = file_lines[s - 1..e].join("\n");
                 println!("{}", slice);
                 return Ok(());
             }
         }
-        eprintln!("{}", "Invalid --lines format. Use: N-M".red());
-        std::process::exit(1);
+        anyhow::bail!("Invalid --lines format. Use: N-M");
     }
 
     let rel = fp
@@ -968,8 +962,7 @@ fn cmd_read(
             .filter(|c| c.symbol.to_lowercase().contains(&sym.to_lowercase()))
             .collect();
         if found.is_empty() {
-            eprintln!("{} '{}'", "Symbol not found:".yellow(), sym);
-            std::process::exit(1);
+            anyhow::bail!("Symbol not found: '{}'", sym);
         }
         for c in found {
             println!(
@@ -1197,6 +1190,7 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
         for (phase, count, saved) in &stats.by_phase {
             let (label, detail) = match phase.as_str() {
                 "pre" => ("PreToolUse ", "Read / Grep intercepts"),
+                "ToolOutputCompressed" => ("ToolCompressed", "Bash command rewrite + compress"),
                 "post" => ("PostToolUse", "Bash / ListDirectory compression"),
                 other => (other, ""),
             };
@@ -1424,7 +1418,8 @@ fn remove_legacy_claude_auto_index_hook(settings: &mut serde_json::Value) -> boo
 
 fn install_copilot() -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let github_dir = cwd.join(".github");
+    let repo_root = store::find_project_root(&cwd);
+    let github_dir = repo_root.join(".github");
     std::fs::create_dir_all(&github_dir)?;
 
     // 1. copilot-instructions.md - repository custom instructions
@@ -1808,8 +1803,9 @@ fn remove_claude_code(local: bool) -> Result<()> {
 
 fn remove_copilot() -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let instructions = cwd.join(".github/copilot-instructions.md");
-    let hooks = cwd.join(".github/hooks/hooks.json");
+    let repo_root = store::find_project_root(&cwd);
+    let instructions = repo_root.join(".github/copilot-instructions.md");
+    let hooks = repo_root.join(".github/hooks/hooks.json");
     for path in [&instructions, &hooks] {
         if path.exists() {
             std::fs::remove_file(path)?;
@@ -2144,6 +2140,9 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
 }
 
 fn format_num(n: i64) -> String {
+    if n < 0 {
+        return format!("-{}", format_num(-n));
+    }
     let s = n.to_string();
     let mut result = String::new();
     for (i, c) in s.chars().rev().enumerate() {
