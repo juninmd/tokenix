@@ -37,7 +37,7 @@ indicatif = "0.18"
 colored = "2"
 dirs = "6"
 rayon = "1"
-toml = "0.8"
+toml = "1.1"
 regex = "1"
 rust-embed = { version = "8", features = ["include-exclude"] }
 libc = "0.2"
