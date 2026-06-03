@@ -584,10 +584,7 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 .and_then(|q| q.as_str())
                 .ok_or_else(|| anyhow!("Missing 'command' argument"))?;
 
-            // Avoid infinite recursion
-            if command.contains("tokenix")
-                && (command.contains(" run ") || command.contains(" hook"))
-            {
+            if invokes_tokenix_binary(command) {
                 return Err(anyhow!("Cannot run tokenix recursively via MCP"));
             }
 
@@ -728,6 +725,37 @@ fn parse_memory_scope(scope: &str) -> Result<crate::memory::PreferenceScope> {
     }
 }
 
+fn invokes_tokenix_binary(command: &str) -> bool {
+    command
+        .split(['&', '|', ';'])
+        .filter_map(first_shell_word)
+        .any(|word| is_tokenix_executable(&word))
+}
+
+fn first_shell_word(segment: &str) -> Option<String> {
+    let segment = segment.trim_start();
+    if segment.is_empty() {
+        return None;
+    }
+    let mut chars = segment.chars();
+    let first = chars.next()?;
+    if first == '"' || first == '\'' {
+        let word: String = chars.take_while(|c| *c != first).collect();
+        return Some(word);
+    }
+    Some(
+        std::iter::once(first)
+            .chain(chars.take_while(|c| !c.is_whitespace()))
+            .collect(),
+    )
+}
+
+fn is_tokenix_executable(part: &str) -> bool {
+    let normalized = part.replace('\\', "/").to_ascii_lowercase();
+    let name = normalized.rsplit('/').next().unwrap_or(&normalized);
+    matches!(name, "tokenix" | "tokenix.exe")
+}
+
 fn open_existing_index(repo_root: &Path) -> Result<rusqlite::Connection> {
     crate::store::open_db(repo_root, false)?
         .ok_or_else(|| anyhow!("Index not found. Please index the workspace first."))
@@ -748,5 +776,18 @@ mod tests {
             crate::memory::PreferenceScope::Project
         ));
         assert!(parse_memory_scope("invalid").is_err());
+    }
+
+    #[test]
+    fn recursive_tokenix_command_detection_blocks_binary_invocations() {
+        assert!(invokes_tokenix_binary("tokenix stats"));
+        assert!(invokes_tokenix_binary("tokenix.exe hook"));
+        assert!(invokes_tokenix_binary("\"C:\\Tools\\tokenix.exe\" stats"));
+        assert!(invokes_tokenix_binary("./target/debug/tokenix mcp"));
+        assert!(invokes_tokenix_binary("echo ok && tokenix gain"));
+
+        assert!(!invokes_tokenix_binary("echo tokenix stats"));
+        assert!(!invokes_tokenix_binary("mytokenix stats"));
+        assert!(!invokes_tokenix_binary("echo ./target/debug/tokenix"));
     }
 }
