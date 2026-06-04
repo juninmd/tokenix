@@ -180,8 +180,11 @@ else
   fail "Read exits $CODE for large .rs file (expected 2)" "stderr: $ERR"
 fi
 
-# Outline must mention the file's line count
-if echo "$ERR" | grep -qE '[0-9]+ lines|tokenix'; then
+# Outline must mention the file's line count.
+# Use a here-string (not `echo | grep -q`): under `set -o pipefail`, grep -q exits
+# on first match and SIGPIPEs the upstream echo, turning a successful match into a
+# pipeline failure (exit 141) — a race that grows with stderr size.
+if grep -qE '[0-9]+ lines|tokenix' <<<"$ERR"; then
   pass "Read intercept stderr contains outline/tokenix message"
 else
   fail "Read intercept stderr missing expected content" "got: $ERR"
@@ -312,7 +315,7 @@ else
   fail "hook-post exits $CODE for ANSI output (expected 0 or 2)"
 fi
 
-if [ "$CODE" = "2" ] && echo "$OUT" | grep -q "\[32m"; then
+if [ "$CODE" = "2" ] && grep -q "\[32m" <<<"$OUT"; then
   fail "hook-post left ANSI codes in compressed output"
 elif [ "$CODE" = "2" ]; then
   pass "hook-post stripped ANSI codes from output"
