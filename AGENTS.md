@@ -33,6 +33,7 @@ tokenix --help
 | `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()` |
 | `src/cmd_filter.rs` | `tokenix filter list/active/generate` subcommands |
 | `src/gain.rs` | `compute_gain()`, `GainStats`, `MODELS` pricing table (Anthropic/OpenAI/Google) |
+| `src/mcp_audit.rs` | `tokenix prompt-audit` — per-agent MCP config discovery + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report |
 | `assets/filters/` | 59 RTK-compatible TOML filters embedded via `rust-embed`. User filters in `~/.tokenix/filters/` take priority |
 
 ## SQLite Schema
@@ -81,6 +82,8 @@ Index missing or >1h old → always exit 0 regardless of tool
 
 **Token count is approximate.** `count_tokens()` = `(len + 3) / 4`. Intentional — no tiktoken dep.
 
+**Keep docs in sync.** Every new or changed user-facing feature MUST update both `README.md` (Features table, Commands Reference, Usage, Architecture) and `AGENTS.md` (Key Files + relevant section) in the same change.
+
 ## Daemon
 
 ```bash
@@ -119,6 +122,33 @@ max_lines      = 30
 on_empty       = "my-cmd: ok"
 ```
 
+## Prompt Audit (MCP/tool weight)
+
+`tokenix prompt-audit` estimates the variable cost of the effective system prompt
+per agent. The base system prompt is internal and **cannot be read or intercepted
+via hooks** — this measures the next-largest lever instead: MCP tool-definition
+JSON. All logic lives in `src/mcp_audit.rs`.
+
+Per-agent MCP config sources (one `ConfigSource` each, ausente = silently skipped):
+
+| Agent | Path(s) | Format |
+|---|---|---|
+| Claude Code | `<repo>/.mcp.json` + `~/.claude.json` (`mcpServers` + `projects[<cwd>]`) | JSON |
+| Codex | `~/.codex/config.toml` → `[mcp_servers.<name>]` | TOML (`toml` dep) |
+| Antigravity | `~/.gemini/antigravity-cli/mcp_config.json` (`mcp_config_path()`) | JSON |
+| Copilot | `.vscode/mcp.json` (`servers`) + VS Code user `mcp.json` | JSON, best-effort |
+
+Pipeline: discover → dedupe stdio transports → `introspect_stdio()` (spawn, JSON-RPC
+`initialize`/`tools/list`, 5s timeout via reader thread + `recv_timeout`, kill on
+done) → tokenize schemas with `count_tokens` → add static `Agent::native_tokens()`
+baseline → compare to thresholds (`TOKENIX_AUDIT_WARN_{TOKENS,SERVERS,TOOLS}`).
+HTTP/SSE servers are not introspected (shown `unknown`). CLI-only — no hooks, no
+settings.json changes.
+
+**Windows caveat:** `npx`/`uvx` run via `cmd /C`; `child.kill()` kills the wrapper
+but a `node` grandchild may linger briefly until stdin EOF. Kill-the-tree
+(`taskkill /T`) is a possible hardening follow-up.
+
 ## Common Tasks
 
 **Add a language:** `chunker.rs` — add extension to `INDEXED_EXTS`, add `Lang` variant, map in `detect_lang()`, implement `chunk_<lang>()` following `chunk_rust()` pattern. Do NOT add to `INDEXED_EXTS` without a symbol-aware chunker.
@@ -133,6 +163,8 @@ on_empty       = "my-cmd: ok"
 3. Add match arms in `cmd_install_hook()` and `cmd_remove_hook()`
 4. Update `hook.rs` only if the tool has a real hook protocol
 5. Document in `README.md`
+
+**Add an agent to `prompt-audit`:** `mcp_audit.rs` — add an `Agent` variant (with `label`/`key`/`native_tokens`), a `discover_<agent>()` config source, and an `AuditAgent` value + mapping in `main.rs`. Reuse `parse_json_map` for JSON `mcpServers`-style configs.
 
 **Change token budget:** `query.rs` — `DEFAULT_BUDGET` constant, or pass `--budget` flag.
 

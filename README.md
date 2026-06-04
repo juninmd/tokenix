@@ -147,6 +147,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Graceful fallback** | Exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `1200`) |
 | **Savings analytics** | `tokenix gain` — token summary and by-tool histogram; `--cost-estimate` adds a per-model cost table (9 reference models across Anthropic / OpenAI / Google) |
+| **MCP/prompt weight audit** | `tokenix prompt-audit` connects to each configured MCP server (Claude Code, Codex, Copilot, Antigravity), tokenizes its tool schemas, and warns when too many tools/servers inflate the system prompt |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
@@ -239,6 +240,22 @@ tokenix gain --cost-estimate  # add the per-model cost table
 across Anthropic, OpenAI, and Google. Prices are shown with their collection
 date (currently `2026-06-01`) so the numbers stay auditable.
 
+### 7. Audit MCP / tool weight
+
+```bash
+tokenix prompt-audit                  # every agent that has MCP config
+tokenix prompt-audit --agent claude   # one agent (claude|codex|copilot|antigravity)
+tokenix prompt-audit --json           # machine-readable
+```
+
+Discovers the MCP servers configured for each agent, connects to each one live
+(`initialize` + `tools/list`), tokenizes the returned tool schemas, and warns
+when too many servers/tools inflate the effective system prompt. The base system
+prompt itself cannot be read by tools, so this is a **relative bloat estimate**:
+the native-tool baseline is approximate and HTTP/SSE servers are shown as
+`unknown`. Thresholds are overridable via `TOKENIX_AUDIT_WARN_TOKENS`,
+`TOKENIX_AUDIT_WARN_SERVERS`, and `TOKENIX_AUDIT_WARN_TOOLS`.
+
 ---
 
 ## 🔧 Setup by Tool
@@ -303,6 +320,7 @@ tokenix install-hook --tool all
 | `tokenix tokenmap` | Directory tree map with token counts (`--format html` supported) |
 | `tokenix rebuild-graph` | Rebuild graph tables from existing chunks without re-embedding |
 | `tokenix gain` | Token savings analytics (`--cost-estimate` adds a per-model cost table) |
+| `tokenix prompt-audit` | Audit MCP/tool token weight across agents; warns on bloat (`--agent`, `--json`) |
 | `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix serve` | Start the background embedding daemon (keeps model + index in RAM) |
@@ -337,6 +355,8 @@ tokenix install-hook --tool all
 **`tokenix impact`** — `--depth/-d` (2), `--limit/-l` (50), `--format <text\|html>`, `--output/-o`, `--path/-p`
 
 **`tokenix install-hook` / `remove-hook`** — `--tool <claude-code\|copilot\|codex\|mcp\|gemini\|all>` (default `all`), `--local` (claude-code only)
+
+**`tokenix prompt-audit`** — `--agent <claude\|codex\|copilot\|antigravity\|all>` (default `all`), `--json`
 
 </details>
 
@@ -439,7 +459,8 @@ src/
 ├── gain.rs        Analytics from the hook log — per-model cost table
 ├── benchmark.rs   Reproducible savings + retrieval-quality benchmark
 ├── doctor.rs      Backend / GPU / model-cache / daemon diagnostics
-└── mcp.rs         Model Context Protocol server
+├── mcp.rs         Model Context Protocol server
+└── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt-audit)
 
 assets/
 └── filters/       72 RTK-compatible TOML filters, embedded in the binary via rust-embed
