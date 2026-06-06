@@ -11,6 +11,7 @@ mod graph;
 mod hook;
 mod indexer;
 mod mcp;
+mod mcp_audit;
 mod memory;
 mod query;
 mod recordings;
@@ -60,6 +61,20 @@ enum Tool {
     Mcp,
     #[value(name = "gemini")]
     Gemini,
+    #[value(name = "all")]
+    All,
+}
+
+#[derive(Clone, Copy, ValueEnum, Debug)]
+enum AuditAgent {
+    #[value(name = "claude")]
+    Claude,
+    #[value(name = "codex")]
+    Codex,
+    #[value(name = "copilot")]
+    Copilot,
+    #[value(name = "antigravity")]
+    Antigravity,
     #[value(name = "all")]
     All,
 }
@@ -296,6 +311,15 @@ enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// Audit MCP/tool "weight" of the effective system prompt across AI agents
+    PromptAudit {
+        /// Which agent to audit (default: all that have config)
+        #[arg(long, value_enum, default_value = "all")]
+        agent: AuditAgent,
+        /// Emit machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
     /// Hook handler called by AI tools (not for direct use)
     Hook,
     /// PostToolUse hook handler for output compression (not for direct use)
@@ -525,6 +549,17 @@ fn main() -> Result<()> {
         Commands::Run { command, path: _ } => {
             let code = compress::run_command_and_compress(&command)?;
             std::process::exit(code);
+        }
+        Commands::PromptAudit { agent, json } => {
+            let filter = match agent {
+                AuditAgent::Claude => Some(mcp_audit::Agent::ClaudeCode),
+                AuditAgent::Codex => Some(mcp_audit::Agent::Codex),
+                AuditAgent::Copilot => Some(mcp_audit::Agent::Copilot),
+                AuditAgent::Antigravity => Some(mcp_audit::Agent::Antigravity),
+                AuditAgent::All => None,
+            };
+            let cwd = std::env::current_dir()?;
+            mcp_audit::run_audit(filter, json, &cwd)
         }
         Commands::Hook => {
             // Hook is a short-lived subprocess: limit thread pools before any init.
