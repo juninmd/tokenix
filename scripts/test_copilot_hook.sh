@@ -136,7 +136,7 @@ git config user.email "t@t"
 git config user.name "T"
 
 # Install Copilot hooks
-"$TOKENIX" install-hook --tool copilot 2>&1 | grep -q "Copilot" && {
+"$TOKENIX" install-hook --tool copilot --local 2>&1 | grep -q "Copilot" && {
   pass "install-hook --tool copilot succeeds"
 } || {
   fail "install-hook did not mention Copilot"
