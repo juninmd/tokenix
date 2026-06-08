@@ -23,6 +23,54 @@ pub fn project_id(root: &Path) -> String {
     hex::encode(&h.finalize()[..8])
 }
 
+/// Acquire a PID-based index lock for the project.
+pub fn acquire_index_lock(repo_root: &Path) -> Result<IndexLockGuard> {
+    let global = global_dir().ok_or_else(|| anyhow::anyhow!("cannot determine home dir"))?;
+    std::fs::create_dir_all(&global)?;
+    let lock_path = global.join(format!("{}.lock", project_id(repo_root)));
+
+    if let Ok(content) = std::fs::read_to_string(&lock_path) {
+        if let Ok(pid) = content.trim().parse::<u32>() {
+            if is_pid_alive(pid) {
+                anyhow::bail!("index already running (PID {pid}). Use `tokenix stop` or wait.");
+            }
+        }
+    }
+    let pid = std::process::id();
+    std::fs::write(&lock_path, pid.to_string())?;
+    Ok(IndexLockGuard { path: lock_path })
+}
+
+pub struct IndexLockGuard {
+    path: PathBuf,
+}
+
+impl Drop for IndexLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_pid_alive(pid: u32) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|s| s.contains(&format!("{pid}")))
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_pid_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
 /// Walk up from `start` looking for VCS/project-root markers.
 /// Falls back to `start` itself if nothing is found.
 pub fn find_project_root(start: &Path) -> PathBuf {
@@ -47,9 +95,18 @@ pub fn find_project_root(start: &Path) -> PathBuf {
 }
 
 pub fn db_path(repo_root: &Path) -> PathBuf {
-    global_dir()
+    let base = global_dir()
         .map(|d| d.join(format!("{}.db", project_id(repo_root))))
-        .unwrap_or_else(|| repo_root.join(".tokenix/index.db"))
+        .unwrap_or_else(|| repo_root.join(".tokenix/index.db"));
+
+    if std::env::var("TOKENIX_BRANCH_AWARE").is_ok_and(|v| v == "true" || v == "1") {
+        if let Some(branch) = current_branch(repo_root) {
+            let safe = branch.replace('/', "_").replace('\\', "_");
+            let branch_path = base.with_extension(format!("{}.db", safe));
+            return branch_path;
+        }
+    }
+    base
 }
 
 pub fn log_path(repo_root: &Path) -> PathBuf {
@@ -475,6 +532,74 @@ pub fn graph_impact(
     Ok(relations)
 }
 
+/// Load all graph edges as (caller_id, caller_name, callee_id, callee_name) tuples.
+/// Used for circular dependency detection.
+pub fn load_all_graph_edges(conn: &Connection) -> Result<Vec<(i64, String, i64, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT e.caller_chunk_id, from_node.name, e.callee_chunk_id, to_node.name
+         FROM graph_edges e
+         JOIN graph_nodes from_node ON from_node.chunk_id = e.caller_chunk_id
+         JOIN graph_nodes to_node ON to_node.chunk_id = e.callee_chunk_id"
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Forward-only call-flow tracing from entry points matching `symbol`.
+/// Follows callee edges only (caller → callee), expanding outward by depth.
+pub fn graph_flow(
+    conn: &Connection,
+    symbol: &str,
+    depth: usize,
+    limit: usize,
+) -> Result<Vec<GraphRelation>> {
+    let start_ids: Vec<i64> = exact_nodes_if_present(search_graph_nodes(conn, symbol, 20)?, symbol)
+        .into_iter()
+        .map(|node| node.chunk_id)
+        .collect();
+    if start_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut relations = Vec::new();
+    let mut seen_nodes = std::collections::HashSet::new();
+    let mut seen_edges = std::collections::HashSet::new();
+    let mut frontier: Vec<i64> = start_ids;
+
+    for _ in 0..depth.max(1) {
+        let mut next = Vec::new();
+        for node_id in &frontier {
+            if !seen_nodes.insert(*node_id) {
+                continue;
+            }
+            // Follow callee edges only (forward direction)
+            for relation in relations_for_node(conn, *node_id, false)? {
+                let edge_key = graph_relation_key(&relation);
+                if seen_edges.insert(edge_key) {
+                    next.push(relation.to.chunk_id);
+                    relations.push(relation);
+                    if relations.len() >= limit {
+                        return Ok(relations);
+                    }
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+
+    Ok(relations)
+}
+
 fn graph_relations(
     conn: &Connection,
     symbol: &str,
@@ -726,37 +851,46 @@ pub fn search_fts(
     query_text: &str,
     limit: usize,
     file_filter: Option<&str>,
-) -> Result<Vec<i64>> {
+) -> Result<Vec<(i64, f32)>> {
     let sanitized = sanitize_fts_query(query_text);
     if sanitized.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut ids = Vec::new();
+    let mut results = Vec::new();
     if let Some(filter) = file_filter {
         let mut stmt = conn.prepare(
-            "SELECT c.id FROM chunks c JOIN chunks_fts f ON c.id = f.rowid
-             WHERE chunks_fts MATCH ?1 AND instr(c.path, ?2) > 0 LIMIT ?3",
+            "SELECT c.id, rank FROM chunks c JOIN chunks_fts f ON c.id = f.rowid
+             WHERE chunks_fts MATCH ?1 AND instr(c.path, ?2) > 0 ORDER BY rank LIMIT ?3",
         )?;
         let rows = stmt.query_map(
             params![sanitized, filter, i64::try_from(limit).unwrap_or(i64::MAX)],
-            |row| row.get::<_, i64>(0),
+            |row| {
+                let id: i64 = row.get(0)?;
+                let rank: f32 = row.get(1)?;
+                Ok((id, -rank)) // Negate: FTS5 rank is negative (lower=better)
+            },
         )?;
-        for id in rows.flatten() {
-            ids.push(id);
+        for row in rows {
+            results.push(row?);
         }
     } else {
-        let mut stmt =
-            conn.prepare("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?1 LIMIT ?2")?;
+        let mut stmt = conn.prepare(
+            "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+        )?;
         let rows = stmt.query_map(
             params![sanitized, i64::try_from(limit).unwrap_or(i64::MAX)],
-            |row| row.get::<_, i64>(0),
+            |row| {
+                let id: i64 = row.get(0)?;
+                let rank: f32 = row.get(1)?;
+                Ok((id, -rank)) // Negate: FTS5 rank is negative (lower=better)
+            },
         )?;
-        for id in rows.flatten() {
-            ids.push(id);
+        for row in rows {
+            results.push(row?);
         }
     }
-    Ok(ids)
+    Ok(results)
 }
 
 /// Scan indexed chunk content with a regular expression — no embedding, no
@@ -853,7 +987,7 @@ pub fn hybrid_search(
     let dense_results = search_similar(conn, query_vec, dense_limit, file_filter)?;
 
     let sparse_limit = 100.max(k * 2);
-    let sparse_ids = search_fts(conn, query_text, sparse_limit, file_filter)?;
+    let sparse_results = search_fts(conn, query_text, sparse_limit, file_filter)?;
 
     let mut rrf_scores: HashMap<i64, f32> = HashMap::new();
 
@@ -862,8 +996,11 @@ pub fn hybrid_search(
         rrf_scores.insert(res.id, score);
     }
 
-    for (rank, id) in sparse_ids.iter().enumerate() {
-        let score = 1.0 / (60.0 + rank as f32);
+    for (rank, (id, bm25_score)) in sparse_results.iter().enumerate() {
+        // Combine position-based RRF with BM25 score
+        let rrf_position = 1.0 / (60.0 + rank as f32);
+        let bm25_normalized = (*bm25_score).max(0.0) / (1.0 + bm25_score.max(0.0));
+        let score = rrf_position + 0.3 * bm25_normalized;
         rrf_scores
             .entry(*id)
             .and_modify(|s| *s += score)
@@ -1097,12 +1234,12 @@ pub fn write_index_meta(conn: &Connection, repo_root: &Path, indexed_at: f64) ->
     Ok(())
 }
 
-fn meta_value(conn: &Connection, key: &str) -> Option<String> {
+pub fn meta_value(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM meta WHERE key=?1", [key], |r| r.get(0))
         .ok()
 }
 
-fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
+pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES(?1,?2)",
         params![key, value],
@@ -1133,6 +1270,11 @@ fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn current_branch(repo_root: &Path) -> Option<String> {
+    git_output(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .filter(|b| !b.is_empty() && b != "HEAD")
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1426,8 +1568,10 @@ mod tests {
         .unwrap();
 
         // 4. Test search_fts
-        let sparse_ids = search_fts(&conn, "fts5 hybrid", 10, None).unwrap();
-        assert_eq!(sparse_ids, vec![chunk_id]);
+        let sparse_results = search_fts(&conn, "fts5 hybrid", 10, None).unwrap();
+        assert_eq!(sparse_results.len(), 1);
+        assert_eq!(sparse_results[0].0, chunk_id);
+        assert!(sparse_results[0].1 > 0.0, "BM25 score should be positive");
 
         // 5. Test hybrid_search
         let query_vec = vec![0.6, 0.6, 0.6, 0.6];

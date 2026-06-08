@@ -24,17 +24,21 @@ tokenix --help
 | `src/main.rs` | CLI entry (clap), command dispatch, `install-hook`/`remove-hook` helpers |
 | `src/chunker.rs` | Symbol-aware heuristic chunking, `generate_outline()`, token counting |
 | `src/embed.rs` | fastembed ONNX — `embed_documents()`, `embed_query()`. Model cached in `OnceCell` |
-| `src/store.rs` | SQLite schema, CRUD, cosine similarity search, hook log I/O |
-| `src/indexer.rs` | File walk + incremental index pipeline. Embeds in batches of 512 |
-| `src/query.rs` | Hybrid semantic/lexical ranking + result formatting |
+| `src/store.rs` | SQLite schema, CRUD, cosine similarity search, hook log I/O, PID index lock, branch-aware DB paths |
+| `src/indexer.rs` | File walk + incremental index pipeline. Embeds in batches of 512, resumable checkpoints |
+| `src/query.rs` | Hybrid semantic/lexical ranking (FTS5 + BM25 + RRF), strict `context` modes, budget enforcement, cross-project search |
+| `src/pack.rs` | `tokenix pack` — budgeted repo map + focused context, changed-file packs, token maps, and safety report |
+| `src/graph.rs` | Symbol graph with PageRank, cycle detection (Tarjan's SCC), tree-sitter references, HTML + Mermaid export |
+| `src/artifacts.rs` | Context artifacts — index non-code files (schemas, API specs, docs) via `.tokenix/artifacts.json` |
 | `src/hook.rs` | `run_hook()` — called by PreToolUse hook. Tries daemon first for Grep |
 | `src/daemon.rs` | Background TCP server (port 47392). Holds model + embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads |
 | `src/compress.rs` | Legacy `PostToolUse` compatibility compression: ANSI strip, emoji removal, blank-line collapse, repeat grouping, JSON compaction, cargo/git-log heuristics |
 | `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()` |
 | `src/cmd_filter.rs` | `tokenix filter list/active/generate` subcommands |
 | `src/gain.rs` | `compute_gain()`, `GainStats`, `MODELS` pricing table (Anthropic/OpenAI/Google) |
-| `src/mcp_audit.rs` | `tokenix prompt-audit` — per-agent MCP config discovery + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report |
-| `assets/filters/` | 59 RTK-compatible TOML filters embedded via `rust-embed`. User filters in `~/.tokenix/filters/` take priority |
+| `src/mcp.rs` | MCP server. `--profile full` exposes all tools; `--profile slim` exposes context/search/call meta-tools for progressive discovery |
+| `src/mcp_audit.rs` | `tokenix prompt-audit` / `session-audit` — per-agent MCP config discovery + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report |
+| `assets/filters/` | 73 RTK-compatible TOML filters embedded via `rust-embed`. User filters in `~/.tokenix/filters/` take priority |
 
 ## SQLite Schema
 
@@ -142,8 +146,39 @@ Pipeline: discover → dedupe stdio transports → `introspect_stdio()` (spawn, 
 `initialize`/`tools/list`, 5s timeout via reader thread + `recv_timeout`, kill on
 done) → tokenize schemas with `count_tokens` → add static `Agent::native_tokens()`
 baseline → compare to thresholds (`TOKENIX_AUDIT_WARN_{TOKENS,SERVERS,TOOLS}`).
+`TOKENIX_BRANCH_AWARE=true` suffixes SQLite DB with git branch name to isolate indexes per branch.
 HTTP/SSE servers are not introspected (shown `unknown`). CLI-only — no hooks, no
 settings.json changes.
+
+`--recommend` adds conservative reduction advice. `--profile-impact` estimates
+the tokenix full-vs-slim MCP schema delta. `tokenix session-audit` reuses the
+same summary and combines it with index freshness plus hook-log evidence;
+`--cache-hygiene` also reports stable-prefix/cache-risk hints.
+
+`tokenix mcp --profile slim` is the token-saving MCP mode: it advertises only
+`tokenix_context`, `tokenix_search_tools`, and `tokenix_call`. Keep `full` as
+the default for compatibility with hosts that do not support progressive tool
+discovery.
+
+## Repository Pack
+
+`tokenix pack` emits a budgeted repo map for non-hook AI tools. Modes/profiles:
+`plan`, `debug`, `audit`, `security`, `review`. Formats: `markdown`, `xml`,
+`json`. `--changed` and `--since <ref>` produce review-sized packs; `--token-map`
+adds per-file token/reason metadata.
+It uses indexed context, file token counts, and symbol outlines; it must skip
+obvious secrets, credentials, `.env`, key files, `.git`, and build output by
+default. Do not turn `pack` into a raw full-repo dump.
+
+## Competitive Benchmark
+
+`tokenix benchmark --competitive` prints measured tokenix context/pack rows,
+optional Repomix/Aider rows when installed, and a feature matrix covering Aider
+repo-map, Repomix pack/remote, Sourcegraph Cody graph context, Cursor/Continue
+embeddings/rerank, Augment context engine, and MCP progressive discovery.
+Keep competitor rows optional and fail-open; missing external tools must not
+fail the benchmark. Current known gaps to prioritize next: remote repo pack and
+learned/adapter-based reranking.
 
 **Windows caveat:** `npx`/`uvx` run via `cmd /C`; `child.kill()` kills the wrapper
 but a `node` grandchild may linger briefly until stdin EOF. Kill-the-tree

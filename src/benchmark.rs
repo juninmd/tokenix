@@ -55,6 +55,7 @@ struct QueryRow {
     hit_top3: bool,
 }
 
+#[derive(Clone)]
 struct ContextBenchCase {
     label: String,
     task: String,
@@ -68,6 +69,20 @@ struct ContextArmRow {
     latency_ms: Option<u128>,
     quality_ok: Option<bool>,
     note: &'static str,
+}
+
+struct CompetitiveRow {
+    tool: &'static str,
+    status: String,
+    tokens: Option<usize>,
+    quality: Option<String>,
+    note: String,
+}
+
+struct FeatureRow {
+    feature: &'static str,
+    tokenix: &'static str,
+    competitors: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -91,7 +106,20 @@ pub fn run_benchmark(
     query_budget: usize,
     codegraph_path: Option<&Path>,
     cases_path: Option<&Path>,
+    competitive: bool,
+    json_out: bool,
 ) -> Result<()> {
+    if json_out {
+        return run_benchmark_json(
+            repo_root,
+            refresh_index,
+            query_budget,
+            codegraph_path,
+            cases_path,
+            competitive,
+        );
+    }
+
     println!();
     println!("{}", "=== tokenix real benchmark ===".bold());
     println!(
@@ -143,12 +171,78 @@ pub fn run_benchmark(
     let cmd_rows = measure_command_compression(repo_root, rtk_available)?;
     print_command_compression(&cmd_rows);
 
+    if competitive {
+        let league_rows = measure_competitive_league(repo_root, &context_cases, query_budget)?;
+        print_competitive_league(&league_rows);
+        print_feature_matrix();
+    }
+
     print_verdict(&read_rows, &workflow_rows, &query_rows, &cmd_rows);
     if let Some(path) = codegraph_path {
         print_codegraph_comparison(repo_root, path, &workflow_rows, &query_rows, &context_rows)?;
     } else {
         print_internal_graph_stats(repo_root)?;
     }
+    Ok(())
+}
+
+fn run_benchmark_json(
+    repo_root: &Path,
+    refresh_index: bool,
+    query_budget: usize,
+    codegraph_path: Option<&Path>,
+    cases_path: Option<&Path>,
+    competitive: bool,
+) -> Result<()> {
+    if refresh_index {
+        let _ = indexer::index_repo(repo_root, false, |_| {})?;
+    }
+    let rtk_available = check_rtk();
+    let context_cases = load_context_bench_cases(cases_path)?;
+    let read_rows = measure_read_reduction(repo_root)?;
+    let workflow_rows = measure_targeted_workflows(repo_root)?;
+    let query_rows =
+        measure_semantic_quality(repo_root, query_budget, rtk_available, &context_cases)?;
+    let context_rows = measure_context_homologation(repo_root, codegraph_path, &context_cases)?;
+    let cmd_rows = measure_command_compression(repo_root, rtk_available)?;
+    let competitive_rows = if competitive {
+        measure_competitive_league(repo_root, &context_cases, query_budget)?
+    } else {
+        Vec::new()
+    };
+    let out = serde_json::json!({
+        "read_saved_pct": saved_pct(
+            read_rows.iter().map(|r| r.raw_tokens).sum(),
+            read_rows.iter().map(|r| r.outline_tokens).sum(),
+        ),
+        "workflow_saved_pct": saved_pct(
+            workflow_rows.iter().map(|r| r.raw_tokens).sum(),
+            workflow_rows.iter().map(|r| r.total_tokens).sum(),
+        ),
+        "hit_top3": query_rows.iter().filter(|r| r.hit_top3).count(),
+        "query_cases": query_rows.len(),
+        "context_budget_violations": context_rows
+            .iter()
+            .filter(|r| r.arm == "tokenix" && r.tokens.is_some_and(|t| t > 1200))
+            .count(),
+        "command_saved_pct": saved_pct(
+            cmd_rows.iter().map(|r| r.vanilla).sum(),
+            cmd_rows.iter().map(|r| r.tokenix).sum(),
+        ),
+        "competitive": competitive_rows.iter().map(|row| serde_json::json!({
+            "tool": row.tool,
+            "status": row.status,
+            "tokens": row.tokens,
+            "quality": row.quality,
+            "note": row.note,
+        })).collect::<Vec<_>>(),
+        "feature_matrix": competitive_feature_rows().iter().map(|row| serde_json::json!({
+            "feature": row.feature,
+            "tokenix": row.tokenix,
+            "competitors": row.competitors,
+        })).collect::<Vec<_>>(),
+    });
+    println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }
 
@@ -361,6 +455,208 @@ fn print_context_homologation(rows: &[ContextArmRow]) {
     println!();
 }
 
+fn measure_competitive_league(
+    repo_root: &Path,
+    cases: &[ContextBenchCase],
+    budget: usize,
+) -> Result<Vec<CompetitiveRow>> {
+    let case = cases
+        .first()
+        .cloned()
+        .unwrap_or_else(|| default_context_bench_cases().into_iter().next().unwrap());
+    let mut rows = Vec::new();
+
+    let tokenix = build_task_context(repo_root, &case.task, budget, 4).unwrap_or_default();
+    rows.push(CompetitiveRow {
+        tool: "tokenix context",
+        status: "measured".to_string(),
+        tokens: Some(count_tokens(&tokenix)),
+        quality: Some(if matches_expected_path(&tokenix, &case.expected_paths) {
+            "hit".to_string()
+        } else {
+            "miss".to_string()
+        }),
+        note: format!("budget {budget}, case `{}`", case.label),
+    });
+
+    let pack = crate::pack::build_pack(
+        repo_root,
+        crate::pack::PackOptions {
+            profile: crate::pack::PackProfile::Plan,
+            budget: budget.max(2_000),
+            format: crate::pack::PackFormat::Markdown,
+            changed: false,
+            since: None,
+            token_map: true,
+        },
+    )
+    .unwrap_or_default();
+    rows.push(CompetitiveRow {
+        tool: "tokenix pack",
+        status: "measured".to_string(),
+        tokens: Some(count_tokens(&pack)),
+        quality: Some(if matches_expected_path(&pack, &case.expected_paths) {
+            "hit".to_string()
+        } else {
+            "miss".to_string()
+        }),
+        note: "local repo pack with token map".to_string(),
+    });
+
+    rows.push(measure_external_pack(
+        repo_root,
+        "repomix",
+        &[".", "--stdout"],
+        &case.expected_paths,
+        "Repomix whole-repo pack if installed",
+    ));
+    rows.push(measure_external_pack(
+        repo_root,
+        "aider",
+        &["--show-repo-map", "--no-gitignore"],
+        &case.expected_paths,
+        "Aider repo map if installed",
+    ));
+    rows.push(CompetitiveRow {
+        tool: "cursor/continue/cody",
+        status: "documented".to_string(),
+        tokens: None,
+        quality: None,
+        note: "IDE/cloud tools are not CLI-comparable here; use tokenix Hit@3/context rows".to_string(),
+    });
+
+    Ok(rows)
+}
+
+fn measure_external_pack(
+    repo_root: &Path,
+    exe: &'static str,
+    args: &[&str],
+    expected_paths: &[String],
+    note: &str,
+) -> CompetitiveRow {
+    let command = if cfg!(windows) {
+        format!("{exe}.cmd")
+    } else {
+        exe.to_string()
+    };
+    let Ok(out) = Command::new(&command)
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+    else {
+        return CompetitiveRow {
+            tool: exe,
+            status: "skipped".to_string(),
+            tokens: None,
+            quality: None,
+            note: "not installed or not on PATH".to_string(),
+        };
+    };
+    if !out.status.success() {
+        return CompetitiveRow {
+            tool: exe,
+            status: "skipped".to_string(),
+            tokens: None,
+            quality: None,
+            note: "command failed; not counted".to_string(),
+        };
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    CompetitiveRow {
+        tool: exe,
+        status: "measured".to_string(),
+        tokens: Some(count_tokens(&stdout)),
+        quality: Some(if matches_expected_path(&stdout, expected_paths) {
+            "hit".to_string()
+        } else {
+            "miss".to_string()
+        }),
+        note: note.to_string(),
+    }
+}
+
+fn print_competitive_league(rows: &[CompetitiveRow]) {
+    println!("{}", "6. Competitive League".bold());
+    println!(
+        "  {:<22} {:<10} {:>9} {:>8}  Note",
+        "Tool", "Status", "Tokens", "Quality"
+    );
+    println!("  {}", "-".repeat(90).dimmed());
+    for row in rows {
+        let tokens = row
+            .tokens
+            .map(|t| format_num(t as i64))
+            .unwrap_or_else(|| "n/a".to_string());
+        let quality = row.quality.as_deref().unwrap_or("n/a");
+        println!(
+            "  {:<22} {:<10} {:>9} {:>8}  {}",
+            row.tool,
+            row.status,
+            tokens,
+            quality,
+            row.note.dimmed()
+        );
+    }
+    println!();
+}
+
+fn competitive_feature_rows() -> Vec<FeatureRow> {
+    vec![
+        FeatureRow {
+            feature: "Budgeted repo map",
+            tokenix: "pack/context strict budget",
+            competitors: "Aider repo-map; Repomix pack",
+        },
+        FeatureRow {
+            feature: "Graph-aware context",
+            tokenix: "symbols/callers/callees/impact",
+            competitors: "Aider graph rank; Cody Code Graph",
+        },
+        FeatureRow {
+            feature: "Semantic index",
+            tokenix: "local fastembed SQLite",
+            competitors: "Cursor/Continue embeddings; Augment engine",
+        },
+        FeatureRow {
+            feature: "Progressive MCP",
+            tokenix: "slim profile + meta-tools",
+            competitors: "MCP progressive discovery best practice",
+        },
+        FeatureRow {
+            feature: "Output savings",
+            tokenix: "PreToolUse command rewrite + filters",
+            competitors: "RTK-style compression; Repomix not command-output focused",
+        },
+        FeatureRow {
+            feature: "Remote repo pack",
+            tokenix: "not yet",
+            competitors: "Repomix --remote; Cody remote context",
+        },
+        FeatureRow {
+            feature: "Rerank model",
+            tokenix: "hybrid lexical/semantic heuristics",
+            competitors: "Continue rerank role; cloud IDE rerankers",
+        },
+    ]
+}
+
+fn print_feature_matrix() {
+    println!("{}", "7. Feature Matrix vs Market".bold());
+    println!(
+        "  {:<24} {:<34} Competitor signal",
+        "Feature", "tokenix"
+    );
+    println!("  {}", "-".repeat(104).dimmed());
+    for row in competitive_feature_rows() {
+        println!(
+            "  {:<24} {:<34} {}",
+            row.feature, row.tokenix, row.competitors
+        );
+    }
+    println!();
+}
+
 fn check_rtk() -> bool {
     let cmd = if cfg!(windows) { "rtk.exe" } else { "rtk" };
     std::process::Command::new(cmd)
@@ -378,7 +674,7 @@ struct CmdRow {
 
 fn measure_command_compression(repo_root: &Path, rtk: bool) -> Result<Vec<CmdRow>> {
     let cases = [
-        ("git status", sample_git_status(repo_root)),
+        ("git status --short", sample_git_status(repo_root)),
         ("git log -n 5", sample_git_log(repo_root)),
         ("cargo check", sample_cargo_check()),
         ("ls -R", sample_file_listing(repo_root)),
@@ -407,7 +703,7 @@ fn measure_command_compression(repo_root: &Path, rtk: bool) -> Result<Vec<CmdRow
 
 fn rtk_pipe_filter(cmd: &str, input: &str) -> Option<String> {
     let filter = match cmd {
-        "git status" => "git-status",
+        "git status" | "git status --short" => "git-status",
         "git log -n 5" => "git-log",
         "cargo check" => "cargo",
         "ls -R" => "find",

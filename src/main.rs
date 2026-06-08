@@ -13,6 +13,7 @@ mod indexer;
 mod mcp;
 mod mcp_audit;
 mod memory;
+mod pack;
 mod query;
 mod recordings;
 mod store;
@@ -79,6 +80,12 @@ enum AuditAgent {
     All,
 }
 
+#[derive(Clone, Copy, ValueEnum, Debug)]
+enum McpProfile {
+    Slim,
+    Full,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Index a repository for semantic search
@@ -115,6 +122,8 @@ enum Commands {
         k: usize,
         #[arg(short, long, help = "Filter to specific file path")]
         file: Option<String>,
+        #[arg(long, help = "Cross-project search: additional project path(s)")]
+        link: Vec<String>,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -133,6 +142,8 @@ enum Commands {
     /// Build focused task context in one call
     Context {
         task: String,
+        #[arg(long, value_enum, default_value = "plan")]
+        mode: query::ContextMode,
         #[arg(short, long, default_value_t = 1200)]
         budget: usize,
         #[arg(long, default_value_t = 4)]
@@ -200,15 +211,32 @@ enum Commands {
         depth: usize,
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
-        #[arg(long, help = "Output format: text | html", default_value = "text")]
+        #[arg(long, help = "Output format: text | html | mermaid", default_value = "text")]
         format: String,
         #[arg(
             short,
             long,
-            help = "Output file path for html format",
+            help = "Output file path for html/mermaid format",
             default_value = "impact.html"
         )]
         output: String,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Trace forward execution flow from an entry point
+    Flow {
+        symbol: String,
+        #[arg(short, long, default_value_t = 3)]
+        depth: usize,
+        #[arg(short, long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, help = "Output format: text | mermaid", default_value = "text")]
+        format: String,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Detect circular dependencies in the symbol graph
+    Cycles {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -225,6 +253,25 @@ enum Commands {
         history: bool,
         #[arg(long, help = "Show the per-model cost-estimate table")]
         cost_estimate: bool,
+    },
+    /// Pack focused repository context for AI tools that cannot call tokenix hooks
+    Pack {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+        #[arg(long, alias = "mode", value_enum, default_value = "plan")]
+        profile: pack::PackProfile,
+        #[arg(long, default_value_t = 8_000)]
+        budget: usize,
+        #[arg(long, value_enum, default_value = "markdown")]
+        format: pack::PackFormat,
+        #[arg(long, help = "Pack only changed files plus focused context")]
+        changed: bool,
+        #[arg(long, help = "Pack files changed since this git ref")]
+        since: Option<String>,
+        #[arg(long, help = "Include per-file token map and safety report")]
+        token_map: bool,
+        #[arg(short, long, help = "Write pack output to a file instead of stdout")]
+        output: Option<PathBuf>,
     },
     /// Run a reproducible token-savings and retrieval-quality benchmark
     Benchmark {
@@ -245,6 +292,10 @@ enum Commands {
         compare_codegraph: Option<PathBuf>,
         #[arg(long, help = "TOML file with project-specific benchmark cases")]
         cases: Option<PathBuf>,
+        #[arg(long, help = "Include optional market-tool comparison arms")]
+        competitive: bool,
+        #[arg(long, help = "Emit machine-readable benchmark summary")]
+        json: bool,
     },
     /// Install hook for one or more AI coding tools
     InstallHook {
@@ -319,13 +370,33 @@ enum Commands {
         /// Emit machine-readable JSON instead of a human report
         #[arg(long)]
         json: bool,
+        /// Include token-saving recommendations
+        #[arg(long)]
+        recommend: bool,
+        /// Show estimated full vs slim tokenix MCP profile impact
+        #[arg(long)]
+        profile_impact: bool,
+    },
+    /// Summarize token economy risks for this session/repository
+    SessionAudit {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+        /// Emit machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+        /// Check prompt-cache hygiene inputs such as MCP churn and hook/index freshness
+        #[arg(long)]
+        cache_hygiene: bool,
     },
     /// Hook handler called by AI tools (not for direct use)
     Hook,
     /// PostToolUse hook handler for output compression (not for direct use)
     HookPost,
     /// Run as a Model Context Protocol (MCP) server over stdin/stdout
-    Mcp,
+    Mcp {
+        #[arg(long, value_enum, default_value = "full")]
+        profile: McpProfile,
+    },
 }
 
 #[derive(Subcommand)]
@@ -447,8 +518,9 @@ fn main() -> Result<()> {
             budget,
             k,
             file,
+            link,
             path,
-        } => cmd_query(&text, budget, k, file.as_deref(), &path),
+        } => cmd_query(&text, budget, k, file.as_deref(), &link, &path),
         Commands::Grep {
             pattern,
             limit,
@@ -458,11 +530,12 @@ fn main() -> Result<()> {
         } => cmd_grep(&pattern, limit, ignore_case, file.as_deref(), &path),
         Commands::Context {
             task,
+            mode,
             budget,
             max_files,
             budget_breakdown,
             path,
-        } => cmd_context(&task, budget, max_files, budget_breakdown, &path),
+        } => cmd_context(&task, mode, budget, max_files, budget_breakdown, &path),
         Commands::Explore {
             query,
             budget,
@@ -496,18 +569,38 @@ fn main() -> Result<()> {
             output,
             path,
         } => cmd_impact(&symbol, depth, limit, &format, &output, &path),
+        Commands::Flow {
+            symbol,
+            depth,
+            limit,
+            format,
+            path,
+        } => cmd_flow(&symbol, depth, limit, &format, &path),
+        Commands::Cycles { path } => cmd_cycles(&path),
         Commands::RebuildGraph { path } => cmd_rebuild_graph(&path),
         Commands::Gain {
             path,
             history,
             cost_estimate,
         } => cmd_gain(&path, history, cost_estimate),
+        Commands::Pack {
+            path,
+            profile,
+            budget,
+            format,
+            changed,
+            since,
+            token_map,
+            output,
+        } => cmd_pack(&path, profile, budget, format, changed, since, token_map, output),
         Commands::Benchmark {
             path,
             refresh_index,
             budget,
             compare_codegraph,
             cases,
+            competitive,
+            json,
         } => {
             let repo_root = find_repo_root(&path);
             benchmark::run_benchmark(
@@ -516,6 +609,8 @@ fn main() -> Result<()> {
                 budget,
                 compare_codegraph.as_deref(),
                 cases.as_deref(),
+                competitive,
+                json,
             )
         }
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
@@ -550,7 +645,12 @@ fn main() -> Result<()> {
             let code = compress::run_command_and_compress(&command)?;
             std::process::exit(code);
         }
-        Commands::PromptAudit { agent, json } => {
+        Commands::PromptAudit {
+            agent,
+            json,
+            recommend,
+            profile_impact,
+        } => {
             let filter = match agent {
                 AuditAgent::Claude => Some(mcp_audit::Agent::ClaudeCode),
                 AuditAgent::Codex => Some(mcp_audit::Agent::Codex),
@@ -559,8 +659,13 @@ fn main() -> Result<()> {
                 AuditAgent::All => None,
             };
             let cwd = std::env::current_dir()?;
-            mcp_audit::run_audit(filter, json, &cwd)
+            mcp_audit::run_audit(filter, json, recommend, profile_impact, &cwd)
         }
+        Commands::SessionAudit {
+            path,
+            json,
+            cache_hygiene,
+        } => cmd_session_audit(&path, json, cache_hygiene),
         Commands::Hook => {
             // Hook is a short-lived subprocess: limit thread pools before any init.
             // OMP_NUM_THREADS controls ONNX Runtime threads on Windows (MS prebuilt uses OpenMP).
@@ -586,13 +691,17 @@ fn main() -> Result<()> {
             }
             std::process::exit(0);
         }
-        Commands::Mcp => {
+        Commands::Mcp { profile } => {
             #[allow(unused_unsafe)]
             unsafe {
                 std::env::set_var("OMP_NUM_THREADS", "1");
                 std::env::set_var("RAYON_NUM_THREADS", "1");
             }
-            mcp::run_mcp_server()
+            let profile = match profile {
+                McpProfile::Slim => mcp::McpProfile::Slim,
+                McpProfile::Full => mcp::McpProfile::Full,
+            };
+            mcp::run_mcp_server(profile)
         }
     };
 
@@ -709,16 +818,152 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result
 
 fn cmd_context(
     task: &str,
+    mode: query::ContextMode,
     budget: usize,
     max_files: usize,
     breakdown: bool,
     path: &Path,
 ) -> Result<()> {
     let repo_root = find_repo_root(path);
-    let out = query::build_task_context(&repo_root, task, budget, max_files)?;
+    let out = query::build_task_context_with_mode(&repo_root, task, mode, budget, max_files)?;
     println!("{}", out);
     if breakdown {
         print_budget_breakdown(&out, budget);
+    }
+    Ok(())
+}
+
+fn cmd_pack(
+    path: &Path,
+    profile: pack::PackProfile,
+    budget: usize,
+    format: pack::PackFormat,
+    changed: bool,
+    since: Option<String>,
+    token_map: bool,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    let repo_root = find_repo_root(path);
+    let options = pack::PackOptions {
+        profile,
+        budget,
+        format,
+        changed,
+        since,
+        token_map,
+    };
+    let content = pack::build_pack(&repo_root, options)?;
+    pack::write_or_print(output, &content)
+}
+
+fn cmd_session_audit(path: &Path, json: bool, cache_hygiene: bool) -> Result<()> {
+    let repo_root = find_repo_root(path);
+    let conn = store::open_db(&repo_root, false)?;
+    let stats = if let Some(conn) = &conn {
+        Some(store::count_stats(conn)?)
+    } else {
+        None
+    };
+    let stale = conn.as_ref().map(|_| store::index_staleness(&repo_root));
+    let age = store::get_index_age(&repo_root);
+    let hooks = store::read_hook_log(&repo_root);
+    let prompt = mcp_audit::audit_summary(None, &repo_root);
+
+    let mut recommendations = Vec::new();
+    if stats.is_none() {
+        recommendations.push("index missing: run `tokenix index .`".to_string());
+    }
+    if stale.as_ref().is_some_and(|s| s.stale) {
+        recommendations.push("index stale: run `tokenix index . --if-stale`".to_string());
+    }
+    if hooks.is_empty() {
+        recommendations.push("no hook events found: install hooks or run a hook smoke".to_string());
+    }
+    if prompt.combined_tokens > 10_000 {
+        recommendations.push(format!(
+            "MCP/tool prompt weight high (~{} tok): run `tokenix prompt-audit --recommend`",
+            prompt.combined_tokens
+        ));
+    }
+    if cache_hygiene && prompt.combined_tokens > 6_000 {
+        recommendations.push(
+            "cache hygiene: keep MCP/tool profiles stable and prefer `tokenix mcp --profile slim`"
+                .to_string(),
+        );
+    }
+    if recommendations.is_empty() {
+        recommendations.push("token economy looks healthy for this repository".to_string());
+    }
+
+    if json {
+        let out = serde_json::json!({
+            "project": repo_root.display().to_string(),
+            "index": stats.as_ref().map(|s| serde_json::json!({
+                "files": s.files,
+                "chunks": s.chunks,
+                "tokens": s.total_tokens,
+                "age_seconds": age,
+                "stale": stale.as_ref().map(|s| s.stale).unwrap_or(false),
+                "reason": stale.as_ref().map(|s| s.reason.clone()).unwrap_or_default(),
+            })),
+            "hook_events": hooks.len(),
+            "prompt_audit": {
+                "combined_tokens": prompt.combined_tokens,
+                "warnings": prompt.warnings,
+            },
+            "cache_hygiene": cache_hygiene.then(|| serde_json::json!({
+                "stable_prefix_risk": prompt.combined_tokens > 6_000 || stale.as_ref().is_some_and(|s| s.stale),
+                "mcp_profile_hint": "prefer slim tokenix MCP profile for routine sessions",
+                "index_stale": stale.as_ref().map(|s| s.stale).unwrap_or(false),
+            })),
+            "recommendations": recommendations,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    println!("{}", "tokenix session-audit".bold());
+    println!("Project: {}", repo_root.display());
+    if let Some(stats) = stats {
+        println!(
+            "Index: {} files, {} chunks, {} tokens{}",
+            stats.files,
+            stats.chunks,
+            format_num(stats.total_tokens),
+            age.map(|a| format!(", age {:.0}s", a)).unwrap_or_default()
+        );
+    } else {
+        println!("{}", "Index: missing".yellow());
+    }
+    if let Some(stale) = &stale {
+        let verdict = if stale.stale {
+            "stale".yellow()
+        } else {
+            "fresh".green()
+        };
+        println!("Staleness: {verdict} ({})", stale.reason);
+    }
+    println!("Hook events: {}", hooks.len());
+    println!(
+        "Prompt/tool estimate: ~{} tok ({} warning(s))",
+        prompt.combined_tokens,
+        prompt.warnings.len()
+    );
+    if cache_hygiene {
+        let stable = prompt.combined_tokens <= 6_000 && !stale.as_ref().is_some_and(|s| s.stale);
+        println!(
+            "Cache hygiene: {}",
+            if stable {
+                "stable enough".green()
+            } else {
+                "review MCP/index churn".yellow()
+            }
+        );
+        println!("  Hint: prefer `tokenix mcp --profile slim` for routine sessions");
+    }
+    println!("\nRecommendations:");
+    for rec in recommendations {
+        println!("- {rec}");
     }
     Ok(())
 }
@@ -845,11 +1090,24 @@ fn selected_memory_scopes(global: bool, project: bool) -> Vec<memory::Preference
     }
 }
 
-fn cmd_query(text: &str, budget: usize, k: usize, file: Option<&str>, path: &Path) -> Result<()> {
+fn cmd_query(text: &str, budget: usize, k: usize, file: Option<&str>, link: &[String], path: &Path) -> Result<()> {
     if k == 0 {
         anyhow::bail!("k must be >= 1");
     }
     let repo_root = find_repo_root(path);
+
+    // Cross-project search: include linked projects
+    if !link.is_empty() {
+        let mut roots: Vec<PathBuf> = vec![repo_root.clone()];
+        for link_path in link {
+            roots.push(find_repo_root(Path::new(link_path)));
+        }
+        let root_refs: Vec<&Path> = roots.iter().map(|p| p.as_path()).collect();
+        let results = query::query_index_multi(&root_refs, text, budget, k, file)?
+            .ok_or_else(|| anyhow::anyhow!("No indexed projects found. Run: tokenix index"))?;
+        println!("{}", query::format_results(&results, text));
+        return Ok(());
+    }
 
     // Try to query via daemon if it's running
     if let Some(output) = daemon::daemon_search(&repo_root, text, k, budget, file) {
@@ -929,12 +1187,54 @@ fn cmd_impact(
             graph::export_relations_to_html(&relations, &format!("Impact graph for `{symbol}`"));
         std::fs::write(output, html)?;
         println!("{} HTML graph exported to {}", "ok".green(), output);
+    } else if format_str.eq_ignore_ascii_case("mermaid") {
+        let mermaid = graph::format_relations_mermaid(
+            &relations,
+            &format!("Impact graph for `{symbol}`"),
+        );
+        if output != "impact.html" {
+            std::fs::write(output, &mermaid)?;
+            println!("{} Mermaid diagram exported to {}", "ok".green(), output);
+        } else {
+            println!("{}", mermaid);
+        }
     } else {
         println!(
             "{}",
             graph::format_relations(&relations, &format!("Impact graph for `{symbol}`"))
         );
     }
+    Ok(())
+}
+
+fn cmd_flow(
+    symbol: &str,
+    depth: usize,
+    limit: usize,
+    format_str: &str,
+    path: &Path,
+) -> Result<()> {
+    let conn = open_existing_index(path)?;
+    let relations = store::graph_flow(&conn, symbol, depth, limit)?;
+    if format_str.eq_ignore_ascii_case("mermaid") {
+        println!(
+            "{}",
+            graph::format_relations_mermaid(&relations, &format!("Call flow from `{symbol}`"))
+        );
+    } else {
+        println!(
+            "{}",
+            graph::format_relations(&relations, &format!("Call flow from `{symbol}`"))
+        );
+    }
+    Ok(())
+}
+
+fn cmd_cycles(path: &Path) -> Result<()> {
+    let conn = open_existing_index(path)?;
+    let edges = store::load_all_graph_edges(&conn)?;
+    let cycles = graph::detect_cycles(&edges);
+    println!("{}", graph::format_cycles(&cycles));
     Ok(())
 }
 

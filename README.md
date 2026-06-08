@@ -125,29 +125,37 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 
 | Feature | Description |
 |---|---|
-| **Semantic search** | Find relevant code by meaning, not just keywords (`tokenix query`) |
+| **Semantic search** | Find relevant code by meaning, not just keywords (`tokenix query`); cross-project with `--link` |
+| **Context artifacts** | `tokenix artifacts` indexes non-code schemas, API docs, and specs via `.tokenix/artifacts.json` |
+| **Hybrid ranking** | FTS5 BM25 + vector cosine + RRF fusion for ranked results |
 | **Exact search** | Regex/literal search over indexed content, no embedding (`tokenix grep`) |
-| **One-call task context** | `tokenix context` combines semantic search, entry points, and compact outlines so agents do not burn calls chaining search/read loops |
+| **One-call task context** | `tokenix context` combines semantic search, entry points, and compact outlines with strict budget modes (`plan`, `debug`, `audit`, `security`, `review`) |
 | **Graph-aware explore** | `tokenix explore` returns related symbols, relationship maps, and grouped source in one capped call |
-| **Symbol graph** | `tokenix symbols`, `callers`, `callees`, and `impact` trace relationships between indexed symbols |
-| **Interactive HTML graphs** | `tokenix impact --format html` and `tokenix tokenmap --format html` export vis.js / tree visualizations |
+| **Repository pack** | `tokenix pack` emits a budgeted, secret-safe repo map with changed-file packs, token maps, and safety reporting |
+| **Symbol graph** | `tokenix symbols`, `callers`, `callees`, `impact`, `flow`, and `cycles` trace relationships, call-flow, and circular deps between indexed symbols |
+| **Interactive HTML/Mermaid graphs** | `tokenix impact --format html\|mermaid` exports vis.js / Mermaid flowcharts; `tokenix flow --format mermaid` traces call flow |
+| **Cycle detection** | `tokenix cycles` finds circular dependencies via Tarjan's strongly-connected components algorithm |
 | **Token map** | `tokenix tokenmap` shows a directory tree with token counts per file/folder |
 | **Preference memory** | `tokenix memory add/list` stores global and project preferences in editable Markdown; context/explore include saved preferences |
 | **Dynamic language detection** | Map custom file extensions to any built-in parser via a project `.tokenix.toml` — no recompile needed |
 | **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C/C++ |
+| **Multi-agent safe index** | PID-based index lock prevents concurrent reindex; resumable checkpoints survive mid-index process kills |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
 | **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash commands before execution |
-| **RTK-grade compression** | Fuzzy grouping (collapses `Removing…`, `Compiling…` lines), NDJSON/JSON compaction, and ANSI/Emoji stripping |
+| **RTK-grade compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, and ANSI/Emoji stripping |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
-| **Output filters** | 72 RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, and more |
+| **Output filters** | 73 RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, and more |
 | **Filter generation** | `tokenix filter generate` writes a TOML filter for a command; `tokenix filter record` captures real output for richer generation |
 | **GPU acceleration (opt-in)** | Build with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU; GPU is used by default at runtime with automatic CPU fallback, or force CPU with `--only-cpu` |
 | **Environment diagnostics** | `tokenix doctor` reports the compiled backend, detected GPU, CUDA/cuDNN status, model cache, and daemon |
+| **Branch-aware indexing** | `TOKENIX_BRANCH_AWARE=true` isolates indexes per git branch |
 | **In-memory daemon** | `tokenix serve` keeps model + index in RAM so repeated hook calls avoid reloading the model each invocation |
 | **Graceful fallback** | Exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `1200`) |
 | **Savings analytics** | `tokenix gain` — token summary and by-tool histogram; `--cost-estimate` adds a per-model cost table (9 reference models across Anthropic / OpenAI / Google) |
-| **MCP/prompt weight audit** | `tokenix prompt-audit` connects to each configured MCP server (Claude Code, Codex, Copilot, Antigravity), tokenizes its tool schemas, and warns when too many tools/servers inflate the system prompt |
+| **Slim MCP profile** | `tokenix mcp --profile slim` exposes 3 meta-tools instead of the full tool surface for hosts that support progressive discovery |
+| **MCP/prompt weight audit** | `tokenix prompt-audit --recommend --profile-impact` connects to configured MCP servers, tokenizes tool schemas, and shows full-vs-slim MCP savings |
+| **Session audit** | `tokenix session-audit --cache-hygiene` combines index freshness, hook history, MCP/tool weight, and prompt-cache stability risks |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
@@ -204,11 +212,25 @@ tokenix grep "fn validate_token" --ignore-case    # exact regex/literal
 
 ```bash
 tokenix context "fix login refresh token bug"
-tokenix context "how does the indexer batch embeddings" --budget 2000
+tokenix context "how does the indexer batch embeddings" --mode debug --budget 2000
+tokenix context "review this auth change" --mode review --budget 1200
 tokenix explore "run_hook hook_post compression" --budget 4000
 ```
 
-### 4. Smart file reader
+### 4. Repository pack
+
+```bash
+tokenix pack --mode plan --budget 8000 --format markdown --token-map
+tokenix pack --mode review --changed --budget 4000
+tokenix pack --mode security --format json --output tokenix-security-pack.json
+```
+
+`pack` builds a stable repo map plus focused context for tools that cannot call
+tokenix directly. It respects the index, skips obvious secrets and build output,
+and supports `plan`, `debug`, `audit`, `security`, and `review` modes. Use
+`--changed` or `--since <ref>` for compact review packs.
+
+### 5. Smart file reader
 
 ```bash
 tokenix read src/auth/middleware.rs                           # symbol outline
@@ -216,7 +238,7 @@ tokenix read src/auth/middleware.rs --symbol validate_token   # targeted
 tokenix read src/auth/middleware.rs --lines 45-80             # line range
 ```
 
-### 5. Symbol graph & maps
+### 6. Symbol graph & maps
 
 ```bash
 tokenix symbols validate_token
@@ -228,24 +250,26 @@ tokenix tokenmap                                                     # token tre
 tokenix rebuild-graph   # recompute relationships without re-embedding
 ```
 
-### 6. Token savings analytics
+### 7. Token savings analytics
 
 ```bash
 tokenix gain                  # token summary + by-tool histogram
 tokenix gain --history        # include per-call history
 tokenix gain --cost-estimate  # add the per-model cost table
+tokenix session-audit         # index + hook + MCP token-economy health
 ```
 
 `tokenix gain --cost-estimate` prices the savings against 9 reference models
 across Anthropic, OpenAI, and Google. Prices are shown with their collection
 date (currently `2026-06-01`) so the numbers stay auditable.
 
-### 7. Audit MCP / tool weight
+### 8. Audit MCP / tool weight
 
 ```bash
 tokenix prompt-audit                  # every agent that has MCP config
 tokenix prompt-audit --agent claude   # one agent (claude|codex|copilot|antigravity)
 tokenix prompt-audit --json           # machine-readable
+tokenix prompt-audit --recommend      # include practical reduction advice
 ```
 
 Discovers the MCP servers configured for each agent, connects to each one live
@@ -255,6 +279,32 @@ prompt itself cannot be read by tools, so this is a **relative bloat estimate**:
 the native-tool baseline is approximate and HTTP/SSE servers are shown as
 `unknown`. Thresholds are overridable via `TOKENIX_AUDIT_WARN_TOKENS`,
 `TOKENIX_AUDIT_WARN_SERVERS`, and `TOKENIX_AUDIT_WARN_TOOLS`.
+
+For MCP hosts that support progressive discovery, run `tokenix mcp --profile slim`.
+The slim profile advertises only `tokenix_context`, `tokenix_search_tools`, and
+`tokenix_call`, reducing tool-schema tokens while preserving access to the full
+tokenix capability set through the meta-tool path.
+
+### 9. Competitive benchmark
+
+```bash
+tokenix benchmark --competitive
+tokenix benchmark --competitive --json
+```
+
+`--competitive` adds a market-facing scorecard. It measures tokenix `context`
+and `pack`, auto-detects optional CLI competitors such as Repomix and Aider when
+they are installed, and prints a feature matrix against current market signals:
+
+| Feature | tokenix | Market signal |
+|---|---|---|
+| Budgeted repo map | `pack` + strict-budget `context` | Aider repo-map; Repomix pack |
+| Graph-aware context | `symbols`, `callers`, `callees`, `impact`, `flow`, `cycles` | Aider graph rank; Sourcegraph Cody Code Graph |
+| Semantic index | Local fastembed + SQLite + FTS5 BM25 | Cursor/Continue embeddings; Augment Context Engine |
+| Progressive MCP | `mcp --profile slim` + meta-tools | MCP progressive discovery |
+| Output savings | PreToolUse command rewrite + filters | RTK-style shell output compression |
+| Remote repo pack | Not yet | Repomix `--remote`; Cody remote context |
+| Learned rerank model | Not yet; heuristic hybrid ranker | Continue rerank role; cloud IDE rerankers |
 
 ---
 
@@ -306,8 +356,9 @@ tokenix install-hook --tool all
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix query TEXT` | Semantic search over indexed chunks |
 | `tokenix grep PATTERN` | Exact regex/literal search over indexed content (no embedding) |
-| `tokenix context TEXT` | One-call task context: entry points, relevant source, compact outlines |
+| `tokenix context TEXT` | One-call task context: entry points, relevant source, compact outlines, strict budget modes |
 | `tokenix explore TEXT` | Graph-aware exploration: entry points, relationships, grouped source |
+| `tokenix pack` | Budgeted repo pack for non-hook AI tools (`--mode/--profile`, `--changed`, `--token-map`) |
 | `tokenix memory add TEXT` | Save a preference (`--global` or `--project`) for future context |
 | `tokenix memory list` | List global and project preferences |
 | `tokenix memory remove TEXT` | Remove preferences matching text |
@@ -316,13 +367,18 @@ tokenix install-hook --tool all
 | `tokenix symbols QUERY` | Find indexed symbols by name or path |
 | `tokenix callers SYMBOL` | Show symbols that call/reference a symbol |
 | `tokenix callees SYMBOL` | Show symbols called/referenced by a symbol |
-| `tokenix impact SYMBOL` | Bidirectional impact graph (`--format html` for a vis.js graph) |
+| `tokenix impact SYMBOL` | Bidirectional impact graph (`--format html\|mermaid` for vis.js graph or Mermaid flowchart) |
+| `tokenix flow SYMBOL` | Forward call-flow trace from a symbol (`--depth`, `--format text\|mermaid`) |
+| `tokenix cycles` | Detect circular dependencies in the symbol graph using Tarjan's SCC algorithm |
 | `tokenix tokenmap` | Directory tree map with token counts (`--format html` supported) |
 | `tokenix rebuild-graph` | Rebuild graph tables from existing chunks without re-embedding |
 | `tokenix gain` | Token savings analytics (`--cost-estimate` adds a per-model cost table) |
-| `tokenix prompt-audit` | Audit MCP/tool token weight across agents; warns on bloat (`--agent`, `--json`) |
-| `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark |
+| `tokenix prompt-audit` | Audit MCP/tool token weight across agents; warns on bloat (`--agent`, `--json`, `--recommend`, `--profile-impact`) |
+| `tokenix session-audit` | Token-economy health check: index, hook events, MCP/tool weight, cache hygiene |
+| `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark (`--competitive`, `--json`) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
+| `tokenix artifacts list` | List context artifacts defined in `.tokenix/artifacts.json` |
+| `tokenix artifacts show NAME` | Show context artifact content |
 | `tokenix serve` | Start the background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
 | `tokenix doctor` | Diagnose embedding backend, GPU availability, model cache, and daemon |
@@ -335,7 +391,7 @@ tokenix install-hook --tool all
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
 | `tokenix hook` | `PreToolUse` handler — intercepts large reads, semantic grep, and noisy Bash commands (called by AI tools) |
 | `tokenix hook-post` | Legacy `PostToolUse` compatibility handler |
-| `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools |
+| `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools (`--profile slim\|full`) |
 
 <details>
 <summary>Selected flags</summary>
@@ -343,20 +399,33 @@ tokenix install-hook --tool all
 **Global**
 
 | Flag | Description |
-|---|---|
+|---|---|---|
 | `--only-cpu` | Force CPU embedding even on a GPU-enabled build (no-op on CPU-only builds) |
+| `TOKENIX_BRANCH_AWARE=true` | Env var: suffix SQLite DB per git branch (isolate indexes per branch) |
 
 **`tokenix index`** — `--force/-f`, `--cpu-profile <low\|default\|max>`, `--jobs N`, `--embed-batch N` (default 16 CPU / 64 GPU), `--if-stale`, `--path/-p`
 
-**`tokenix query`** — `--budget/-b` (1200), `--k` (20), `--file/-f`, `--path/-p`
+**`tokenix query`** — `--budget/-b` (1200), `--k` (20), `--file/-f`, `--link` (cross-project, repeatable), `--path/-p`
 
 **`tokenix grep`** — `--limit/-l` (20), `--ignore-case/-i`, `--file/-f`, `--path/-p`
 
-**`tokenix impact`** — `--depth/-d` (2), `--limit/-l` (50), `--format <text\|html>`, `--output/-o`, `--path/-p`
+**`tokenix context`** — `--mode <plan\|debug\|audit\|security\|review>`, `--budget/-b` (1200), `--max-files`, `--budget-breakdown`, `--path/-p`
+
+**`tokenix impact`** — `--depth/-d` (2), `--limit/-l` (50), `--format <text\|html\|mermaid>`, `--output/-o`, `--path/-p`
+
+**`tokenix flow`** — `--depth/-d` (3), `--format <text\|mermaid>`, `--output/-o`, `--path/-p`
 
 **`tokenix install-hook` / `remove-hook`** — `--tool <claude-code\|copilot\|codex\|mcp\|gemini\|all>` (default `all`), `--local` (claude-code only)
 
-**`tokenix prompt-audit`** — `--agent <claude\|codex\|copilot\|antigravity\|all>` (default `all`), `--json`
+**`tokenix pack`** — `--mode/--profile <plan\|debug\|audit\|security\|review>`, `--budget N` (8000), `--format <markdown\|xml\|json>`, `--changed`, `--since REF`, `--token-map`, `--output/-o`
+
+**`tokenix benchmark`** — `--budget N` (1200), `--competitive`, `--json`, `--refresh-index`, `--cases FILE`, `--compare-codegraph PATH`
+
+**`tokenix prompt-audit`** — `--agent <claude\|codex\|copilot\|antigravity\|all>` (default `all`), `--json`, `--recommend`, `--profile-impact`
+
+**`tokenix session-audit`** — `--json`, `--cache-hygiene`, `--path/-p`
+
+**`tokenix mcp`** — `--profile <full\|slim>` (default `full`)
 
 </details>
 
@@ -399,7 +468,7 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
-3. **Bundled filters** — 72 RTK-compatible TOML filters shipped inside the binary, covering `uv sync`, `cargo build`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 73 RTK-compatible TOML filters shipped inside the binary, covering `uv sync`, `cargo build`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -447,8 +516,10 @@ src/
 ├── embed.rs       fastembed ONNX: embed_documents(), embed_query() — optional GPU via ort features
 ├── store.rs       SQLite schema, CRUD, FTS5, hybrid search, incremental branch fingerprint check
 ├── indexer.rs     File walker + incremental index pipeline (parallel chunking + batch embedding)
-├── query.rs       Hybrid semantic + sparse FTS5 ranking, token-budget selection, result formatting
-├── graph.rs       Symbol relationship graph + HTML export for vis.js output
+├── query.rs       Hybrid semantic + sparse FTS5 ranking, strict context modes, token-budget selection
+├── pack.rs        Budgeted repo pack generation for non-hook AI tools, changed packs, token maps
+├── graph.rs       Symbol relationship graph, cycle detection (Tarjan's SCC), HTML/Mermaid export
+├── artifacts.rs   Context artifacts — parse `.tokenix/artifacts.json`, read non-code content
 ├── hook.rs        PreToolUse handler — Claude-, Copilot-, and grep_search/run_in_terminal-style JSON input
 ├── daemon.rs      Background TCP server — holds model + in-memory embedding cache
 ├── compress.rs    Legacy PostToolUse compatibility pipeline for tool-output rewriting
@@ -459,8 +530,8 @@ src/
 ├── gain.rs        Analytics from the hook log — per-model cost table
 ├── benchmark.rs   Reproducible savings + retrieval-quality benchmark
 ├── doctor.rs      Backend / GPU / model-cache / daemon diagnostics
-├── mcp.rs         Model Context Protocol server
-└── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt-audit)
+├── mcp.rs         Model Context Protocol server (full and slim profiles)
+└── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
 assets/
 └── filters/       72 RTK-compatible TOML filters, embedded in the binary via rust-embed

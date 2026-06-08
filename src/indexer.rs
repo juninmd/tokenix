@@ -267,6 +267,8 @@ pub fn index_repo_with_options<F>(
 where
     F: FnMut(&str),
 {
+    let _lock = crate::store::acquire_index_lock(repo_root)?;
+
     let conn = open_db(repo_root, true)?.unwrap();
     init_schema(&conn, 768)?;
     let existing: Arc<HashMap<String, (i64, f64, String)>> = Arc::new(load_all_file_info(&conn)?);
@@ -402,6 +404,7 @@ where
                 )
             })?;
             all.extend(batch_embs);
+            save_checkpoint(&conn, "embed", batch_idx + 1)?;
             if embed_sleep > 0 && batch_idx + 1 < total_batches {
                 thread::sleep(Duration::from_millis(embed_sleep));
             }
@@ -502,6 +505,9 @@ where
         progress_cb("no changes — skipping graph rebuild");
     }
 
+    // Clear checkpoint on success
+    crate::store::set_meta(&conn, "index_checkpoint", "")?;
+
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -520,6 +526,15 @@ where
         },
         stats,
     ))
+}
+
+fn save_checkpoint(conn: &rusqlite::Connection, phase: &str, count: usize) -> Result<()> {
+    crate::store::set_meta(conn, "index_checkpoint", &format!("{phase}:{count}"))
+}
+
+fn read_checkpoint(conn: &rusqlite::Connection) -> Option<(String, usize)> {
+    crate::store::meta_value(conn, "index_checkpoint")
+        .and_then(|val| val.split_once(':').and_then(|(p, c)| c.parse().ok().map(|n| (p.to_string(), n))))
 }
 
 #[cfg(test)]

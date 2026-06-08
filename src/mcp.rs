@@ -3,12 +3,110 @@ use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpProfile {
+    Slim,
+    Full,
+}
+
 fn find_repo_root(path: &Path) -> PathBuf {
     let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     crate::store::find_project_root(&abs)
 }
 
-pub fn run_mcp_server() -> Result<()> {
+fn slim_tools() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "tokenix_context",
+            "description": "Build focused repository context for a task. Prefer this first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["plan", "debug", "audit", "security", "review"], "default": "plan"},
+                    "budget": {"type": "integer", "default": 3000},
+                    "max_files": {"type": "integer", "default": 4}
+                },
+                "required": ["task"]
+            }
+        }),
+        json!({
+            "name": "tokenix_search_tools",
+            "description": "Find tokenix tool names for query/read/graph/memory/run/gain capabilities.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"]
+            }
+        }),
+        json!({
+            "name": "tokenix_call",
+            "description": "Call a tokenix tool by name with JSON arguments after tokenix_search_tools.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "arguments": {"type": "object"}
+                },
+                "required": ["name"]
+            }
+        }),
+    ]
+}
+
+pub fn tool_schema_tokens(profile: McpProfile) -> usize {
+    let schemas = match profile {
+        McpProfile::Slim => slim_tools(),
+        McpProfile::Full => full_tool_estimate(),
+    };
+    schemas
+        .iter()
+        .map(|tool| crate::chunker::count_tokens(&tool.to_string()))
+        .sum()
+}
+
+fn full_tool_estimate() -> Vec<Value> {
+    [
+        ("tokenix_query", "Semantic search over the indexed codebase repository"),
+        ("tokenix_context", "Build focused task context in one call"),
+        ("tokenix_explore", "Graph-aware source and relationship context"),
+        ("tokenix_read", "Smart outline, symbol, or line-range file reader"),
+        ("tokenix_symbols", "Find indexed symbols by name or path"),
+        ("tokenix_callers", "Find symbols that call a target symbol"),
+        ("tokenix_callees", "Find symbols called by a target symbol"),
+        ("tokenix_impact", "Show bidirectional impact graph around a symbol"),
+        ("tokenix_memory_add", "Save durable preference memory"),
+        ("tokenix_memory_list", "List preference memory"),
+        ("tokenix_memory_remove", "Remove preference memory"),
+        ("tokenix_memory_edit", "Edit preference memory"),
+        ("tokenix_run", "Run shell command with compressed output"),
+        ("tokenix_gain", "Show hook token savings"),
+    ]
+    .into_iter()
+    .map(|(name, description)| {
+        json!({
+            "name": name,
+            "description": description,
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "task": {"type": "string"},
+                    "budget": {"type": "integer"},
+                    "file": {"type": "string"},
+                    "symbol": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "command": {"type": "string"},
+                    "scope": {"type": "string"},
+                    "history": {"type": "boolean"}
+                }
+            }
+        })
+    })
+    .collect()
+}
+
+pub fn run_mcp_server(profile: McpProfile) -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut reader = stdin.lock();
@@ -69,242 +167,258 @@ pub fn run_mcp_server() -> Result<()> {
                     continue;
                 }
                 "tools/list" => {
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": {
-                            "tools": [
-                                {
-                                    "name": "tokenix_query",
-                                    "description": "Semantic search over the indexed codebase repository",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "query": {
-                                                "type": "string",
-                                                "description": "Natural language query, e.g. 'how does authentication work'"
+                    if profile == McpProfile::Slim {
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "tools": slim_tools()
+                            }
+                        })
+                    } else {
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "tools": [
+                                    {
+                                        "name": "tokenix_query",
+                                        "description": "Semantic search over the indexed codebase repository",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "query": {
+                                                    "type": "string",
+                                                    "description": "Natural language query, e.g. 'how does authentication work'"
+                                                },
+                                                "budget": {
+                                                    "type": "integer",
+                                                    "description": "Optional token budget limit for query context (default 3000)",
+                                                    "default": 3000
+                                                },
+                                                "file_filter": {
+                                                    "type": "string",
+                                                    "description": "Optional path or name filter to search a specific file"
+                                                }
                                             },
-                                            "budget": {
-                                                "type": "integer",
-                                                "description": "Optional token budget limit for query context (default 3000)",
-                                                "default": 3000
+                                            "required": ["query"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_context",
+                                        "description": "PRIMARY TOOL: build focused task context in one call by combining semantic search, preference-memory capture guidance, entry points, and compact file outlines",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "task": {
+                                                    "type": "string",
+                                                    "description": "Task, feature, bug, or architecture question to gather context for"
+                                                },
+                                                "budget": {
+                                                    "type": "integer",
+                                                    "description": "Optional token budget limit for returned context (default 3000)",
+                                                    "default": 3000
+                                                },
+                                                "mode": {
+                                                    "type": "string",
+                                                    "description": "Context mode: plan, debug, audit, security, or review",
+                                                    "enum": ["plan", "debug", "audit", "security", "review"],
+                                                    "default": "plan"
+                                                },
+                                                "max_files": {
+                                                    "type": "integer",
+                                                    "description": "Maximum number of file outlines to include (default 4)",
+                                                    "default": 4
+                                                }
                                             },
-                                            "file_filter": {
-                                                "type": "string",
-                                                "description": "Optional path or name filter to search a specific file"
+                                            "required": ["task"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_explore",
+                                        "description": "Graph-aware exploration in one capped call: preference-memory capture guidance, entry points, relationship map, and source grouped by file. Use after tokenix_context when you need implementation details.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "query": {
+                                                    "type": "string",
+                                                    "description": "Symbol names, file names, or focused task terms to explore"
+                                                },
+                                                "budget": {
+                                                    "type": "integer",
+                                                    "description": "Optional token budget limit for returned source context (default 4000)",
+                                                    "default": 4000
+                                                },
+                                                "max_symbols": {
+                                                    "type": "integer",
+                                                    "description": "Maximum seed symbols to expand (default 8)",
+                                                    "default": 8
+                                                }
+                                            },
+                                            "required": ["query"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_read",
+                                        "description": "Smart outline, symbol, or line-range file reader (token-efficient)",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "file": {
+                                                    "type": "string",
+                                                    "description": "Relative path to the file to read"
+                                                },
+                                                "symbol": {
+                                                    "type": "string",
+                                                    "description": "Optional symbol/class/function name to extract"
+                                                },
+                                                "lines": {
+                                                    "type": "string",
+                                                    "description": "Optional line range, e.g. '1-50'"
+                                                }
+                                            },
+                                            "required": ["file"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_symbols",
+                                        "description": "Find indexed symbols by name or path",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "query": {"type": "string", "description": "Symbol name, partial name, or path fragment"},
+                                                "limit": {"type": "integer", "description": "Maximum results (default 20)", "default": 20}
+                                            },
+                                            "required": ["query"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_callers",
+                                        "description": "Find symbols that call or reference a target symbol",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "symbol": {"type": "string", "description": "Target symbol name"},
+                                                "limit": {"type": "integer", "description": "Maximum relationships (default 20)", "default": 20}
+                                            },
+                                            "required": ["symbol"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_callees",
+                                        "description": "Find symbols called or referenced by a target symbol",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "symbol": {"type": "string", "description": "Target symbol name"},
+                                                "limit": {"type": "integer", "description": "Maximum relationships (default 20)", "default": 20}
+                                            },
+                                            "required": ["symbol"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_impact",
+                                        "description": "Show a bidirectional impact graph around a symbol",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "symbol": {"type": "string", "description": "Target symbol name"},
+                                                "depth": {"type": "integer", "description": "Graph traversal depth (default 2)", "default": 2},
+                                                "limit": {"type": "integer", "description": "Maximum relationships (default 50)", "default": 50}
+                                            },
+                                            "required": ["symbol"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_memory_add",
+                                        "description": "Save a durable user preference for future tokenix context. Scope defaults to project.",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "text": {
+                                                    "type": "string",
+                                                    "description": "Preference to remember, e.g. 'Prefer Biome over ESLint for linting migrations'"
+                                                },
+                                                "scope": {
+                                                    "type": "string",
+                                                    "description": "Preference scope: project or global",
+                                                    "default": "project"
+                                                }
+                                            },
+                                            "required": ["text"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_memory_list",
+                                        "description": "List saved tokenix preferences from global, project, or all scopes",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "scope": {
+                                                    "type": "string",
+                                                    "description": "Scope to list: all, project, or global",
+                                                    "default": "all"
+                                                }
                                             }
-                                        },
-                                        "required": ["query"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_context",
-                                    "description": "PRIMARY TOOL: build focused task context in one call by combining semantic search, preference-memory capture guidance, entry points, and compact file outlines",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "task": {
-                                                "type": "string",
-                                                "description": "Task, feature, bug, or architecture question to gather context for"
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_memory_remove",
+                                        "description": "Remove saved preferences matching text from project or global memory",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "query": {"type": "string", "description": "Text to match in saved preferences"},
+                                                "scope": {"type": "string", "description": "Scope to edit: project or global", "default": "project"}
                                             },
-                                            "budget": {
-                                                "type": "integer",
-                                                "description": "Optional token budget limit for returned context (default 3000)",
-                                                "default": 3000
+                                            "required": ["query"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_memory_edit",
+                                        "description": "Replace saved preferences matching text in project or global memory",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "query": {"type": "string", "description": "Text to match in saved preferences"},
+                                                "replacement": {"type": "string", "description": "Replacement preference text"},
+                                                "scope": {"type": "string", "description": "Scope to edit: project or global", "default": "project"}
                                             },
-                                            "max_files": {
-                                                "type": "integer",
-                                                "description": "Maximum number of file outlines to include (default 4)",
-                                                "default": 4
-                                            }
-                                        },
-                                        "required": ["task"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_explore",
-                                    "description": "Graph-aware exploration in one capped call: preference-memory capture guidance, entry points, relationship map, and source grouped by file. Use after tokenix_context when you need implementation details.",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "query": {
-                                                "type": "string",
-                                                "description": "Symbol names, file names, or focused task terms to explore"
+                                            "required": ["query", "replacement"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_run",
+                                        "description": "Execute a shell command with token-efficient output compression (removes noise, truncates long logs)",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "command": {
+                                                    "type": "string",
+                                                    "description": "Shell command to execute, e.g. 'npm install' or 'cargo test'"
+                                                }
                                             },
-                                            "budget": {
-                                                "type": "integer",
-                                                "description": "Optional token budget limit for returned source context (default 4000)",
-                                                "default": 4000
-                                            },
-                                            "max_symbols": {
-                                                "type": "integer",
-                                                "description": "Maximum seed symbols to expand (default 8)",
-                                                "default": 8
-                                            }
-                                        },
-                                        "required": ["query"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_read",
-                                    "description": "Smart outline, symbol, or line-range file reader (token-efficient)",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "file": {
-                                                "type": "string",
-                                                "description": "Relative path to the file to read"
-                                            },
-                                            "symbol": {
-                                                "type": "string",
-                                                "description": "Optional symbol/class/function name to extract"
-                                            },
-                                            "lines": {
-                                                "type": "string",
-                                                "description": "Optional line range, e.g. '1-50'"
-                                            }
-                                        },
-                                        "required": ["file"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_symbols",
-                                    "description": "Find indexed symbols by name or path",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "query": {"type": "string", "description": "Symbol name, partial name, or path fragment"},
-                                            "limit": {"type": "integer", "description": "Maximum results (default 20)", "default": 20}
-                                        },
-                                        "required": ["query"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_callers",
-                                    "description": "Find symbols that call or reference a target symbol",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "symbol": {"type": "string", "description": "Target symbol name"},
-                                            "limit": {"type": "integer", "description": "Maximum relationships (default 20)", "default": 20}
-                                        },
-                                        "required": ["symbol"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_callees",
-                                    "description": "Find symbols called or referenced by a target symbol",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "symbol": {"type": "string", "description": "Target symbol name"},
-                                            "limit": {"type": "integer", "description": "Maximum relationships (default 20)", "default": 20}
-                                        },
-                                        "required": ["symbol"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_impact",
-                                    "description": "Show a bidirectional impact graph around a symbol",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "symbol": {"type": "string", "description": "Target symbol name"},
-                                            "depth": {"type": "integer", "description": "Graph traversal depth (default 2)", "default": 2},
-                                            "limit": {"type": "integer", "description": "Maximum relationships (default 50)", "default": 50}
-                                        },
-                                        "required": ["symbol"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_memory_add",
-                                    "description": "Save a durable user preference for future tokenix context. Scope defaults to project.",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "text": {
-                                                "type": "string",
-                                                "description": "Preference to remember, e.g. 'Prefer Biome over ESLint for linting migrations'"
-                                            },
-                                            "scope": {
-                                                "type": "string",
-                                                "description": "Preference scope: project or global",
-                                                "default": "project"
-                                            }
-                                        },
-                                        "required": ["text"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_memory_list",
-                                    "description": "List saved tokenix preferences from global, project, or all scopes",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "scope": {
-                                                "type": "string",
-                                                "description": "Scope to list: all, project, or global",
-                                                "default": "all"
+                                            "required": ["command"]
+                                        }
+                                    },
+                                    {
+                                        "name": "tokenix_gain",
+                                        "description": "Show estimated token savings statistics from tokenix hooks",
+                                        "inputSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "history": {
+                                                    "type": "boolean",
+                                                    "description": "Optional flag to show per-call history",
+                                                    "default": false
+                                                }
                                             }
                                         }
                                     }
-                                },
-                                {
-                                    "name": "tokenix_memory_remove",
-                                    "description": "Remove saved preferences matching text from project or global memory",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "query": {"type": "string", "description": "Text to match in saved preferences"},
-                                            "scope": {"type": "string", "description": "Scope to edit: project or global", "default": "project"}
-                                        },
-                                        "required": ["query"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_memory_edit",
-                                    "description": "Replace saved preferences matching text in project or global memory",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "query": {"type": "string", "description": "Text to match in saved preferences"},
-                                            "replacement": {"type": "string", "description": "Replacement preference text"},
-                                            "scope": {"type": "string", "description": "Scope to edit: project or global", "default": "project"}
-                                        },
-                                        "required": ["query", "replacement"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_run",
-                                    "description": "Execute a shell command with token-efficient output compression (removes noise, truncates long logs)",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "command": {
-                                                "type": "string",
-                                                "description": "Shell command to execute, e.g. 'npm install' or 'cargo test'"
-                                            }
-                                        },
-                                        "required": ["command"]
-                                    }
-                                },
-                                {
-                                    "name": "tokenix_gain",
-                                    "description": "Show estimated token savings statistics from tokenix hooks",
-                                    "inputSchema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "history": {
-                                                "type": "boolean",
-                                                "description": "Optional flag to show per-call history",
-                                                "default": false
-                                            }
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    })
+                                ]
+                            }
+                        })
+                    }
                 }
                 "tools/call" => {
                     let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
@@ -369,6 +483,24 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
     let repo_root = find_repo_root(path);
 
     match name {
+        "tokenix_search_tools" => {
+            let query = args
+                .get("query")
+                .and_then(|q| q.as_str())
+                .ok_or_else(|| anyhow!("Missing 'query' argument"))?;
+            Ok(search_tool_catalog(query))
+        }
+        "tokenix_call" => {
+            let tool = args
+                .get("name")
+                .and_then(|q| q.as_str())
+                .ok_or_else(|| anyhow!("Missing 'name' argument"))?;
+            let arguments = args.get("arguments").cloned().unwrap_or(Value::Null);
+            if matches!(tool, "tokenix_call" | "tokenix_search_tools") {
+                return Err(anyhow!("Refusing recursive tokenix_call"));
+            }
+            handle_tool_call(tool, arguments)
+        }
         "tokenix_query" => {
             let query = args
                 .get("query")
@@ -389,8 +521,13 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 .ok_or_else(|| anyhow!("Missing 'task' argument"))?;
             let budget = args.get("budget").and_then(|b| b.as_u64()).unwrap_or(3000) as usize;
             let max_files = args.get("max_files").and_then(|b| b.as_u64()).unwrap_or(4) as usize;
+            let mode = parse_context_mode(
+                args.get("mode")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("plan"),
+            )?;
 
-            crate::query::build_task_context(&repo_root, task, budget, max_files)
+            crate::query::build_task_context_with_mode(&repo_root, task, mode, budget, max_files)
         }
         "tokenix_explore" => {
             let query = args
@@ -721,11 +858,70 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
     }
 }
 
+fn search_tool_catalog(query: &str) -> String {
+    const TOOLS: &[(&str, &str)] = &[
+        (
+            "tokenix_query",
+            "semantic code search with optional file filter",
+        ),
+        ("tokenix_context", "one-call focused context for a task"),
+        (
+            "tokenix_explore",
+            "graph-aware source and relationship context",
+        ),
+        (
+            "tokenix_read",
+            "smart file outline, symbol, or line-range read",
+        ),
+        ("tokenix_symbols", "find indexed symbols by name or path"),
+        ("tokenix_callers", "find symbols that reference a target"),
+        ("tokenix_callees", "find symbols referenced by a target"),
+        ("tokenix_impact", "bidirectional symbol impact graph"),
+        ("tokenix_memory_add", "save durable preference memory"),
+        ("tokenix_memory_list", "list saved preference memory"),
+        ("tokenix_memory_remove", "remove saved preference memory"),
+        ("tokenix_memory_edit", "edit saved preference memory"),
+        ("tokenix_run", "run shell command with compressed output"),
+        ("tokenix_gain", "show hook token savings"),
+    ];
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    let mut rows = Vec::new();
+    for (name, desc) in TOOLS {
+        let haystack = format!("{name} {desc}").to_ascii_lowercase();
+        if terms.is_empty() || terms.iter().any(|term| haystack.contains(term)) {
+            rows.push(format!("- {name}: {desc}"));
+        }
+    }
+    if rows.is_empty() {
+        "No tokenix tools matched. Try query, context, read, graph, memory, run, or gain."
+            .to_string()
+    } else {
+        rows.join("\n")
+    }
+}
+
 fn parse_memory_scope(scope: &str) -> Result<crate::memory::PreferenceScope> {
     match scope {
         "global" => Ok(crate::memory::PreferenceScope::Global),
         "project" => Ok(crate::memory::PreferenceScope::Project),
         other => Err(anyhow!("Invalid scope '{}'. Use: global | project", other)),
+    }
+}
+
+fn parse_context_mode(mode: &str) -> Result<crate::query::ContextMode> {
+    match mode {
+        "plan" => Ok(crate::query::ContextMode::Plan),
+        "debug" => Ok(crate::query::ContextMode::Debug),
+        "audit" => Ok(crate::query::ContextMode::Audit),
+        "security" => Ok(crate::query::ContextMode::Security),
+        "review" => Ok(crate::query::ContextMode::Review),
+        other => Err(anyhow!(
+            "Invalid mode '{}'. Use: plan | debug | audit | security | review",
+            other
+        )),
     }
 }
 

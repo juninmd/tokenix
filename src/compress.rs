@@ -63,12 +63,29 @@ pub fn compress_bash_output(cmd: &str, s: &str) -> String {
         }
     }
 
-    if lines.len() <= BASH_MAX_LINES {
-        return base;
+    if is_git_status_command(cmd) {
+        let status_out = compress_git_status(&lines);
+        if status_out.len() < base.len() {
+            return status_out;
+        }
     }
 
-    if is_git_log(&lines) {
-        return compress_git_log(&lines);
+    if is_git_log_command(cmd) || is_git_log(&lines) {
+        let log_out = compress_git_log(&lines);
+        if log_out.len() < base.len() {
+            return log_out;
+        }
+    }
+
+    if is_git_diff_command(cmd) {
+        let diff_out = compress_git_diff(&lines);
+        if diff_out.len() < base.len() {
+            return diff_out;
+        }
+    }
+
+    if lines.len() <= BASH_MAX_LINES {
+        return base;
     }
 
     truncate_head_tail(&lines, BASH_HEAD_LINES, BASH_TAIL_LINES)
@@ -156,7 +173,41 @@ fn is_git_log(lines: &[&str]) -> bool {
     lines.iter().take(5).any(|l| l.starts_with("commit "))
 }
 
+fn is_git_log_command(cmd: &str) -> bool {
+    let cmd = cmd.trim();
+    cmd == "git log" || cmd.starts_with("git log ")
+}
+
+fn is_git_status_command(cmd: &str) -> bool {
+    let cmd = cmd.trim();
+    cmd == "git status" || cmd.starts_with("git status ")
+}
+
+fn is_git_diff_command(cmd: &str) -> bool {
+    let cmd = cmd.trim();
+    cmd == "git diff" || cmd.starts_with("git diff ")
+}
+
 fn compress_git_log(lines: &[&str]) -> String {
+    let oneline: Vec<&str> = lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| {
+            line.len() > 8
+                && line
+                    .chars()
+                    .take_while(|c| c.is_ascii_hexdigit())
+                    .count()
+                    >= 7
+                && line.chars().nth(7).is_some_and(|c| c.is_whitespace())
+        })
+        .collect();
+    if oneline.len() >= 3 {
+        let first = oneline.first().copied().unwrap_or_default();
+        let last = oneline.last().copied().unwrap_or_default();
+        return format!("git log: {} commits\nfirst: {first}\nlast: {last}", oneline.len());
+    }
+
     const MAX_COMMITS: usize = 20;
     let mut commit_count: usize = 0;
     let mut keep_until: usize = 0;
@@ -180,6 +231,80 @@ fn compress_git_log(lines: &[&str]) -> String {
         lines[..keep_until].join("\n"),
         omitted,
         MAX_COMMITS
+    )
+}
+
+fn compress_git_status(lines: &[&str]) -> String {
+    let mut modified = 0usize;
+    let mut added = 0usize;
+    let mut deleted = 0usize;
+    let mut untracked = 0usize;
+    let mut renamed = 0usize;
+    let mut examples = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let code = trimmed.chars().take(2).collect::<String>();
+        match code.as_str() {
+            "??" => untracked += 1,
+            " D" | "D " | "DD" => deleted += 1,
+            " A" | "A " => added += 1,
+            " R" | "R " => renamed += 1,
+            _ if code.contains('M') => modified += 1,
+            _ => {}
+        }
+        if examples.len() < 5 {
+            examples.push(trimmed.to_string());
+        }
+    }
+    if modified + added + deleted + untracked + renamed == 0 {
+        return lines.join("\n");
+    }
+    let mut out = format!(
+        "git status: M={modified} A={added} D={deleted} R={renamed} ?={untracked}"
+    );
+    if !examples.is_empty() {
+        out.push_str("\nexamples:\n");
+        out.push_str(&examples.join("\n"));
+    }
+    out
+}
+
+fn compress_git_diff(lines: &[&str]) -> String {
+    let files = lines
+        .iter()
+        .filter_map(|line| line.strip_prefix("diff --git "))
+        .count();
+    let hunks = lines.iter().filter(|line| line.starts_with("@@")).count();
+    let additions = lines
+        .iter()
+        .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
+        .count();
+    let deletions = lines
+        .iter()
+        .filter(|line| line.starts_with('-') && !line.starts_with("---"))
+        .count();
+    let mut keep = Vec::new();
+    for line in lines {
+        if line.starts_with("diff --git ")
+            || line.starts_with("@@")
+            || line.starts_with("+++")
+            || line.starts_with("---")
+        {
+            keep.push(*line);
+        }
+        if keep.len() >= 40 {
+            break;
+        }
+    }
+    if files == 0 && hunks == 0 {
+        return lines.join("\n");
+    }
+    format!(
+        "git diff: files={files} hunks={hunks} +{additions} -{deletions}\n{}",
+        keep.join("\n")
     )
 }
 

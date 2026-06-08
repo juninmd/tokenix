@@ -562,7 +562,7 @@ fn search_handler(
 
     // Run sparse FTS5 search (holds no cache lock, query is fast)
     let sparse_limit = (k.saturating_mul(5)).max(50);
-    let sparse_ids = store::search_fts(&conn, query, sparse_limit, file_filter).unwrap_or_default();
+    let sparse_results = store::search_fts(&conn, query, sparse_limit, file_filter).unwrap_or_default();
 
     // Acquire lock, reload cache if stale, run cosine search + RRF merge, release lock.
     let top_ids: Vec<(usize, f32, i64)> = {
@@ -603,8 +603,10 @@ fn search_handler(
             rrf_scores.insert(id, score);
         }
 
-        for (rank, id) in sparse_ids.iter().enumerate() {
-            let score = 1.0 / (60.0 + rank as f32);
+        for (rank, (id, bm25_score)) in sparse_results.iter().enumerate() {
+            let rrf_position = 1.0 / (60.0 + rank as f32);
+            let bm25_normalized = (*bm25_score).max(0.0) / (1.0 + bm25_score.max(0.0));
+            let score = rrf_position + 0.3 * bm25_normalized;
             rrf_scores
                 .entry(*id)
                 .and_modify(|s| *s += score)

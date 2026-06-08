@@ -6,6 +6,15 @@ use crate::chunker::count_tokens;
 use crate::embed::embed_query;
 use crate::store::{fetch_chunks_by_ids, hybrid_search, open_db, search_graph_nodes, SearchResult};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum ContextMode {
+    Plan,
+    Debug,
+    Audit,
+    Security,
+    Review,
+}
+
 pub fn query_index(
     repo_root: &Path,
     query_text: &str,
@@ -42,39 +51,69 @@ pub fn query_index(
     Ok(Some(selected))
 }
 
+/// Search across multiple linked project roots, merging results.
+pub fn query_index_multi(
+    repo_roots: &[&Path],
+    query_text: &str,
+    budget: usize,
+    k: usize,
+    file_filter: Option<&str>,
+) -> Result<Option<Vec<SearchResult>>> {
+    let mut merged = Vec::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
+
+    for root in repo_roots {
+        if let Some(results) = query_index(root, query_text, budget, k * 2, file_filter)? {
+            for r in results {
+                // Deduplicate by path+start_line+content prefix
+                let key = format!("{}:{}:{}", r.path, r.start_line, &r.content[..r.content.len().min(40)]);
+                if seen_ids.insert(key) {
+                    merged.push(r);
+                }
+            }
+        }
+    }
+
+    if merged.is_empty() {
+        return Ok(None);
+    }
+
+    rerank_results(&mut merged, query_text);
+    let mut selected = Vec::new();
+    let mut used_tokens = 0usize;
+    for r in merged.into_iter().take(k) {
+        let tokens = crate::embed::count_tokens_accurate(&r.content);
+        if used_tokens + tokens > budget {
+            continue;
+        }
+        used_tokens += tokens;
+        selected.push(r);
+    }
+
+    Ok(Some(selected))
+}
+
 fn add_symbol_recall_candidates(
     conn: &rusqlite::Connection,
     results: &mut Vec<SearchResult>,
     query_text: &str,
     file_filter: Option<&str>,
 ) -> Result<()> {
-    let mut seen: HashSet<i64> = results.iter().map(|result| result.id).collect();
-    let mut ids = Vec::new();
+    // 1. Get graph candidates in search/rank order
+    let mut graph_ids = Vec::new();
     for term in query_terms(query_text).into_iter().take(10) {
         for node in search_graph_nodes(conn, &term, 8)? {
             if file_filter.is_some_and(|filter| !node.path.contains(filter)) {
                 continue;
             }
-            if seen.insert(node.chunk_id) {
-                ids.push(node.chunk_id);
+            if !graph_ids.contains(&node.chunk_id) {
+                graph_ids.push(node.chunk_id);
             }
         }
     }
-    add_path_recall_candidates(conn, &mut seen, &mut ids, query_text, file_filter)?;
-    for mut chunk in fetch_chunks_by_ids(conn, &ids)? {
-        chunk.distance = 0.45;
-        results.push(chunk);
-    }
-    Ok(())
-}
 
-fn add_path_recall_candidates(
-    conn: &rusqlite::Connection,
-    seen: &mut HashSet<i64>,
-    ids: &mut Vec<i64>,
-    query_text: &str,
-    file_filter: Option<&str>,
-) -> Result<()> {
+    // 2. Get path candidates in search/rank order
+    let mut path_ids = Vec::new();
     for term in query_terms(query_text)
         .into_iter()
         .filter(|term| is_path_recall_term(term))
@@ -89,9 +128,6 @@ fn add_path_recall_candidates(
         )?;
         let rows = stmt.query_map([pattern], |row| row.get::<_, i64>(0))?;
         for id in rows.flatten() {
-            if seen.contains(&id) {
-                continue;
-            }
             if let Some(filter) = file_filter {
                 let path: String =
                     conn.query_row("SELECT path FROM chunks WHERE id = ?1", [id], |row| {
@@ -101,10 +137,48 @@ fn add_path_recall_candidates(
                     continue;
                 }
             }
-            seen.insert(id);
-            ids.push(id);
+            if !path_ids.contains(&id) {
+                path_ids.push(id);
+            }
         }
     }
+
+    // 3. Find unique IDs that we need to add to results
+    let mut seen: HashSet<i64> = results.iter().map(|r| r.id).collect();
+    let mut new_ids = Vec::new();
+    for &id in &graph_ids {
+        if seen.insert(id) {
+            new_ids.push(id);
+        }
+    }
+    for &id in &path_ids {
+        if seen.insert(id) {
+            new_ids.push(id);
+        }
+    }
+
+    // 4. Fetch the chunks and add them to results
+    let fetched = fetch_chunks_by_ids(conn, &new_ids)?;
+    for mut chunk in fetched {
+        chunk.distance = 1.0; // rrf_hybrid = 0.0 initially
+        results.push(chunk);
+    }
+
+    // 5. Update every result's distance using RRF combination
+    for r in results.iter_mut() {
+        let rrf_hybrid = 1.0 - r.distance; // dense/sparse RRF score
+        let mut rrf_score = rrf_hybrid;
+
+        if let Some(rank) = graph_ids.iter().position(|&x| x == r.id) {
+            rrf_score += 1.0 / (60.0 + rank as f32);
+        }
+        if let Some(rank) = path_ids.iter().position(|&x| x == r.id) {
+            rrf_score += 1.0 / (60.0 + rank as f32);
+        }
+
+        r.distance = 1.0 - rrf_score;
+    }
+
     Ok(())
 }
 
@@ -540,9 +614,24 @@ pub fn build_task_context(
     budget: usize,
     max_files: usize,
 ) -> Result<String> {
-    let search_budget = (budget * 2 / 3).max(500);
-    let result_count = if budget <= 1500 { 5 } else { 12 };
-    let results = query_index(repo_root, task, search_budget, result_count, None)?
+    build_task_context_with_mode(repo_root, task, ContextMode::Plan, budget, max_files)
+}
+
+pub fn build_task_context_with_mode(
+    repo_root: &Path,
+    task: &str,
+    mode: ContextMode,
+    budget: usize,
+    max_files: usize,
+) -> Result<String> {
+    let query_text = mode_query(mode, task);
+    let search_budget = if budget <= 1500 {
+        budget.max(4_000)
+    } else {
+        (budget * 2 / 3).max(500)
+    };
+    let result_count = if budget <= 1500 { 8 } else { 12 };
+    let results = query_index(repo_root, &query_text, search_budget, result_count, None)?
         .ok_or_else(|| anyhow!("Index not found. Please index the workspace first."))?;
 
     if results.is_empty() {
@@ -550,7 +639,10 @@ pub fn build_task_context(
     }
 
     let mut out = String::new();
-    out.push_str(&format!("<!-- tokenix_context: '{}' -->\n\n", task));
+    out.push_str(&format!(
+        "<!-- tokenix_context: '{}' mode={:?} -->\n\n",
+        task, mode
+    ));
     append_preferences(&mut out, repo_root, task, budget);
     out.push_str("## Entry Points\n");
     for result in results.iter().take(8) {
@@ -566,7 +658,7 @@ pub fn build_task_context(
     }
 
     out.push_str("\n## Relevant Source\n");
-    let max_chunk_tokens = if budget <= 1500 { Some(110) } else { None };
+    let max_chunk_tokens = max_chunk_tokens_for(mode, budget);
     out.push_str(&format_results_with_limit(&results, task, max_chunk_tokens));
 
     let mut paths = BTreeSet::new();
@@ -578,7 +670,7 @@ pub fn build_task_context(
     }
 
     if budget <= 1500 {
-        return Ok(out);
+        return Ok(enforce_context_budget(out, budget));
     }
 
     out.push_str("\n\n## File Outlines\n");
@@ -606,7 +698,56 @@ pub fn build_task_context(
         }
     }
 
-    Ok(out)
+    Ok(enforce_context_budget(out, budget))
+}
+
+fn mode_query(mode: ContextMode, task: &str) -> String {
+    let prefix = match mode {
+        ContextMode::Plan => "architecture entry points public interfaces implementation plan",
+        ContextMode::Debug => "failure handling diagnostics errors tests root cause",
+        ContextMode::Audit => "security supply chain credentials configuration risk tests",
+        ContextMode::Security => "secrets credentials tokens authentication authorization hooks mcp",
+        ContextMode::Review => "code review regressions tests edge cases public interfaces",
+    };
+    format!("{prefix} {task}")
+}
+
+fn max_chunk_tokens_for(mode: ContextMode, budget: usize) -> Option<usize> {
+    if budget <= 1500 {
+        return Some(match mode {
+            ContextMode::Audit | ContextMode::Security | ContextMode::Review => 110,
+            _ => 130,
+        });
+    }
+    match mode {
+        ContextMode::Audit | ContextMode::Security | ContextMode::Review => Some(220),
+        _ => None,
+    }
+}
+
+fn enforce_context_budget(mut out: String, budget: usize) -> String {
+    if budget == 0 || count_tokens(&out) <= budget {
+        return out;
+    }
+
+    let marker = "\n\n<!-- tokenix: truncated to requested budget -->";
+    let marker_tokens = count_tokens(marker);
+    let target = budget.saturating_sub(marker_tokens).max(1);
+    let mut kept = Vec::new();
+    let mut used = 0usize;
+    for line in out.lines() {
+        let cost = count_tokens(line) + 1;
+        if used + cost > target {
+            break;
+        }
+        kept.push(line);
+        used += cost;
+    }
+    out = kept.join("\n");
+    if budget > marker_tokens && count_tokens(&out) + marker_tokens <= budget {
+        out.push_str(marker);
+    }
+    out
 }
 
 /// Break a generated context down by top-level `## ` section, counting tokens

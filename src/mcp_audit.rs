@@ -17,6 +17,7 @@ use crate::chunker::count_tokens;
 use anyhow::Result;
 use colored::Colorize;
 use serde_json::{json, Value};
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -107,6 +108,11 @@ struct Thresholds {
     tools: usize,
 }
 
+pub struct AuditSummary {
+    pub combined_tokens: usize,
+    pub warnings: Vec<String>,
+}
+
 impl Thresholds {
     fn load() -> Self {
         Thresholds {
@@ -126,7 +132,43 @@ fn env_usize(var: &str, default: usize) -> usize {
 
 /// Entry point for `tokenix prompt-audit`.
 /// `filter` = None audits every agent that has config; Some(agent) audits one.
-pub fn run_audit(filter: Option<Agent>, json_out: bool, cwd: &Path) -> Result<()> {
+pub fn run_audit(
+    filter: Option<Agent>,
+    json_out: bool,
+    recommend: bool,
+    profile_impact: bool,
+    cwd: &Path,
+) -> Result<()> {
+    let (agents, reports, thresholds) = collect_audit(filter, cwd);
+    if json_out {
+        print_json(&agents, &reports, &thresholds, recommend, profile_impact);
+    } else {
+        print_human(&agents, &reports, &thresholds, recommend, profile_impact);
+    }
+    Ok(())
+}
+
+pub fn audit_summary(filter: Option<Agent>, cwd: &Path) -> AuditSummary {
+    let (agents, reports, thresholds) = collect_audit(filter, cwd);
+    let mut combined_tokens = 0usize;
+    let mut warnings = Vec::new();
+    for agent in &agents {
+        let (_rows, totals) = aggregate(*agent, &reports, &thresholds);
+        combined_tokens += totals.native + totals.mcp_tokens;
+        for reason in totals.reasons {
+            warnings.push(format!("{}: {reason}", agent.label()));
+        }
+    }
+    AuditSummary {
+        combined_tokens,
+        warnings,
+    }
+}
+
+fn collect_audit(
+    filter: Option<Agent>,
+    cwd: &Path,
+) -> (Vec<Agent>, Vec<(Agent, String, Status)>, Thresholds) {
     let agents: Vec<Agent> = match filter {
         Some(a) => vec![a],
         None => Agent::all().to_vec(),
@@ -156,12 +198,7 @@ pub fn run_audit(filter: Option<Agent>, json_out: bool, cwd: &Path) -> Result<()
     }
 
     let thresholds = Thresholds::load();
-    if json_out {
-        print_json(&agents, &reports, &thresholds);
-    } else {
-        print_human(&agents, &reports, &thresholds);
-    }
-    Ok(())
+    (agents, reports, thresholds)
 }
 
 // ---------------------------------------------------------------------------
@@ -614,7 +651,13 @@ fn aggregate(
     (rows, totals)
 }
 
-fn print_human(agents: &[Agent], reports: &[(Agent, String, Status)], th: &Thresholds) {
+fn print_human(
+    agents: &[Agent],
+    reports: &[(Agent, String, Status)],
+    th: &Thresholds,
+    recommend: bool,
+    profile_impact: bool,
+) {
     println!("{}", "tokenix prompt-audit — MCP/tool weight".bold());
     println!(
         "{}",
@@ -663,11 +706,19 @@ fn print_human(agents: &[Agent], reports: &[(Agent, String, Status)], th: &Thres
         for reason in &totals.reasons {
             println!("      {} {}", "⚠".yellow(), reason.yellow());
         }
+        if recommend {
+            for rec in recommendations_for_agent(*agent, &rows, &totals, th) {
+                println!("      {} {}", "rec:".cyan(), rec.cyan());
+            }
+        }
         println!();
     }
 
     if any {
         println!("{} ~{} tok", "combined estimate:".bold(), grand_tokens);
+    }
+    if profile_impact {
+        print_profile_impact();
     }
     print_caveats();
 }
@@ -684,7 +735,13 @@ fn print_caveats() {
     }
 }
 
-fn print_json(agents: &[Agent], reports: &[(Agent, String, Status)], th: &Thresholds) {
+fn print_json(
+    agents: &[Agent],
+    reports: &[(Agent, String, Status)],
+    th: &Thresholds,
+    recommend: bool,
+    profile_impact: bool,
+) {
     let mut agents_json = Vec::new();
     let mut grand_tokens = 0usize;
     for agent in agents {
@@ -705,7 +762,7 @@ fn print_json(agents: &[Agent], reports: &[(Agent, String, Status)], th: &Thresh
             .collect();
         let total = totals.native + totals.mcp_tokens;
         grand_tokens += total;
-        agents_json.push(json!({
+        let mut agent_json = json!({
             "agent": agent.key(),
             "label": agent.label(),
             "has_config": !rows.is_empty(),
@@ -717,16 +774,110 @@ fn print_json(agents: &[Agent], reports: &[(Agent, String, Status)], th: &Thresh
             "total_tokens": total,
             "warn": totals.warn,
             "reasons": totals.reasons,
-        }));
+        });
+        if recommend {
+            agent_json["recommendations"] =
+                json!(recommendations_for_agent(*agent, &rows, &totals, th));
+        }
+        agents_json.push(agent_json);
     }
     let out = json!({
         "agents": agents_json,
         "combined_tokens": grand_tokens,
+        "tokenix_profile_impact": profile_impact.then(profile_impact_json),
         "thresholds": {
             "tokens": th.tokens, "servers": th.servers, "tools": th.tools
         }
     });
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+}
+
+fn tokenix_profile_counts() -> (usize, usize, usize) {
+    let slim_tools = crate::mcp::tool_schema_tokens(crate::mcp::McpProfile::Slim);
+    let full_tools = crate::mcp::tool_schema_tokens(crate::mcp::McpProfile::Full);
+    let saved = full_tools.saturating_sub(slim_tools);
+    (full_tools, slim_tools, saved)
+}
+
+fn print_profile_impact() {
+    let (full, slim, saved) = tokenix_profile_counts();
+    println!();
+    println!("{}", "tokenix MCP profile impact".bold());
+    println!("  full: ~{full} tool-schema tok");
+    println!("  slim: ~{slim} tool-schema tok");
+    println!(
+        "  saved: ~{} tok ({:.1}%)",
+        saved,
+        if full > 0 {
+            (saved as f64 / full as f64) * 100.0
+        } else {
+            0.0
+        }
+    );
+}
+
+fn profile_impact_json() -> Value {
+    let (full, slim, saved) = tokenix_profile_counts();
+    json!({
+        "full_tokens": full,
+        "slim_tokens": slim,
+        "saved_tokens": saved,
+        "saved_pct": if full > 0 { (saved as f64 / full as f64) * 100.0 } else { 0.0 }
+    })
+}
+
+fn recommendations_for_agent(
+    agent: Agent,
+    rows: &[(String, Status)],
+    totals: &AgentTotals,
+    th: &Thresholds,
+) -> Vec<String> {
+    let mut recs = Vec::new();
+    if totals.mcp_tokens > th.tokens || totals.tools > th.tools {
+        recs.push(
+            "enable progressive tool discovery or disable rarely used MCP servers".to_string(),
+        );
+    }
+    if totals.servers > th.servers {
+        recs.push(format!(
+            "reduce {} MCP servers to {} or fewer for routine sessions",
+            totals.servers, th.servers
+        ));
+    }
+    let mut heavy: Vec<_> = rows
+        .iter()
+        .filter_map(|(name, status)| match status {
+            Status::Ok { tokens, .. } => Some((name.as_str(), *tokens)),
+            _ => None,
+        })
+        .collect();
+    heavy.sort_by_key(|row| Reverse(row.1));
+    for (name, tokens) in heavy.into_iter().take(2) {
+        if tokens > 1_500 {
+            recs.push(format!(
+                "review `{name}` first: ~{tokens} tool-schema tokens"
+            ));
+        }
+    }
+    if rows
+        .iter()
+        .any(|(_, status)| matches!(status, Status::Unknown(_)))
+    {
+        recs.push(
+            "HTTP/SSE servers were not introspected; count them as unknown prompt risk".to_string(),
+        );
+    }
+    if agent == Agent::Antigravity
+        && rows
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("tokenix"))
+    {
+        recs.push(
+            "run `tokenix mcp --profile slim` when the host supports a smaller tool surface"
+                .to_string(),
+        );
+    }
+    recs
 }
 
 #[cfg(test)]

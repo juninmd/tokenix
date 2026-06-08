@@ -258,8 +258,8 @@ fn is_sensitive_file(name_lower: &str) -> bool {
     SENSITIVE_EXTS.iter().any(|ext| name_lower.ends_with(ext))
 }
 
-#[derive(Debug)]
-enum Lang {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lang {
     Rust,
     Python,
     TypeScript,
@@ -269,7 +269,7 @@ enum Lang {
     Generic,
 }
 
-fn detect_lang(path: &Path) -> Lang {
+pub(crate) fn detect_lang(path: &Path) -> Lang {
     if let Some(lang) = detect_custom_lang(path) {
         return lang;
     }

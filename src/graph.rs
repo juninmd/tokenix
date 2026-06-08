@@ -61,7 +61,7 @@ pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
     let mut inserted = HashSet::new();
     for chunk in &chunks {
         let aliases = extract_import_aliases(&chunk.content);
-        for reference in extract_references(&chunk.content) {
+        for reference in extract_references(&chunk.content, &chunk.path) {
             let resolved_reference = aliases
                 .get(&reference)
                 .or_else(|| aliases.get(&short_reference_name(&reference)))
@@ -141,6 +141,114 @@ fn pagerank(node_ids: &[i64], edges: &[(i64, i64)]) -> Vec<(i64, f32)> {
     }
 
     node_ids.iter().copied().zip(rank).collect()
+}
+
+/// Detect circular dependencies using Tarjan's SCC algorithm.
+/// Returns cycles (SCCs with size > 1) as lists of symbol names.
+pub fn detect_cycles(edges: &[(i64, String, i64, String)]) -> Vec<Vec<String>> {
+    let mut adj: HashMap<i64, Vec<i64>> = HashMap::new();
+    let mut node_names: HashMap<i64, String> = HashMap::new();
+
+    for (caller_id, caller_name, callee_id, callee_name) in edges {
+        adj.entry(*caller_id).or_default().push(*callee_id);
+        node_names.entry(*caller_id).or_insert_with(|| caller_name.clone());
+        node_names.entry(*callee_id).or_insert_with(|| callee_name.clone());
+    }
+
+    let mut index_counter: usize = 0;
+    let mut stack: Vec<i64> = Vec::new();
+    let mut on_stack: HashSet<i64> = HashSet::new();
+    let mut indices: HashMap<i64, usize> = HashMap::new();
+    let mut lowlinks: HashMap<i64, usize> = HashMap::new();
+    let mut sccs: Vec<Vec<i64>> = Vec::new();
+
+    let all_nodes: Vec<i64> = node_names.keys().cloned().collect();
+
+    fn strongconnect(
+        v: i64,
+        index_counter: &mut usize,
+        stack: &mut Vec<i64>,
+        on_stack: &mut HashSet<i64>,
+        indices: &mut HashMap<i64, usize>,
+        lowlinks: &mut HashMap<i64, usize>,
+        adj: &HashMap<i64, Vec<i64>>,
+        sccs: &mut Vec<Vec<i64>>,
+    ) {
+        indices.insert(v, *index_counter);
+        lowlinks.insert(v, *index_counter);
+        *index_counter += 1;
+        stack.push(v);
+        on_stack.insert(v);
+
+        if let Some(neighbors) = adj.get(&v) {
+            for &w in neighbors {
+                if !indices.contains_key(&w) {
+                    strongconnect(w, index_counter, stack, on_stack, indices, lowlinks, adj, sccs);
+                    let v_low = *lowlinks.get(&v).unwrap_or(&usize::MAX);
+                    let w_low = *lowlinks.get(&w).unwrap_or(&usize::MAX);
+                    lowlinks.insert(v, v_low.min(w_low));
+                } else if on_stack.contains(&w) {
+                    let v_low = *lowlinks.get(&v).unwrap_or(&usize::MAX);
+                    let w_idx = *indices.get(&w).unwrap_or(&usize::MAX);
+                    lowlinks.insert(v, v_low.min(w_idx));
+                }
+            }
+        }
+
+        if lowlinks.get(&v) == indices.get(&v) {
+            let mut scc = Vec::new();
+            loop {
+                let w = stack.pop().unwrap();
+                on_stack.remove(&w);
+                scc.push(w);
+                if w == v {
+                    break;
+                }
+            }
+            if scc.len() > 1 {
+                sccs.push(scc);
+            }
+        }
+    }
+
+    for node in all_nodes {
+        if !indices.contains_key(&node) {
+            strongconnect(
+                node,
+                &mut index_counter,
+                &mut stack,
+                &mut on_stack,
+                &mut indices,
+                &mut lowlinks,
+                &adj,
+                &mut sccs,
+            );
+        }
+    }
+
+    sccs.into_iter()
+        .map(|scc| {
+            scc.into_iter()
+                .map(|id| node_names.remove(&id).unwrap_or_else(|| format!("node_{id}")))
+                .collect()
+        })
+        .collect()
+}
+
+/// Format detected cycles for CLI output.
+pub fn format_cycles(cycles: &[Vec<String>]) -> String {
+    if cycles.is_empty() {
+        return "No circular dependencies found.".to_string();
+    }
+    let mut out = format!("## Circular Dependencies ({} cycles)\n", cycles.len());
+    for (i, cycle) in cycles.iter().enumerate() {
+        out.push_str(&format!("{}. {}", i + 1, cycle.join(" → ")));
+        if let Some(first) = cycle.first() {
+            out.push_str(&format!(" → {}", first));
+        }
+        out.push('\n');
+    }
+    out
 }
 
 fn resolve_reference_targets<'a>(
@@ -256,6 +364,41 @@ pub fn format_relations(relations: &[GraphRelation], title: &str) -> String {
     out
 }
 
+/// Format graph relations as a Mermaid flowchart diagram.
+pub fn format_relations_mermaid(relations: &[GraphRelation], title: &str) -> String {
+    if relations.is_empty() {
+        return format!("No graph relationships found for: {title}");
+    }
+    let mut out = String::from("```mermaid\ngraph LR\n");
+    let mut seen_nodes = std::collections::HashSet::new();
+
+    for rel in relations {
+        let from_id = format!("N{}", rel.from.chunk_id);
+        let to_id = format!("N{}", rel.to.chunk_id);
+
+        if seen_nodes.insert(from_id.clone()) {
+            out.push_str(&format!(
+                "    {}[\"{}:{} [{}] {}\"]\n",
+                from_id, rel.from.path, rel.from.start_line, rel.from.kind, rel.from.name
+            ));
+        }
+        if seen_nodes.insert(to_id.clone()) {
+            out.push_str(&format!(
+                "    {}[\"{}:{} [{}] {}\"]\n",
+                to_id, rel.to.path, rel.to.start_line, rel.to.kind, rel.to.name
+            ));
+        }
+        out.push_str(&format!(
+            "    {} -->|\"{}\"| {}\n",
+            from_id, rel.reference, to_id
+        ));
+    }
+
+    out.push_str(&format!("    %% {title}\n"));
+    out.push_str("```\n");
+    out
+}
+
 fn load_symbol_chunks(conn: &Connection) -> Result<Vec<ChunkSymbol>> {
     let mut stmt = conn.prepare(
         "SELECT id, file_id, path, symbol, kind, start_line, end_line, content
@@ -277,7 +420,106 @@ fn load_symbol_chunks(conn: &Connection) -> Result<Vec<ChunkSymbol>> {
     Ok(rows.filter_map(|row| row.ok()).collect())
 }
 
-fn extract_references(content: &str) -> Vec<String> {
+fn is_comment_or_string(kind: &str) -> bool {
+    let k = kind.to_ascii_lowercase();
+    k.contains("comment") || k.contains("string") || k == "char" || k == "character"
+}
+
+fn is_definition_node(node: tree_sitter::Node, parent: tree_sitter::Node) -> bool {
+    let parent_kind = parent.kind();
+    for field in &["name", "pattern", "declarator", "target", "left"] {
+        if let Some(child) = parent.child_by_field_name(field) {
+            if child.id() == node.id() {
+                return true;
+            }
+        }
+    }
+    matches!(parent_kind, "parameter" | "formal_parameter" | "parameter_declaration")
+}
+
+fn is_reference_node(kind: &str) -> bool {
+    matches!(
+        kind,
+        "identifier"
+            | "type_identifier"
+            | "field_identifier"
+            | "property_identifier"
+            | "shorthand_property_identifier"
+            | "namespace_identifier"
+            | "scoped_identifier"
+            | "scoped_type_identifier"
+    )
+}
+
+fn extract_references_tree_sitter(content: &str, path: &str) -> Option<Vec<String>> {
+    let p = std::path::Path::new(path);
+    let lang = crate::chunker::detect_lang(p);
+    let ts_lang = match lang {
+        crate::chunker::Lang::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
+        crate::chunker::Lang::Python => Some(tree_sitter_python::LANGUAGE.into()),
+        crate::chunker::Lang::TypeScript | crate::chunker::Lang::JavaScript => {
+            Some(tree_sitter_javascript::LANGUAGE.into())
+        }
+        crate::chunker::Lang::Go => Some(tree_sitter_go::LANGUAGE.into()),
+        crate::chunker::Lang::Cpp => Some(tree_sitter_cpp::LANGUAGE.into()),
+        crate::chunker::Lang::Generic => None,
+    }?;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).ok()?;
+    let tree = parser.parse(content, None)?;
+    let mut refs = HashSet::new();
+
+    fn traverse(
+        node: tree_sitter::Node,
+        content: &str,
+        refs: &mut HashSet<String>,
+    ) {
+        let kind = node.kind();
+        if is_comment_or_string(kind) {
+            return;
+        }
+
+        let is_ref = is_reference_node(kind);
+        if is_ref {
+            let is_def = if let Some(parent) = node.parent() {
+                is_definition_node(node, parent)
+            } else {
+                false
+            };
+
+            if !is_def {
+                if let Some(text) = content.get(node.start_byte()..node.end_byte()) {
+                    let cleaned = text.trim();
+                    if !cleaned.is_empty() && !is_keyword(cleaned) {
+                        refs.insert(cleaned.to_string());
+                    }
+                }
+            }
+
+            if matches!(
+                kind,
+                "scoped_identifier"
+                    | "scoped_type_identifier"
+            ) {
+                return;
+            }
+        }
+
+        for i in 0..node.child_count() as u32 {
+            if let Some(child) = node.child(i) {
+                traverse(child, content, refs);
+            }
+        }
+    }
+
+    traverse(tree.root_node(), content, &mut refs);
+    let mut result: Vec<String> = refs.into_iter().collect();
+    result.sort();
+    Some(result)
+}
+
+fn extract_references_regex(content: &str) -> Vec<String> {
     let call_re = Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(").unwrap();
     let path_call_re =
         Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+)\s*\(").unwrap();
@@ -307,6 +549,14 @@ fn extract_references(content: &str) -> Vec<String> {
     let mut refs: Vec<String> = refs.into_iter().collect();
     refs.sort();
     refs
+}
+
+fn extract_references(content: &str, path: &str) -> Vec<String> {
+    if let Some(refs) = extract_references_tree_sitter(content, path) {
+        refs
+    } else {
+        extract_references_regex(content)
+    }
 }
 
 fn extract_import_aliases(content: &str) -> HashMap<String, String> {
@@ -513,12 +763,29 @@ mod tests {
     #[test]
     fn extracts_function_and_method_references() {
         let refs =
-            extract_references("fn a() { foo(); user.save(); crate::bar::baz(); if ready() {} }");
+            extract_references("fn a() { foo(); user.save(); crate::bar::baz(); if ready() {} }", "test.rs");
         assert!(refs.contains(&"foo".to_string()));
         assert!(refs.contains(&"save".to_string()));
         assert!(refs.contains(&"crate::bar::baz".to_string()));
         assert!(refs.contains(&"ready".to_string()));
         assert!(!refs.contains(&"if".to_string()));
+    }
+
+    #[test]
+    fn tree_sitter_ignores_comments_and_strings() {
+        let code = r#"
+            // This is a comment calling ignored_comment_func()
+            /* Another ignored_block_func() comment */
+            fn my_func() {
+                let some_str = "ignored_string_func()";
+                actual_func();
+            }
+        "#;
+        let refs = extract_references(code, "test.rs");
+        assert!(!refs.contains(&"ignored_comment_func".to_string()));
+        assert!(!refs.contains(&"ignored_block_func".to_string()));
+        assert!(!refs.contains(&"ignored_string_func".to_string()));
+        assert!(refs.contains(&"actual_func".to_string()));
     }
 
     #[test]

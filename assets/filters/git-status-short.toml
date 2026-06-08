@@ -1,0 +1,20 @@
+[filters.git-status-short]
+description = "Compact short git status output"
+match_command = "^git\\s+status\\s+--short\\b"
+strip_ansi = true
+head_lines = 2
+truncate_lines_at = 90
+
+[[tests.git-status-short]]
+name = "Short status keeps representative changed files"
+input = """
+ M src/main.rs
+ M src/query.rs
+ M src/benchmark.rs
+ M README.md
+ M AGENTS.md
+?? src/pack.rs
+?? assets/filters/git-status-short.toml
+"""
+expected = """ M src/main.rs
+ M src/query.rs"""

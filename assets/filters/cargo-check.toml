@@ -7,9 +7,18 @@ strip_lines_matching = [
   "^\\s*Checking\\s+",
   "^\\s*Compiling\\s+",
   "^\\s*Fresh\\s+",
-  "^\\s*Finished\\s+"
+  "^\\s*Finished\\s+",
+  "^\\s*\\|\\s*$",
+  "^warning: `.*` .* generated \\d+ warning"
 ]
-max_lines = 100
+keep_lines_matching = [
+  "^error",
+  "^warning",
+  "^\\s*-->",
+  "could not compile"
+]
+max_lines = 40
+truncate_lines_at = 120
 on_empty = "cargo check/clippy: ok"
 
 [[tests.cargo-check]]
@@ -37,10 +46,4 @@ warning: `tokenix` (bin "tokenix") generated 1 warning
     Finished dev [unoptimized + debuginfo] target(s) in 0.9s
 """
 expected = """warning: unused variable: `x`
-  --> src/main.rs:12:9
-   |
-12 |     let x = 42;
-   |         ^ help: if this is intentional, prefix it with an underscore: `_x`
-   |
-   = note: `#[warn(unused_variables)]` on by default
-warning: `tokenix` (bin "tokenix") generated 1 warning"""
+  --> src/main.rs:12:9"""
