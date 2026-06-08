@@ -40,6 +40,23 @@ pub fn run_doctor() -> Result<()> {
     println!();
 
     section("Embedding model");
+    let active = crate::embed::active_model_id();
+    kv(
+        "active",
+        &format!("{} ({})", active, crate::embed::spec_for(&active).note),
+    );
+    // If run inside an indexed repo, show the model that index was built with.
+    if let Ok(cwd) = std::env::current_dir() {
+        let root = crate::store::find_project_root(&cwd);
+        if let Some(indexed) = crate::store::index_model_id(&root) {
+            kv("this repo's index", &indexed);
+        }
+    }
+    let available: Vec<String> = crate::embed::MODELS
+        .iter()
+        .map(|m| m.id.to_string())
+        .collect();
+    kv("available", &available.join(", "));
     let model_dir = crate::embed::model_cache_dir();
     match dir_size(&model_dir) {
         Some(bytes) if bytes > 0 => kv(

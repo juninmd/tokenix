@@ -1,3 +1,4 @@
+mod artifacts;
 mod benchmark;
 mod chunker;
 mod cmd_filter;
@@ -110,6 +111,11 @@ enum Commands {
         jobs: Option<usize>,
         #[arg(long, help = "Embedding batch size for indexing")]
         embed_batch: Option<usize>,
+        #[arg(
+            long,
+            help = "Embedding model id (e.g. nomic-v1.5, bge-small). See `tokenix doctor`"
+        )]
+        model: Option<String>,
         #[arg(long, help = "Update file chunks and symbol graph without embedding")]
         no_embed: bool,
     },
@@ -388,6 +394,9 @@ enum Commands {
         #[arg(long)]
         cache_hygiene: bool,
     },
+    /// Manage context artifacts (non-code files in .tokenix/artifacts.json)
+    #[command(subcommand)]
+    Artifacts(ArtifactsAction),
     /// Hook handler called by AI tools (not for direct use)
     Hook,
     /// PostToolUse hook handler for output compression (not for direct use)
@@ -396,6 +405,21 @@ enum Commands {
     Mcp {
         #[arg(long, value_enum, default_value = "full")]
         profile: McpProfile,
+    },
+}
+
+#[derive(Subcommand)]
+enum ArtifactsAction {
+    /// List all context artifacts
+    List {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show the content of a context artifact
+    Show {
+        name: String,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
     },
 }
 
@@ -508,8 +532,17 @@ fn main() -> Result<()> {
             cpu_profile,
             jobs,
             embed_batch,
+            model,
             no_embed,
         } => {
+            if let Some(model) = model.as_deref() {
+                if !crate::embed::is_known_model(model) {
+                    let ids: Vec<&str> = crate::embed::MODELS.iter().map(|m| m.id).collect();
+                    anyhow::bail!("unknown --model '{model}'. Available: {}", ids.join(", "));
+                }
+                crate::embed::set_active_model(model);
+                set_env_override("TOKENIX_EMBED_MODEL", model);
+            }
             configure_index_limits(cpu_profile, only_cpu, jobs, embed_batch);
             cmd_index(&path, force, if_stale, no_embed)
         }
@@ -666,6 +699,10 @@ fn main() -> Result<()> {
             json,
             cache_hygiene,
         } => cmd_session_audit(&path, json, cache_hygiene),
+        Commands::Artifacts(action) => match action {
+            ArtifactsAction::List { path } => cmd_artifacts_list(&path),
+            ArtifactsAction::Show { name, path } => cmd_artifacts_show(&path, &name),
+        },
         Commands::Hook => {
             // Hook is a short-lived subprocess: limit thread pools before any init.
             // OMP_NUM_THREADS controls ONNX Runtime threads on Windows (MS prebuilt uses OpenMP).
@@ -966,6 +1003,16 @@ fn cmd_session_audit(path: &Path, json: bool, cache_hygiene: bool) -> Result<()>
         println!("- {rec}");
     }
     Ok(())
+}
+
+fn cmd_artifacts_list(path: &Path) -> Result<()> {
+    let repo_root = find_repo_root(path);
+    crate::artifacts::list_artifacts(&repo_root)
+}
+
+fn cmd_artifacts_show(path: &Path, name: &str) -> Result<()> {
+    let repo_root = find_repo_root(path);
+    crate::artifacts::show_artifact(&repo_root, name)
 }
 
 /// Print a per-section token breakdown of a generated context to stderr, so the
@@ -2152,12 +2199,12 @@ fn remove_claude_code(local: bool) -> Result<()> {
     }
     let raw = std::fs::read_to_string(&settings_path)?;
     let mut settings: serde_json::Value = serde_json::from_str(&raw)?;
-    if let Some(arr) = settings["hooks"]["PreToolUse"].as_array_mut() {
-        arr.retain(|h| !h.to_string().contains("tokenix"));
-    }
-    if let Some(arr) = settings["hooks"]["PostToolUse"].as_array_mut() {
-        arr.retain(|h| !h.to_string().contains("tokenix"));
-    }
+    // Use the non-vivifying helper: indexing `settings["hooks"]["PostToolUse"]`
+    // with IndexMut would INSERT a `"PostToolUse": null` for a missing key, which
+    // is exactly the null hook event the install path strips (Claude Code chokes
+    // on null events). get_mut chains never create keys.
+    remove_tokenix_hook_entries(&mut settings, "PreToolUse");
+    remove_tokenix_hook_entries(&mut settings, "PostToolUse");
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
     println!(
         "{} Claude Code hooks removed from {}",
@@ -2600,6 +2647,38 @@ mod tests {
 
         assert!(!changed);
         assert_eq!(settings, serde_json::json!({"hooks": {}}));
+    }
+
+    #[test]
+    fn remove_claude_hooks_keeps_foreign_and_adds_no_null_event() {
+        // Regression: remove-hook used `settings["hooks"]["PostToolUse"]` (IndexMut),
+        // which INSERTS `"PostToolUse": null` when the key is absent — the exact null
+        // event the install path strips (Claude Code chokes on it). The fix routes
+        // both events through the get_mut-based helper, mirroring remove_claude_code.
+        let mut settings = serde_json::json!({
+            "model": "opus",
+            "hooks": {
+                "PreToolUse": [
+                    { "matcher": "^Edit$", "hooks": [{"type": "command", "command": "other"}] },
+                    { "matcher": "^(Read|Grep|Bash)$", "hooks": [{"type": "command", "command": "\"/x/tokenix\" hook"}] }
+                ]
+            }
+        });
+
+        remove_tokenix_hook_entries(&mut settings, "PreToolUse");
+        remove_tokenix_hook_entries(&mut settings, "PostToolUse");
+
+        let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 1, "foreign hook must be preserved");
+        assert!(pre[0].to_string().contains("Edit"));
+        assert!(
+            !settings["hooks"]
+                .as_object()
+                .unwrap()
+                .contains_key("PostToolUse"),
+            "must not create a null PostToolUse event"
+        );
+        assert_eq!(settings["model"], "opus", "unrelated keys preserved");
     }
 
     #[test]

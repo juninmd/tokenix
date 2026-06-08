@@ -58,11 +58,25 @@ fn greet(name: &str) -> String { format!("Hello, {}!", name) }
 fn main() { println!("{}", greet("world")); }
 RS
 
-# large code file (≥200 lines) — generates outline
-# generate 220 lines of Rust functions
-for i in $(seq 0 219); do
-  echo "fn func_${i}(x: i32) -> i32 { x + ${i} }"
+# large code file (≥200 lines) with real function bodies — the symbol outline is
+# far smaller than the source, so interception genuinely saves tokens (exit 2).
+for i in $(seq 0 39); do
+  cat <<RS
+fn func_${i}(x: i32) -> i32 {
+    let a = x + ${i};
+    let b = a.wrapping_mul(2);
+    let c = b.wrapping_sub(${i});
+    c + a
+}
+RS
 done > "$REPO/src/large.rs"
+
+# large code file (≥200 lines) of many tiny one-line functions: the per-symbol
+# outline is ~as large as the source, so intercepting would not save tokens (and
+# would force a re-read) — the hook must pass through (exit 0).
+for i in $(seq 0 219); do
+  echo "fn dense_${i}(x: i32) -> i32 { x + ${i} }"
+done > "$REPO/src/dense.rs"
 
 # large non-code file (.md) — should NOT be intercepted
 for i in $(seq 1 220); do echo "line $i content here"; done > "$REPO/docs.md"
@@ -188,6 +202,15 @@ if grep -qE '[0-9]+ lines|tokenix' <<<"$ERR"; then
   pass "Read intercept stderr contains outline/tokenix message"
 else
   fail "Read intercept stderr missing expected content" "got: $ERR"
+fi
+
+# Large .rs whose outline is not meaningfully smaller (many tiny symbols) →
+# passes through, because intercepting would lose tokens (outline + re-read).
+run_hook '{"tool_name":"Read","tool_input":{"file_path":"src/dense.rs"}}'
+if [ "$CODE" = "0" ]; then
+  pass "Read exits 0 for large .rs with low-savings outline"
+else
+  fail "Read exits $CODE for low-savings .rs file (expected 0)" "stderr: $ERR"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -27,6 +27,11 @@ pub fn query_index(
         None => return Ok(None),
     };
 
+    // Embed the query with the SAME model the index was built with (read from the
+    // index meta) so query and document vectors are comparable.
+    if let Some(model_id) = crate::store::index_model_id(repo_root) {
+        crate::embed::set_active_model(&model_id);
+    }
     let vec = embed_query(query_text)?;
     let candidate_k = (k.saturating_mul(5)).max(50);
     let mut results = hybrid_search(&conn, &vec, query_text, candidate_k, file_filter)?;

@@ -23,7 +23,7 @@ tokenix --help
 |---|---|
 | `src/main.rs` | CLI entry (clap), command dispatch, `install-hook`/`remove-hook` helpers |
 | `src/chunker.rs` | Symbol-aware heuristic chunking, `generate_outline()`, token counting |
-| `src/embed.rs` | fastembed ONNX — `embed_documents()`, `embed_query()`. Model cached in `OnceCell` |
+| `src/embed.rs` | fastembed ONNX — `embed_documents()`, `embed_query()`. Model **registry** (`MODELS`, `spec_for`) + thread-local active model (`set_active_model`/`active_model_id`) + per-id loaded-model cache. Per-model query/doc prefixes; query cache keyed by model |
 | `src/store.rs` | SQLite schema, CRUD, cosine similarity search, hook log I/O, PID index lock, branch-aware DB paths |
 | `src/indexer.rs` | File walk + incremental index pipeline. Embeds in batches of 512, resumable checkpoints |
 | `src/query.rs` | Hybrid semantic/lexical ranking (FTS5 + BM25 + RRF), strict `context` modes, budget enforcement, cross-project search |
@@ -202,6 +202,8 @@ but a `node` grandchild may linger briefly until stdin EOF. Kill-the-tree
 **Add an agent to `prompt-audit`:** `mcp_audit.rs` — add an `Agent` variant (with `label`/`key`/`native_tokens`), a `discover_<agent>()` config source, and an `AuditAgent` value + mapping in `main.rs`. Reuse `parse_json_map` for JSON `mcpServers`-style configs.
 
 **Change token budget:** `query.rs` — `DEFAULT_BUDGET` constant, or pass `--budget` flag.
+
+**Embedding model (flexible):** `embed.rs` `MODELS` registry maps a friendly id → `EmbeddingModel` + query/doc prefixes. Default is `nomic-v1.5` (existing indexes keep working). Select with `tokenix index --model <id>` or `TOKENIX_EMBED_MODEL=<id>`. The chosen model is **stamped in the index `meta` (`embed_model`)**; query/hook/daemon read it back via `store::index_model_id` and `embed::set_active_model` so query vectors always match the indexed docs. The model is **sticky** (a plain re-index keeps it); an explicit switch forces a full re-embed. `index_staleness` only flags a model change when `TOKENIX_EMBED_MODEL` is explicitly set. The embedding cache key (`chunk_embedding_key`) and the persistent query cache are namespaced by model id. Add a built-in model: append a `ModelSpec` (use the non-quantized variant if the Qdrant-Q ONNX fails ORT's `SkipLayerNormalization`). `tokenix doctor` lists available + active + this-repo's model.
 
 **Update pricing table:** `gain.rs` — edit `MODELS` constant. Fields: `name`, `input_per_1m` (USD), `reference` (marks ★ model).
 

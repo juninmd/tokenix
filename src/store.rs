@@ -1175,6 +1175,25 @@ pub fn index_staleness(repo_root: &Path) -> IndexStaleness {
         };
     }
 
+    // A model change only makes the index stale when a model is *explicitly*
+    // requested via TOKENIX_EMBED_MODEL. Otherwise queries use whatever model the
+    // index was built with (read from meta), so a differing local default must not
+    // invalidate a perfectly usable index (e.g. a hook with no env set).
+    if let Ok(desired_raw) = std::env::var("TOKENIX_EMBED_MODEL") {
+        let desired_raw = desired_raw.trim();
+        if !desired_raw.is_empty() {
+            let desired = crate::embed::spec_for(desired_raw).id;
+            let stored = meta_value(&conn, "embed_model")
+                .unwrap_or_else(|| crate::embed::DEFAULT_MODEL_ID.to_string());
+            if stored != desired {
+                return IndexStaleness {
+                    stale: true,
+                    reason: format!("embedding model changed ({stored} -> {desired})"),
+                };
+            }
+        }
+    }
+
     if let Some(current) = git_fingerprint(repo_root) {
         match meta_value(&conn, "git_fingerprint") {
             Some(stored) if stored == current => {}
@@ -1228,10 +1247,21 @@ pub fn index_staleness(repo_root: &Path) -> IndexStaleness {
 
 pub fn write_index_meta(conn: &Connection, repo_root: &Path, indexed_at: f64) -> Result<()> {
     set_meta(conn, "indexed_at", &indexed_at.to_string())?;
+    set_meta(conn, "embed_model", &crate::embed::active_model_id())?;
     if let Some(fp) = git_fingerprint(repo_root) {
         set_meta(conn, "git_fingerprint", &fp)?;
     }
     Ok(())
+}
+
+/// The embedding model id the index was built with. Defaults to the historical
+/// model for indexes created before model stamping. `None` if there is no index.
+pub fn index_model_id(repo_root: &Path) -> Option<String> {
+    let conn = open_db(repo_root, false).ok()??;
+    Some(
+        meta_value(&conn, "embed_model")
+            .unwrap_or_else(|| crate::embed::DEFAULT_MODEL_ID.to_string()),
+    )
 }
 
 pub fn meta_value(conn: &Connection, key: &str) -> Option<String> {
