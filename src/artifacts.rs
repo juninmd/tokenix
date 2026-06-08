@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct ArtifactsConfig {
     pub artifacts: Vec<ArtifactEntry>,
 }
@@ -19,6 +19,12 @@ pub struct ArtifactEntry {
 
 pub fn load_artifacts(repo_root: &Path) -> Result<ArtifactsConfig> {
     let path = repo_root.join(".tokenix").join("artifacts.json");
+    // A missing artifacts file is a normal, common state (the feature is opt-in) —
+    // degrade to an empty config so `artifacts list`/`show` report "none" instead
+    // of erroring. A present-but-unreadable or malformed file still errors.
+    if !path.exists() {
+        return Ok(ArtifactsConfig::default());
+    }
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read artifacts file at {}", path.display()))?;
     let config: ArtifactsConfig =
@@ -63,4 +69,30 @@ pub fn show_artifact(repo_root: &Path, name: &str) -> Result<()> {
     println!("--- {} ---", entry.name);
     println!("{}", content);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_artifacts_missing_file_returns_empty() {
+        // A repo with no .tokenix/artifacts.json must not error — `artifacts list`
+        // should report "none", not "No such file or directory".
+        let dir = std::env::temp_dir().join(format!("tokenix_artifacts_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let cfg = load_artifacts(&dir).expect("missing artifacts.json must degrade to empty");
+        assert!(cfg.artifacts.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_artifacts_malformed_file_still_errors() {
+        let dir =
+            std::env::temp_dir().join(format!("tokenix_artifacts_bad_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(dir.join(".tokenix"));
+        std::fs::write(dir.join(".tokenix").join("artifacts.json"), "{ not json").unwrap();
+        assert!(load_artifacts(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
