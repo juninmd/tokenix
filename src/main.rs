@@ -1852,12 +1852,12 @@ fn remove_claude_code(local: bool) -> Result<()> {
     }
     let raw = std::fs::read_to_string(&settings_path)?;
     let mut settings: serde_json::Value = serde_json::from_str(&raw)?;
-    if let Some(arr) = settings["hooks"]["PreToolUse"].as_array_mut() {
-        arr.retain(|h| !h.to_string().contains("tokenix"));
-    }
-    if let Some(arr) = settings["hooks"]["PostToolUse"].as_array_mut() {
-        arr.retain(|h| !h.to_string().contains("tokenix"));
-    }
+    // Use the non-vivifying helper: indexing `settings["hooks"]["PostToolUse"]`
+    // with IndexMut would INSERT a `"PostToolUse": null` for a missing key, which
+    // is exactly the null hook event the install path strips (Claude Code chokes
+    // on null events). get_mut chains never create keys.
+    remove_tokenix_hook_entries(&mut settings, "PreToolUse");
+    remove_tokenix_hook_entries(&mut settings, "PostToolUse");
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
     println!(
         "{} Claude Code hooks removed from {}",
@@ -2300,6 +2300,38 @@ mod tests {
 
         assert!(!changed);
         assert_eq!(settings, serde_json::json!({"hooks": {}}));
+    }
+
+    #[test]
+    fn remove_claude_hooks_keeps_foreign_and_adds_no_null_event() {
+        // Regression: remove-hook used `settings["hooks"]["PostToolUse"]` (IndexMut),
+        // which INSERTS `"PostToolUse": null` when the key is absent — the exact null
+        // event the install path strips (Claude Code chokes on it). The fix routes
+        // both events through the get_mut-based helper, mirroring remove_claude_code.
+        let mut settings = serde_json::json!({
+            "model": "opus",
+            "hooks": {
+                "PreToolUse": [
+                    { "matcher": "^Edit$", "hooks": [{"type": "command", "command": "other"}] },
+                    { "matcher": "^(Read|Grep|Bash)$", "hooks": [{"type": "command", "command": "\"/x/tokenix\" hook"}] }
+                ]
+            }
+        });
+
+        remove_tokenix_hook_entries(&mut settings, "PreToolUse");
+        remove_tokenix_hook_entries(&mut settings, "PostToolUse");
+
+        let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 1, "foreign hook must be preserved");
+        assert!(pre[0].to_string().contains("Edit"));
+        assert!(
+            !settings["hooks"]
+                .as_object()
+                .unwrap()
+                .contains_key("PostToolUse"),
+            "must not create a null PostToolUse event"
+        );
+        assert_eq!(settings["model"], "opus", "unrelated keys preserved");
     }
 
     #[test]
