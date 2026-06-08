@@ -1,32 +1,52 @@
 use anyhow::{anyhow, Result};
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{
+    EmbeddingModel, InitOptions, InitOptionsUserDefined, Pooling, TextEmbedding, TokenizerFiles,
+    UserDefinedEmbeddingModel,
+};
 use once_cell::sync::OnceCell;
+use reqwest::blocking::Client;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 /// Friendly id of the model used when nothing is configured. Existing indexes were
 /// built with this, so it stays the default to avoid forcing a re-index.
 pub const DEFAULT_MODEL_ID: &str = "nomic-v1.5";
 
+/// Where a model's ONNX graph + tokenizer come from.
+pub enum ModelSource {
+    /// One of fastembed's built-in models (downloaded + cached by fastembed).
+    BuiltIn(EmbeddingModel),
+    /// A "bring your own" ONNX model fetched from the Hugging Face hub and loaded
+    /// via fastembed's `UserDefinedEmbeddingModel`. Enables models fastembed does
+    /// not ship (e.g. code-specialized ones) without a new inference backend.
+    Custom {
+        hf_repo: &'static str,
+        onnx_file: &'static str,
+        pooling: Pooling,
+    },
+}
+
 /// A selectable embedding model. `doc_prefix`/`query_prefix` are model-specific:
 /// nomic uses `search_document:`/`search_query:`, e5 uses `passage:`/`query:`,
-/// bge/minilm use none. Using the wrong prefix silently degrades retrieval.
+/// bge/minilm/jina use none. Using the wrong prefix silently degrades retrieval.
 pub struct ModelSpec {
     pub id: &'static str,
-    pub model: EmbeddingModel,
+    pub source: ModelSource,
     pub doc_prefix: &'static str,
     pub query_prefix: &'static str,
     pub note: &'static str,
 }
 
-/// Built-in ONNX models (run on the current fastembed/ORT backend, no extra deps).
+/// Selectable models. Built-ins run on fastembed's bundled list; `jina-code` is a
+/// custom ONNX downloaded on first use.
 pub const MODELS: &[ModelSpec] = &[
     ModelSpec {
         id: "nomic-v1.5",
-        model: EmbeddingModel::NomicEmbedTextV15Q,
+        source: ModelSource::BuiltIn(EmbeddingModel::NomicEmbedTextV15Q),
         doc_prefix: "search_document: ",
         query_prefix: "search_query: ",
         note: "768d · English · quantized · default",
@@ -37,31 +57,43 @@ pub const MODELS: &[ModelSpec] = &[
     // far fewer params than nomic, so indexing is faster.
     ModelSpec {
         id: "bge-small",
-        model: EmbeddingModel::BGESmallENV15,
+        source: ModelSource::BuiltIn(EmbeddingModel::BGESmallENV15),
         doc_prefix: "",
         query_prefix: "",
         note: "384d · English · ~33M params, fast",
     },
     ModelSpec {
         id: "bge-base",
-        model: EmbeddingModel::BGEBaseENV15,
+        source: ModelSource::BuiltIn(EmbeddingModel::BGEBaseENV15),
         doc_prefix: "",
         query_prefix: "",
         note: "768d · English",
     },
     ModelSpec {
         id: "minilm-l6",
-        model: EmbeddingModel::AllMiniLML6V2,
+        source: ModelSource::BuiltIn(EmbeddingModel::AllMiniLML6V2),
         doc_prefix: "",
         query_prefix: "",
         note: "384d · English · ~22M params, fastest, lower quality",
     },
     ModelSpec {
         id: "e5-small",
-        model: EmbeddingModel::MultilingualE5Small,
+        source: ModelSource::BuiltIn(EmbeddingModel::MultilingualE5Small),
         doc_prefix: "passage: ",
         query_prefix: "query: ",
         note: "384d · multilingual",
+    },
+    // Code-specialized (custom ONNX). Mean pooling; no task prefix.
+    ModelSpec {
+        id: "jina-code",
+        source: ModelSource::Custom {
+            hf_repo: "jinaai/jina-embeddings-v2-base-code",
+            onnx_file: "onnx/model.onnx",
+            pooling: Pooling::Mean,
+        },
+        doc_prefix: "",
+        query_prefix: "",
+        note: "768d · code-specialized (downloaded on first use)",
     },
 ];
 
@@ -221,8 +253,15 @@ fn model_for(id: &str) -> Result<&'static TextEmbedding> {
     if let Some(m) = map.get(id) {
         return Ok(*m);
     }
-    let te = build_text_embedding(spec_for(id).model.clone())
-        .map_err(|e| anyhow!("Embedding model '{id}' init failed: {e}"))?;
+    let te = match &spec_for(id).source {
+        ModelSource::BuiltIn(m) => build_text_embedding(m.clone()),
+        ModelSource::Custom {
+            hf_repo,
+            onnx_file,
+            pooling,
+        } => build_custom_embedding(id, hf_repo, onnx_file, pooling.clone()),
+    }
+    .map_err(|e| anyhow!("Embedding model '{id}' init failed: {e}"))?;
     // Leak once: the model lives for the rest of the process anyway.
     let leaked: &'static TextEmbedding = Box::leak(Box::new(te));
     map.insert(id.to_string(), leaked);
@@ -263,6 +302,90 @@ fn build_text_embedding(model: EmbeddingModel) -> Result<TextEmbedding> {
     }
 
     TextEmbedding::try_new(options)
+}
+
+/// Load a "bring your own" ONNX model from the Hugging Face hub via fastembed's
+/// `UserDefinedEmbeddingModel`. Files are cached under `<model_cache>/custom/<id>/`.
+fn build_custom_embedding(
+    id: &str,
+    repo: &str,
+    onnx_file: &str,
+    pooling: Pooling,
+) -> Result<TextEmbedding> {
+    #[allow(unused_unsafe)]
+    if std::env::var("OMP_NUM_THREADS").is_err() {
+        unsafe { std::env::set_var("OMP_NUM_THREADS", "1") };
+    }
+    let dir = model_cache_dir().join("custom").join(id);
+    std::fs::create_dir_all(&dir)?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(600))
+        .build()?;
+
+    let onnx = download_model_file(&client, repo, onnx_file, &dir.join("model.onnx"))?;
+    let tokenizer_files = TokenizerFiles {
+        tokenizer_file: download_model_file(
+            &client,
+            repo,
+            "tokenizer.json",
+            &dir.join("tokenizer.json"),
+        )?,
+        config_file: download_model_file(&client, repo, "config.json", &dir.join("config.json"))?,
+        special_tokens_map_file: download_model_file(
+            &client,
+            repo,
+            "special_tokens_map.json",
+            &dir.join("special_tokens_map.json"),
+        )?,
+        tokenizer_config_file: download_model_file(
+            &client,
+            repo,
+            "tokenizer_config.json",
+            &dir.join("tokenizer_config.json"),
+        )?,
+    };
+
+    let udm = UserDefinedEmbeddingModel::new(onnx, tokenizer_files).with_pooling(pooling);
+
+    #[allow(unused_mut)]
+    let mut options = InitOptionsUserDefined::new();
+    #[cfg(feature = "cuda")]
+    if !force_cpu() {
+        options = options.with_execution_providers(vec![
+            ort::execution_providers::CUDAExecutionProvider::default().build(),
+            ort::execution_providers::CPUExecutionProvider::default().build(),
+        ]);
+    }
+    #[cfg(all(not(feature = "cuda"), feature = "directml"))]
+    if !force_cpu() {
+        options = options.with_execution_providers(vec![
+            ort::execution_providers::DirectMLExecutionProvider::default().build(),
+            ort::execution_providers::CPUExecutionProvider::default().build(),
+        ]);
+    }
+
+    TextEmbedding::try_new_from_user_defined(udm, options).map_err(|e| anyhow!("{e}"))
+}
+
+/// Download a single HF repo file to `dest`, returning its bytes. Cached: if a
+/// non-empty file already exists at `dest` it is reused (no network).
+fn download_model_file(client: &Client, repo: &str, file: &str, dest: &Path) -> Result<Vec<u8>> {
+    if let Ok(bytes) = std::fs::read(dest) {
+        if !bytes.is_empty() {
+            return Ok(bytes);
+        }
+    }
+    let url = format!("https://huggingface.co/{repo}/resolve/main/{file}");
+    let bytes = client
+        .get(&url)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| anyhow!("download {url} failed: {e}"))?
+        .bytes()
+        .map_err(|e| anyhow!("read {url} failed: {e}"))?
+        .to_vec();
+    let _ = std::fs::write(dest, &bytes);
+    Ok(bytes)
 }
 
 /// Embed a batch of document texts for indexing, applying the active model's
@@ -367,6 +490,15 @@ mod tests {
         // Unknown ids fall back to the default rather than breaking.
         assert!(!is_known_model("does-not-exist"));
         assert_eq!(spec_for("does-not-exist").id, DEFAULT_MODEL_ID);
+        // Built-in vs custom sources.
+        assert!(matches!(
+            spec_for("nomic-v1.5").source,
+            ModelSource::BuiltIn(_)
+        ));
+        assert!(matches!(
+            spec_for("jina-code").source,
+            ModelSource::Custom { .. }
+        ));
     }
 
     #[test]
