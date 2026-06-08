@@ -127,8 +127,17 @@ fn compress_cargo(lines: &[&str]) -> String {
             || t.starts_with("running ")
             || t.starts_with("FAILED")
             || (t.starts_with("test ") && (t.ends_with("ok") || t.ends_with("FAILED")));
+        // The whole point of running a test is to learn WHY it failed. These lines
+        // carry that signal and previously fell through to the drop branch, so a
+        // compressed `cargo test` showed "FAILED" with no panic/assertion detail —
+        // forcing the agent to re-run uncompressed (a net token loss).
+        let is_test_failure = t.contains("panicked at")
+            || t.starts_with("assertion ")
+            || t.starts_with("left:")
+            || t.starts_with("right:")
+            || (t.starts_with("---- ") && t.ends_with("----"));
 
-        if is_error {
+        if is_error || is_test_failure {
             out.push(line);
             in_diagnostic = true;
         } else if is_warning && warning_count < MAX_WARNINGS {
@@ -761,6 +770,46 @@ mod tests {
     fn strips_ansi_colors() {
         assert_eq!(strip_ansi("\x1b[32mOK\x1b[0m"), "OK");
         assert_eq!(strip_ansi("\x1b[1;31mError\x1b[0m: bad"), "Error: bad");
+    }
+
+    #[test]
+    fn cargo_test_failure_detail_is_preserved() {
+        // A failing `cargo test` must keep the panic/assertion detail — that is the
+        // whole reason to read the output. Compression should drop noise (Compiling
+        // lines, passing tests) but never the failure signal.
+        let raw = "\
+Compiling foo v0.1.0
+running 1 test
+test tests::adds ... FAILED
+
+failures:
+
+---- tests::adds stdout ----
+thread 'tests::adds' panicked at src/lib.rs:10:9:
+assertion `left == right` failed
+  left: 4
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+failures:
+    tests::adds
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
+        let lines: Vec<&str> = raw.lines().collect();
+        let out = compress_cargo(&lines);
+        assert!(out.contains("panicked at"), "panic line must be preserved");
+        assert!(
+            out.contains("assertion `left == right` failed"),
+            "assertion line must be preserved"
+        );
+        assert!(out.contains("left: 4"), "left value must be preserved");
+        assert!(out.contains("right: 5"), "right value must be preserved");
+        assert!(
+            out.contains("---- tests::adds stdout ----"),
+            "failing test name marker must be preserved"
+        );
+        // Still compresses: the noisy Compiling line is dropped.
+        assert!(!out.contains("Compiling foo"), "noise should be dropped");
     }
 
     #[test]

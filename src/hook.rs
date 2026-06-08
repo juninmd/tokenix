@@ -280,6 +280,23 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         );
     }
 
+    // Only intercept when the outline is materially smaller than the file. For
+    // files of many tiny symbols the outline can be ~as large as (or larger than)
+    // the source, so intercepting would cost ~full price for the outline AND force
+    // a re-read for the bodies — a net token loss. Require >=30% savings.
+    let file_tokens = count_tokens(&content) as i64;
+    let outline_tokens = count_tokens(&outline) as i64;
+    if file_tokens <= 0 || (file_tokens - outline_tokens) * 100 < file_tokens * 30 {
+        return (
+            false,
+            String::new(),
+            format!(
+                "outline saves <30% ({} vs {} tokens) — passing through",
+                outline_tokens, file_tokens
+            ),
+        );
+    }
+
     let msg = format!(
         "{}\n\n[tokenix] File has {} lines. Showing symbol outline above.\n\
         To read a specific symbol: tokenix read {} --symbol <name>\n\
@@ -836,6 +853,49 @@ mod tests {
         let input = HookInput::from_stdin(raw).unwrap();
         assert_eq!(input.tool_name, "Read");
         assert_eq!(input.tool_input["file_path"], "src/main.rs");
+    }
+
+    #[test]
+    fn read_intercepts_only_when_outline_saves_tokens() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("tokenix_read_hook_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+
+        // Many small-but-indexable one-line functions: the per-symbol outline is
+        // ~as large as the file, so intercepting would not save tokens and would
+        // force a re-read. handle_read must pass through (intercepted == false).
+        let dense = dir.join("dense.rs");
+        let mut f = std::fs::File::create(&dense).unwrap();
+        for i in 0..220 {
+            writeln!(f, "pub fn s{i}(x: i64, y: i64) -> i64 {{ x + y + {i} }}").unwrap();
+        }
+        drop(f);
+        let input = serde_json::json!({ "file_path": dense.to_string_lossy() });
+        let (intercepted, _, reason) = handle_read(&input, &dir);
+        assert!(
+            !intercepted,
+            "dense small-symbol file should pass through, got: {reason}"
+        );
+
+        // A few large functions: the outline is far smaller than the file → intercept.
+        let sparse = dir.join("sparse.rs");
+        let mut f = std::fs::File::create(&sparse).unwrap();
+        for i in 0..6 {
+            writeln!(f, "pub fn big{i}(x: i64) -> i64 {{").unwrap();
+            for j in 0..50 {
+                writeln!(f, "    let v{j} = x + {j} * {i}; // body line padding the function").unwrap();
+            }
+            writeln!(f, "    x\n}}").unwrap();
+        }
+        drop(f);
+        let input = serde_json::json!({ "file_path": sparse.to_string_lossy() });
+        let (intercepted, _, reason) = handle_read(&input, &dir);
+        assert!(
+            intercepted,
+            "large-body file should be intercepted, got: {reason}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
