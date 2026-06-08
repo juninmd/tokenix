@@ -1,35 +1,52 @@
 [filters.pre-commit]
 description = "Compact pre-commit output"
-match_command = "^pre-commit\\b"
+match_command = "^pre-commit\\s+(run|install|autoupdate)\\b"
 strip_ansi = true
 strip_lines_matching = [
-  "^\\[INFO\\] Installing environment",
-  "^\\[INFO\\] Once installed this environment will be reused",
-  "^\\[INFO\\] This may take a few minutes",
   "^\\s*$",
+  "^\\s*\\[INFO\\]",
+  "^\\s*Installing",
+  "^\\s*Installing environment",
+  "^\\s*\\d+ passed",
+  "^\\s*\\d+ failed",
+  "^\\s*All hooks passed"
+]
+keep_lines_matching = [
+  "FAILED",
+  "Error:",
+  "error:",
+  "Hook failed",
+  "returned non-zero"
 ]
 max_lines = 40
+on_empty = "pre-commit: passed"
 
 [[tests.pre-commit]]
-name = "strips INFO install noise, keeps hook results"
+name = "hooks pass"
 input = """
-[INFO] Installing environment for https://github.com/psf/black.
+[INFO] Installing environment for https://github.com/pre-commit/pre-commit-hooks.
 [INFO] Once installed this environment will be reused.
 [INFO] This may take a few minutes...
-Trim Trailing Whitespace.................................................Passed
-Fix End of Files.........................................................Passed
-Check Yaml...............................................................Failed
-- hook id: check-yaml
-- exit code: 1
+Trim Trailing Whitespace...............................................Passed
+Fix End of Files......................................................Passed
+Check Yaml............................................................Passed
 """
-expected = "Trim Trailing Whitespace.................................................Passed\nFix End of Files.........................................................Passed\nCheck Yaml...............................................................Failed\n- hook id: check-yaml\n- exit code: 1"
+expected = "pre-commit: passed"
 
 [[tests.pre-commit]]
-name = "all passed — no INFO noise"
+name = "hook failure shown"
 input = """
-[INFO] Installing environment for https://github.com/pre-commit/mirrors-isort.
-[INFO] Once installed this environment will be reused.
-isort....................................................................Passed
-black....................................................................Passed
+Check Yaml............................................................Failed
+- hook id: check-yaml
+- exit code: 1
+
+Error: Invalid YAML: mapping values are not allowed here
+  in ".github/workflows/ci.yml", line 10, column 15
 """
-expected = "isort....................................................................Passed\nblack....................................................................Passed"
+expected = """
+Check Yaml............................................................Failed
+- hook id: check-yaml
+- exit code: 1
+
+Error: Invalid YAML: mapping values are not allowed here
+  in ".github/workflows/ci.yml", line 10, column 15"""

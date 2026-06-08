@@ -1,0 +1,27 @@
+[filters.docker-images]
+description = "Compact docker images output"
+match_command = "^docker\\s+images\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^REPOSITORY\\s+TAG"
+]
+keep_lines_matching = [
+  "^\\w+",
+  "<none>"
+]
+max_lines = 30
+on_empty = "docker images: none"
+
+[[tests.docker-images]]
+name = "list images"
+input = """
+REPOSITORY    TAG       IMAGE ID       CREATED        SIZE
+nginx         latest    abc123def456   2 days ago     188MB
+postgres      15        def456abc123   3 days ago     372MB
+myapp         latest    ghi789jkl012   1 hour ago     256MB
+"""
+expected = """
+nginx         latest    abc123def456   2 days ago     188MB
+postgres      15        def456abc123   3 days ago     372MB
+myapp         latest    ghi789jkl012   1 hour ago     256MB"""

@@ -1,0 +1,33 @@
+[filters.terraform-fmt]
+description = "Compact terraform fmt output"
+match_command = "^terraform\\s+fmt\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\w+\\.tf",
+  "Error:",
+  "Error:",
+  "failed"
+]
+max_lines = 20
+on_empty = "terraform fmt: formatted"
+
+[[tests.terraform-fmt]]
+name = "files formatted"
+input = """
+main.tf
+variables.tf
+outputs.tf
+"""
+expected = """
+main.tf
+variables.tf
+outputs.tf"""
+
+[[tests.terraform-fmt]]
+name = "no changes"
+input = """
+"""
+expected = "terraform fmt: formatted"

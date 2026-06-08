@@ -4,31 +4,52 @@ match_command = "^ansible-playbook\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^ok: \\[",
-  "^skipping: \\[",
+  "^PLAY \\[",
+  "^TASK \\[",
+  "^\\s*ok: ",
+  "^\\s*changed: ",
+  "^\\s*skipping: ",
+  "^\\s*\\d+ hosts",
+  "^\\s*PLAY RECAP",
+  "^\\s*\\w+\\s+:\\s+ok="
 ]
-max_lines = 60
+keep_lines_matching = [
+  "FAILED",
+  "fatal:",
+  "ERROR",
+  "unreachable",
+  "failed=",
+  "MSG:"
+]
+max_lines = 50
+on_empty = "ansible-playbook: ok"
 
 [[tests.ansible-playbook]]
-name = "strips ok and skipping lines, keeps changed and failures"
+name = "clean run"
 input = """
-PLAY [all] *********************************************************************
+PLAY [webservers] ************************************************************
 
-TASK [Gathering Facts] *********************************************************
-ok: [web01]
-ok: [web02]
+TASK [Gathering Facts] *******************************************************
+ok: [web1]
 
-TASK [Install nginx] ***********************************************************
-changed: [web01]
-skipping: [web02]
+TASK [Install nginx] *********************************************************
+changed: [web1]
 
-PLAY RECAP *********************************************************************
-web01                      : ok=2    changed=1    unreachable=0    failed=0
-web02                      : ok=1    changed=0    unreachable=0    failed=0
+PLAY RECAP *******************************************************************
+web1                   : ok=2    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
 """
-expected = "PLAY [all] *********************************************************************\nTASK [Gathering Facts] *********************************************************\nTASK [Install nginx] ***********************************************************\nchanged: [web01]\nPLAY RECAP *********************************************************************\nweb01                      : ok=2    changed=1    unreachable=0    failed=0\nweb02                      : ok=1    changed=0    unreachable=0    failed=0"
+expected = "ansible-playbook: ok"
 
 [[tests.ansible-playbook]]
-name = "failed task preserved"
-input = "TASK [Start service] ***\nfailed: [web01] => {\"msg\": \"Service not found\"}\nPLAY RECAP ***\nweb01 : ok=1 failed=1"
-expected = "TASK [Start service] ***\nfailed: [web01] => {\"msg\": \"Service not found\"}\nPLAY RECAP ***\nweb01 : ok=1 failed=1"
+name = "failure shown"
+input = """
+PLAY [webservers] ************************************************************
+
+TASK [Install nginx] *********************************************************
+fatal: [web1]: FAILED! => {"msg": "Failed to install nginx: apt update failed"}
+
+PLAY RECAP *******************************************************************
+web1                   : ok=1    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0
+"""
+expected = """
+fatal: [web1]: FAILED! => {"msg": "Failed to install nginx: apt update failed}"""

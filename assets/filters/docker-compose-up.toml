@@ -1,0 +1,47 @@
+[filters.docker-compose-up]
+description = "Compact docker compose up output"
+match_command = "^docker\\s+compose\\s+up\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\d+\\.\\d+s",
+  "^\\s*\\d+/\\d+",
+  "^\\s*=>",
+  "^\\s*CACHED",
+  "^\\s*DONE",
+  "^\\s*CREATED",
+  "^\\s*STARTED",
+  "^\\s*HEALTHY",
+  "^\\s*UNHEALTHY"
+]
+keep_lines_matching = [
+  "error:",
+  "failed to",
+  "ERROR:",
+  "unhealthy",
+  "exited",
+  "killed"
+]
+max_lines = 40
+on_empty = "docker compose up: done"
+
+[[tests.docker-compose-up]]
+name = "clean up"
+input = """
+[+] Running 3/3
+ ✔ Network myapp_default    Created
+ ✔ Container myapp-db-1     Started
+ ✔ Container myapp-web-1    Started
+"""
+expected = "docker compose up: done"
+
+[[tests.docker-compose-up]]
+name = "unhealthy shown"
+input = """
+[+] Running 3/3
+ ✔ Network myapp_default    Created
+ ✔ Container myapp-db-1     Started
+ ✘ Container myapp-web-1    Unhealthy
+"""
+expected = """
+ ✘ Container myapp-web-1    Unhealthy"""

@@ -1,0 +1,37 @@
+[filters.govulncheck]
+description = "Compact govulncheck output"
+match_command = "^govulncheck\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*No vulnerabilities found"
+]
+keep_lines_matching = [
+  "Vulnerability",
+  "CVE-",
+  "GHSA-",
+  "Found "
+]
+max_lines = 50
+on_empty = "govulncheck: no vulnerabilities"
+
+[[tests.govulncheck]]
+name = "clean"
+input = """
+No vulnerabilities found.
+"""
+expected = "govulncheck: no vulnerabilities"
+
+[[tests.govulncheck]]
+name = "vulnerability shown"
+input = """
+Vulnerability #1: GO-2024-1234
+  Module: github.com/example/module
+  Version: v1.2.3
+  CVE: CVE-2024-12345
+"""
+expected = """
+Vulnerability #1: GO-2024-1234
+  Module: github.com/example/module
+  Version: v1.2.3
+  CVE: CVE-2024-12345"""

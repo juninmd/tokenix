@@ -1,0 +1,33 @@
+[filters.git-branch]
+description = "Compact git branch output"
+match_command = "^git\\s+branch\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\*",
+  "^\\s+"
+]
+max_lines = 30
+on_empty = "git branch: no branches"
+
+[[tests.git-branch]]
+name = "list branches"
+input = """
+* main
+  feature/new-ui
+  bugfix/login-issue
+"""
+expected = """
+* main
+  feature/new-ui
+  bugfix/login-issue"""
+
+[[tests.git-branch]]
+name = "current branch only"
+input = """
+* main
+"""
+expected = """
+* main"""

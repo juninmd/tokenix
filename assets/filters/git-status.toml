@@ -1,45 +1,59 @@
 [filters.git-status]
 description = "Compact git status output"
-match_command = "^git\\s+status\\s*$"
+match_command = "^git\\s+status\\b"
 strip_ansi = true
 strip_lines_matching = [
-  "\\(use \"git ",
-  "no changes added to commit",
-  "nothing added to commit but untracked files present"
+  "^\\s*$",
+  "^On branch",
+  "^Your branch is",
+  "^nothing to commit",
+  "^working tree clean",
+  "^Changes not staged for commit:",
+  "^Changes to be committed:",
+  "^Untracked files:",
+  "^\\s*\\(",
+  "^\\s*use \"git",
+  "^\\s*\\)"
 ]
 keep_lines_matching = [
-  "^On branch",
-  "^Your branch",
-  "^Changes",
-  "^Untracked",
-  "^\\s*(modified|new file|deleted|renamed):",
-  "^\\s+\\S"
+  "^\\s*modified:",
+  "^\\s*new file:",
+  "^\\s*deleted:",
+  "^\\s*renamed:",
+  "^\\s*\\?"
 ]
-max_lines = 20
+max_lines = 30
+on_empty = "git status: clean"
 
 [[tests.git-status]]
-name = "Git status with modified and untracked files"
+name = "clean repo"
+input = """
+On branch main
+Your branch is up to date with 'origin/main'.
+
+nothing to commit, working tree clean
+"""
+expected = "git status: clean"
+
+[[tests.git-status]]
+name = "changes shown"
 input = """
 On branch main
 Your branch is up to date with 'origin/main'.
 
 Changes not staged for commit:
-  (use "git add <file>..." to stage for commit)
+  (use "git add <file>..." to update what will be committed)
   (use "git restore <file>..." to discard changes in working directory)
-	modified:   src/compress.rs
-	modified:   src/hook.rs
+	modified:   src/main.rs
+	modified:   Cargo.toml
 
 Untracked files:
   (use "git add <file>..." to include in what will be committed)
-	new_file.txt
+	new_feature.rs
 
 no changes added to commit (use "git add" and/or "git commit -a")
 """
 expected = """
-On branch main
-Your branch is up to date with 'origin/main'.
-Changes not staged for commit:
-	modified:   src/compress.rs
-	modified:   src/hook.rs
-Untracked files:
-	new_file.txt"""
+	modified:   src/main.rs
+	modified:   Cargo.toml
+	new_feature.rs"""

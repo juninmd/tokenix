@@ -1,0 +1,25 @@
+[filters.git-worktree]
+description = "Compact git worktree output"
+match_command = "^git\\s+worktree\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\w+",
+  "\\[",
+  "\\]",
+  "detached"
+]
+max_lines = 30
+on_empty = "git worktree: none"
+
+[[tests.git-worktree]]
+name = "list worktrees"
+input = """
+/path/to/repo          abc1234 [main]
+/path/to/repo-feature  def5678 [feature/new-ui]
+"""
+expected = """
+/path/to/repo          abc1234 [main]
+/path/to/repo-feature  def5678 [feature/new-ui]"""

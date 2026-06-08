@@ -1,0 +1,42 @@
+[filters.docker-run]
+description = "Compact docker run output"
+match_command = "^docker\\s+run\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Unable to find image",
+  "^\\w+: Pulling from",
+  "^\\s*\\w+: Pull complete",
+  "^\\s*Digest: ",
+  "^\\s*Status: "
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Failed",
+  "permission denied",
+  "no such file",
+  "executable file not found"
+]
+max_lines = 30
+on_empty = "docker run: started"
+
+[[tests.docker-run]]
+name = "clean run"
+input = """
+Unable to find image 'nginx:latest' locally
+latest: Pulling from library/nginx
+Digest: sha256:abc123...
+Status: Downloaded newer image for nginx:latest
+"""
+expected = "docker run: started"
+
+[[tests.docker-run]]
+name = "error shown"
+input = """
+docker: Error response from daemon: failed to create shim task: OCI runtime create failed: container_linux.go:380: starting container process caused: exec: "nonexistent": executable file not found in $PATH: unknown.
+ERRO[0000] failed to start container: Error response from daemon
+"""
+expected = """
+docker: Error response from daemon: failed to create shim task: OCI runtime create failed: container_linux.go:380: starting container process caused: exec: "nonexistent": executable file not found in $PATH: unknown.
+ERRO[0000] failed to start container: Error response from daemon"""

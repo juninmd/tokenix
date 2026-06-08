@@ -1,0 +1,32 @@
+[filters.go-build]
+description = "Compact go build output"
+match_command = "^go\\s+build\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^# "
+]
+keep_lines_matching = [
+  "error:",
+  "warning:",
+  "undefined:",
+  "cannot find package"
+]
+max_lines = 40
+on_empty = "go build: ok"
+
+[[tests.go-build]]
+name = "clean build"
+input = """
+"""
+expected = "go build: ok"
+
+[[tests.go-build]]
+name = "build error shown"
+input = """
+# github.com/user/project
+./main.go:10:5: undefined: foo
+"""
+expected = """
+# github.com/user/project
+./main.go:10:5: undefined: foo"""

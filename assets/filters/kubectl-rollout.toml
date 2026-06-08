@@ -1,0 +1,34 @@
+[filters.kubectl-rollout]
+description = "Compact kubectl rollout output"
+match_command = "^kubectl\\s+rollout\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*deployment\\.apps/\\w+\\s+(rolled out|paused|resumed)$"
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Failed",
+  "FAILED",
+  "timeout",
+  "progress deadline exceeded"
+]
+max_lines = 30
+on_empty = "kubectl rollout: done"
+
+[[tests.kubectl-rollout]]
+name = "clean rollout"
+input = """
+deployment.apps/myapp rolled out
+"""
+expected = """
+deployment.apps/myapp rolled out"""
+
+[[tests.kubectl-rollout]]
+name = "timeout shown"
+input = """
+error: deployment "myapp" exceeded its progress deadline
+"""
+expected = """
+error: deployment "myapp" exceeded its progress deadline"""

@@ -1,0 +1,30 @@
+[filters.go-fmt]
+description = "Compact go fmt output"
+match_command = "^go\\s+fmt\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\w+\\.go:\\d+:\\d+:",
+  "error:",
+  "warning:"
+]
+max_lines = 30
+on_empty = "go fmt: formatted"
+
+[[tests.go-fmt]]
+name = "clean"
+input = """
+"""
+expected = "go fmt: formatted"
+
+[[tests.go-fmt]]
+name = "files changed"
+input = """
+main.go:10:5: missing comma
+utils.go:15:1: extra blank line
+"""
+expected = """
+main.go:10:5: missing comma
+utils.go:15:1: extra blank line"""

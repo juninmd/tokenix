@@ -1,0 +1,31 @@
+[filters.kubectl-exec]
+description = "Compact kubectl exec output"
+match_command = "^kubectl\\s+exec\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Failed",
+  "command terminated",
+  "OCI runtime exec failed"
+]
+max_lines = 30
+on_empty = "kubectl exec: done"
+
+[[tests.kubectl-exec]]
+name = "clean exec"
+input = """
+root@myapp:/app# 
+"""
+expected = "kubectl exec: done"
+
+[[tests.kubectl-exec]]
+name = "error shown"
+input = """
+error: unable to upgrade connection: container not found ("nginx")
+"""
+expected = """
+error: unable to upgrade connection: container not found ("nginx")"""

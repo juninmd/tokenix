@@ -1,41 +1,40 @@
 [filters.swift-build]
-description = "Compact swift build output — short-circuit on success, strip Compiling/Linking"
+description = "Compact swift build output"
 match_command = "^swift\\s+build\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^Compiling ",
-  "^Linking ",
+  "^\\s*Compile ",
+  "^\\s*Linking ",
+  "^\\s*Build complete"
 ]
-match_output = [
-  { pattern = "Build complete!", message = "ok (build complete)", unless = "warning:|error:" },
+keep_lines_matching = [
+  "error:",
+  "warning:",
+  "note:"
 ]
-max_lines = 40
+max_lines = 60
+on_empty = "swift build: success"
 
 [[tests.swift-build]]
-name = "successful build short-circuits to ok"
+name = "clean build"
 input = """
-Build complete!
+Compile MyPackage main.swift
+Linking .build/debug/MyPackage
+Build complete! (2.3s)
 """
-expected = "ok (build complete)"
+expected = "swift build: success"
 
 [[tests.swift-build]]
-name = "build errors pass through after stripping noise"
+name = "error shown"
 input = """
-Compiling MyApp MyApp.swift
-/home/user/MyApp/Sources/MyApp/main.swift:5:1: error: use of unresolved identifier 'foo'
-foo()
-^~~
-Linking MyApp
-error: build had 1 command failure
+Compile MyPackage main.swift
+main.swift:10:5: error: cannot find 'foo' in scope
+    foo()
+    ^~~
 """
-expected = "/home/user/MyApp/Sources/MyApp/main.swift:5:1: error: use of unresolved identifier 'foo'\nfoo()\n^~~\nerror: build had 1 command failure"
-
-[[tests.swift-build]]
-name = "warnings not swallowed when Build complete present"
-input = """
-CompileSwift normal x86_64 MyFile.swift
-/path/to/MyFile.swift:42:10: warning: unused variable 'x'
-Build complete! (with warnings)
-"""
-expected = "CompileSwift normal x86_64 MyFile.swift\n/path/to/MyFile.swift:42:10: warning: unused variable 'x'\nBuild complete! (with warnings)"
+expected = """
+Compile MyPackage main.swift
+main.swift:10:5: error: cannot find 'foo' in scope
+    foo()
+    ^~~"""

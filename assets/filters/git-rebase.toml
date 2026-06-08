@@ -1,0 +1,49 @@
+[filters.git-rebase]
+description = "Compact git rebase output"
+match_command = "^git\\s+rebase\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^First, rewinding head",
+  "^Applying:",
+  "^Successfully rebased"
+]
+keep_lines_matching = [
+  "CONFLICT",
+  "error:",
+  "fatal:",
+  "failed",
+  "Patch failed",
+  "When you have resolved"
+]
+max_lines = 30
+on_empty = "git rebase: done"
+
+[[tests.git-rebase]]
+name = "clean rebase"
+input = """
+First, rewinding head to replay your work on top of it...
+Applying: Add new feature
+Applying: Fix bug
+Successfully rebased and updated refs/heads/feature.
+"""
+expected = "git rebase: done"
+
+[[tests.git-rebase]]
+name = "conflict shown"
+input = """
+First, rewinding head to replay your work on top of it...
+Applying: Add new feature
+Using index info to reconstruct a base tree...
+M	src/main.rs
+Falling back to patching base and 3-way merge...
+CONFLICT (content): Merge conflict in src/main.rs
+error: Failed to merge in the changes.
+Patch failed at 0001 Add new feature
+When you have resolved this problem, run "git rebase --continue".
+"""
+expected = """
+CONFLICT (content): Merge conflict in src/main.rs
+error: Failed to merge in the changes.
+Patch failed at 0001 Add new feature
+When you have resolved this problem, run "git rebase --continue"."""

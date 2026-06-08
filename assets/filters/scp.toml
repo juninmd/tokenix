@@ -1,0 +1,37 @@
+[filters.scp]
+description = "Compact scp output"
+match_command = "^scp\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\d+%",
+  "^\\s*\\d+\\.\\d+ [KM]B/s",
+  "^\\s*\\d{2}:\\d{2}:\\d{2}"
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Permission denied",
+  "No such file",
+  "Connection refused",
+  "lost connection"
+]
+max_lines = 20
+on_empty = "scp: done"
+
+[[tests.scp]]
+name = "clean copy"
+input = """
+main.rs                                    100%  1234   1.2MB/s   00:00
+"""
+expected = "scp: done"
+
+[[tests.scp]]
+name = "error shown"
+input = """
+scp: /remote/path/main.rs: Permission denied
+lost connection
+"""
+expected = """
+scp: /remote/path/main.rs: Permission denied
+lost connection"""

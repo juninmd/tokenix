@@ -1,0 +1,37 @@
+[filters.terraform-workspace]
+description = "Compact terraform workspace output"
+match_command = "^terraform\\s+workspace\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\*",
+  "^\\s+"
+]
+max_lines = 20
+on_empty = "terraform workspace: default"
+
+[[tests.terraform-workspace]]
+name = "list workspaces"
+input = """
+  default
+* dev
+  staging
+  prod
+"""
+expected = """
+  default
+* dev
+  staging
+  prod"""
+
+[[tests.terraform-workspace]]
+name = "new workspace"
+input = """
+Workspace "staging" created.
+Switched to workspace "staging".
+"""
+expected = """
+Workspace "staging" created.
+Switched to workspace "staging"."""

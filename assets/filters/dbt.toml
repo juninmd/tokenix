@@ -1,0 +1,48 @@
+[filters.dbt]
+description = "Compact dbt output"
+match_command = "^dbt\\s+(run|test|build|compile|seed)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\d+ of \\d+",
+  "^\\s*\\d+:\\d+:\\d+",
+  "^\\s*Running",
+  "^\\s*Completed",
+  "^\\s*Done."
+]
+keep_lines_matching = [
+  "ERROR",
+  "FAILED",
+  "Error:",
+  "Runtime Error",
+  "Compilation Error"
+]
+max_lines = 50
+on_empty = "dbt: completed"
+
+[[tests.dbt]]
+name = "clean run"
+input = """
+Running with dbt=1.7.0
+Found 10 models, 5 tests
+Running models...
+1 of 10 START sql table model schema.model1
+10 of 10 END sql table model schema.model10
+Done.
+"""
+expected = "dbt: completed"
+
+[[tests.dbt]]
+name = "error shown"
+input = """
+Running with dbt=1.7.0
+Found 10 models, 5 tests
+Running models...
+1 of 10 START sql table model schema.model1
+  ERROR: division by zero
+  compiled SQL at target/run/schema/model1.sql
+Done.
+"""
+expected = """
+  ERROR: division by zero
+  compiled SQL at target/run/schema/model1.sql"""

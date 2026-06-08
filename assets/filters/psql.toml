@@ -1,0 +1,43 @@
+[filters.psql]
+description = "Compact psql output"
+match_command = "^psql\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*psql \\(.*\\)",
+  "^\\s*Type \"help\"",
+  "^\\s*\\\\",
+  "^\\s*You are now connected"
+]
+keep_lines_matching = [
+  "ERROR:",
+  "ERROR:",
+  "FATAL:",
+  "PANIC:",
+  "WARNING:",
+  "NOTICE:"
+]
+max_lines = 50
+on_empty = "psql: ok"
+
+[[tests.psql]]
+name = "clean connection"
+input = """
+psql (16.2, server 15.5)
+Type "help" for help.
+
+postgres=# 
+"""
+expected = "psql: ok"
+
+[[tests.psql]]
+name = "error shown"
+input = """
+ERROR:  relation "users" does not exist
+LINE 1: SELECT * FROM users;
+               ^
+"""
+expected = """
+ERROR:  relation "users" does not exist
+LINE 1: SELECT * FROM users;
+               ^"""

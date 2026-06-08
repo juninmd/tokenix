@@ -1,0 +1,30 @@
+[filters.docker-network]
+description = "Compact docker network output"
+match_command = "^docker\\s+network\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^NETWORK ID\\s+NAME\\s+DRIVER"
+]
+keep_lines_matching = [
+  "^\\w+",
+  "bridge",
+  "overlay",
+  "host",
+  "none"
+]
+max_lines = 30
+on_empty = "docker network: none"
+
+[[tests.docker-network]]
+name = "list networks"
+input = """
+NETWORK ID     NAME            DRIVER    SCOPE
+abc123def456   bridge          bridge    local
+def456abc123   host            host      local
+ghi789jkl012   myapp_default   bridge    local
+"""
+expected = """
+abc123def456   bridge          bridge    local
+def456abc123   host            host      local
+ghi789jkl012   myapp_default   bridge    local"""

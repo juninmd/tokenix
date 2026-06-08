@@ -1,22 +1,51 @@
 [filters.tofu-validate]
 description = "Compact OpenTofu validate output"
-match_command = "^tofu\\s+validate(\\s|$)"
+match_command = "^tofu\\s+validate\\b"
 strip_ansi = true
-match_output = [
-  { pattern = "Success! The configuration is valid", message = "ok (valid)", unless = "[Ee]rror|[Ff]ailed" },
+strip_lines_matching = [
+  "^\\s*$",
+  "^Success! The configuration is valid"
 ]
+keep_lines_matching = [
+  "Error:",
+  "Error:",
+  "Warning:",
+  "Warning:",
+  "│ Error",
+  "│ Warning"
+]
+max_lines = 30
+on_empty = "tofu validate: valid"
 
 [[tests.tofu-validate]]
-name = "error not masked when success line also present"
-input = "Error: Invalid value\nSuccess! The configuration is valid"
-expected = "Error: Invalid value\nSuccess! The configuration is valid"
+name = "valid config"
+input = """
+Success! The configuration is valid.
+"""
+expected = "tofu validate: valid"
 
 [[tests.tofu-validate]]
-name = "success short-circuits to ok"
-input = "Success! The configuration is valid."
-expected = "ok (valid)"
+name = "validation error"
+input = """
+Error: Invalid value for variable "instance_type"
 
-[[tests.tofu-validate]]
-name = "error passes through unchanged"
-input = "Error: Invalid resource type\n  on main.tf line 3: resource \"aws_instancee\" \"web\""
-expected = "Error: Invalid resource type\n  on main.tf line 3: resource \"aws_instancee\" \"web\""
+  on variables.tf line 10:
+  10: variable "instance_type" {
+  11:   type = string
+  12:   validation {
+  13:     condition = contains(["t2.micro", "t3.micro"], var.instance_type)
+  14:     error_message = "Invalid instance type."
+  15:   }
+  16: }
+"""
+expected = """
+Error: Invalid value for variable "instance_type"
+
+  on variables.tf line 10:
+  10: variable "instance_type" {
+  11:   type = string
+  12:   validation {
+  13:     condition = contains(["t2.micro", "t3.micro"], var.instance_type)
+  14:     error_message = "Invalid instance type."
+  15:   }
+  16: }"""

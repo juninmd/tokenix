@@ -1,0 +1,41 @@
+[filters.eslint]
+description = "Compact ESLint output"
+match_command = "^(npx\\s+)?eslint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\d+ problems?",
+  "^\\s*✔",
+  "^\\s*No problems"
+]
+keep_lines_matching = [
+  "error",
+  "warning",
+  "^\\s+\\d+:",
+  "Parsing error"
+]
+max_lines = 60
+on_empty = "eslint: no issues"
+
+[[tests.eslint]]
+name = "clean"
+input = """
+No problems found in 50 files.
+"""
+expected = "eslint: no issues"
+
+[[tests.eslint]]
+name = "issues shown"
+input = """
+/src/main.ts
+  10:5  error  'x' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  15:1  warning  Line too long  max-len
+
+✖ 2 problems (1 error, 1 warning)
+"""
+expected = """
+/src/main.ts
+  10:5  error  'x' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  15:1  warning  Line too long  max-len
+
+✖ 2 problems (1 error, 1 warning)"""

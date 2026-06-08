@@ -1,0 +1,23 @@
+[filters.fzf]
+description = "Compact fzf output"
+match_command = "^fzf\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+max_lines = 30
+on_empty = "fzf: no selection"
+
+[[tests.fzf]]
+name = "selection made"
+input = """
+src/main.rs
+"""
+expected = """
+src/main.rs"""
+
+[[tests.fzf]]
+name = "no selection"
+input = """
+"""
+expected = "fzf: no selection"

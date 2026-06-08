@@ -1,0 +1,41 @@
+[filters.kubectl-get]
+description = "Compact kubectl get output"
+match_command = "^kubectl\\s+get\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^NAME\\s+READY\\s+STATUS\\s+RESTARTS\\s+AGE"
+]
+keep_lines_matching = [
+  "Running",
+  "Pending",
+  "CrashLoopBackOff",
+  "Error",
+  "Completed",
+  "Terminating",
+  "Evicted"
+]
+max_lines = 40
+on_empty = "kubectl get: no resources"
+
+[[tests.kubectl-get]]
+name = "pods running"
+input = """
+NAME                    READY   STATUS    RESTARTS   AGE
+myapp-web-abc123        1/1     Running   0          2h
+myapp-db-def456         1/1     Running   0          2h
+"""
+expected = """
+myapp-web-abc123        1/1     Running   0          2h
+myapp-db-def456         1/1     Running   0          2h"""
+
+[[tests.kubectl-get]]
+name = "crashloop shown"
+input = """
+NAME                    READY   STATUS             RESTARTS   AGE
+myapp-web-abc123        1/1     Running            0          2h
+myapp-db-def456         0/1     CrashLoopBackOff   5          10m
+"""
+expected = """
+myapp-web-abc123        1/1     Running            0          2h
+myapp-db-def456         0/1     CrashLoopBackOff   5          10m"""

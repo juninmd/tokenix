@@ -1,0 +1,51 @@
+[filters.terraform-validate]
+description = "Compact terraform validate output"
+match_command = "^terraform\\s+validate\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Success! The configuration is valid"
+]
+keep_lines_matching = [
+  "Error:",
+  "Error:",
+  "Warning:",
+  "Warning:",
+  "│ Error",
+  "│ Warning"
+]
+max_lines = 30
+on_empty = "terraform validate: valid"
+
+[[tests.terraform-validate]]
+name = "valid config"
+input = """
+Success! The configuration is valid.
+"""
+expected = "terraform validate: valid"
+
+[[tests.terraform-validate]]
+name = "validation error"
+input = """
+Error: Invalid value for variable "instance_type"
+
+  on variables.tf line 10:
+  10: variable "instance_type" {
+  11:   type = string
+  12:   validation {
+  13:     condition = contains(["t2.micro", "t3.micro"], var.instance_type)
+  14:     error_message = "Invalid instance type."
+  15:   }
+  16: }
+"""
+expected = """
+Error: Invalid value for variable "instance_type"
+
+  on variables.tf line 10:
+  10: variable "instance_type" {
+  11:   type = string
+  12:   validation {
+  13:     condition = contains(["t2.micro", "t3.micro"], var.instance_type)
+  14:     error_message = "Invalid instance type."
+  15:   }
+  16: }"""

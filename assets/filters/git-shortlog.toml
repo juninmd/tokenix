@@ -1,0 +1,42 @@
+[filters.git-shortlog]
+description = "Compact git shortlog output"
+match_command = "^git\\s+shortlog\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\s*\\w+",
+  "\\(",
+  "\\)"
+]
+max_lines = 40
+on_empty = "git shortlog: no commits"
+
+[[tests.git-shortlog]]
+name = "shortlog output"
+input = """
+John Doe (5):
+      Add new feature
+      Fix bug in parser
+      Update documentation
+      Refactor auth module
+      Bump version
+
+Jane Smith (3):
+      Fix login issue
+      Add tests for auth
+      Update dependencies
+"""
+expected = """
+John Doe (5):
+      Add new feature
+      Fix bug in parser
+      Update documentation
+      Refactor auth module
+      Bump version
+
+Jane Smith (3):
+      Fix login issue
+      Add tests for auth
+      Update dependencies"""

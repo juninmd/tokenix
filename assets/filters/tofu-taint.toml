@@ -1,0 +1,32 @@
+[filters.tofu-taint]
+description = "Compact OpenTofu taint output"
+match_command = "^tofu\\s+taint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Resource instance"
+]
+keep_lines_matching = [
+  "Error:",
+  "Error:",
+  "marked as tainted",
+  "No such resource"
+]
+max_lines = 20
+on_empty = "tofu taint: done"
+
+[[tests.tofu-taint]]
+name = "taint resource"
+input = """
+Resource instance aws_instance.web has been marked as tainted.
+"""
+expected = """
+Resource instance aws_instance.web has been marked as tainted."""
+
+[[tests.tofu-taint]]
+name = "untaint"
+input = """
+Resource instance aws_instance.web has been marked as untainted.
+"""
+expected = """
+Resource instance aws_instance.web has been marked as untainted."""

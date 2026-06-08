@@ -1,0 +1,31 @@
+[filters.terraform-providers]
+description = "Compact terraform providers output"
+match_command = "^terraform\\s+providers\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\."
+]
+keep_lines_matching = [
+  "^\\w+",
+  "hashicorp/",
+  "registry.terraform.io"
+]
+max_lines = 30
+on_empty = "terraform providers: none"
+
+[[tests.terraform-providers]]
+name = "providers tree"
+input = """
+.
+├── provider[registry.terraform.io/hashicorp/aws] ~> 5.0
+├── provider[registry.terraform.io/hashicorp/random] ~> 3.0
+└── module.vpc
+    └── provider[registry.terraform.io/hashicorp/aws] ~> 5.0
+"""
+expected = """
+.
+├── provider[registry.terraform.io/hashicorp/aws] ~> 5.0
+├── provider[registry.terraform.io/hashicorp/random] ~> 3.0
+└── module.vpc
+    └── provider[registry.terraform.io/hashicorp/aws] ~> 5.0"""

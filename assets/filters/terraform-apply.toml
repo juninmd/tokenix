@@ -1,0 +1,49 @@
+[filters.terraform-apply]
+description = "Compact terraform apply output"
+match_command = "^terraform\\s+apply\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*data\\.",
+  "^\\s*# ",
+  "^\\s*Creation complete",
+  "^\\s*Modification complete",
+  "^\\s*Destruction complete",
+  "^Apply complete"
+]
+keep_lines_matching = [
+  "Error:",
+  "Warning:",
+  "Error: ",
+  "│ Error",
+  "│ Warning",
+  "still creating",
+  "still modifying",
+  "still destroying"
+]
+max_lines = 60
+on_empty = "terraform apply: complete"
+
+[[tests.terraform-apply]]
+name = "apply complete"
+input = """
+aws_instance.web: Creating...
+aws_instance.web: Creation complete after 10s [id=i-1234567890abcdef0]
+
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+"""
+expected = "terraform apply: complete"
+
+[[tests.terraform-apply]]
+name = "error shown"
+input = """
+aws_instance.web: Creating...
+aws_instance.web: Still creating... [10s elapsed]
+aws_instance.web: Still creating... [20s elapsed]
+Error: Error launching instance: InvalidParameterValue
+"""
+expected = """
+aws_instance.web: Creating...
+aws_instance.web: Still creating... [10s elapsed]
+aws_instance.web: Still creating... [20s elapsed]
+Error: Error launching instance: InvalidParameterValue"""

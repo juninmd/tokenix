@@ -1,0 +1,71 @@
+[filters.dotnet-test]
+description = "Compact dotnet test output"
+match_command = "^dotnet\\s+test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Microsoft \\(R\\) Test Execution",
+  "^\\s*Copyright",
+  "^\\s*Starting test execution",
+  "^\\s*Test Run Successful",
+  "^\\s*Total tests:",
+  "^\\s*Passed:",
+  "^\\s*Failed:",
+  "^\\s*Skipped:",
+  "^\\s*Test Run Failed"
+]
+keep_lines_matching = [
+  "Failed ",
+  "Error ",
+  "FAILED",
+  "Exception:",
+  "StackTrace:"
+]
+max_lines = 60
+on_empty = "dotnet test: passed"
+
+[[tests.dotnet-test]]
+name = "tests pass"
+input = """
+Microsoft (R) Test Execution Command Line Tool Version 17.8.0
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+
+Test Run Successful.
+Total tests: 10
+     Passed: 10
+     Failed: 0
+     Skipped: 0
+Test Run Successful.
+"""
+expected = "dotnet test: passed"
+
+[[tests.dotnet-test]]
+name = "failure shown"
+input = """
+Test Run Failed.
+Total tests: 10
+     Passed: 9
+     Failed: 1
+     Skipped: 0
+Failed MyApp.Tests.TestAdd [10 ms]
+Error Message:
+  Expected: 3
+  But was:  4
+StackTrace:
+   at MyApp.Tests.TestAdd() in /Tests.cs:line 15
+"""
+expected = """
+Test Run Failed.
+Total tests: 10
+     Passed: 9
+     Failed: 1
+     Skipped: 0
+Failed MyApp.Tests.TestAdd [10 ms]
+Error Message:
+  Expected: 3
+  But was:  4
+StackTrace:
+   at MyApp.Tests.TestAdd() in /Tests.cs:line 15"""

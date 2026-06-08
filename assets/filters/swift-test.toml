@@ -1,0 +1,54 @@
+[filters.swift-test]
+description = "Compact swift test output"
+match_command = "^swift\\s+test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Test Suite ",
+  "^\\s*Test Case ",
+  "^\\s*passed",
+  "^\\s*Test Suite.*passed",
+  "^\\s*Executed "
+]
+keep_lines_matching = [
+  "failed",
+  "FAILED",
+  "error:",
+  "XCTAssert",
+  "XCTFail"
+]
+max_lines = 60
+on_empty = "swift test: all tests passed"
+
+[[tests.swift-test]]
+name = "all pass"
+input = """
+Test Suite 'All tests' started at 2024-01-15 10:30:00.123
+Test Suite 'MyPackageTests' started at 2024-01-15 10:30:00.124
+Test Case '-[MyPackageTests testAdd]' started.
+Test Case '-[MyPackageTests testAdd]' passed (0.001 seconds).
+Test Case '-[MyPackageTests testSub]' started.
+Test Case '-[MyPackageTests testSub]' passed (0.001 seconds).
+Test Suite 'MyPackageTests' passed at 2024-01-15 10:30:00.126
+	Executed 2 tests, with 0 failures (0 unexpected) in 0.002 seconds
+Test Suite 'All tests' passed at 2024-01-15 10:30:00.126
+	Executed 2 tests, with 0 failures (0 unexpected) in 0.002 seconds
+"""
+expected = "swift test: all tests passed"
+
+[[tests.swift-test]]
+name = "failure shown"
+input = """
+Test Suite 'All tests' started at 2024-01-15 10:30:00.123
+Test Suite 'MyPackageTests' started at 2024-01-15 10:30:00.124
+Test Case '-[MyPackageTests testAdd]' started.
+Test Case '-[MyPackageTests testAdd]' failed (0.001 seconds).
+	MyPackageTests.swift:15: XCTAssertEqual failed: ("4") is not equal to ("3")
+Test Suite 'MyPackageTests' failed at 2024-01-15 10:30:00.126
+	Executed 2 tests, with 1 failure (1 unexpected) in 0.002 seconds
+"""
+expected = """
+Test Case '-[MyPackageTests testAdd]' failed (0.001 seconds).
+	MyPackageTests.swift:15: XCTAssertEqual failed: ("4") is not equal to ("3")
+Test Suite 'MyPackageTests' failed at 2024-01-15 10:30:00.126
+	Executed 2 tests, with 1 failure (1 unexpected) in 0.002 seconds"""

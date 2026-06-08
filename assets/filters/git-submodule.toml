@@ -1,0 +1,38 @@
+[filters.git-submodule]
+description = "Compact git submodule output"
+match_command = "^git\\s+submodule\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\s*\\w+",
+  "^\\s*Submodule",
+  "^\\s*Entering",
+  "^\\s*Cloning",
+  "^\\s*Checking out"
+]
+max_lines = 30
+on_empty = "git submodule: none"
+
+[[tests.git-submodule]]
+name = "list submodules"
+input = """
+ 1234567 src/lib  (v1.0.0)
+ abcdefg tests/mock  (heads/main)
+"""
+expected = """
+ 1234567 src/lib  (v1.0.0)
+ abcdefg tests/mock  (heads/main)"""
+
+[[tests.git-submodule]]
+name = "update submodules"
+input = """
+Submodule 'src/lib' (https://github.com/user/lib.git) registered for path 'src/lib'
+Cloning into '/path/to/repo/src/lib'...
+Submodule path 'src/lib': checked out '1234567890abcdef'
+"""
+expected = """
+Submodule 'src/lib' (https://github.com/user/lib.git) registered for path 'src/lib'
+Cloning into '/path/to/repo/src/lib'...
+Submodule path 'src/lib': checked out '1234567890abcdef'"""

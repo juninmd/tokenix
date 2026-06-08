@@ -1,0 +1,35 @@
+[filters.sqlfluff]
+description = "Compact sqlfluff output"
+match_command = "^sqlfluff\\s+(lint|fix|parse)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*All files passed",
+  "^\\s*\\d+ file\\(s\\) passed"
+]
+keep_lines_matching = [
+  "^\\w+:\\d+:\\d+:",
+  "L:",
+  "P:",
+  "Error:",
+  "Warning:"
+]
+max_lines = 50
+on_empty = "sqlfluff: no issues"
+
+[[tests.sqlfluff]]
+name = "clean"
+input = """
+All files passed!
+"""
+expected = "sqlfluff: no issues"
+
+[[tests.sqlfluff]]
+name = "issues shown"
+input = """
+test.sql:10:5: L010: Inconsistent capitalisation of keywords
+test.sql:15:1: L016: Line too long
+"""
+expected = """
+test.sql:10:5: L010: Inconsistent capitalisation of keywords
+test.sql:15:1: L016: Line too long"""

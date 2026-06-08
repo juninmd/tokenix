@@ -1,0 +1,55 @@
+[filters.az-cli]
+description = "Compact Azure CLI output"
+match_command = "^az\\s+\\w+\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*{",
+  "^\\s*}",
+  "^\\s*\"",
+  "^\\s*\\]",
+  "^\\s*\\["
+]
+keep_lines_matching = [
+  "ERROR:",
+  "Error:",
+  "Failed",
+  "FAILED",
+  "AuthorizationFailed",
+  "QuotaExceeded",
+  "ResourceNotFound"
+]
+max_lines = 50
+on_empty = "az: ok"
+
+[[tests.az-cli]]
+name = "clean output"
+input = """
+{
+  "id": "/subscriptions/xxx/resourceGroups/my-rg/providers/Microsoft.Compute/virtualMachines/my-vm",
+  "name": "my-vm",
+  "type": "Microsoft.Compute/virtualMachines",
+  "location": "eastus",
+  "properties": {
+    "provisioningState": "Succeeded"
+  }
+}
+"""
+expected = """
+{
+  "id": "/subscriptions/xxx/resourceGroups/my-rg/providers/Microsoft.Compute/virtualMachines/my-vm",
+  "name": "my-vm",
+  "type": "Microsoft.Compute/virtualMachines",
+  "location": "eastus",
+  "properties": {
+    "provisioningState": "Succeeded"
+  }
+}"""
+
+[[tests.az-cli]]
+name = "error shown"
+input = """
+ERROR: The client 'xxx' with object id 'yyy' does not have authorization to perform action 'Microsoft.Compute/virtualMachines/write' over scope '/subscriptions/xxx/resourceGroups/my-rg'.
+"""
+expected = """
+ERROR: The client 'xxx' with object id 'yyy' does not have authorization to perform action 'Microsoft.Compute/virtualMachines/write' over scope '/subscriptions/xxx/resourceGroups/my-rg'."""

@@ -1,0 +1,35 @@
+[filters.docker-prune]
+description = "Compact docker prune output"
+match_command = "^docker\\s+(system|container|image|volume|network)\\s+prune\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*WARNING",
+  "^\\s*Are you sure"
+]
+keep_lines_matching = [
+  "Deleted",
+  "Removed",
+  "Total reclaimed",
+  "Space reclaimed",
+  "error:",
+  "Error:"
+]
+max_lines = 30
+on_empty = "docker prune: done"
+
+[[tests.docker-prune]]
+name = "prune output"
+input = """
+Deleted Images:
+deleted: sha256:abc123...
+deleted: sha256:def456...
+
+Total reclaimed space: 1.8GB
+"""
+expected = """
+Deleted Images:
+deleted: sha256:abc123...
+deleted: sha256:def456...
+
+Total reclaimed space: 1.8GB"""

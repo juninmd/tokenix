@@ -1,0 +1,46 @@
+[filters.tofu-output]
+description = "Compact OpenTofu output output"
+match_command = "^tofu\\s+output\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\w+\\s*=",
+  "Error:",
+  "Error:"
+]
+max_lines = 30
+on_empty = "tofu output: no outputs"
+
+[[tests.tofu-output]]
+name = "outputs shown"
+input = """
+instance_ip = "54.123.45.67"
+instance_id = "i-1234567890abcdef0"
+vpc_id = "vpc-12345678"
+"""
+expected = """
+instance_ip = "54.123.45.67"
+instance_id = "i-1234567890abcdef0"
+vpc_id = "vpc-12345678"""
+
+[[tests.tofu-output]]
+name = "json output"
+input = """
+{
+  "instance_ip": {
+    "sensitive": false,
+    "type": "string",
+    "value": "54.123.45.67"
+  }
+}
+"""
+expected = """
+{
+  "instance_ip": {
+    "sensitive": false,
+    "type": "string",
+    "value": "54.123.45.67"
+  }
+}"""

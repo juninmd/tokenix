@@ -31,8 +31,7 @@ expected = "main.c:10:5: error: use of undeclared identifier 'foo'\n    foo();\n
 
 [[tests.gcc]]
 name = "clean compilation"
-input = """
-"""
+input = ""
 expected = "gcc: ok"
 
 [[tests.gcc]]

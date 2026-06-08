@@ -1,0 +1,35 @@
+[filters.kubectl-port-forward]
+description = "Compact kubectl port-forward output"
+match_command = "^kubectl\\s+port-forward\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Forwarding from",
+  "^\\s*Handling connection"
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Failed",
+  "unable to",
+  "connection refused"
+]
+max_lines = 20
+on_empty = "kubectl port-forward: running"
+
+[[tests.kubectl-port-forward]]
+name = "clean port-forward"
+input = """
+Forwarding from 127.0.0.1:8080 -> 8080
+Forwarding from [::1]:8080 -> 8080
+Handling connection for 8080
+"""
+expected = "kubectl port-forward: running"
+
+[[tests.kubectl-port-forward]]
+name = "error shown"
+input = """
+error: unable to listen on port 8080: listen tcp 127.0.0.1:8080: bind: address already in use
+"""
+expected = """
+error: unable to listen on port 8080: listen tcp 127.0.0.1:8080: bind: address already in use"""

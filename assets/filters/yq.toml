@@ -1,0 +1,34 @@
+[filters.yq]
+description = "Compact yq output"
+match_command = "^yq\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "Error:",
+  "parse error",
+  "cannot"
+]
+max_lines = 50
+on_empty = "yq: ok"
+
+[[tests.yq]]
+name = "clean yaml output"
+input = """
+name: John
+age: 30
+city: New York
+"""
+expected = """
+name: John
+age: 30
+city: New York"""
+
+[[tests.yq]]
+name = "error shown"
+input = """
+Error: cannot parse YAML: invalid character ':' at line 2
+"""
+expected = """
+Error: cannot parse YAML: invalid character ':' at line 2"""

@@ -4,36 +4,38 @@ match_command = "^go\\s+test\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^go\\s+test\\b",
-  "^ok\\s+\\S+\\s+\\d+\\.\\d+s",
-  "^\\?\\s+\\S+\\s+\\[no test files\\]",
-  "^PASS$"
+  "^ok\\s+",
+  "^\\s*--- PASS:",
+  "^\\s*PASS\\s*$"
 ]
-max_lines = 80
+keep_lines_matching = [
+  "FAIL",
+  "--- FAIL:",
+  "panic:",
+  "Error:",
+  "error:",
+  "FAIL\\s+"
+]
+max_lines = 60
 on_empty = "go test: all tests passed"
 
 [[tests.go-test]]
-name = "All go tests pass"
+name = "all pass"
 input = """
-go test ./...
-?   	github.com/user/project/pkg	[no test files]
-ok  	github.com/user/project/src	0.150s
-PASS
+ok      github.com/user/project  0.234s
 """
 expected = "go test: all tests passed"
 
 [[tests.go-test]]
-name = "Go test failure"
+name = "test failure shown"
 input = """
-go test ./...
---- FAIL: TestSum (0.00s)
-    main_test.go:12: Sum(2, 2) = 5; want 4
+--- FAIL: TestAdd (0.00s)
+    main_test.go:15: expected 3, got 4
 FAIL
-FAIL	github.com/user/project/src	0.005s
-FAIL
+FAIL    github.com/user/project  0.234s
 """
-expected = """--- FAIL: TestSum (0.00s)
-    main_test.go:12: Sum(2, 2) = 5; want 4
+expected = """
+--- FAIL: TestAdd (0.00s)
+    main_test.go:15: expected 3, got 4
 FAIL
-FAIL	github.com/user/project/src	0.005s
-FAIL"""
+FAIL    github.com/user/project  0.234s"""

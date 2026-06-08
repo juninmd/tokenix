@@ -1,0 +1,45 @@
+[filters.tofu-apply]
+description = "Compact OpenTofu apply output"
+match_command = "^tofu\\s+apply\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\w+\\.\\w+:\\s+Creating",
+  "^\\s*\\w+\\.\\w+:\\s+Creation complete",
+  "^\\s*\\w+\\.\\w+:\\s+Modification complete",
+  "^\\s*\\w+\\.\\w+:\\s+Destruction complete",
+  "^Apply complete"
+]
+keep_lines_matching = [
+  "Error:",
+  "Error:",
+  "│ Error",
+  "│ Warning",
+  "still creating",
+  "still modifying",
+  "still destroying"
+]
+max_lines = 60
+on_empty = "tofu apply: complete"
+
+[[tests.tofu-apply]]
+name = "apply complete"
+input = """
+aws_instance.web: Creating...
+aws_instance.web: Creation complete after 10s [id=i-1234567890abcdef0]
+
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+"""
+expected = "tofu apply: complete"
+
+[[tests.tofu-apply]]
+name = "error shown"
+input = """
+aws_instance.web: Creating...
+aws_instance.web: Still creating... [10s elapsed]
+Error: Error launching instance: InvalidParameterValue
+"""
+expected = """
+aws_instance.web: Creating...
+aws_instance.web: Still creating... [10s elapsed]
+Error: Error launching instance: InvalidParameterValue"""

@@ -1,0 +1,43 @@
+[filters.cargo-doc]
+description = "Compact cargo doc output"
+match_command = "^cargo\\s+doc\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Documenting",
+  "^\\s*Finished"
+]
+keep_lines_matching = [
+  "error:",
+  "warning:",
+  "note:"
+]
+max_lines = 50
+on_empty = "cargo doc: generated"
+
+[[tests.cargo-doc]]
+name = "clean doc generation"
+input = """
+Documenting my-crate v0.1.0
+Finished dev [unoptimized + debuginfo] target(s) in 2.3s
+"""
+expected = "cargo doc: generated"
+
+[[tests.cargo-doc]]
+name = "warning shown"
+input = """
+Documenting my-crate v0.1.0
+warning: missing documentation for crate
+ --> src/lib.rs:1:1
+  |
+1 | // crate
+  | ^
+
+Finished dev [unoptimized + debuginfo] target(s) in 2.3s
+"""
+expected = """
+warning: missing documentation for crate
+ --> src/lib.rs:1:1
+  |
+1 | // crate
+  | ^"""

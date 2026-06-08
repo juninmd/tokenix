@@ -1,0 +1,26 @@
+[filters.uv-pip-install]
+description = "Compact uv pip install output"
+match_command = "^uv\\s+pip\\s+install\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Collecting",
+  "^\\s*Downloading",
+  "^\\s*Installing collected packages",
+  "^\\s*Successfully installed",
+  "^\\s*Requirement already satisfied",
+  "packages in",
+  "found 0 vulnerabilities"
+]
+max_lines = 30
+on_empty = "uv pip install: ok"
+
+[[tests.uv-pip-install]]
+name = "uv pip install clean"
+input = """
+Collecting requests
+  Downloading requests-2.31.0-py3-none-any.whl (62 kB)
+Installing collected packages: requests
+Successfully installed requests-2.31.0
+"""
+expected = "uv pip install: ok"

@@ -1,0 +1,54 @@
+[filters.aws-cli]
+description = "Compact AWS CLI output"
+match_command = "^aws\\s+\\w+\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*{",
+  "^\\s*}"
+]
+keep_lines_matching = [
+  "Error",
+  "error",
+  "Invalid",
+  "AccessDenied",
+  "UnauthorizedOperation",
+  "Throttling",
+  "Rate exceeded"
+]
+max_lines = 50
+on_empty = "aws: ok"
+
+[[tests.aws-cli]]
+name = "clean output"
+input = """
+{
+    "Instances": [
+        {
+            "InstanceId": "i-1234567890abcdef0",
+            "State": {
+                "Name": "running"
+            }
+        }
+    ]
+}
+"""
+expected = """
+{
+    "Instances": [
+        {
+            "InstanceId": "i-1234567890abcdef0",
+            "State": {
+                "Name": "running"
+            }
+        }
+    ]
+}"""
+
+[[tests.aws-cli]]
+name = "error shown"
+input = """
+An error occurred (UnauthorizedOperation) when calling the DescribeInstances operation: You are not authorized to perform this operation.
+"""
+expected = """
+An error occurred (UnauthorizedOperation) when calling the DescribeInstances operation: You are not authorized to perform this operation."""

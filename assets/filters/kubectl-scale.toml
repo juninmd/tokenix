@@ -1,0 +1,33 @@
+[filters.kubectl-scale]
+description = "Compact kubectl scale output"
+match_command = "^kubectl\\s+scale\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\w+/\\w+\\s+scaled$"
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Failed",
+  "FAILED",
+  "cannot"
+]
+max_lines = 20
+on_empty = "kubectl scale: done"
+
+[[tests.kubectl-scale]]
+name = "clean scale"
+input = """
+deployment.apps/myapp scaled
+"""
+expected = """
+deployment.apps/myapp scaled"""
+
+[[tests.kubectl-scale]]
+name = "error shown"
+input = """
+error: resource(s) were provided, but no name, label selector, or --all flag specified
+"""
+expected = """
+error: resource(s) were provided, but no name, label selector, or --all flag specified"""

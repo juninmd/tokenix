@@ -1,0 +1,38 @@
+[filters.git-remote]
+description = "Compact git remote output"
+match_command = "^git\\s+remote\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^origin",
+  "^upstream",
+  "^\\w+"
+]
+max_lines = 20
+on_empty = "git remote: no remotes"
+
+[[tests.git-remote]]
+name = "list remotes"
+input = """
+origin
+upstream
+"""
+expected = """
+origin
+upstream"""
+
+[[tests.git-remote]]
+name = "verbose"
+input = """
+origin  https://github.com/user/repo.git (fetch)
+origin  https://github.com/user/repo.git (push)
+upstream    https://github.com/upstream/repo.git (fetch)
+upstream    https://github.com/upstream/repo.git (push)
+"""
+expected = """
+origin  https://github.com/user/repo.git (fetch)
+origin  https://github.com/user/repo.git (push)
+upstream    https://github.com/upstream/repo.git (fetch)
+upstream    https://github.com/upstream/repo.git (push)"""

@@ -1,35 +1,52 @@
 [filters.terraform-plan]
-description = "Compact Terraform plan output"
-match_command = "^terraform\\s+plan"
+description = "Compact terraform plan output"
+match_command = "^terraform\\s+plan\\b"
 strip_ansi = true
 strip_lines_matching = [
-  "^Refreshing state",
-  "^\\s*#.*unchanged",
   "^\\s*$",
-  "^Acquiring state lock",
-  "^Releasing state lock",
+  "^\\s*Refreshing Terraform state",
+  "^\\s*data\\.",
+  "^\\s*# ",
+  "^\\s*\\+\\/\\-",
+  "^\\s*\\-",
+  "^Plan:",
+  "^\\s*\\d+ to add",
+  "^\\s*\\d+ to change",
+  "^\\s*\\d+ to destroy"
 ]
-max_lines = 80
-on_empty = "terraform plan: no changes detected"
+keep_lines_matching = [
+  "Error:",
+  "Warning:",
+  "Error: ",
+  "│ Error",
+  "│ Warning"
+]
+max_lines = 60
+on_empty = "terraform plan: no changes"
 
 [[tests.terraform-plan]]
-name = "strips Refreshing state lines and blank lines"
+name = "no changes"
 input = """
-Acquiring state lock. This may take a few moments...
-Refreshing state... [id=vpc-abc]
-Refreshing state... [id=sg-123]
-Releasing state lock. This may take a few moments...
-
-Terraform will perform the following actions:
-
-  # aws_instance.web will be created
-  + resource "aws_instance" "web" {}
-
-Plan: 1 to add, 0 to change, 0 to destroy.
+No changes. Infrastructure is up-to-date.
 """
-expected = "Terraform will perform the following actions:\n  # aws_instance.web will be created\n  + resource \"aws_instance\" \"web\" {}\nPlan: 1 to add, 0 to change, 0 to destroy."
+expected = "terraform plan: no changes"
 
 [[tests.terraform-plan]]
-name = "strips noise, preserves non-blank content"
-input = "Refreshing state... [id=vpc-abc]\nNo changes. Your infrastructure matches the configuration."
-expected = "No changes. Your infrastructure matches the configuration."
+name = "plan with changes shown"
+input = """
+Terraform used the selected providers to generate the following execution plan.
+Resource actions are indicated with the following symbols:
+  + create
+  ~ update in-place
+  - destroy
+
+Plan: 2 to add, 1 to change, 1 to destroy.
+"""
+expected = """
+Terraform used the selected providers to generate the following execution plan.
+Resource actions are indicated with the following symbols:
+  + create
+  ~ update in-place
+  - destroy
+
+Plan: 2 to add, 1 to change, 1 to destroy."""

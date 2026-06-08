@@ -1,0 +1,30 @@
+[filters.gofumpt]
+description = "Compact gofumpt output"
+match_command = "^gofumpt\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\w+\\.go:\\d+:\\d+:",
+  "error:",
+  "warning:"
+]
+max_lines = 30
+on_empty = "gofumpt: formatted"
+
+[[tests.gofumpt]]
+name = "clean"
+input = """
+"""
+expected = "gofumpt: formatted"
+
+[[tests.gofumpt]]
+name = "files changed"
+input = """
+main.go:10:5: missing comma
+utils.go:15:1: extra blank line
+"""
+expected = """
+main.go:10:5: missing comma
+utils.go:15:1: extra blank line"""

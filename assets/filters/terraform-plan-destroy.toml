@@ -1,0 +1,33 @@
+[filters.terraform-plan-destroy]
+description = "Compact terraform plan -destroy output"
+match_command = "^terraform\\s+plan\\s+.*-destroy\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Plan:",
+  "^\\s*\\d+ to destroy"
+]
+keep_lines_matching = [
+  "Error:",
+  "Error:",
+  "│ Error",
+  "│ Warning",
+  "# ",
+  "-/"
+]
+max_lines = 60
+on_empty = "terraform plan -destroy: nothing to destroy"
+
+[[tests.terraform-plan-destroy]]
+name = "destroy plan"
+input = """
+Plan: 0 to add, 0 to change, 2 to destroy.
+
+# aws_instance.web will be destroyed
+# aws_s3_bucket.data will be destroyed
+"""
+expected = """
+Plan: 0 to add, 0 to change, 2 to destroy.
+
+# aws_instance.web will be destroyed
+# aws_s3_bucket.data will be destroyed"""

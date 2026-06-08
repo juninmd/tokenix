@@ -1,43 +1,48 @@
 [filters.cargo-build]
-description = "Compact Rust cargo build output"
+description = "Compact cargo build output"
 match_command = "^cargo\\s+build\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^\\s*Downloading\\s+",
-  "^\\s*Downloaded\\s+",
-  "^\\s*Compiling\\s+\\S+\\s+v\\d+\\.\\d+\\.\\d+\\s*(\\(.*\\))?$",
-  "^\\s*Fresh\\s+",
-  "^\\s*Finished\\s+"
+  "^\\s*Compiling",
+  "^\\s*Fresh",
+  "^\\s*Finished"
+]
+keep_lines_matching = [
+  "error\\[",
+  "warning:",
+  "note:"
 ]
 max_lines = 80
 on_empty = "cargo build: build succeeded"
 
 [[tests.cargo-build]]
-name = "Successful clean build"
+name = "clean build"
 input = """
-    Downloading crates ...
-     Compiling libc v0.2.150
-     Compiling tokenix v0.12.0
-    Finished dev [unoptimized + debuginfo] target(s) in 1.25s
+   Compiling libc v0.2.150
+   Compiling my-crate v0.1.0
+    Finished dev [unoptimized + debuginfo] target(s) in 2.3s
 """
 expected = "cargo build: build succeeded"
 
 [[tests.cargo-build]]
-name = "Build with warning/error"
+name = "build with warnings"
 input = """
-   Compiling tokenix v0.12.0
-error[E0425]: cannot find value `foo` in this scope
-  --> src/main.rs:42:5
-   |
-42 |     foo
-   |     ^^^ not found in this scope
+   Compiling my-crate v0.1.0
+warning: unused import: `std::io::Write`
+ --> src/main.rs:5:5
+  |
+5 | use std::io::Write;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
 
-error: could not compile `tokenix` due to previous error
+    Finished dev [unoptimized + debuginfo] target(s) in 1.2s
 """
-expected = """error[E0425]: cannot find value `foo` in this scope
-  --> src/main.rs:42:5
-   |
-42 |     foo
-   |     ^^^ not found in this scope
-error: could not compile `tokenix` due to previous error"""
+expected = """warning: unused import: `std::io::Write`
+ --> src/main.rs:5:5
+  |
+5 | use std::io::Write;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default"""

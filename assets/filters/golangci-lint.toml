@@ -1,0 +1,33 @@
+[filters.golangci-lint]
+description = "Compact golangci-lint output"
+match_command = "^golangci-lint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Issues:",
+  "^\\s*Found \\d+ issues"
+]
+keep_lines_matching = [
+  "^\\w+\\.go:\\d+:\\d+:",
+  "error:",
+  "warning:"
+]
+max_lines = 60
+on_empty = "golangci-lint: no issues"
+
+[[tests.golangci-lint]]
+name = "clean"
+input = """
+Found 0 issues
+"""
+expected = "golangci-lint: no issues"
+
+[[tests.golangci-lint]]
+name = "issues shown"
+input = """
+main.go:10:5: unused variable x (unused)
+utils.go:15:1: line too long (lll)
+"""
+expected = """
+main.go:10:5: unused variable x (unused)
+utils.go:15:1: line too long (lll)"""

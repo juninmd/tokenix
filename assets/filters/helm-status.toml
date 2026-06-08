@@ -1,0 +1,51 @@
+[filters.helm-status]
+description = "Compact helm status output"
+match_command = "^helm\\s+status\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^NAME:",
+  "^LAST DEPLOYED:",
+  "^NAMESPACE:",
+  "^STATUS:",
+  "^REVISION:",
+  "^TEST SUITE:"
+]
+keep_lines_matching = [
+  "Error:",
+  "Error:",
+  "FAILED",
+  "failed"
+]
+max_lines = 30
+on_empty = "helm status: deployed"
+
+[[tests.helm-status]]
+name = "clean status"
+input = """
+NAME: myapp
+LAST DEPLOYED: Mon Jan 15 10:30:00 2024
+NAMESPACE: default
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+"""
+expected = "helm status: deployed"
+
+[[tests.helm-status]]
+name = "failed status"
+input = """
+NAME: myapp
+LAST DEPLOYED: Mon Jan 15 10:30:00 2024
+NAMESPACE: default
+STATUS: failed
+REVISION: 1
+TEST SUITE: None
+"""
+expected = """
+NAME: myapp
+LAST DEPLOYED: Mon Jan 15 10:30:00 2024
+NAMESPACE: default
+STATUS: failed
+REVISION: 1
+TEST SUITE: None"""

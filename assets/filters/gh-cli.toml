@@ -1,0 +1,44 @@
+[filters.gh-cli]
+description = "Compact GitHub CLI output"
+match_command = "^gh\\s+\\w+\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^✓ ",
+  "^✔ ",
+  "^Creating ",
+  "^Created ",
+  "^Updated ",
+  "^Deleted "
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "failed",
+  "FAILED",
+  "not found",
+  "unauthorized",
+  "rate limit"
+]
+max_lines = 40
+on_empty = "gh: ok"
+
+[[tests.gh-cli]]
+name = "clean pr create"
+input = """
+Creating pull request for feature-branch into main in owner/repo
+
+https://github.com/owner/repo/pull/42
+"""
+expected = """
+Creating pull request for feature-branch into main in owner/repo
+
+https://github.com/owner/repo/pull/42"""
+
+[[tests.gh-cli]]
+name = "error shown"
+input = """
+error: failed to create pull request: Not Found (HTTP 404)
+"""
+expected = """
+error: failed to create pull request: Not Found (HTTP 404)"""

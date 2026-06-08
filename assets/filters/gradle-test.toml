@@ -1,0 +1,68 @@
+[filters.gradle-test]
+description = "Compact gradle test output"
+match_command = "^(./gradlew|gradle)\\s+test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^> Task :",
+  "^BUILD SUCCESSFUL",
+  "^\\d+ actionable task"
+]
+keep_lines_matching = [
+  "FAILED",
+  "Test.*FAILED",
+  "> Task .* FAILED",
+  "Error",
+  "Exception"
+]
+max_lines = 60
+on_empty = "gradle test: passed"
+
+[[tests.gradle-test]]
+name = "tests pass"
+input = """
+> Task :compileJava
+> Task :processResources
+> Task :classes
+> Task :compileTestJava
+> Task :processTestResources
+> Task :testClasses
+> Task :test
+
+BUILD SUCCESSFUL in 12s
+12 actionable tasks: 12 executed
+"""
+expected = "gradle test: passed"
+
+[[tests.gradle-test]]
+name = "failure shown"
+input = """
+> Task :compileJava
+> Task :test FAILED
+com.example.MyTest > testAdd FAILED
+    java.lang.AssertionError: expected:<3> but was:<4>
+
+> Task :test FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///build/reports/tests/test/index.html
+
+BUILD FAILED in 5s
+"""
+expected = """
+> Task :test FAILED
+com.example.MyTest > testAdd FAILED
+    java.lang.AssertionError: expected:<3> but was:<4>
+
+> Task :test FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///build/reports/tests/test/index.html
+
+BUILD FAILED in 5s"""

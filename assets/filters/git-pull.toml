@@ -1,0 +1,55 @@
+[filters.git-pull]
+description = "Compact git pull output"
+match_command = "^git\\s+pull\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^remote:",
+  "^Unpacking objects:",
+  "^From ",
+  "^ *\\[new branch\\]",
+  "^ *\\[new tag\\]",
+  "^Already up to date",
+  "^Fast-forward",
+  "^Updating "
+]
+keep_lines_matching = [
+  "error:",
+  "fatal:",
+  "CONFLICT",
+  "Automatic merge failed",
+  "Merge conflict",
+  "Unmerged paths"
+]
+max_lines = 30
+on_empty = "git pull: ok"
+
+[[tests.git-pull]]
+name = "clean pull"
+input = """
+remote: Enumerating objects: 5, done.
+remote: Counting objects: 100% (5/5), done.
+remote: Compressing objects: 100% (3/3), done.
+Unpacking objects: 100% (3/3), 280 bytes | 280.00 KiB/s, done.
+From github.com:user/repo
+   abc123..def456  main     -> origin/main
+Updating abc123..def456
+Fast-forward
+ src/main.rs | 2 ++
+ 1 file changed, 2 insertions(+)
+"""
+expected = "git pull: ok"
+
+[[tests.git-pull]]
+name = "conflict shown"
+input = """
+remote: Enumerating objects: 5, done.
+From github.com:user/repo
+   abc123..def456  main     -> origin/main
+Auto-merging src/main.rs
+CONFLICT (content): Merge conflict in src/main.rs
+Automatic merge failed; fix conflicts and then commit the result.
+"""
+expected = """
+CONFLICT (content): Merge conflict in src/main.rs
+Automatic merge failed; fix conflicts and then commit the result."""

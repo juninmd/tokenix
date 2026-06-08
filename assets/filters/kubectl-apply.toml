@@ -1,0 +1,38 @@
+[filters.kubectl-apply]
+description = "Compact kubectl apply output"
+match_command = "^kubectl\\s+apply\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\w+/\\w+\\s+(created|unchanged|configured)$"
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Failed",
+  "FAILED",
+  "cannot",
+  "Invalid"
+]
+max_lines = 30
+on_empty = "kubectl apply: done"
+
+[[tests.kubectl-apply]]
+name = "clean apply"
+input = """
+deployment.apps/myapp created
+service/myapp created
+configmap/myapp-config unchanged
+"""
+expected = """
+deployment.apps/myapp created
+service/myapp created
+configmap/myapp-config unchanged"""
+
+[[tests.kubectl-apply]]
+name = "error shown"
+input = """
+error: error validating "deployment.yaml": error validating data: apiVersion "apps/v1" is missing; if you choose to manually configure this resource, you must specify a valid apiVersion
+"""
+expected = """
+error: error validating "deployment.yaml": error validating data: apiVersion "apps/v1" is missing; if you choose to manually configure this resource, you must specify a valid apiVersion"""

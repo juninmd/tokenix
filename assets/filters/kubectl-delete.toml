@@ -1,0 +1,36 @@
+[filters.kubectl-delete]
+description = "Compact kubectl delete output"
+match_command = "^kubectl\\s+delete\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\w+/\\w+\\s+deleted$"
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Failed",
+  "FAILED",
+  "cannot",
+  "not found"
+]
+max_lines = 30
+on_empty = "kubectl delete: done"
+
+[[tests.kubectl-delete]]
+name = "clean delete"
+input = """
+deployment.apps "myapp" deleted
+service "myapp" deleted
+"""
+expected = """
+deployment.apps "myapp" deleted
+service "myapp" deleted"""
+
+[[tests.kubectl-delete]]
+name = "error shown"
+input = """
+error: resource(s) were provided, but no name, label selector, or --all flag specified
+"""
+expected = """
+error: resource(s) were provided, but no name, label selector, or --all flag specified"""

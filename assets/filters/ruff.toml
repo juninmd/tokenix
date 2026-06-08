@@ -1,0 +1,38 @@
+[filters.ruff]
+description = "Compact ruff lint/check output"
+match_command = "^ruff\\s+(check|lint|format)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\d+ files?",
+  "^\\s*All checks passed",
+  "^\\s*No issues found",
+  "^\\s*Formatted"
+]
+keep_lines_matching = [
+  "^[A-Z]:",
+  "error:",
+  "warning:",
+  "note:"
+]
+max_lines = 60
+on_empty = "ruff: no issues"
+
+[[tests.ruff]]
+name = "clean check"
+input = """
+All checks passed!
+"""
+expected = "ruff: no issues"
+
+[[tests.ruff]]
+name = "issues shown"
+input = """
+src/main.py:10:5: F841 Local variable `x` assigned to but never used
+src/main.py:15:1: E501 Line too long (120 > 88)
+Found 2 issues.
+"""
+expected = """
+src/main.py:10:5: F841 Local variable `x` assigned to but never used
+src/main.py:15:1: E501 Line too long (120 > 88)
+Found 2 issues."""

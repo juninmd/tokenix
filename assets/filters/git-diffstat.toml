@@ -1,0 +1,29 @@
+[filters.git-diffstat]
+description = "Compact git diff --stat output"
+match_command = "^git\\s+diff\\s+.*--stat\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\s*\\d+",
+  "file",
+  "insertion",
+  "deletion"
+]
+max_lines = 30
+on_empty = "git diff --stat: no changes"
+
+[[tests.git-diffstat]]
+name = "diffstat output"
+input = """
+ src/main.rs     | 10 ++++++++++
+ src/utils.rs    |  5 +++++
+ tests/test.rs   |  3 ---
+ 3 files changed, 15 insertions(+), 3 deletions(-)
+"""
+expected = """
+ src/main.rs     | 10 ++++++++++
+ src/utils.rs    |  5 +++++
+ tests/test.rs   |  3 ---
+ 3 files changed, 15 insertions(+), 3 deletions(-)"""

@@ -1,22 +1,37 @@
 [filters.git-log]
-description = "Compact git log history"
+description = "Compact git log output"
 match_command = "^git\\s+log\\b"
 strip_ansi = true
 strip_lines_matching = [
+  "^\\s*$",
   "^Author:",
   "^Date:"
 ]
-head_lines = 1
-truncate_lines_at = 80
+keep_lines_matching = [
+  "^commit ",
+  "^    "
+]
+max_lines = 40
+on_empty = "git log: no commits"
 
 [[tests.git-log]]
-name = "Git commits log"
+name = "compact log"
 input = """
-commit a1b2c3d4e5f6g7h8i9j0
+commit abc123def456 (HEAD -> main, origin/main)
 Author: John Doe <john@example.com>
-Date:   Mon May 26 15:30:00 2026 -0300
+Date:   Mon Jan 15 10:30:00 2024 +0000
 
-    Add run subcommand and refactor PreToolUse hooks
+    Add new feature
+
+commit def456abc123
+Author: Jane Smith <jane@example.com>
+Date:   Fri Jan 12 15:45:00 2024 +0000
+
+    Fix bug in parser
 """
 expected = """
-commit a1b2c3d4e5f6g7h8i9j0"""
+commit abc123def456 (HEAD -> main, origin/main)
+    Add new feature
+
+commit def456abc123
+    Fix bug in parser"""

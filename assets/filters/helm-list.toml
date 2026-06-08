@@ -1,0 +1,28 @@
+[filters.helm-list]
+description = "Compact helm list output"
+match_command = "^helm\\s+list\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^NAME\\s+NAMESPACE\\s+REVISION"
+]
+keep_lines_matching = [
+  "^\\w+",
+  "deployed",
+  "failed",
+  "pending",
+  "superseded"
+]
+max_lines = 30
+on_empty = "helm list: no releases"
+
+[[tests.helm-list]]
+name = "list releases"
+input = """
+NAME       NAMESPACE   REVISION   UPDATED                                 STATUS      CHART           APP VERSION
+myapp      default     1          2024-01-15 10:30:00 +0000 UTC        deployed    myapp-1.0.0     1.0.0
+myapp-db   default     1          2024-01-15 10:30:00 +0000 UTC        deployed    postgresql-12.0 15.5
+"""
+expected = """
+myapp      default     1          2024-01-15 10:30:00 +0000 UTC        deployed    myapp-1.0.0     1.0.0
+myapp-db   default     1          2024-01-15 10:30:00 +0000 UTC        deployed    postgresql-12.0 15.5"""

@@ -1,0 +1,31 @@
+[filters.redis-cli]
+description = "Compact redis-cli output"
+match_command = "^redis-cli\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "ERROR",
+  "Error",
+  "ERR ",
+  "WRONGTYPE",
+  "NIL"
+]
+max_lines = 30
+on_empty = "redis-cli: ok"
+
+[[tests.redis-cli]]
+name = "clean command"
+input = """
+OK
+"""
+expected = "redis-cli: ok"
+
+[[tests.redis-cli]]
+name = "error shown"
+input = """
+ERR unknown command 'INVALID', with args beginning with:
+"""
+expected = """
+ERR unknown command 'INVALID', with args beginning with:"""

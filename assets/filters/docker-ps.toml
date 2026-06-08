@@ -2,13 +2,38 @@
 description = "Compact docker ps output"
 match_command = "^docker\\s+ps\\b"
 strip_ansi = true
-truncate_lines_at = 120
-max_lines = 40
+strip_lines_matching = [
+  "^\\s*$",
+  "^CONTAINER ID"
+]
+keep_lines_matching = [
+  "Up ",
+  "Exited",
+  "Restarting",
+  "Paused",
+  "Dead"
+]
+max_lines = 30
+on_empty = "docker ps: no containers"
 
 [[tests.docker-ps]]
-name = "docker ps status output"
-input = """CONTAINER ID   IMAGE          COMMAND                  CREATED         STATUS         PORTS     NAMES
-1a2b3c4d5e6f   redis:alpine   "docker-entrypoint.s…"   2 hours ago     Up 2 hours     6379/tcp   my-redis
+name = "running containers"
+input = """
+CONTAINER ID   IMAGE           COMMAND                  CREATED         STATUS         PORTS                    NAMES
+abc123def456   nginx:alpine    "/docker-entrypoint.…"   2 hours ago     Up 2 hours     0.0.0.0:8080->80/tcp     web
+def456abc123   postgres:15     "docker-entrypoint.s…"   2 hours ago     Up 2 hours     5432/tcp                 db
 """
-expected = """CONTAINER ID   IMAGE          COMMAND                  CREATED         STATUS         PORTS     NAMES
-1a2b3c4d5e6f   redis:alpine   "docker-entrypoint.s…"   2 hours ago     Up 2 hours     6379/tcp   my-redis"""
+expected = """
+abc123def456   nginx:alpine    "/docker-entrypoint.…"   2 hours ago     Up 2 hours     0.0.0.0:8080->80/tcp     web
+def456abc123   postgres:15     "docker-entrypoint.s…"   2 hours ago     Up 2 hours     5432/tcp                 db"""
+
+[[tests.docker-ps]]
+name = "exited container shown"
+input = """
+CONTAINER ID   IMAGE           COMMAND                  CREATED         STATUS                     PORTS     NAMES
+abc123def456   nginx:alpine    "/docker-entrypoint.…"   2 hours ago     Up 2 hours                 0.0.0.0:8080->80/tcp     web
+def456abc123   postgres:15     "docker-entrypoint.s…"   2 hours ago     Exited (1) 5 minutes ago             db
+"""
+expected = """
+abc123def456   nginx:alpine    "/docker-entrypoint.…"   2 hours ago     Up 2 hours                 0.0.0.0:8080->80/tcp     web
+def456abc123   postgres:15     "docker-entrypoint.s…"   2 hours ago     Exited (1) 5 minutes ago             db"""

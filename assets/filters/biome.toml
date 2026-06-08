@@ -1,45 +1,54 @@
 [filters.biome]
-description = "Compact Biome lint/format output — strip blank lines, keep diagnostics"
-match_command = "^biome\\b"
+description = "Compact biome check/format output"
+match_command = "^biome\\s+(check|lint|format)\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^Checked \\d+ file",
-  "^Fixed \\d+ file",
-  "^The following command",
-  "^Run it with",
+  "^\\s*\\d+ files?",
+  "^\\s*No issues found",
+  "^\\s*All checks passed",
+  "^\\s*Formatted"
 ]
-max_lines = 50
-on_empty = "biome: ok"
-
-[[tests.biome]]
-name = "lint strips noise, keeps diagnostics"
-input = """
-Checked 42 files in 0.5s
-
-src/app.tsx:5:3 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━
-  × Unexpected any. Specify a different type.
-  3 │ interface Props {
-  4 │   data: any;
-  5 │         ^^^
-
-src/utils.ts:12:1 lint/complexity/noForEach ━━━━━━━━━━━━━━━━━━━━
-  × Prefer for...of instead of forEach.
- 12 │ items.forEach(item => process(item));
-    │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Found 2 errors.
-"""
-expected = "src/app.tsx:5:3 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━\n  × Unexpected any. Specify a different type.\n  3 │ interface Props {\n  4 │   data: any;\n  5 │         ^^^\nsrc/utils.ts:12:1 lint/complexity/noForEach ━━━━━━━━━━━━━━━━━━━━\n  × Prefer for...of instead of forEach.\n 12 │ items.forEach(item => process(item));\n    │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFound 2 errors."
+keep_lines_matching = [
+  "error:",
+  "warning:",
+  "info:",
+  "hint:"
+]
+max_lines = 60
+on_empty = "biome: no issues"
 
 [[tests.biome]]
 name = "clean check"
 input = """
-Checked 42 files in 0.3s
+Checked 50 files in 200ms. No issues found.
 """
-expected = "biome: ok"
+expected = "biome: no issues"
 
 [[tests.biome]]
-name = "empty input returns on_empty message"
-input = ""
-expected = "biome: ok"
+name = "issues shown"
+input = """
+error: Unexpected console statement. Use a logger instead.
+  ┌─ src/main.ts:10:1
+  │
+10 │ console.log("hello");
+   │ ^^^^^^^^^^^^^^^^^^^
+
+warning: Variable 'x' is assigned a value but never used.
+  ┌─ src/main.ts:15:5
+  │
+15 │     let x = 5;
+   │     ^^^^^^^^^^
+"""
+expected = """
+error: Unexpected console statement. Use a logger instead.
+  ┌─ src/main.ts:10:1
+  │
+10 │ console.log("hello");
+   │ ^^^^^^^^^^^^^^^^^^^
+
+warning: Variable 'x' is assigned a value but never used.
+  ┌─ src/main.ts:15:5
+  │
+15 │     let x = 5;
+   │     ^^^^^^^^^^"""

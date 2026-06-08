@@ -1,0 +1,30 @@
+[filters.rg]
+description = "Compact ripgrep output"
+match_command = "^rg\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  ":",
+  "error:",
+  "warning:"
+]
+max_lines = 50
+on_empty = "rg: no matches"
+
+[[tests.rg]]
+name = "matches found"
+input = """
+src/main.rs:10:    let x = 5;
+src/utils.rs:25:    println!("{}", x);
+"""
+expected = """
+src/main.rs:10:    let x = 5;
+src/utils.rs:25:    println!("{}", x);"""
+
+[[tests.rg]]
+name = "no matches"
+input = """
+"""
+expected = "rg: no matches"

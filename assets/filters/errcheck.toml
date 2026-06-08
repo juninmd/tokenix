@@ -1,0 +1,30 @@
+[filters.errcheck]
+description = "Compact errcheck output"
+match_command = "^errcheck\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\w+\\.go:\\d+:\\d+:",
+  "error:",
+  "warning:"
+]
+max_lines = 50
+on_empty = "errcheck: no issues"
+
+[[tests.errcheck]]
+name = "clean"
+input = """
+"""
+expected = "errcheck: no issues"
+
+[[tests.errcheck]]
+name = "issues shown"
+input = """
+main.go:10:5: ignored error
+utils.go:15:1: unchecked error return
+"""
+expected = """
+main.go:10:5: ignored error
+utils.go:15:1: unchecked error return"""

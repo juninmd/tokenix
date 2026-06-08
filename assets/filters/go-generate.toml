@@ -1,0 +1,31 @@
+[filters.go-generate]
+description = "Compact go generate output"
+match_command = "^go\\s+generate\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Running "
+]
+keep_lines_matching = [
+  "error:",
+  "FAILED",
+  "cannot find"
+]
+max_lines = 30
+on_empty = "go generate: done"
+
+[[tests.go-generate]]
+name = "clean generate"
+input = """
+Running "go run github.com/golang/mock/mockgen -source=foo.go -destination=mock_foo.go"
+"""
+expected = "go generate: done"
+
+[[tests.go-generate]]
+name = "error shown"
+input = """
+Running "go run github.com/golang/mock/mockgen -source=foo.go -destination=mock_foo.go"
+foo.go:10:5: cannot find package "github.com/golang/mock/mockgen"
+"""
+expected = """
+foo.go:10:5: cannot find package "github.com/golang/mock/mockgen" """

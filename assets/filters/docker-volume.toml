@@ -1,0 +1,26 @@
+[filters.docker-volume]
+description = "Compact docker volume output"
+match_command = "^docker\\s+volume\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^DRIVER\\s+VOLUME NAME"
+]
+keep_lines_matching = [
+  "^\\w+",
+  "local",
+  "nfs"
+]
+max_lines = 30
+on_empty = "docker volume: none"
+
+[[tests.docker-volume]]
+name = "list volumes"
+input = """
+DRIVER    VOLUME NAME
+local     myapp_db_data
+local     myapp_redis_data
+"""
+expected = """
+local     myapp_db_data
+local     myapp_redis_data"""

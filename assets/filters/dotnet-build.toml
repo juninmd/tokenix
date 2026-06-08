@@ -1,74 +1,59 @@
 [filters.dotnet-build]
-description = "Compact dotnet build output — short-circuit on success, strip banners"
+description = "Compact dotnet build output"
 match_command = "^dotnet\\s+build\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^Microsoft \\(R\\)",
-  "^Copyright \\(C\\)",
-  "^  Determining projects",
+  "^\\s*Microsoft \\(R\\) Build Engine",
+  "^\\s*Copyright",
+  "^\\s*Build succeeded",
+  "^\\s*\\d+ Warning\\(s\\)",
+  "^\\s*\\d+ Error\\(s\\)",
+  "^\\s*Time Elapsed"
 ]
-match_output = [
-  { pattern = "0 Warning\\(s\\)\\n\\s+0 Error\\(s\\)", message = "ok (build succeeded)", unless = ": error|Build FAILED" },
+keep_lines_matching = [
+  "error ",
+  "warning ",
+  "FAILED",
+  "Build FAILED"
 ]
-max_lines = 40
+max_lines = 50
+on_empty = "dotnet build: success"
 
 [[tests.dotnet-build]]
-name = "error not masked when zero-error summary also present"
+name = "clean build"
 input = """
-src/Program.cs(10,5): error CS1002: ; expected
-Build succeeded.
-    0 Warning(s)
-    0 Error(s)
-"""
-expected = "src/Program.cs(10,5): error CS1002: ; expected\nBuild succeeded.\n    0 Warning(s)\n    0 Error(s)"
-
-[[tests.dotnet-build]]
-name = "successful build short-circuits to ok"
-input = """
-Microsoft (R) Build Engine version 17.8.3+195e7f5a3
+Microsoft (R) Build Engine version 17.8.0
 Copyright (C) Microsoft Corporation. All rights reserved.
 
   Determining projects to restore...
-  All projects are up-to-date for restore.
-  MyApp -> /home/user/MyApp/bin/Debug/net8.0/MyApp.dll
+  Restored /project/MyApp.csproj (in 1.2s).
+  MyApp -> /project/bin/Debug/net8.0/MyApp.dll
 
 Build succeeded.
     0 Warning(s)
     0 Error(s)
 
-Time Elapsed 00:00:02.34
+Time Elapsed 00:00:05.23
 """
-expected = "ok (build succeeded)"
+expected = "dotnet build: success"
 
 [[tests.dotnet-build]]
-name = "build with warnings not short-circuited"
+name = "error shown"
 input = """
-Microsoft (R) Build Engine version 17.8.3+195e7f5a3
+Microsoft (R) Build Engine version 17.8.0
 Copyright (C) Microsoft Corporation. All rights reserved.
 
-  Determining projects to restore...
-  MyApp -> /home/user/MyApp/bin/Debug/net8.0/MyApp.dll
-
-Build succeeded.
-    3 Warning(s)
-    0 Error(s)
-
-Time Elapsed 00:00:01.87
-"""
-expected = "  MyApp -> /home/user/MyApp/bin/Debug/net8.0/MyApp.dll\nBuild succeeded.\n    3 Warning(s)\n    0 Error(s)\nTime Elapsed 00:00:01.87"
-
-[[tests.dotnet-build]]
-name = "build errors pass through"
-input = """
-Microsoft (R) Build Engine version 17.8.3+195e7f5a3
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-  Determining projects to restore...
-src/Program.cs(10,5): error CS1002: ; expected [/home/user/MyApp/MyApp.csproj]
+  MyApp -> /project/bin/Debug/net8.0/MyApp.dll
+/MyApp/Program.cs(10,5): error CS0103: The name 'foo' does not exist in the current context [MyApp.csproj]
 
 Build FAILED.
     0 Warning(s)
     1 Error(s)
+
+Time Elapsed 00:00:05.23
 """
-expected = "src/Program.cs(10,5): error CS1002: ; expected [/home/user/MyApp/MyApp.csproj]\nBuild FAILED.\n    0 Warning(s)\n    1 Error(s)"
+expected = """
+/MyApp/Program.cs(10,5): error CS0103: The name 'foo' does not exist in the current context [MyApp.csproj]
+
+Build FAILED."""

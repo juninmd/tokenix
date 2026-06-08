@@ -1,69 +1,36 @@
 [filters.bundle-install]
-description = "Compact bundle install/update — strip 'Using' lines, keep installs and errors"
-match_command = "^bundle\\s+(install|update)\\b"
+description = "Compact bundle install output"
+match_command = "^bundle\\s+install\\b"
 strip_ansi = true
 strip_lines_matching = [
-  "^Using ",
   "^\\s*$",
-  "^Fetching gem metadata",
-  "^Resolving dependencies",
+  "^\\s*Fetching ",
+  "^\\s*Installing ",
+  "^\\s*Using ",
+  "^\\s*Bundle complete",
+  "^\\s*\\d+ gem",
+  "^\\s*\\d+ dependency"
 ]
-match_output = [
-  { pattern = "Bundle complete!", message = "ok bundle: complete", unless = "[Ee]rror|[Ff]ailed|[Cc]ould not find|[Cc]onflict" },
-  { pattern = "Bundle updated!", message = "ok bundle: updated", unless = "[Ee]rror|[Ff]ailed|[Cc]ould not find|[Cc]onflict" },
+keep_lines_matching = [
+  "Error:",
+  "error:",
+  "Failed",
+  "Could not find",
+  "Bundler::GemNotFound"
 ]
-max_lines = 30
+max_lines = 40
+on_empty = "bundle install: ok"
 
 [[tests.bundle-install]]
-name = "error not masked when 'Bundle complete!' present"
+name = "clean install"
 input = """
-error: could not find gem 'sqlite3'
-Bundle complete!
-"""
-expected = "error: could not find gem 'sqlite3'\nBundle complete!"
-
-[[tests.bundle-install]]
-name = "all cached short-circuits"
-input = """
-Using bundler 2.5.6
-Using rake 13.1.0
-Using ast 2.4.2
-Using base64 0.2.0
-Using minitest 5.22.2
-Bundle complete! 85 Gemfile dependencies, 200 gems now installed.
+Fetching gem metadata from https://rubygems.org/..........
+Fetching gem metadata from https://rubygems.org/.
+Resolving dependencies...
+Using rake 13.0.6
+Using concurrent-ruby 1.1.10
+Using minitest 5.16.3
+Bundle complete! 15 Gemfile dependencies, 45 gems now installed.
 Use `bundle info [gemname]` to see where a bundled gem is installed.
 """
-expected = "ok bundle: complete"
-
-[[tests.bundle-install]]
-name = "mixed install keeps Fetching and Installing lines"
-input = """
-Fetching gem metadata from https://rubygems.org/.........
-Resolving dependencies...
-Using rake 13.1.0
-Using ast 2.4.2
-Fetching rspec 3.13.0
-Installing rspec 3.13.0
-Using rubocop 1.62.0
-Fetching simplecov 0.22.0
-Installing simplecov 0.22.0
-Bundle complete! 85 Gemfile dependencies, 202 gems now installed.
-"""
-expected = "ok bundle: complete"
-
-[[tests.bundle-install]]
-name = "update output"
-input = """
-Fetching gem metadata from https://rubygems.org/.........
-Resolving dependencies...
-Using rake 13.1.0
-Fetching rspec 3.14.0 (was 3.13.0)
-Installing rspec 3.14.0 (was 3.13.0)
-Bundle updated!
-"""
-expected = "ok bundle: updated"
-
-[[tests.bundle-install]]
-name = "empty output"
-input = ""
-expected = ""
+expected = "bundle install: ok"

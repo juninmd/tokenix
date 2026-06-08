@@ -1,0 +1,33 @@
+[filters.docker-exec]
+description = "Compact docker exec output"
+match_command = "^docker\\s+exec\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Failed",
+  "permission denied",
+  "no such file",
+  "executable file not found",
+  "container not found"
+]
+max_lines = 30
+on_empty = "docker exec: done"
+
+[[tests.docker-exec]]
+name = "clean exec"
+input = """
+root@container:/app# 
+"""
+expected = "docker exec: done"
+
+[[tests.docker-exec]]
+name = "error shown"
+input = """
+Error response from daemon: Container abc123456 is not running
+"""
+expected = """
+Error response from daemon: Container abc123456 is not running"""

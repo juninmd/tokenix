@@ -1,0 +1,48 @@
+[filters.pnpm-install]
+description = "Compact pnpm install output"
+match_command = "^pnpm\\s+(install|add|i|in)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]",
+  "Progress:",
+  "│",
+  "Fetched",
+  "Resolving",
+  "Extracting",
+  "Checking",
+  "up to date",
+  "packages in",
+  "found 0 vulnerabilities",
+  "audited \\d+ packages",
+  "npm WARN deprecated",
+  "peer dep missing",
+  "WARN.*deprecated"
+]
+max_lines = 40
+on_empty = "pnpm install: ok"
+
+[[tests.pnpm-install]]
+name = "clean install"
+input = """
+Packages: +120
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ 100%
+
+Progress: resolved 120, reused 118, downloaded 2, added 120
+
+Done in 2.3s
+"""
+expected = "pnpm install: ok"
+
+[[tests.pnpm-install]]
+name = "vulnerabilities shown"
+input = """
+Packages: +120
+Progress: resolved 120
+
+found 5 vulnerabilities (2 moderate, 3 high)
+run `pnpm audit` to address them
+"""
+expected = """
+found 5 vulnerabilities (2 moderate, 3 high)
+run `pnpm audit` to address them"""

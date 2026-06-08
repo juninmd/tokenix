@@ -1,0 +1,33 @@
+[filters.terraform-graph]
+description = "Compact terraform graph output"
+match_command = "^terraform\\s+graph\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "digraph",
+  "->",
+  "label",
+  "shape"
+]
+max_lines = 50
+on_empty = "terraform graph: empty"
+
+[[tests.terraform-graph]]
+name = "graph output"
+input = """
+digraph {
+  compound = true
+  newrank = true
+  "aws_instance.web" -> "provider.aws"
+  "aws_s3_bucket.data" -> "provider.aws"
+}
+"""
+expected = """
+digraph {
+  compound = true
+  newrank = true
+  "aws_instance.web" -> "provider.aws"
+  "aws_s3_bucket.data" -> "provider.aws"
+}"""

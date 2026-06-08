@@ -1,0 +1,70 @@
+[filters.jest]
+description = "Compact Jest test output"
+match_command = "^(npx\\s+)?jest\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*PASS\\s+",
+  "^\\s*Test Suites:",
+  "^\\s*Tests:",
+  "^\\s*Snapshots:",
+  "^\\s*Time:",
+  "^\\s*Ran all test suites"
+]
+keep_lines_matching = [
+  "FAIL",
+  "● ",
+  "expect",
+  "Received:",
+  "Expected:",
+  "TypeError",
+  "ReferenceError",
+  "SyntaxError"
+]
+max_lines = 80
+on_empty = "jest: all tests passed"
+
+[[tests.jest]]
+name = "all pass"
+input = """
+ PASS  src/utils.test.ts
+ PASS  src/components.test.tsx
+Test Suites: 2 passed, 2 total
+Tests:       15 passed, 15 total
+Snapshots:   0 total
+Time:        2.345 s
+Ran all test suites.
+"""
+expected = "jest: all tests passed"
+
+[[tests.jest]]
+name = "test failure shown"
+input = """
+ FAIL  src/utils.test.ts
+  ● add › should add two numbers
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 4
+
+      12 |   expect(add(1, 2)).toBe(3);
+      13 | });
+
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 14 passed, 15 total
+"""
+expected = """
+ FAIL  src/utils.test.ts
+  ● add › should add two numbers
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 4
+
+      12 |   expect(add(1, 2)).toBe(3);
+      13 | });
+
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 14 passed, 15 total"""

@@ -1,0 +1,31 @@
+[filters.kubectl-logs]
+description = "Compact kubectl logs output"
+match_command = "^kubectl\\s+logs\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "ERROR",
+  "FATAL",
+  "PANIC",
+  "Exception",
+  "Error:",
+  "Failed",
+  "WARN"
+]
+max_lines = 100
+on_empty = "kubectl logs: no output"
+
+[[tests.kubectl-logs]]
+name = "logs with errors"
+input = """
+2024-01-15 10:30:00 INFO  Starting server on port 8080
+2024-01-15 10:30:01 INFO  Connected to database
+2024-01-15 10:30:02 ERROR Failed to connect to redis: connection refused
+2024-01-15 10:30:03 WARN  Retrying in 5s
+2024-01-15 10:30:08 INFO  Connected to redis
+"""
+expected = """
+2024-01-15 10:30:02 ERROR Failed to connect to redis: connection refused
+2024-01-15 10:30:03 WARN  Retrying in 5s"""

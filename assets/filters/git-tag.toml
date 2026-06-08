@@ -1,0 +1,30 @@
+[filters.git-tag]
+description = "Compact git tag output"
+match_command = "^git\\s+tag\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^v?\\d+\\.\\d+\\.\\d+"
+]
+max_lines = 30
+on_empty = "git tag: no tags"
+
+[[tests.git-tag]]
+name = "list tags"
+input = """
+v1.0.0
+v1.1.0
+v2.0.0
+"""
+expected = """
+v1.0.0
+v1.1.0
+v2.0.0"""
+
+[[tests.git-tag]]
+name = "no tags"
+input = """
+"""
+expected = "git tag: no tags"

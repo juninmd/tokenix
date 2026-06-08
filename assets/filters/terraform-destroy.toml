@@ -1,0 +1,42 @@
+[filters.terraform-destroy]
+description = "Compact terraform destroy output"
+match_command = "^terraform\\s+destroy\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\w+\\.\\w+:\\s+Destroying",
+  "^\\s*\\w+\\.\\w+:\\s+Destruction complete",
+  "^Destroy complete"
+]
+keep_lines_matching = [
+  "Error:",
+  "Error:",
+  "Failed",
+  "│ Error",
+  "│ Warning",
+  "still destroying"
+]
+max_lines = 50
+on_empty = "terraform destroy: complete"
+
+[[tests.terraform-destroy]]
+name = "clean destroy"
+input = """
+aws_instance.web: Destroying... [id=i-1234567890abcdef0]
+aws_instance.web: Destruction complete after 5s
+
+Destroy complete! Resources: 1 destroyed.
+"""
+expected = "terraform destroy: complete"
+
+[[tests.terraform-destroy]]
+name = "error shown"
+input = """
+aws_instance.web: Destroying... [id=i-1234567890abcdef0]
+aws_instance.web: Still destroying... [10s elapsed]
+Error: Error terminating instance: InvalidInstanceID.NotFound
+"""
+expected = """
+aws_instance.web: Destroying... [id=i-1234567890abcdef0]
+aws_instance.web: Still destroying... [10s elapsed]
+Error: Error terminating instance: InvalidInstanceID.NotFound"""

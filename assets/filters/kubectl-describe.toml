@@ -1,0 +1,50 @@
+[filters.kubectl-describe]
+description = "Compact kubectl describe output"
+match_command = "^kubectl\\s+describe\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "Error:",
+  "Failed",
+  "Events:",
+  "Warning",
+  "Normal"
+]
+max_lines = 60
+on_empty = "kubectl describe: no details"
+
+[[tests.kubectl-describe]]
+name = "describe output"
+input = """
+Name:         myapp
+Namespace:    default
+Labels:       app=myapp
+Annotations:  <none>
+Selector:     app=myapp
+Replicas:     3 desired | 3 updated | 3 total | 3 available | 3 ready
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  10m   default-scheduler  Successfully assigned default/myapp-abc123 to node1
+  Normal  Pulling    10m   kubelet            Pulling image "nginx:latest"
+  Normal  Pulled     9m    kubelet            Successfully pulled image "nginx:latest"
+  Normal  Created    9m    kubelet            Created container nginx
+  Normal  Started    9m    kubelet            Started container nginx
+"""
+expected = """
+Name:         myapp
+Namespace:    default
+Labels:       app=myapp
+Annotations:  <none>
+Selector:     app=myapp
+Replicas:     3 desired | 3 updated | 3 total | 3 available | 3 ready
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  10m   default-scheduler  Successfully assigned default/myapp-abc123 to node1
+  Normal  Pulling    10m   kubelet            Pulling image "nginx:latest"
+  Normal  Pulled     9m    kubelet            Successfully pulled image "nginx:latest"
+  Normal  Created    9m    kubelet            Created container nginx
+  Normal  Started    9m    kubelet            Started container nginx"""

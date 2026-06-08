@@ -1,0 +1,34 @@
+[filters.trunk]
+description = "Compact trunk check output"
+match_command = "^trunk\\s+check\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\d+ issues?",
+  "^\\s*All checks passed"
+]
+keep_lines_matching = [
+  "^\\w+:\\d+:\\d+:",
+  "error:",
+  "warning:",
+  "info:"
+]
+max_lines = 60
+on_empty = "trunk check: passed"
+
+[[tests.trunk]]
+name = "clean"
+input = """
+All checks passed!
+"""
+expected = "trunk check: passed"
+
+[[tests.trunk]]
+name = "issues shown"
+input = """
+src/main.ts:10:5: error: 'x' is assigned a value but never used
+src/main.ts:15:1: warning: Line too long
+"""
+expected = """
+src/main.ts:10:5: error: 'x' is assigned a value but never used
+src/main.ts:15:1: warning: Line too long"""

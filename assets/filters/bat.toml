@@ -1,0 +1,21 @@
+[filters.bat]
+description = "Compact bat (cat) output"
+match_command = "^bat\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+max_lines = 100
+on_empty = "bat: empty file"
+
+[[tests.bat]]
+name = "file content"
+input = """
+  1 | fn main() {
+  2 |     println!("Hello, world!");
+  3 | }
+"""
+expected = """
+  1 | fn main() {
+  2 |     println!("Hello, world!");
+  3 | }"""

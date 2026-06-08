@@ -1,0 +1,32 @@
+[filters.terraform-taint]
+description = "Compact terraform taint output"
+match_command = "^terraform\\s+taint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Resource instance"
+]
+keep_lines_matching = [
+  "Error:",
+  "Error:",
+  "marked as tainted",
+  "No such resource"
+]
+max_lines = 20
+on_empty = "terraform taint: done"
+
+[[tests.terraform-taint]]
+name = "taint resource"
+input = """
+Resource instance aws_instance.web has been marked as tainted.
+"""
+expected = """
+Resource instance aws_instance.web has been marked as tainted."""
+
+[[tests.terraform-taint]]
+name = "untaint"
+input = """
+Resource instance aws_instance.web has been marked as untainted.
+"""
+expected = """
+Resource instance aws_instance.web has been marked as untainted."""

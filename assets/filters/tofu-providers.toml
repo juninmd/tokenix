@@ -1,0 +1,31 @@
+[filters.tofu-providers]
+description = "Compact OpenTofu providers output"
+match_command = "^tofu\\s+providers\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\."
+]
+keep_lines_matching = [
+  "^\\w+",
+  "hashicorp/",
+  "registry.terraform.io"
+]
+max_lines = 30
+on_empty = "tofu providers: none"
+
+[[tests.tofu-providers]]
+name = "providers tree"
+input = """
+.
+├── provider[registry.terraform.io/hashicorp/aws] ~> 5.0
+├── provider[registry.terraform.io/hashicorp/random] ~> 3.0
+└── module.vpc
+    └── provider[registry.terraform.io/hashicorp/aws] ~> 5.0
+"""
+expected = """
+.
+├── provider[registry.terraform.io/hashicorp/aws] ~> 5.0
+├── provider[registry.terraform.io/hashicorp/random] ~> 3.0
+└── module.vpc
+    └── provider[registry.terraform.io/hashicorp/aws] ~> 5.0"""

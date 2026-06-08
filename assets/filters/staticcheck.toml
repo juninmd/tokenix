@@ -1,0 +1,30 @@
+[filters.staticcheck]
+description = "Compact staticcheck output"
+match_command = "^staticcheck\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\w+\\.go:\\d+:\\d+:",
+  "error:",
+  "warning:"
+]
+max_lines = 50
+on_empty = "staticcheck: no issues"
+
+[[tests.staticcheck]]
+name = "clean"
+input = """
+"""
+expected = "staticcheck: no issues"
+
+[[tests.staticcheck]]
+name = "issues shown"
+input = """
+main.go:10:5: SA1000: invalid regular expression
+utils.go:15:1: SA4006: value assigned to variable is never used
+"""
+expected = """
+main.go:10:5: SA1000: invalid regular expression
+utils.go:15:1: SA4006: value assigned to variable is never used"""

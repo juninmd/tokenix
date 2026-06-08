@@ -1,0 +1,28 @@
+[filters.helm-history]
+description = "Compact helm history output"
+match_command = "^helm\\s+history\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^REVISION\\s+UPDATED\\s+STATUS"
+]
+keep_lines_matching = [
+  "^\\s*\\d+",
+  "deployed",
+  "failed",
+  "superseded",
+  "uninstalled"
+]
+max_lines = 30
+on_empty = "helm history: none"
+
+[[tests.helm-history]]
+name = "release history"
+input = """
+REVISION  UPDATED                         STATUS      CHART           APP VERSION   DESCRIPTION
+1         Mon Jan 15 10:30:00 2024        superseded  myapp-1.0.0     1.0.0         Install complete
+2         Mon Jan 15 11:00:00 2024        deployed    myapp-1.0.1     1.0.1         Upgrade complete
+"""
+expected = """
+1         Mon Jan 15 10:30:00 2024        superseded  myapp-1.0.0     1.0.0         Install complete
+2         Mon Jan 15 11:00:00 2024        deployed    myapp-1.0.1     1.0.1         Upgrade complete"""

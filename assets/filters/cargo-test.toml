@@ -1,62 +1,74 @@
 [filters.cargo-test]
-description = "Compact Rust cargo test output"
+description = "Compact cargo test output"
 match_command = "^cargo\\s+test\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^\\s*Compiling\\s+",
-  "^\\s*Finished\\s+",
-  "^\\s*Fresh\\s+",
-  "^\\s*running\\s+\\d+\\s+test",
-  "^test\\s+\\S+\\s+\\.\\.\\.\\s+ok\\b",
-  "^\\s*Doc-tests\\s+"
+  "^\\s*Compiling",
+  "^\\s*Running unittests",
+  "^\\s*Running tests/",
+  "^\\s*test result: ok\\.",
+  "^\\s*Doc-tests"
 ]
-max_lines = 100
+keep_lines_matching = [
+  "test result:",
+  "FAILED",
+  "PASSED",
+  "error\\[",
+  "warning:",
+  "thread.*panicked"
+]
+max_lines = 80
 on_empty = "cargo test: all tests passed"
 
 [[tests.cargo-test]]
-name = "All tests pass"
+name = "all tests pass"
 input = """
-   Compiling tokenix v0.12.0
-    Finished test [unoptimized + debuginfo] target(s) in 0.95s
-     Running unittests src/main.rs
+   Compiling my-crate v0.1.0
+    Finished test [unoptimized + debuginfo] target(s) in 2.3s
+     Running unittests src/lib.rs (target/debug/deps/my_crate-abc123)
 
-running 3 tests
-test a ... ok
-test b ... ok
-test c ... ok
+running 5 tests
+test test_add ... ok
+test test_sub ... ok
+test test_mul ... ok
+test test_div ... ok
+test test_mod ... ok
 
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 """
-expected = """     Running unittests src/main.rs
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"""
+expected = """
+running 5 tests
+test test_add ... ok
+test test_sub ... ok
+test test_mul ... ok
+test test_div ... ok
+test test_mod ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"""
 
 [[tests.cargo-test]]
-name = "Test failure"
+name = "test failure shown"
 input = """
-     Running unittests src/main.rs
+   Compiling my-crate v0.1.0
+    Finished test [unoptimized + debuginfo] target(s) in 2.3s
+     Running unittests src/lib.rs (target/debug/deps/my_crate-abc123)
 
-running 2 tests
-test a ... ok
-test b ... FAILED
-
-failures:
-
----- b stdout ----
-thread 'b' panicked at src/main.rs:10:5:
-assertion failed: false
+running 5 tests
+test test_add ... ok
+test test_fail ... FAILED
 
 failures:
-    b
+    test_fail
 
-test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
 """
-expected = """     Running unittests src/main.rs
-test b ... FAILED
+expected = """
+running 5 tests
+test test_add ... ok
+test test_fail ... FAILED
+
 failures:
----- b stdout ----
-thread 'b' panicked at src/main.rs:10:5:
-assertion failed: false
-failures:
-    b
-test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"""
+    test_fail
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"""

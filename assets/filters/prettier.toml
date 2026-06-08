@@ -1,0 +1,34 @@
+[filters.prettier]
+description = "Compact Prettier output"
+match_command = "^(npx\\s+)?prettier\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\w+\\.(js|ts|jsx|tsx|json|css|md)\\s*$"
+]
+keep_lines_matching = [
+  "error",
+  "SyntaxError",
+  "Could not parse"
+]
+max_lines = 40
+on_empty = "prettier: formatted"
+
+[[tests.prettier]]
+name = "formatted files"
+input = """
+src/main.ts
+src/utils.ts
+src/components/Button.tsx
+"""
+expected = "prettier: formatted"
+
+[[tests.prettier]]
+name = "parse error shown"
+input = """
+src/main.ts
+SyntaxError: Could not parse src/main.ts: Unexpected token (10:5)
+"""
+expected = """
+src/main.ts
+SyntaxError: Could not parse src/main.ts: Unexpected token (10:5)"""

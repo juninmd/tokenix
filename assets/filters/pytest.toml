@@ -1,69 +1,65 @@
 [filters.pytest]
-description = "Compact pytest test runs"
+description = "Compact pytest output"
 match_command = "^(python\\s+-m\\s+)?pytest\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^platform\\s+",
-  "^cachedir:",
-  "^rootdir:",
-  "^configfile:",
-  "^plugins:",
-  "^collected \\d+ items",
-  "^passed in",
-  "^\\.+[\\s$]",
-  "^\\s*\\d+%\\s*$",
-  "^[\\.sFp]+$"
+  "^\\s*\\.\\.\\.",
+  "^\\s*======",
+  "^\\s*---",
+  "^\\s*passed\\s+in\\s+",
+  "^\\s*\\d+ passed",
+  "^\\s*\\d+ failed",
+  "^\\s*\\d+ skipped",
+  "^\\s*\\d+ warnings",
+  "^\\s*===.*===",
+  "^\\s*PASSED",
+  "^\\s*SKIPPED"
+]
+keep_lines_matching = [
+  "FAILED",
+  "ERROR",
+  "AssertionError",
+  "Traceback",
+  "File ",
+  "assert ",
+  "E       "
 ]
 max_lines = 80
 on_empty = "pytest: all tests passed"
 
 [[tests.pytest]]
-name = "All pytest tests pass"
+name = "all pass"
 input = """
 ============================= test session starts =============================
-platform linux -- Python 3.10.5, pytest-7.1.2, pluggy-1.0.0
-rootdir: /home/user/project
-collected 3 items
+collected 15 items
 
-test_main.py ...                                                         [100%]
+test_utils.py ..........
+test_api.py .....
 
-============================== 3 passed in 0.05s ===============================
+============================= 15 passed in 0.45s =============================
 """
-expected = """============================= test session starts =============================
-test_main.py ...                                                         [100%]
-============================== 3 passed in 0.05s ==============================="""
+expected = "pytest: all tests passed"
 
 [[tests.pytest]]
-name = "Pytest failure"
+name = "failure shown"
 input = """
 ============================= test session starts =============================
-platform linux -- Python 3.10.5, pytest-7.1.2, pluggy-1.0.0
-rootdir: /home/user/project
-collected 2 items
+collected 15 items
 
-test_main.py .F                                                          [100%]
+test_utils.py ......F...
 
-================================── FAILURES ──==================================
-__________________________________ test_fail ___________________________________
+============================= FAILED test_utils.py::test_add =============================
+def test_add():
+    assert add(1, 2) == 3
+E   AssertionError: assert 4 == 3
+E    +  where 4 = add(1, 2)
 
-    def test_fail():
->       assert False
-E       assert False
-
-test_main.py:8: AssertionError
-=========================== short test summary info ============================
-FAILED test_main.py::test_fail - assert False
-========================= 1 failed, 1 passed in 0.08s ==========================
+============================= 1 failed, 14 passed in 0.52s =============================
 """
-expected = """============================= test session starts =============================
-test_main.py .F                                                          [100%]
-================================── FAILURES ──==================================
-__________________________________ test_fail ___________________________________
-    def test_fail():
->       assert False
-E       assert False
-test_main.py:8: AssertionError
-=========================== short test summary info ============================
-FAILED test_main.py::test_fail - assert False
-========================= 1 failed, 1 passed in 0.08s =========================="""
+expected = """
+============================= FAILED test_utils.py::test_add =============================
+def test_add():
+    assert add(1, 2) == 3
+E   AssertionError: assert 4 == 3
+E    +  where 4 = add(1, 2)"""

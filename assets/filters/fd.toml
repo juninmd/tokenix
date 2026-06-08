@@ -1,0 +1,27 @@
+[filters.fd]
+description = "Compact fd (find) output"
+match_command = "^fd\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+max_lines = 50
+on_empty = "fd: no files found"
+
+[[tests.fd]]
+name = "files found"
+input = """
+src/main.rs
+src/utils.rs
+tests/integration.rs
+"""
+expected = """
+src/main.rs
+src/utils.rs
+tests/integration.rs"""
+
+[[tests.fd]]
+name = "no files"
+input = """
+"""
+expected = "fd: no files found"

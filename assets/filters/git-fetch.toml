@@ -1,0 +1,36 @@
+[filters.git-fetch]
+description = "Compact git fetch output"
+match_command = "^git\\s+fetch\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^remote:",
+  "^From "
+]
+keep_lines_matching = [
+  "error:",
+  "fatal:",
+  "failed",
+  "Permission denied"
+]
+max_lines = 20
+on_empty = "git fetch: done"
+
+[[tests.git-fetch]]
+name = "clean fetch"
+input = """
+remote: Enumerating objects: 50, done.
+remote: Counting objects: 100% (50/50), done.
+remote: Compressing objects: 100% (25/25), done.
+From github.com:user/repo
+   abc123..def456  main     -> origin/main
+"""
+expected = "git fetch: done"
+
+[[tests.git-fetch]]
+name = "error shown"
+input = """
+fatal: couldn't find remote ref main
+"""
+expected = """
+fatal: couldn't find remote ref main"""

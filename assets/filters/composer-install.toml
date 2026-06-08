@@ -1,49 +1,36 @@
 [filters.composer-install]
-description = "Compact composer install/update/require output — strip downloads, short-circuit when up-to-date"
-match_command = "^composer\\s+(install|update|require)\\b"
+description = "Compact composer install output"
+match_command = "^composer\\s+install\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^  - Downloading ",
-  "^  - Installing ",
-  "^Loading composer",
-  "^Updating dependencies",
+  "^\\s*Loading composer repositories",
+  "^\\s*Installing dependencies",
+  "^\\s*Package operations:",
+  "^\\s*\\s*- Installing",
+  "^\\s*Generating",
+  "^\\s*\\d+ packages installed",
+  "^\\s*\\d+ packages updated"
 ]
-match_output = [
-  { pattern = "Nothing to install, update or remove", message = "ok (up to date)", unless = "[Ee]rror|[Ff]ailed|fatal|Problem \\d" },
+keep_lines_matching = [
+  "Error:",
+  "error:",
+  "Failed",
+  "Could not find",
+  "Installation failed"
 ]
-max_lines = 30
+max_lines = 40
+on_empty = "composer install: ok"
 
 [[tests.composer-install]]
-name = "error not masked when 'Nothing to install' present"
-input = """
-Your requirements could not be resolved to an installable set.
-Problem 1: error in dependency tree
-Nothing to install, update or remove
-"""
-expected = "Your requirements could not be resolved to an installable set.\nProblem 1: error in dependency tree\nNothing to install, update or remove"
-
-[[tests.composer-install]]
-name = "nothing to do short-circuits"
+name = "clean install"
 input = """
 Loading composer repositories with package information
-Updating dependencies
-Lock file operations: 0 installs, 0 updates, 0 removals
-Nothing to install, update or remove
-Generating autoload files
-"""
-expected = "ok (up to date)"
-
-[[tests.composer-install]]
-name = "install strips download lines"
-input = """
-Loading composer repositories with package information
-Updating dependencies
-  - Downloading symfony/console (v6.4.0)
+Installing dependencies (including require-dev) from lock file
+Package operations: 12 installs, 0 updates, 0 removals
+  - Installing symfony/polyfill-ctype (v1.28.0): Extracting archive
   - Installing symfony/console (v6.4.0): Extracting archive
-  - Downloading psr/log (3.0.0)
-  - Installing psr/log (3.0.0): Extracting archive
-Writing lock file
 Generating autoload files
+12 packages installed in 2.3s
 """
-expected = "Writing lock file\nGenerating autoload files"
+expected = "composer install: ok"

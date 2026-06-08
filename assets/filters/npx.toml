@@ -1,0 +1,30 @@
+[filters.npx]
+description = "Compact npx output"
+match_command = "^npx\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*npm notice",
+  "^\\s*npm WARN",
+  "^Need to install",
+  "^installing",
+  "^installed"
+]
+max_lines = 50
+on_empty = "npx: done"
+
+[[tests.npx]]
+name = "command runs"
+input = """
+Need to install the following packages:
+  create-react-app@5.0.1
+Ok to proceed? (y) y
+...
+Created react app in my-app
+"""
+expected = """
+Need to install the following packages:
+  create-react-app@5.0.1
+Ok to proceed? (y) y
+...
+Created react app in my-app"""

@@ -1,0 +1,42 @@
+[filters.mysql]
+description = "Compact mysql output"
+match_command = "^mysql\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Welcome to the MySQL monitor",
+  "^\\s*Copyright",
+  "^\\s*Your MySQL connection id",
+  "^\\s*Server version",
+  "^\\s*Type 'help'"
+]
+keep_lines_matching = [
+  "ERROR",
+  "Error",
+  "FAILED",
+  "Unknown database",
+  "Access denied"
+]
+max_lines = 50
+on_empty = "mysql: ok"
+
+[[tests.mysql]]
+name = "clean connection"
+input = """
+Welcome to the MySQL monitor.  Commands end with ; or \\g.
+Your MySQL connection id is 123
+Server version: 8.0.36 MySQL Community Server - GPL
+
+Type 'help;' or '\\h' for help. Type '\\c' to clear the current input statement.
+
+mysql> 
+"""
+expected = "mysql: ok"
+
+[[tests.mysql]]
+name = "error shown"
+input = """
+ERROR 1049 (42000): Unknown database 'mydb'
+"""
+expected = """
+ERROR 1049 (42000): Unknown database 'mydb'"""

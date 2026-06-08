@@ -1,0 +1,52 @@
+[filters.maven-test]
+description = "Compact Maven test output"
+match_command = "^mvn\\s+test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[INFO\\]\\s+---",
+  "^\\[INFO\\]\\s+Running ",
+  "^\\[INFO\\]\\s+Tests run:",
+  "^\\[INFO\\]\\s+BUILD SUCCESS"
+]
+keep_lines_matching = [
+  "ERROR",
+  "FAILURE",
+  "FAILURE!",
+  "Tests run:.*Failures:",
+  "Tests run:.*Errors:",
+  "<<< FAILURE",
+  "<<< ERROR"
+]
+max_lines = 60
+on_empty = "maven test: passed"
+
+[[tests.maven-test]]
+name = "tests pass"
+input = """
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] --- maven-surefire-plugin:3.0.0:test (default-test) @ my-project ---
+[INFO] Running com.example.MyTest
+[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.3 s
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+"""
+expected = "maven test: passed"
+
+[[tests.maven-test]]
+name = "failure shown"
+input = """
+[INFO] --- maven-surefire-plugin:3.0.0:test (default-test) @ my-project ---
+[INFO] Running com.example.MyTest
+[INFO] Tests run: 10, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 2.3 s
+[INFO] ------------------------------------------------------------------------
+[ERROR] BUILD FAILURE
+[ERROR] There are test failures.
+"""
+expected = """
+[INFO] Tests run: 10, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 2.3 s
+[INFO] ------------------------------------------------------------------------
+[ERROR] BUILD FAILURE
+[ERROR] There are test failures."""

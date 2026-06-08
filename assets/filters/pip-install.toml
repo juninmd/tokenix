@@ -1,0 +1,45 @@
+[filters.pip-install]
+description = "Compact pip install output"
+match_command = "^pip\\s+install\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Collecting ",
+  "^\\s*Downloading ",
+  "^\\s*Installing collected packages",
+  "^\\s*Successfully installed",
+  "^\\s*Requirement already satisfied",
+  "^\\s*WARNING: ",
+  "packages in",
+  "found 0 vulnerabilities"
+]
+keep_lines_matching = [
+  "ERROR:",
+  "error:",
+  "Failed",
+  "Could not find",
+  "No matching distribution"
+]
+max_lines = 40
+on_empty = "pip install: ok"
+
+[[tests.pip-install]]
+name = "clean install"
+input = """
+Collecting requests
+  Downloading requests-2.31.0-py3-none-any.whl (62 kB)
+Installing collected packages: requests
+Successfully installed requests-2.31.0
+"""
+expected = "pip install: ok"
+
+[[tests.pip-install]]
+name = "error shown"
+input = """
+Collecting nonexistent-package
+  ERROR: Could not find a version that satisfies the requirement nonexistent-package
+ERROR: No matching distribution found for nonexistent-package
+"""
+expected = """
+  ERROR: Could not find a version that satisfies the requirement nonexistent-package
+ERROR: No matching distribution found for nonexistent-package"""

@@ -1,0 +1,29 @@
+[filters.tofu-console]
+description = "Compact OpenTofu console output"
+match_command = "^tofu\\s+console\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*>"
+]
+keep_lines_matching = [
+  "^\\w+",
+  "Error:",
+  "Error:"
+]
+max_lines = 30
+on_empty = "tofu console: ready"
+
+[[tests.tofu-console]]
+name = "console session"
+input = """
+> var.instance_type
+"t3.micro"
+> length(var.subnet_ids)
+2
+"""
+expected = """
+> var.instance_type
+"t3.micro"
+> length(var.subnet_ids)
+2"""

@@ -1,0 +1,53 @@
+[filters.wget]
+description = "Compact wget output"
+match_command = "^wget\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^--\\d{4}-\\d{2}-\\d{2} ",
+  "^\\s*Resolving ",
+  "^\\s*Connecting ",
+  "^\\s*HTTP request sent",
+  "^\\s*Length: ",
+  "^\\s*Saving to: ",
+  "^\\s*\\d+%",
+  "^\\s*\\[",
+  "^\\s*\\d+\\.\\d+ [KM]B/s",
+  "^\\s*\\d{4}-\\d{2}-\\d{2} "
+]
+keep_lines_matching = [
+  "ERROR",
+  "failed",
+  "Connection refused",
+  "No such file",
+  "404 Not Found",
+  "403 Forbidden"
+]
+max_lines = 20
+on_empty = "wget: ok"
+
+[[tests.wget]]
+name = "clean download"
+input = """
+--2024-01-15 10:30:00--  https://example.com/file.zip
+Resolving example.com (example.com)... 93.184.216.34
+Connecting to example.com (example.com)|93.184.216.34|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 123456 (120K) [application/zip]
+Saving to: 'file.zip'
+
+file.zip          100%[===================>] 120.56K  --.-KB/s    in 0.1s
+
+2024-01-15 10:30:01 (1.2 MB/s) - 'file.zip' saved [123456/123456]
+"""
+expected = "wget: ok"
+
+[[tests.wget]]
+name = "error shown"
+input = """
+--2024-01-15 10:30:00--  https://example.com/missing.zip
+HTTP request sent, awaiting response... 404 Not Found
+2024-01-15 10:30:01 ERROR 404: Not Found.
+"""
+expected = """
+2024-01-15 10:30:01 ERROR 404: Not Found."""

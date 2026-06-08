@@ -1,0 +1,21 @@
+[filters.go-mod-tidy]
+description = "Compact go mod tidy output"
+match_command = "^go\\s+mod\\s+tidy\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^go: finding",
+  "^go: downloading",
+  "^go: extracting"
+]
+max_lines = 20
+on_empty = "go mod tidy: ok"
+
+[[tests.go-mod-tidy]]
+name = "clean tidy"
+input = """
+go: finding module for package github.com/gin-gonic/gin
+go: downloading github.com/gin-gonic/gin v1.9.1
+go: extracting github.com/gin-gonic/gin v1.9.1
+"""
+expected = "go mod tidy: ok"

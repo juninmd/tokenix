@@ -1,0 +1,45 @@
+[filters.terraform-init]
+description = "Compact terraform init output"
+match_command = "^terraform\\s+init\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Initializing the backend",
+  "^Initializing provider plugins",
+  "^\\s*Finding ",
+  "^\\s*Installing ",
+  "^\\s*Installed ",
+  "^Terraform has been successfully initialized"
+]
+keep_lines_matching = [
+  "Error:",
+  "Error:",
+  "Failed",
+  "Failed to",
+  "│ Error",
+  "│ Warning"
+]
+max_lines = 40
+on_empty = "terraform init: initialized"
+
+[[tests.terraform-init]]
+name = "clean init"
+input = """
+Initializing the backend...
+Initializing provider plugins...
+- Finding hashicorp/aws latest...
+- Installing hashicorp/aws v5.0.0...
+- Installed hashicorp/aws v5.0.0 (signed by HashiCorp)
+
+Terraform has been successfully initialized!
+"""
+expected = "terraform init: initialized"
+
+[[tests.terraform-init]]
+name = "error shown"
+input = """
+Initializing the backend...
+Error: Failed to get existing workspaces: accessing S3 bucket: AccessDenied
+"""
+expected = """
+Error: Failed to get existing workspaces: accessing S3 bucket: AccessDenied"""

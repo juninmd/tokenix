@@ -1,0 +1,40 @@
+[filters.npm-run]
+description = "Compact npm run script output"
+match_command = "^npm\\s+run\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^> ",
+  "^\\s*npm notice",
+  "^\\s*npm WARN"
+]
+max_lines = 50
+on_empty = "npm run: done"
+
+[[tests.npm-run]]
+name = "build script"
+input = """
+> my-project@1.0.0 build
+> tsc
+
+> my-project@1.0.0 build:done
+> echo "Build complete"
+Build complete
+"""
+expected = "npm run: done"
+
+[[tests.npm-run]]
+name = "script error shown"
+input = """
+> my-project@1.0.0 lint
+> eslint src/
+
+/src/main.ts
+  10:5  error  'x' is assigned a value but never used
+"""
+expected = """
+> my-project@1.0.0 lint
+> eslint src/
+
+/src/main.ts
+  10:5  error  'x' is assigned a value but never used"""

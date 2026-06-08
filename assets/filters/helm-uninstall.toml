@@ -1,0 +1,32 @@
+[filters.helm-uninstall]
+description = "Compact helm uninstall output"
+match_command = "^helm\\s+uninstall\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^release \"\\w+\" uninstalled"
+]
+keep_lines_matching = [
+  "Error:",
+  "Error:",
+  "not found",
+  "failed"
+]
+max_lines = 20
+on_empty = "helm uninstall: done"
+
+[[tests.helm-uninstall]]
+name = "clean uninstall"
+input = """
+release "myapp" uninstalled
+"""
+expected = """
+release "myapp" uninstalled"""
+
+[[tests.helm-uninstall]]
+name = "error shown"
+input = """
+Error: uninstall: Release not loaded: myapp: release: not found
+"""
+expected = """
+Error: uninstall: Release not loaded: myapp: release: not found"""

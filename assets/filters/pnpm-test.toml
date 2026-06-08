@@ -1,0 +1,32 @@
+[filters.pnpm-test]
+description = "Compact pnpm test output"
+match_command = "^pnpm\\s+test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\$ ",
+  "^\\s*Running ",
+  "^\\s*Done in"
+]
+keep_lines_matching = [
+  "FAIL",
+  "PASS",
+  "Test Suites:",
+  "Tests:",
+  "Error:",
+  "TypeError:",
+  "AssertionError"
+]
+max_lines = 60
+on_empty = "pnpm test: passed"
+
+[[tests.pnpm-test]]
+name = "tests pass"
+input = """
+Running test: jest
+ PASS  src/utils.test.ts
+Test Suites: 1 passed, 1 total
+Tests:       10 passed, 10 total
+Done in 2.34s.
+"""
+expected = "pnpm test: passed"

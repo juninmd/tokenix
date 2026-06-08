@@ -1,82 +1,57 @@
 [filters.npm-test]
-description = "Compact npm/pnpm/yarn test outputs"
-match_command = "^(npm|pnpm|yarn)\\s+(run\\s+)?test\\b"
+description = "Compact npm test output"
+match_command = "^npm\\s+test\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^>\\s+\\S+@\\S+\\s+test\\b",
-  "^>\\s+\\S+\\s+\\S+\\b",
-  "^>\\s+\\S+\\s*$",
-  "^platform\\s+",
-  "^PASS\\s+"
+  "^> ",
+  "^\\s*npm notice",
+  "^\\s*npm WARN"
 ]
-max_lines = 80
-on_empty = "npm test: all tests passed"
+keep_lines_matching = [
+  "FAIL",
+  "PASS",
+  "Test Suites:",
+  "Tests:",
+  "Error:",
+  "TypeError:",
+  "AssertionError"
+]
+max_lines = 60
+on_empty = "npm test: passed"
 
 [[tests.npm-test]]
-name = "All JS tests pass"
+name = "tests pass"
 input = """
-> project@1.0.0 test
+> my-project@1.0.0 test
 > jest
 
-PASS  src/sum.test.js
-  ✓ adds 1 + 2 to equal 3 (2 ms)
-
-Test Suites: 1 passed, 1 total
-Tests:       1 passed, 1 total
-Snapshots:   0 total
-Time:        0.18 s
-Ran all test suites.
+ PASS  src/utils.test.ts
+ PASS  src/components.test.tsx
+Test Suites: 2 passed, 2 total
+Tests:       15 passed, 15 total
 """
-expected = """  ✓ adds 1 + 2 to equal 3 (2 ms)
-Test Suites: 1 passed, 1 total
-Tests:       1 passed, 1 total
-Snapshots:   0 total
-Time:        0.18 s
-Ran all test suites."""
+expected = "npm test: passed"
 
 [[tests.npm-test]]
-name = "JS test failure"
+name = "test failure shown"
 input = """
-> project@1.0.0 test
+> my-project@1.0.0 test
 > jest
 
-FAIL  src/sum.test.js
-  ✕ adds 1 + 2 to equal 3 (5 ms)
+ FAIL  src/utils.test.ts
+  ● add › should add two numbers
 
-  ● adds 1 + 2 to equal 3
-
-    expect(received).toBe(expected) // Object.is equality
+    expect(received).toBe(expected)
 
     Expected: 3
     Received: 4
-
-      2 | test('adds 1 + 2 to equal 3', () => {
-    > 3 |   expect(sum(1, 2)).toBe(4);
-        |                     ^
-      4 | });
-
-      at Object.toBe (src/sum.test.js:3:21)
-
-Test Suites: 1 failed, 1 total
-Tests:       1 failed, 1 total
-Snapshots:   0 total
-Time:        0.22 s
-Ran all test suites.
 """
-expected = """FAIL  src/sum.test.js
-  ✕ adds 1 + 2 to equal 3 (5 ms)
-  ● adds 1 + 2 to equal 3
-    expect(received).toBe(expected) // Object.is equality
+expected = """
+ FAIL  src/utils.test.ts
+  ● add › should add two numbers
+
+    expect(received).toBe(expected)
+
     Expected: 3
-    Received: 4
-      2 | test('adds 1 + 2 to equal 3', () => {
-    > 3 |   expect(sum(1, 2)).toBe(4);
-        |                     ^
-      4 | });
-      at Object.toBe (src/sum.test.js:3:21)
-Test Suites: 1 failed, 1 total
-Tests:       1 failed, 1 total
-Snapshots:   0 total
-Time:        0.22 s
-Ran all test suites."""
+    Received: 4"""

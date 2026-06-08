@@ -1,24 +1,32 @@
 [filters.hadolint]
-description = "Compact hadolint Dockerfile linting output"
+description = "Compact hadolint output"
 match_command = "^hadolint\\b"
 strip_ansi = true
 strip_lines_matching = [
-  "^\\s*$",
+  "^\\s*$"
 ]
-truncate_lines_at = 120
-max_lines = 40
+keep_lines_matching = [
+  "^\\w+:\\d+\\s+",
+  "Error:",
+  "Warning:",
+  "Info:",
+  "Style:"
+]
+max_lines = 50
+on_empty = "hadolint: no issues"
 
 [[tests.hadolint]]
-name = "Dockerfile warnings kept, blank lines stripped"
+name = "clean"
 input = """
-Dockerfile:3 DL3008 warning: Pin versions in apt-get install
-Dockerfile:5 DL3009 info: Delete apt-get lists after installing
-
-Dockerfile:8 DL4006 warning: Set SHELL option -o pipefail before RUN with pipe
 """
-expected = "Dockerfile:3 DL3008 warning: Pin versions in apt-get install\nDockerfile:5 DL3009 info: Delete apt-get lists after installing\nDockerfile:8 DL4006 warning: Set SHELL option -o pipefail before RUN with pipe"
+expected = "hadolint: no issues"
 
 [[tests.hadolint]]
-name = "empty input passes through"
-input = ""
-expected = ""
+name = "issues shown"
+input = """
+Dockerfile:10 DL3008 Pin versions in apt get install
+Dockerfile:15 DL3015 Avoid additional packages by specifying --no-install-recommends
+"""
+expected = """
+Dockerfile:10 DL3008 Pin versions in apt get install
+Dockerfile:15 DL3015 Avoid additional packages by specifying --no-install-recommends"""

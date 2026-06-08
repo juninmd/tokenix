@@ -1,0 +1,44 @@
+[filters.helm-install]
+description = "Compact helm install/upgrade output"
+match_command = "^helm\\s+(install|upgrade|template)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^NAME:",
+  "^LAST DEPLOYED:",
+  "^NAMESPACE:",
+  "^STATUS:",
+  "^REVISION:",
+  "^TEST SUITE:",
+  "^\\s*\\d+\\.\\d+s$"
+]
+keep_lines_matching = [
+  "Error:",
+  "FAILED",
+  "failed to",
+  "cannot",
+  "timed out",
+  "release.*failed"
+]
+max_lines = 40
+on_empty = "helm: deployed"
+
+[[tests.helm-install]]
+name = "clean install"
+input = """
+NAME: my-release
+LAST DEPLOYED: Mon Jan 15 10:30:00 2024
+NAMESPACE: default
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+"""
+expected = "helm: deployed"
+
+[[tests.helm-install]]
+name = "failure shown"
+input = """
+Error: INSTALLATION FAILED: cannot re-use a name that is still in use
+"""
+expected = """
+Error: INSTALLATION FAILED: cannot re-use a name that is still in use"""

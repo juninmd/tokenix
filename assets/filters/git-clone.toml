@@ -1,0 +1,42 @@
+[filters.git-clone]
+description = "Compact git clone output"
+match_command = "^git\\s+clone\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Cloning into",
+  "^remote:",
+  "^Receiving objects:",
+  "^Resolving deltas:",
+  "^Checking out"
+]
+keep_lines_matching = [
+  "error:",
+  "fatal:",
+  "failed",
+  "Permission denied",
+  "Repository not found"
+]
+max_lines = 20
+on_empty = "git clone: done"
+
+[[tests.git-clone]]
+name = "clean clone"
+input = """
+Cloning into 'my-repo'...
+remote: Enumerating objects: 100, done.
+remote: Counting objects: 100% (100/100), done.
+remote: Compressing objects: 100% (50/50), done.
+Receiving objects: 100% (100/100), 1.23 MiB | 2.34 MiB/s, done.
+Resolving deltas: 100% (50/50), done.
+"""
+expected = "git clone: done"
+
+[[tests.git-clone]]
+name = "error shown"
+input = """
+Cloning into 'my-repo'...
+fatal: repository 'https://github.com/user/nonexistent.git' not found
+"""
+expected = """
+fatal: repository 'https://github.com/user/nonexistent.git' not found"""

@@ -1,0 +1,30 @@
+[filters.go-lint]
+description = "Compact go lint output (golint)"
+match_command = "^golint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\w+\\.go:\\d+:\\d+:",
+  "error:",
+  "warning:"
+]
+max_lines = 50
+on_empty = "golint: no issues"
+
+[[tests.go-lint]]
+name = "clean"
+input = """
+"""
+expected = "golint: no issues"
+
+[[tests.go-lint]]
+name = "issues shown"
+input = """
+main.go:10:5: exported function Add should have comment or be unexported
+utils.go:15:1: don't use ALL_CAPS in Go names; use CamelCase
+"""
+expected = """
+main.go:10:5: exported function Add should have comment or be unexported
+utils.go:15:1: don't use ALL_CAPS in Go names; use CamelCase"""

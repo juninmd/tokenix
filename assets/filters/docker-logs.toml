@@ -1,0 +1,32 @@
+[filters.docker-logs]
+description = "Compact docker logs output"
+match_command = "^docker\\s+logs\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "ERROR",
+  "FATAL",
+  "PANIC",
+  "Exception",
+  "Error:",
+  "Failed",
+  "WARN",
+  "WARNING"
+]
+max_lines = 100
+on_empty = "docker logs: no output"
+
+[[tests.docker-logs]]
+name = "logs with errors"
+input = """
+2024-01-15 10:30:00 INFO  Starting server on port 8080
+2024-01-15 10:30:01 INFO  Connected to database
+2024-01-15 10:30:02 ERROR Failed to connect to redis: connection refused
+2024-01-15 10:30:03 WARN  Retrying in 5s
+2024-01-15 10:30:08 INFO  Connected to redis
+"""
+expected = """
+2024-01-15 10:30:02 ERROR Failed to connect to redis: connection refused
+2024-01-15 10:30:03 WARN  Retrying in 5s"""

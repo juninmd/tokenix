@@ -1,0 +1,29 @@
+[filters.git-reflog]
+description = "Compact git reflog output"
+match_command = "^git\\s+reflog\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "^\\w+",
+  "HEAD@",
+  "commit:",
+  "merge:",
+  "checkout:",
+  "rebase:"
+]
+max_lines = 30
+on_empty = "git reflog: empty"
+
+[[tests.git-reflog]]
+name = "reflog output"
+input = """
+abc1234 HEAD@{0}: commit: Add new feature
+def5678 HEAD@{1}: commit: Fix bug
+ghi9012 HEAD@{2}: checkout: moving from main to feature
+"""
+expected = """
+abc1234 HEAD@{0}: commit: Add new feature
+def5678 HEAD@{1}: commit: Fix bug
+ghi9012 HEAD@{2}: checkout: moving from main to feature"""

@@ -1,0 +1,28 @@
+[filters.docker-compose-down]
+description = "Compact docker compose down output"
+match_command = "^docker\\s+compose\\s+down\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\[\\+\\]",
+  "^\\s*✔",
+  "^\\s*Removing"
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Failed",
+  "not found"
+]
+max_lines = 20
+on_empty = "docker compose down: done"
+
+[[tests.docker-compose-down]]
+name = "clean down"
+input = """
+[+] Running 3/3
+ ✔ Container myapp-web-1    Removed
+ ✔ Container myapp-db-1     Removed
+ ✔ Network myapp_default    Removed
+"""
+expected = "docker compose down: done"

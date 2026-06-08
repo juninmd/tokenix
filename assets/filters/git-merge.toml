@@ -1,0 +1,40 @@
+[filters.git-merge]
+description = "Compact git merge output"
+match_command = "^git\\s+merge\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Merge made by",
+  "^Already up to date",
+  "^Fast-forward",
+  "^Updating "
+]
+keep_lines_matching = [
+  "CONFLICT",
+  "error:",
+  "fatal:",
+  "Automatic merge failed",
+  "Unmerged paths"
+]
+max_lines = 30
+on_empty = "git merge: done"
+
+[[tests.git-merge]]
+name = "clean merge"
+input = """
+Merge made by the 'ort' strategy.
+ src/main.rs | 2 ++
+ 1 file changed, 2 insertions(+)
+"""
+expected = "git merge: done"
+
+[[tests.git-merge]]
+name = "conflict shown"
+input = """
+Auto-merging src/main.rs
+CONFLICT (content): Merge conflict in src/main.rs
+Automatic merge failed; fix conflicts and then commit the result.
+"""
+expected = """
+CONFLICT (content): Merge conflict in src/main.rs
+Automatic merge failed; fix conflicts and then commit the result."""
