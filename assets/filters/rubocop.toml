@@ -1,0 +1,52 @@
+[filters.rubocop]
+description = "Compact RuboCop output — offenses by file"
+match_command = "^rubocop\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Inspecting",
+  "^\\.{10,}$",
+]
+keep_lines_matching = [
+  "^[A-Z]:",
+  "offenses? detected",
+  "no offenses",
+  "files? inspected",
+  "error",
+  "warning",
+  "convention",
+  "refactor",
+  "style"
+]
+max_lines = 50
+on_empty = "rubocop: no offenses"
+
+[[tests.rubocop]]
+name = "offenses detected"
+input = """
+Inspecting 15 files
+.........
+
+Offenses:
+
+app/models/user.rb:10:5: W: Layout/LineLength: Line is too long. [120/80]
+app/controllers/users_controller.rb:5:3: C: Style/GuardClause: Use guard clause instead of wrapping the code inside a conditional.
+lib/utils.rb:1:1: E: Lint/Syntax: syntax error, unexpected end-of-input
+
+15 files inspected, 3 offenses detected
+"""
+expected = """
+app/models/user.rb:10:5: W: Layout/LineLength: Line is too long. [120/80]
+app/controllers/users_controller.rb:5:3: C: Style/GuardClause: Use guard clause instead of wrapping the code inside a conditional.
+lib/utils.rb:1:1: E: Lint/Syntax: syntax error, unexpected end-of-input
+3 offenses detected"""
+
+[[tests.rubocop]]
+name = "no offenses"
+input = """
+Inspecting 5 files
+.....
+
+5 files inspected, no offenses detected
+"""
+expected = "rubocop: no offenses"

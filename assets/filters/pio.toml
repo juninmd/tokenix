@@ -1,0 +1,55 @@
+[filters.pio]
+description = "Compact PlatformIO output"
+match_command = "^pio\\s+(run|test|check|update|lib|pkg|platform|boards|device|debug|remote|home|account|ci|pkg)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Verbose mode",
+  "^CONFIGURATION:",
+  "^LDF:",
+  "^Library Manager:",
+  "^Compiling\\s",
+  "^Linking\\s",
+  "^Building\\s",
+  "^Checking size",
+  "^Downloading",
+  "^Unpacking",
+  "^Installing",
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "Failed",
+  "FAILED",
+  "warning:",
+  "Warning:",
+  "Error",
+  "compilation terminated",
+  "undefined reference",
+  "multiple definition",
+]
+max_lines = 40
+on_empty = "pio: ok"
+
+[[tests.pio]]
+name = "build error shown"
+input = """
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32dev.html
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+Compiling .pio/build/esp32dev/src/main.cpp.o
+Building .pio/build/esp32dev/firmware.elf
+Linking .pio/build/esp32dev/firmware.elf
+src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared in this scope
+"""
+expected = "src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared in this scope"
+
+[[tests.pio]]
+name = "clean build"
+input = """
+Verbose mode can be enabled via `-v, --verbose` option
+Compiling .pio/build/esp32dev/src/main.cpp.o
+Linking .pio/build/esp32dev/firmware.elf
+Checking size .pio/build/esp32dev/firmware.elf
+"""
+expected = "pio: ok"

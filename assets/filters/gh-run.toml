@@ -1,0 +1,80 @@
+[filters.gh-run]
+description = "Compact gh run output"
+match_command = "^gh\\s+run\\s+(list|view|watch|download|rerun|cancel|delete)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*✓",
+  "^\\s*✔",
+  "^Downloading",
+  "^Completed",
+  "^Rerunning",
+  "^Cancelling",
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "failed",
+  "FAILED",
+  "not found",
+  "unauthorized",
+  "rate limit",
+  "workflow:",
+  "run:",
+  "status:",
+  "conclusion:",
+  "created:",
+  "head_branch:",
+  "head_sha:",
+  "jobs:",
+  "passed",
+  "failed",
+  "skipped",
+  "completed",
+  "in_progress",
+  "queued",
+]
+max_lines = 40
+on_empty = "gh run: ok"
+
+[[tests.gh-run]]
+name = "run view"
+input = """
+workflow: CI
+run: 12345
+status: completed
+conclusion: failure
+created: 2024-01-15T10:30:00Z
+head_branch: feature/new-feature
+head_sha: abc123
+
+jobs:
+  ✓ lint (2m 30s)
+  ✓ test (5m 15s)
+  ✗ build (3m 45s)
+    Error: Compilation failed
+
+view this run on GitHub: https://github.com/owner/repo/actions/runs/12345
+"""
+expected = """
+workflow: CI
+run: 12345
+status: completed
+conclusion: failure
+created: 2024-01-15T10:30:00Z
+head_branch: feature/new-feature
+head_sha: abc123
+
+jobs:
+  ✓ lint (2m 30s)
+  ✓ test (5m 15s)
+  ✗ build (3m 45s)
+    Error: Compilation failed"""
+
+[[tests.gh-run]]
+name = "error shown"
+input = """
+error: run not found
+"""
+expected = """
+error: run not found"""

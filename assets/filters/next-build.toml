@@ -1,0 +1,61 @@
+[filters.next-build]
+description = "Compact Next.js build output — pages and errors"
+match_command = "^(npx\\s+)?next\\s+build\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*info",
+  "^\\s*Compiling",
+  "^\\s*Collecting page data",
+  "^\\s*Generating static pages",
+  "^\\s*Finalizing page optimization",
+]
+keep_lines_matching = [
+  "Route",
+  "Size",
+  "First Load",
+  "error",
+  "Error",
+  "warn",
+  "Creating",
+  "Generating",
+  "Build error",
+  "Linting",
+  "Type checking"
+]
+max_lines = 50
+on_empty = "next build: ok"
+
+[[tests.next-build]]
+name = "successful build"
+input = """
+info  - Creating optimized production build
+info  - Compiled successfully
+info  - Collecting page data
+info  - Generating static pages (10/10)
+info  - Finalizing page optimization
+
+Route (app)                              Size     First Load JS
+┌ ○ /                                    1.2 kB         85 kB
+└ ○ /about                               2.3 kB         87 kB
+info  - Build completed in 15.2s
+"""
+expected = """
+Route (app)                              Size     First Load JS
+┌ ○ /                                    1.2 kB         85 kB
+└ ○ /about                               2.3 kB         87 kB"""
+
+[[tests.next-build]]
+name = "build error shown"
+input = """
+info  - Creating optimized production build
+info  - Compiled successfully
+Error: Build error occurred
+./src/app/page.tsx:10:5
+Type error: Property 'foo' does not exist on type '{}'.
+info  - Build failed
+"""
+expected = """
+Error: Build error occurred
+./src/app/page.tsx:10:5
+Type error: Property 'foo' does not exist on type '{}'."""

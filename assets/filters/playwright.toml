@@ -1,0 +1,55 @@
+[filters.playwright]
+description = "Compact Playwright test output — keep results and failures"
+match_command = "^(npx\\s+)?playwright\\s+test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Running",
+  "^\\s*\\d+ passed",
+  "^\\s*\\d+ failed",
+  "^\\s*\\d+ skipped",
+  "^\\s*\\d+ flaky",
+  "^\\s*\\d+ timed out",
+]
+keep_lines_matching = [
+  "passed",
+  "failed",
+  "Error:",
+  "Error:",
+  "expect",
+  "Received:",
+  "Expected:",
+  "Timeout",
+  "AssertionError"
+]
+max_lines = 50
+on_empty = "playwright test: all passed"
+
+[[tests.playwright]]
+name = "all tests pass"
+input = """
+Running 10 tests using 2 workers
+  ✓ test1.spec.ts:1:1  passed (1.2s)
+  ✓ test2.spec.ts:1:1  passed (0.8s)
+
+10 passed (2.5s)
+"""
+expected = "playwright test: all passed"
+
+[[tests.playwright]]
+name = "test failures shown"
+input = """
+Running 10 tests using 2 workers
+  ✓ test1.spec.ts:1:1  passed (1.2s)
+  ✗ test2.spec.ts:1:1  failed (0.8s)
+    Error: expect(received).toBe(expected)
+    Expected: 3
+    Received: 4
+
+9 passed, 1 failed (2.5s)
+"""
+expected = """
+  ✗ test2.spec.ts:1:1  failed (0.8s)
+    Error: expect(received).toBe(expected)
+    Expected: 3
+    Received: 4"""

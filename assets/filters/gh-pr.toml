@@ -1,0 +1,86 @@
+[filters.gh-pr]
+description = "Compact gh pr output"
+match_command = "^gh\\s+pr\\s+(list|view|create|checkout|merge|ready|comment|edit|close|reopen|diff|checks|status)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*✓",
+  "^\\s*✔",
+  "^Creating",
+  "^Created",
+  "^Updating",
+  "^Merged",
+  "^Closed",
+  "^Reopened",
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "failed",
+  "FAILED",
+  "not found",
+  "unauthorized",
+  "rate limit",
+  "#",
+  "PR-",
+  "title:",
+  "state:",
+  "author:",
+  "reviewers:",
+  "assignees:",
+  "labels:",
+  "milestone:",
+  "base:",
+  "head:",
+  "checks:",
+  "passing",
+  "failing",
+]
+max_lines = 40
+on_empty = "gh pr: ok"
+
+[[tests.gh-pr]]
+name = "pr view"
+input = """
+title: Add new feature
+state: OPEN
+author: user
+reviewers: reviewer1, reviewer2
+assignees: user
+labels: enhancement
+milestone: v1.0
+base: main
+head: feature/new-feature
+
+checks:
+  ✓ CI
+  ✓ Lint
+  ✗ Tests (2 failing)
+
+view this pull request on GitHub: https://github.com/owner/repo/pull/42
+"""
+expected = """
+title: Add new feature
+state: OPEN
+author: user
+reviewers: reviewer1, reviewer2
+assignees: user
+labels: enhancement
+milestone: v1.0
+base: main
+head: feature/new-feature
+
+checks:
+  ✓ CI
+  ✓ Lint
+  ✗ Tests (2 failing)
+
+view this pull request on GitHub: https://github.com/owner/repo/pull/42"""
+
+[[tests.gh-pr]]
+name = "error shown"
+input = """
+error: pull request not found
+"""
+expected = """
+error: pull request not found"""

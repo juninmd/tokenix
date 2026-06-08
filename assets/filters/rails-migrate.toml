@@ -1,0 +1,44 @@
+[filters.rails-migrate]
+description = "Compact Rails db:migrate output"
+match_command = "^(bundle\\s+exec\\s+)?rails\\s+db:migrate\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*==",
+  "^\\s*--",
+]
+keep_lines_matching = [
+  "migrated",
+  "CreateTable",
+  "AddColumn",
+  "RemoveColumn",
+  "CreateIndex",
+  "RemoveIndex",
+  "down",
+  "up",
+]
+max_lines = 30
+on_empty = "rails db:migrate: ok"
+
+[[tests.rails-migrate]]
+name = "migrations executed"
+input = """
+== 20240115100000 CreateUsers: migrating =======================================
+-- create_table(:users)
+   -> 0.0150s
+== 20240115100000 CreateUsers: migrated (0.0153s) ==============================
+
+== 20240115100001 AddEmailToUsers: migrating ===================================
+-- add_column(:users, :email, :string)
+   -> 0.0080s
+== 20240115100001 AddEmailToUsers: migrated (0.0082s) =========================
+"""
+expected = """
+== 20240115100000 CreateUsers: migrated (0.0153s) ==============================
+== 20240115100001 AddEmailToUsers: migrated (0.0082s) ========================="""
+
+[[tests.rails-migrate]]
+name = "no pending migrations"
+input = """
+"""
+expected = "rails db:migrate: ok"

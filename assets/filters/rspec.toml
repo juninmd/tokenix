@@ -1,0 +1,67 @@
+[filters.rspec]
+description = "Compact RSpec output — keep failures and summary"
+match_command = "^(bundle\\s+exec\\s+)?rspec\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\.",
+  "^\\*",
+  "^\\s*\\d+ examples?",
+  "^\\s*\\d+ failures?",
+  "^\\s*\\d+ pending",
+  "^\\s*Finished in",
+  "^\\s*Randomized with seed",
+]
+keep_lines_matching = [
+  "Failures:",
+  "failed",
+  "Error",
+  "Error:",
+  "expect",
+  "expected",
+  "received",
+  "backtrace",
+  "NoMethodError",
+  "ArgumentError",
+  "RuntimeError",
+  "Summary",
+  "examples?",
+  "failures?",
+  "pending"
+]
+max_lines = 50
+on_empty = "rspec: all tests passed"
+
+[[tests.rspec]]
+name = "all tests pass"
+input = """
+.....
+
+Finished in 0.5 seconds (files took 0.2 seconds to load)
+5 examples, 0 failures
+"""
+expected = "rspec: all tests passed"
+
+[[tests.rspec]]
+name = "failures shown"
+input = """
+..F..
+
+Failures:
+
+  1) User#name returns the name
+     Failure/Error: expect(user.name).to eq("John")
+       expected: "John"
+            got: "Jane"
+     # ./spec/models/user_spec.rb:10:in `block (2 levels) in <top (required)>'
+
+Finished in 0.5 seconds
+5 examples, 1 failure
+"""
+expected = """
+  1) User#name returns the name
+     Failure/Error: expect(user.name).to eq("John")
+       expected: "John"
+            got: "Jane"
+     # ./spec/models/user_spec.rb:10:in `block (2 levels) in <top (required)>'
+5 examples, 1 failure"""

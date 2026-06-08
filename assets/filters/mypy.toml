@@ -1,0 +1,40 @@
+[filters.mypy]
+description = "Compact mypy type checker output"
+match_command = "^mypy\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Found \\d+ error",
+  "^\\s*Found \\d+ warning",
+  "^\\s*Found \\d+ note",
+  "^\\s*Success: no issues found",
+]
+keep_lines_matching = [
+  "^\\w+\\.py:\\d+:\\d+:",
+  "error:",
+  "warning:",
+  "note:",
+]
+max_lines = 60
+on_empty = "mypy: no issues"
+
+[[tests.mypy]]
+name = "clean"
+input = """
+Success: no issues found in 15 source files
+"""
+expected = "mypy: no issues"
+
+[[tests.mypy]]
+name = "errors shown"
+input = """
+src/main.py:10:5: error: Variable "foo" is not defined  [attr-defined]
+src/utils.py:15:1: warning: Line too long  [line-too-long]
+src/utils.py:20:3: note: Consider using a typed dict
+Found 1 error, 1 warning, 1 note in 3 files
+"""
+expected = """
+src/main.py:10:5: error: Variable "foo" is not defined  [attr-defined]
+src/utils.py:15:1: warning: Line too long  [line-too-long]
+src/utils.py:20:3: note: Consider using a typed dict
+Found 1 error, 1 warning, 1 note in 3 files"""

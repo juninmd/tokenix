@@ -1,0 +1,56 @@
+[filters.git-show]
+description = "Compact git show output"
+match_command = "^git\\s+show\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^commit ",
+  "^Author:",
+  "^Date:",
+  "^    ",
+  "^diff --git",
+  "^index ",
+  "^--- ",
+  "^\\+\\+\\+ ",
+  "^@@ ",
+]
+keep_lines_matching = [
+  "^\\+",
+  "^\\-",
+  "^\\\\ ",
+]
+max_lines = 50
+on_empty = "git show: no changes"
+
+[[tests.git-show]]
+name = "show commit with diff"
+input = """
+commit abc123def456 (HEAD -> main)
+Author: John Doe <john@example.com>
+Date:   Mon Jan 15 10:30:00 2024 +0000
+
+    Add new feature
+
+diff --git a/src/main.rs b/src/main.rs
+index 1234567..abcdefg 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,5 +1,6 @@
+ fn main() {
+     println!("Hello, world!");
++    println!("New line");
+ }
+"""
+expected = """
++    println!("New line");"""
+
+[[tests.git-show]]
+name = "show commit only"
+input = """
+commit abc123def456 (HEAD -> main)
+Author: John Doe <john@example.com>
+Date:   Mon Jan 15 10:30:00 2024 +0000
+
+    Add new feature
+"""
+expected = "git show: no changes"

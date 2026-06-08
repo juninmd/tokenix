@@ -1,0 +1,56 @@
+[filters.rake]
+description = "Compact Rake task output"
+match_command = "^(bundle\\s+exec\\s+)?rake\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\(\\s*\\d+\\s*\\)",
+  "^\\s*\\[\\s*\\d+/\\d+\\s*\\]",
+]
+keep_lines_matching = [
+  "rake aborted",
+  "Error",
+  "error:",
+  "failed",
+  "FAILED",
+  "don't know how to build",
+  "Don't know how to build",
+  "invoke",
+  "execute",
+  "invoke",
+  "Done"
+]
+max_lines = 40
+on_empty = "rake: done"
+
+[[tests.rake]]
+name = "task runs"
+input = """
+** Invoke db:migrate (first_time)
+** Invoke environment (first_time)
+** Execute environment
+** Execute db:migrate
+== 20240115100000 CreateUsers: migrated (0.0153s) ==============================
+
+** Invoke db:seed (first_time)
+** Execute db:seed
+Done
+"""
+expected = """
+** Execute db:migrate
+== 20240115100000 CreateUsers: migrated (0.0153s) ==============================
+
+** Execute db:seed
+Done"""
+
+[[tests.rake]]
+name = "error shown"
+input = """
+rake aborted!
+Don't know how to build task 'db:migrate' (see --tasks)
+/home/user/Rakefile:10:in `<top (required)>'
+"""
+expected = """
+rake aborted!
+Don't know how to build task 'db:migrate' (see --tasks)
+/home/user/Rakefile:10:in `<top (required)>'"""

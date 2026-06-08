@@ -1,0 +1,34 @@
+[filters.rails-routes]
+description = "Summarize Rails routes with count"
+match_command = "^(bundle\\s+exec\\s+)?rails\\s+routes\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Prefix",
+  "^\\s*Verb",
+  "^\\s*URI Pattern",
+  "^\\s*Controller#Action",
+]
+keep_lines_matching = [
+  "^\\s*[A-Z]+",
+  "^\\s*GET|POST|PUT|PATCH|DELETE|PATCH",
+]
+max_lines = 20
+on_empty = "rails routes: no routes"
+
+[[tests.rails-routes]]
+name = "routes listed"
+input = """
+      Prefix Verb   URI Pattern                    Controller#Action
+        root GET    /                              home#index
+     users GET    /users(.:format)                 users#index
+           POST   /users(.:format)                 users#create
+  new_user GET    /users/new(.:format)             users#new
+ edit_user GET    /users/:id/edit(.:format)        users#edit
+"""
+expected = """
+        root GET    /                              home#index
+     users GET    /users(.:format)                 users#index
+           POST   /users(.:format)                 users#create
+  new_user GET    /users/new(.:format)             users#new
+ edit_user GET    /users/:id/edit(.:format)        users#edit"""

@@ -1,0 +1,61 @@
+[filters.cargo-nextest]
+description = "Compact cargo nextest output"
+match_command = "^cargo\\s+nextest\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Starting",
+  "^\\s*Running",
+  "^\\s*\\d+ passed",
+  "^\\s*\\d+ failed",
+  "^\\s*\\d+ skipped",
+  "^\\s*\\d+ slow",
+  "^\\s*\\d+ leaked",
+]
+keep_lines_matching = [
+  "FAILED",
+  "FAILED",
+  "error:",
+  "Error:",
+  "passed",
+  "failed",
+  "skipped",
+  "test result:",
+  "Slow tests:",
+  "Leaked tests:",
+]
+max_lines = 60
+on_empty = "cargo nextest: all tests passed"
+
+[[tests.cargo-nextest]]
+name = "all tests pass"
+input = """
+Starting 50 tests across 8 binaries
+Running tests (sequential)
+[PASS] my-crate::tests::test1 (10ms)
+[PASS] my-crate::tests::test2 (15ms)
+
+Test run: 50 passed, 0 failed, 0 skipped (2.3s)
+"""
+expected = "cargo nextest: all tests passed"
+
+[[tests.cargo-nextest]]
+name = "failures shown"
+input = """
+Starting 50 tests across 8 binaries
+Running tests (sequential)
+[PASS] my-crate::tests::test1 (10ms)
+[FAIL] my-crate::tests::test2 (15ms)
+   Error: assertion failed: `(left == right)`
+     left: `3`,
+     right: `4`,
+
+Test run: 49 passed, 1 failed, 0 skipped (2.5s)
+"""
+expected = """
+[FAIL] my-crate::tests::test2 (15ms)
+   Error: assertion failed: `(left == right)`
+     left: `3`,
+     right: `4`,
+
+Test run: 49 passed, 1 failed, 0 skipped (2.5s)"""

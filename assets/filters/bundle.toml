@@ -1,0 +1,55 @@
+[filters.bundle]
+description = "Compact Bundler output"
+match_command = "^bundle\\s+(install|update|exec|add|outdated|show)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Fetching",
+  "^Installing",
+  "^Using ",
+  "^Bundle complete",
+  "^\\d+ gem",
+  "^\\d+ dependency",
+  "^Resolving dependencies",
+  "^Fetching gem metadata",
+  "^Fetching source index",
+  "^Removing",
+]
+keep_lines_matching = [
+  "Bundler::",
+  "Error",
+  "error:",
+  "Could not find",
+  "No matching version",
+  "retry",
+  "Retry",
+  "An error occurred",
+  "Installing",
+  "Updating",
+  "Removed",
+]
+max_lines = 40
+on_empty = "bundle: ok"
+
+[[tests.bundle]]
+name = "install complete"
+input = """
+Fetching gem metadata from https://rubygems.org/..........
+Resolving dependencies.......
+Using rake 13.0.6
+Using concurrent-ruby 1.1.10
+Installing rails 7.1.0
+Bundle complete! 45 Gemfile dependencies, 120 gems now installed.
+Use `bundle info [gemname]` to see where a bundled gem is installed.
+"""
+expected = "bundle: ok"
+
+[[tests.bundle]]
+name = "error shown"
+input = """
+Fetching gem metadata from https://rubygems.org/..........
+Resolving dependencies.......
+Could not find gem 'nonexistent-gem' in any of the gem sources listed in your Gemfile.
+"""
+expected = """
+Could not find gem 'nonexistent-gem' in any of the gem sources listed in your Gemfile."""

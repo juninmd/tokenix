@@ -1,0 +1,57 @@
+[filters.cargo-install]
+description = "Compact cargo install output"
+match_command = "^cargo\\s+install\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Updating",
+  "^\\s*Downloading",
+  "^\\s*Compiling",
+  "^\\s*Finished",
+  "^\\s*Installed",
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "failed to compile",
+  "could not compile",
+  "installing",
+  "Replacing",
+]
+max_lines = 30
+on_empty = "cargo install: ok"
+
+[[tests.cargo-install]]
+name = "clean install"
+input = """
+   Updating crates.io index
+  Downloading my-tool v1.0.0
+  Downloading 1 file (123 KB)
+  Compiling my-tool v1.0.0
+   Finished release [optimized] target(s) in 5.2s
+  Installing /home/user/.cargo/bin/my-tool
+"""
+expected = "cargo install: ok"
+
+[[tests.cargo-install]]
+name = "compilation error shown"
+input = """
+   Updating crates.io index
+  Downloading my-tool v1.0.0
+  Compiling my-tool v1.0.0
+error[E0432]: unresolved import `std::foo`
+ --> src/main.rs:10:5
+  |
+10 | use std::foo;
+  |     ^^^^^^^^^ could not find `foo` in `std`
+
+error: could not compile `my-tool` due to previous error
+"""
+expected = """
+error[E0432]: unresolved import `std::foo`
+ --> src/main.rs:10:5
+  |
+10 | use std::foo;
+  |     ^^^^^^^^^ could not find `foo` in `std`
+
+error: could not compile `my-tool` due to previous error"""

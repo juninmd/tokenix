@@ -1,0 +1,81 @@
+[filters.gradlew]
+description = "Compact ./gradlew output"
+match_command = "^\\./gradlew\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^> Task :",
+  "^> Configuring",
+  "^BUILD SUCCESSFUL",
+  "^\\d+ actionable task",
+  "^Deprecated Gradle features",
+]
+keep_lines_matching = [
+  "ERROR",
+  "FAILED",
+  "BUILD FAILED",
+  "Compilation failed",
+  "Test.*FAILED",
+  "> Task .* FAILED",
+  "Error",
+  "Exception",
+  "Caused by:",
+]
+max_lines = 60
+on_empty = "gradlew: success"
+
+[[tests.gradlew]]
+name = "clean build"
+input = """
+> Task :compileJava
+> Task :processResources
+> Task :classes
+> Task :jar
+> Task :assemble
+> Task :compileTestJava
+> Task :processTestResources
+> Task :testClasses
+> Task :test
+> Task :check
+> Task :build
+
+BUILD SUCCESSFUL in 12s
+12 actionable tasks: 12 executed
+"""
+expected = "gradlew: success"
+
+[[tests.gradlew]]
+name = "build failure shown"
+input = """
+> Task :compileJava FAILED
+/src/main/java/com/example/Main.java:10: error: cannot find symbol
+  symbol:   variable foo
+  location: class com.example.Main
+1 error
+
+> Task :compileJava FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':compileJava'.
+> Compilation failed; see the compiler error output for details.
+
+BUILD FAILED in 5s
+"""
+expected = """
+> Task :compileJava FAILED
+/src/main/java/com/example/Main.java:10: error: cannot find symbol
+  symbol:   variable foo
+  location: class com.example.Main
+1 error
+
+> Task :compileJava FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':compileJava'.
+> Compilation failed; see the compiler error output for details.
+
+BUILD FAILED in 5s"""

@@ -1,0 +1,52 @@
+[filters.pnpm-list]
+description = "Compact pnpm list output"
+match_command = "^pnpm\\s+(list|ls|ll|la)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\w+@",
+  "^\\s*dependencies:",
+  "^\\s*devDependencies:",
+  "^\\s*optionalDependencies:",
+  "^\\s*peerDependencies:",
+  "^\\s*\\w+:\\s*\\w+@",
+]
+keep_lines_matching = [
+  "^\\s*\\w+@",
+  "not installed",
+  "missing",
+  "extraneous",
+  "UNMET",
+]
+max_lines = 50
+on_empty = "pnpm list: ok"
+
+[[tests.pnpm-list]]
+name = "list dependencies"
+input = """
+my-project@1.0.0 /home/user/my-project
+├─┬ @babel/core@7.23.0
+│ └── @babel/helper-compilation-targets@7.22.15
+├─┬ eslint@8.50.0
+│ └── @eslint-community/eslint-utils@4.4.0
+└── typescript@5.2.2
+"""
+expected = """
+my-project@1.0.0 /home/user/my-project
+├─┬ @babel/core@7.23.0
+│ └── @babel/helper-compilation-targets@7.22.15
+├─┬ eslint@8.50.0
+│ └── @eslint-community/eslint-utils@4.4.0
+└── typescript@5.2.2"""
+
+[[tests.pnpm-list]]
+name = "unmet dependency"
+input = """
+my-project@1.0.0 /home/user/my-project
+├── typescript@5.2.2
+UNMET PEER DEPENDENCY @babel/core@^7.0.0
+"""
+expected = """
+my-project@1.0.0 /home/user/my-project
+├── typescript@5.2.2
+UNMET PEER DEPENDENCY @babel/core@^7.0.0"""

@@ -1,0 +1,81 @@
+[filters.mvn]
+description = "Compact Maven output"
+match_command = "^mvn\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[INFO\\]\\s+---",
+  "^\\[INFO\\]\\s+Building ",
+  "^\\[INFO\\]\\s+Downloading ",
+  "^\\[INFO\\]\\s+Downloaded ",
+  "^\\[INFO\\]\\s+BUILD SUCCESS",
+  "^\\[INFO\\]\\s+Total time:",
+  "^\\[INFO\\]\\s+Finished at:",
+  "^\\[INFO\\]\\s+Final Memory:",
+]
+keep_lines_matching = [
+  "ERROR",
+  "FAILURE",
+  "BUILD FAILURE",
+  "Compilation failure",
+  "Test failures",
+  "There are test failures",
+  "\\[ERROR\\]",
+  "\\[WARNING\\]",
+]
+max_lines = 60
+on_empty = "maven: success"
+
+[[tests.mvn]]
+name = "clean build"
+input = """
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] --- maven-resources-plugin:3.2.0:resources (default-resources) @ my-project ---
+[INFO] Copying 2 resources
+[INFO] 
+[INFO] --- maven-compiler-plugin:3.8.1:compile (default-compile) @ my-project ---
+[INFO] Changes detected - recompiling the module!
+[INFO] Compiling 15 source files to /project/target/classes
+[INFO] 
+[INFO] --- maven-jar-plugin:3.2.0:jar (default-jar) @ my-project ---
+[INFO] Building jar: /project/target/my-project-1.0.jar
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  4.521 s
+[INFO] Finished at: 2024-01-15T10:30:00Z
+[INFO] ------------------------------------------------------------------------
+"""
+expected = "maven: success"
+
+[[tests.mvn]]
+name = "build failure shown"
+input = """
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] --- maven-compiler-plugin:3.8.1:compile (default-compile) @ my-project ---
+[INFO] Changes detected - recompiling the module!
+[INFO] Compiling 15 source files to /project/target/classes
+[INFO] -------------------------------------------------------------
+[ERROR] COMPILATION ERROR : 
+[INFO] -------------------------------------------------------------
+[ERROR] /project/src/main/java/com/example/Main.java:[10,5] cannot find symbol
+  symbol:   variable foo
+  location: class com.example.Main
+[INFO] 1 error
+[INFO] -------------------------------------------------------------
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+"""
+expected = """
+[ERROR] COMPILATION ERROR : 
+[INFO] -------------------------------------------------------------
+[ERROR] /project/src/main/java/com/example/Main.java:[10,5] cannot find symbol
+  symbol:   variable foo
+  location: class com.example.Main
+[INFO] 1 error
+[INFO] -------------------------------------------------------------
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE"""

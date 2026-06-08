@@ -1,0 +1,72 @@
+[filters.gh-issue]
+description = "Compact gh issue output"
+match_command = "^gh\\s+issue\\s+(list|view|create|close|reopen|comment|edit|transfer|pin|unpin|develop)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*✓",
+  "^\\s*✔",
+  "^Creating",
+  "^Created",
+  "^Updating",
+  "^Closed",
+  "^Reopened",
+]
+keep_lines_matching = [
+  "error:",
+  "Error:",
+  "failed",
+  "FAILED",
+  "not found",
+  "unauthorized",
+  "rate limit",
+  "#",
+  "title:",
+  "state:",
+  "author:",
+  "assignees:",
+  "labels:",
+  "milestone:",
+  "body:",
+  "comments:",
+]
+max_lines = 40
+on_empty = "gh issue: ok"
+
+[[tests.gh-issue]]
+name = "issue view"
+input = """
+title: Bug in login
+state: OPEN
+author: user
+assignees: user
+labels: bug, high-priority
+milestone: v1.0
+
+Login fails with 500 error when password contains special characters.
+
+comments:
+  user: investigating...
+  user: fixed in PR #42
+"""
+expected = """
+title: Bug in login
+state: OPEN
+author: user
+assignees: user
+labels: bug, high-priority
+milestone: v1.0
+
+Login fails with 500 error when password contains special characters.
+
+comments:
+  user: investigating...
+  user: fixed in PR #42"""
+
+[[tests.gh-issue]]
+name = "error shown"
+input = """
+error: issue not found
+"""
+expected = """
+error: issue not found"""
