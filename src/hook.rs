@@ -883,7 +883,11 @@ mod tests {
         for i in 0..6 {
             writeln!(f, "pub fn big{i}(x: i64) -> i64 {{").unwrap();
             for j in 0..50 {
-                writeln!(f, "    let v{j} = x + {j} * {i}; // body line padding the function").unwrap();
+                writeln!(
+                    f,
+                    "    let v{j} = x + {j} * {i}; // body line padding the function"
+                )
+                .unwrap();
             }
             writeln!(f, "    x\n}}").unwrap();
         }

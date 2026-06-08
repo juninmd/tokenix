@@ -108,11 +108,30 @@ fn is_cargo_output(lines: &[&str]) -> bool {
 fn compress_cargo(lines: &[&str]) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut in_diagnostic = false;
+    // Inside a test-failure stdout block (`---- <test> stdout ----` up to the
+    // `test result:` summary). The reason a test failed — a custom panic message,
+    // a pretty-assertion colour diff, a backtrace — is free-form and matches no
+    // fixed prefix, so the block is captured verbatim instead of line-by-line.
+    let mut in_failure_block = false;
     let mut warning_count: u32 = 0;
     const MAX_WARNINGS: u32 = 5;
 
     for line in lines {
         let t = line.trim();
+
+        if !in_failure_block && t.starts_with("---- ") && t.ends_with("----") {
+            in_failure_block = true;
+        }
+        if in_failure_block {
+            out.push(line);
+            // `test result:` ends the failure section; a `running ` line marks the
+            // start of a fresh test binary, so it also closes a truncated block.
+            if t.starts_with("test result:") || t.starts_with("running ") {
+                in_failure_block = false;
+            }
+            continue;
+        }
+
         let is_error = (t.starts_with("error[") || t == "error" || t.starts_with("error: "))
             && !t.starts_with("error_");
         let is_warning = t.starts_with("warning[") || t.starts_with("warning: ");
@@ -127,17 +146,11 @@ fn compress_cargo(lines: &[&str]) -> String {
             || t.starts_with("running ")
             || t.starts_with("FAILED")
             || (t.starts_with("test ") && (t.ends_with("ok") || t.ends_with("FAILED")));
-        // The whole point of running a test is to learn WHY it failed. These lines
-        // carry that signal and previously fell through to the drop branch, so a
-        // compressed `cargo test` showed "FAILED" with no panic/assertion detail —
-        // forcing the agent to re-run uncompressed (a net token loss).
-        let is_test_failure = t.contains("panicked at")
-            || t.starts_with("assertion ")
-            || t.starts_with("left:")
-            || t.starts_with("right:")
-            || (t.starts_with("---- ") && t.ends_with("----"));
+        // A panic outside a cargo-test stdout block (e.g. a plain binary run)
+        // still carries the failure reason and must survive compression.
+        let is_panic = t.contains("panicked at");
 
-        if is_error || is_test_failure {
+        if is_error || is_panic {
             out.push(line);
             in_diagnostic = true;
         } else if is_warning && warning_count < MAX_WARNINGS {
@@ -774,39 +787,49 @@ mod tests {
 
     #[test]
     fn cargo_test_failure_detail_is_preserved() {
-        // A failing `cargo test` must keep the panic/assertion detail — that is the
-        // whole reason to read the output. Compression should drop noise (Compiling
-        // lines, passing tests) but never the failure signal.
+        // A failing `cargo test` must keep the WHOLE failure block — the reason a
+        // test failed is free-form (custom panic message, pretty-assertion colour
+        // diff, backtrace) and matches no fixed prefix. Compression should still
+        // drop noise (Compiling lines, passing tests) but never the failure signal.
         let raw = "\
 Compiling foo v0.1.0
-running 1 test
+running 2 tests
+test tests::ok_one ... ok
 test tests::adds ... FAILED
 
 failures:
 
 ---- tests::adds stdout ----
 thread 'tests::adds' panicked at src/lib.rs:10:9:
-assertion `left == right` failed
-  left: 4
- right: 5
+custom failure: widget count drifted by 1
+Diff < left / right > :
+<4
+>5
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 failures:
     tests::adds
 
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
         let lines: Vec<&str> = raw.lines().collect();
         let out = compress_cargo(&lines);
         assert!(out.contains("panicked at"), "panic line must be preserved");
+        // Free-form lines that no prefix matches — the stateful block capture keeps them.
         assert!(
-            out.contains("assertion `left == right` failed"),
-            "assertion line must be preserved"
+            out.contains("custom failure: widget count drifted by 1"),
+            "custom panic message must be preserved"
         );
-        assert!(out.contains("left: 4"), "left value must be preserved");
-        assert!(out.contains("right: 5"), "right value must be preserved");
+        assert!(
+            out.contains("Diff < left / right > :") && out.contains("<4") && out.contains(">5"),
+            "pretty-assertion diff must be preserved"
+        );
         assert!(
             out.contains("---- tests::adds stdout ----"),
             "failing test name marker must be preserved"
+        );
+        assert!(
+            out.contains("test result: FAILED"),
+            "summary must be preserved"
         );
         // Still compresses: the noisy Compiling line is dropped.
         assert!(!out.contains("Compiling foo"), "noise should be dropped");
