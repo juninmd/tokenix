@@ -346,7 +346,9 @@ tokenix install-hook --tool all
 |---|---|
 | `--only-cpu` | Force CPU embedding even on a GPU-enabled build (no-op on CPU-only builds) |
 
-**`tokenix index`** — `--force/-f`, `--cpu-profile <low\|default\|max>`, `--jobs N`, `--embed-batch N` (default 16 CPU / 64 GPU), `--if-stale`, `--path/-p`
+**`tokenix index`** — `--force/-f`, `--cpu-profile <low\|default\|max>`, `--jobs N`, `--embed-batch N` (default 16 CPU / 64 GPU), `--if-stale`, `--path/-p`, `--model <id>`
+
+**Embedding model** — default `nomic-v1.5`. Select another with `tokenix index --model <id>` or `TOKENIX_EMBED_MODEL=<id>`; run `tokenix doctor` to list available ids (`nomic-v1.5`, `bge-small`, `bge-base`, `minilm-l6`, `e5-small`). The model is stamped into the index and read back at query time, so search always matches what was indexed; it is sticky across re-indexes and an explicit switch re-embeds. `nomic-v1.5` (768d) is the quality default; `bge-small` (384d) indexes faster; `e5-small` is multilingual. Existing indexes keep working unchanged.
 
 **`tokenix query`** — `--budget/-b` (1200), `--k` (20), `--file/-f`, `--path/-p`
 

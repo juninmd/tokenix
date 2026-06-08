@@ -75,7 +75,13 @@ fn mtime_of(path: &Path) -> f64 {
 fn chunk_embedding_key(text: &str) -> String {
     let mut hasher = sha2::Sha256::new();
     hasher.update(text.as_bytes());
-    hex::encode(hasher.finalize())
+    // Namespace the cache by model: vectors from different models are not
+    // interchangeable, so re-indexing under a new model must not reuse old ones.
+    format!(
+        "{}:{}",
+        crate::embed::active_model_id(),
+        hex::encode(hasher.finalize())
+    )
 }
 
 fn rel_path(repo_root: &Path, abs: &Path) -> String {
@@ -267,6 +273,31 @@ pub fn index_repo_with_options<F>(
 where
     F: FnMut(&str),
 {
+    // Resolve and pin the embedding model for this whole run so documents and the
+    // stamped meta agree. Precedence: an explicit TOKENIX_EMBED_MODEL wins; else
+    // keep the model the existing index already uses (sticky — a plain re-index
+    // must not silently switch models); else the default.
+    let prev_model = crate::store::index_model_id(repo_root);
+    let explicit_model = std::env::var("TOKENIX_EMBED_MODEL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| crate::embed::spec_for(&s).id.to_string());
+    let model_id = explicit_model
+        .clone()
+        .or_else(|| prev_model.clone())
+        .unwrap_or_else(|| crate::embed::DEFAULT_MODEL_ID.to_string());
+    crate::embed::set_active_model(&model_id);
+
+    // An explicit model switch makes the existing per-chunk vectors incompatible,
+    // so force a full re-embed to keep the index single-model.
+    let mut options = options;
+    if let (Some(prev), Some(explicit)) = (&prev_model, &explicit_model) {
+        if prev != explicit {
+            options.force = true;
+        }
+    }
+
     let conn = open_db(repo_root, true)?.unwrap();
     init_schema(&conn, 768)?;
     let existing: Arc<HashMap<String, (i64, f64, String)>> = Arc::new(load_all_file_info(&conn)?);
@@ -540,10 +571,18 @@ mod tests {
     fn test_chunk_embedding_key() {
         let text = "hello world";
         let key = chunk_embedding_key(text);
-        assert_eq!(key.len(), 64); // SHA-256 hex is 64 chars
+        // "<model-id>:<64-hex>" — namespaced so different models never collide.
+        let (model, hash) = key.split_once(':').expect("key has model prefix");
+        assert_eq!(model, crate::embed::active_model_id());
+        assert_eq!(hash.len(), 64); // SHA-256 hex is 64 chars
 
         let key2 = chunk_embedding_key(text);
         assert_eq!(key, key2); // deterministic
+
+        // Switching the model changes the namespace, preventing cache reuse.
+        crate::embed::set_active_model("bge-small");
+        assert!(chunk_embedding_key(text).starts_with("bge-small:"));
+        crate::embed::set_active_model(crate::embed::DEFAULT_MODEL_ID);
     }
 
     #[test]

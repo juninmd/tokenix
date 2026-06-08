@@ -544,6 +544,10 @@ fn search_handler(
     budget: usize,
     file_filter: Option<&str>,
 ) -> String {
+    // Use the model the project's index was built with (this handler thread only).
+    if let Some(model_id) = store::index_model_id(Path::new(project_root)) {
+        crate::embed::set_active_model(&model_id);
+    }
     // Embed outside the lock — takes 50-100ms, holds no mutex.
     let query_vec = match embed_query(query) {
         Ok(v) => v,
