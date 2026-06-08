@@ -217,7 +217,11 @@ enum Commands {
         depth: usize,
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
-        #[arg(long, help = "Output format: text | html | mermaid", default_value = "text")]
+        #[arg(
+            long,
+            help = "Output format: text | html | mermaid",
+            default_value = "text"
+        )]
         format: String,
         #[arg(
             short,
@@ -625,7 +629,9 @@ fn main() -> Result<()> {
             since,
             token_map,
             output,
-        } => cmd_pack(&path, profile, budget, format, changed, since, token_map, output),
+        } => cmd_pack(
+            &path, profile, budget, format, changed, since, token_map, output,
+        ),
         Commands::Benchmark {
             path,
             refresh_index,
@@ -1138,7 +1144,14 @@ fn selected_memory_scopes(global: bool, project: bool) -> Vec<memory::Preference
     }
 }
 
-fn cmd_query(text: &str, budget: usize, k: usize, file: Option<&str>, link: &[String], path: &Path) -> Result<()> {
+fn cmd_query(
+    text: &str,
+    budget: usize,
+    k: usize,
+    file: Option<&str>,
+    link: &[String],
+    path: &Path,
+) -> Result<()> {
     if k == 0 {
         anyhow::bail!("k must be >= 1");
     }
@@ -1236,10 +1249,8 @@ fn cmd_impact(
         std::fs::write(output, html)?;
         println!("{} HTML graph exported to {}", "ok".green(), output);
     } else if format_str.eq_ignore_ascii_case("mermaid") {
-        let mermaid = graph::format_relations_mermaid(
-            &relations,
-            &format!("Impact graph for `{symbol}`"),
-        );
+        let mermaid =
+            graph::format_relations_mermaid(&relations, &format!("Impact graph for `{symbol}`"));
         if output != "impact.html" {
             std::fs::write(output, &mermaid)?;
             println!("{} Mermaid diagram exported to {}", "ok".green(), output);
@@ -1255,13 +1266,7 @@ fn cmd_impact(
     Ok(())
 }
 
-fn cmd_flow(
-    symbol: &str,
-    depth: usize,
-    limit: usize,
-    format_str: &str,
-    path: &Path,
-) -> Result<()> {
+fn cmd_flow(symbol: &str, depth: usize, limit: usize, format_str: &str, path: &Path) -> Result<()> {
     let conn = open_existing_index(path)?;
     let relations = store::graph_flow(&conn, symbol, depth, limit)?;
     if format_str.eq_ignore_ascii_case("mermaid") {

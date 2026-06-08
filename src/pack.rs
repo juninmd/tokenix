@@ -108,7 +108,9 @@ pub fn build_pack(repo_root: &Path, options: PackOptions) -> Result<String> {
             continue;
         }
         if should_pack_path(&path, profile) {
-            reasons.entry(path.clone()).or_insert_with(|| "top-file".to_string());
+            reasons
+                .entry(path.clone())
+                .or_insert_with(|| "top-file".to_string());
             selected.insert(path);
         }
     }
@@ -132,7 +134,9 @@ pub fn build_pack(repo_root: &Path, options: PackOptions) -> Result<String> {
         }
         used += tokens;
         files.push(PackFile {
-            reason: reasons.remove(&path).unwrap_or_else(|| "selected".to_string()),
+            reason: reasons
+                .remove(&path)
+                .unwrap_or_else(|| "selected".to_string()),
             path,
             tokens,
             outline,

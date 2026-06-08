@@ -71,7 +71,12 @@ pub fn query_index_multi(
         if let Some(results) = query_index(root, query_text, budget, k * 2, file_filter)? {
             for r in results {
                 // Deduplicate by path+start_line+content prefix
-                let key = format!("{}:{}:{}", r.path, r.start_line, &r.content[..r.content.len().min(40)]);
+                let key = format!(
+                    "{}:{}:{}",
+                    r.path,
+                    r.start_line,
+                    &r.content[..r.content.len().min(40)]
+                );
                 if seen_ids.insert(key) {
                     merged.push(r);
                 }
@@ -711,7 +716,9 @@ fn mode_query(mode: ContextMode, task: &str) -> String {
         ContextMode::Plan => "architecture entry points public interfaces implementation plan",
         ContextMode::Debug => "failure handling diagnostics errors tests root cause",
         ContextMode::Audit => "security supply chain credentials configuration risk tests",
-        ContextMode::Security => "secrets credentials tokens authentication authorization hooks mcp",
+        ContextMode::Security => {
+            "secrets credentials tokens authentication authorization hooks mcp"
+        }
         ContextMode::Review => "code review regressions tests edge cases public interfaces",
     };
     format!("{prefix} {task}")

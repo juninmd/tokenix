@@ -539,7 +539,7 @@ pub fn load_all_graph_edges(conn: &Connection) -> Result<Vec<(i64, String, i64, 
         "SELECT e.caller_chunk_id, from_node.name, e.callee_chunk_id, to_node.name
          FROM graph_edges e
          JOIN graph_nodes from_node ON from_node.chunk_id = e.caller_chunk_id
-         JOIN graph_nodes to_node ON to_node.chunk_id = e.callee_chunk_id"
+         JOIN graph_nodes to_node ON to_node.chunk_id = e.callee_chunk_id",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((

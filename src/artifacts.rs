@@ -41,10 +41,7 @@ pub fn list_artifacts(repo_root: &Path) -> Result<()> {
     }
     println!("Context artifacts ({}):", config.artifacts.len());
     for entry in &config.artifacts {
-        let desc = entry
-            .description
-            .as_deref()
-            .unwrap_or("(no description)");
+        let desc = entry.description.as_deref().unwrap_or("(no description)");
         println!("  {} [{type}] -> {path}  {desc}",
             entry.name,
             type = entry.artifact_type,

@@ -67,14 +67,26 @@ pub fn tool_schema_tokens(profile: McpProfile) -> usize {
 
 fn full_tool_estimate() -> Vec<Value> {
     [
-        ("tokenix_query", "Semantic search over the indexed codebase repository"),
+        (
+            "tokenix_query",
+            "Semantic search over the indexed codebase repository",
+        ),
         ("tokenix_context", "Build focused task context in one call"),
-        ("tokenix_explore", "Graph-aware source and relationship context"),
-        ("tokenix_read", "Smart outline, symbol, or line-range file reader"),
+        (
+            "tokenix_explore",
+            "Graph-aware source and relationship context",
+        ),
+        (
+            "tokenix_read",
+            "Smart outline, symbol, or line-range file reader",
+        ),
         ("tokenix_symbols", "Find indexed symbols by name or path"),
         ("tokenix_callers", "Find symbols that call a target symbol"),
         ("tokenix_callees", "Find symbols called by a target symbol"),
-        ("tokenix_impact", "Show bidirectional impact graph around a symbol"),
+        (
+            "tokenix_impact",
+            "Show bidirectional impact graph around a symbol",
+        ),
         ("tokenix_memory_add", "Save durable preference memory"),
         ("tokenix_memory_list", "List preference memory"),
         ("tokenix_memory_remove", "Remove preference memory"),
@@ -521,11 +533,8 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 .ok_or_else(|| anyhow!("Missing 'task' argument"))?;
             let budget = args.get("budget").and_then(|b| b.as_u64()).unwrap_or(3000) as usize;
             let max_files = args.get("max_files").and_then(|b| b.as_u64()).unwrap_or(4) as usize;
-            let mode = parse_context_mode(
-                args.get("mode")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("plan"),
-            )?;
+            let mode =
+                parse_context_mode(args.get("mode").and_then(|m| m.as_str()).unwrap_or("plan"))?;
 
             crate::query::build_task_context_with_mode(&repo_root, task, mode, budget, max_files)
         }

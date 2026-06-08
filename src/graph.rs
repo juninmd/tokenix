@@ -151,8 +151,12 @@ pub fn detect_cycles(edges: &[(i64, String, i64, String)]) -> Vec<Vec<String>> {
 
     for (caller_id, caller_name, callee_id, callee_name) in edges {
         adj.entry(*caller_id).or_default().push(*callee_id);
-        node_names.entry(*caller_id).or_insert_with(|| caller_name.clone());
-        node_names.entry(*callee_id).or_insert_with(|| callee_name.clone());
+        node_names
+            .entry(*caller_id)
+            .or_insert_with(|| caller_name.clone());
+        node_names
+            .entry(*callee_id)
+            .or_insert_with(|| callee_name.clone());
     }
 
     let mut index_counter: usize = 0;
@@ -184,7 +188,16 @@ pub fn detect_cycles(edges: &[(i64, String, i64, String)]) -> Vec<Vec<String>> {
         if let Some(neighbors) = adj.get(&v) {
             for &w in neighbors {
                 if !indices.contains_key(&w) {
-                    strongconnect(w, index_counter, stack, on_stack, indices, lowlinks, adj, sccs);
+                    strongconnect(
+                        w,
+                        index_counter,
+                        stack,
+                        on_stack,
+                        indices,
+                        lowlinks,
+                        adj,
+                        sccs,
+                    );
                     let v_low = *lowlinks.get(&v).unwrap_or(&usize::MAX);
                     let w_low = *lowlinks.get(&w).unwrap_or(&usize::MAX);
                     lowlinks.insert(v, v_low.min(w_low));
@@ -230,7 +243,11 @@ pub fn detect_cycles(edges: &[(i64, String, i64, String)]) -> Vec<Vec<String>> {
     sccs.into_iter()
         .map(|scc| {
             scc.into_iter()
-                .map(|id| node_names.remove(&id).unwrap_or_else(|| format!("node_{id}")))
+                .map(|id| {
+                    node_names
+                        .remove(&id)
+                        .unwrap_or_else(|| format!("node_{id}"))
+                })
                 .collect()
         })
         .collect()
@@ -435,7 +452,10 @@ fn is_definition_node(node: tree_sitter::Node, parent: tree_sitter::Node) -> boo
             }
         }
     }
-    matches!(parent_kind, "parameter" | "formal_parameter" | "parameter_declaration")
+    matches!(
+        parent_kind,
+        "parameter" | "formal_parameter" | "parameter_declaration"
+    )
 }
 
 fn is_reference_node(kind: &str) -> bool {
@@ -471,11 +491,7 @@ fn extract_references_tree_sitter(content: &str, path: &str) -> Option<Vec<Strin
     let tree = parser.parse(content, None)?;
     let mut refs = HashSet::new();
 
-    fn traverse(
-        node: tree_sitter::Node,
-        content: &str,
-        refs: &mut HashSet<String>,
-    ) {
+    fn traverse(node: tree_sitter::Node, content: &str, refs: &mut HashSet<String>) {
         let kind = node.kind();
         if is_comment_or_string(kind) {
             return;
@@ -498,11 +514,7 @@ fn extract_references_tree_sitter(content: &str, path: &str) -> Option<Vec<Strin
                 }
             }
 
-            if matches!(
-                kind,
-                "scoped_identifier"
-                    | "scoped_type_identifier"
-            ) {
+            if matches!(kind, "scoped_identifier" | "scoped_type_identifier") {
                 return;
             }
         }
@@ -763,8 +775,10 @@ mod tests {
 
     #[test]
     fn extracts_function_and_method_references() {
-        let refs =
-            extract_references("fn a() { foo(); user.save(); crate::bar::baz(); if ready() {} }", "test.rs");
+        let refs = extract_references(
+            "fn a() { foo(); user.save(); crate::bar::baz(); if ready() {} }",
+            "test.rs",
+        );
         assert!(refs.contains(&"foo".to_string()));
         assert!(refs.contains(&"save".to_string()));
         assert!(refs.contains(&"crate::bar::baz".to_string()));

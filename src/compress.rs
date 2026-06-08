@@ -216,18 +216,17 @@ fn compress_git_log(lines: &[&str]) -> String {
         .map(|line| line.trim())
         .filter(|line| {
             line.len() > 8
-                && line
-                    .chars()
-                    .take_while(|c| c.is_ascii_hexdigit())
-                    .count()
-                    >= 7
+                && line.chars().take_while(|c| c.is_ascii_hexdigit()).count() >= 7
                 && line.chars().nth(7).is_some_and(|c| c.is_whitespace())
         })
         .collect();
     if oneline.len() >= 3 {
         let first = oneline.first().copied().unwrap_or_default();
         let last = oneline.last().copied().unwrap_or_default();
-        return format!("git log: {} commits\nfirst: {first}\nlast: {last}", oneline.len());
+        return format!(
+            "git log: {} commits\nfirst: {first}\nlast: {last}",
+            oneline.len()
+        );
     }
 
     const MAX_COMMITS: usize = 20;
@@ -284,9 +283,8 @@ fn compress_git_status(lines: &[&str]) -> String {
     if modified + added + deleted + untracked + renamed == 0 {
         return lines.join("\n");
     }
-    let mut out = format!(
-        "git status: M={modified} A={added} D={deleted} R={renamed} ?={untracked}"
-    );
+    let mut out =
+        format!("git status: M={modified} A={added} D={deleted} R={renamed} ?={untracked}");
     if !examples.is_empty() {
         out.push_str("\nexamples:\n");
         out.push_str(&examples.join("\n"));

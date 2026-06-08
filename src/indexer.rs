@@ -565,8 +565,10 @@ fn save_checkpoint(conn: &rusqlite::Connection, phase: &str, count: usize) -> Re
 
 #[allow(dead_code)] // retained for resumable-index work; not yet wired into the pipeline
 fn read_checkpoint(conn: &rusqlite::Connection) -> Option<(String, usize)> {
-    crate::store::meta_value(conn, "index_checkpoint")
-        .and_then(|val| val.split_once(':').and_then(|(p, c)| c.parse().ok().map(|n| (p.to_string(), n))))
+    crate::store::meta_value(conn, "index_checkpoint").and_then(|val| {
+        val.split_once(':')
+            .and_then(|(p, c)| c.parse().ok().map(|n| (p.to_string(), n)))
+    })
 }
 
 #[cfg(test)]

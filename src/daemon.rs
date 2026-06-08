@@ -566,7 +566,8 @@ fn search_handler(
 
     // Run sparse FTS5 search (holds no cache lock, query is fast)
     let sparse_limit = (k.saturating_mul(5)).max(50);
-    let sparse_results = store::search_fts(&conn, query, sparse_limit, file_filter).unwrap_or_default();
+    let sparse_results =
+        store::search_fts(&conn, query, sparse_limit, file_filter).unwrap_or_default();
 
     // Acquire lock, reload cache if stale, run cosine search + RRF merge, release lock.
     let top_ids: Vec<(usize, f32, i64)> = {

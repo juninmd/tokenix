@@ -522,7 +522,8 @@ fn measure_competitive_league(
         status: "documented".to_string(),
         tokens: None,
         quality: None,
-        note: "IDE/cloud tools are not CLI-comparable here; use tokenix Hit@3/context rows".to_string(),
+        note: "IDE/cloud tools are not CLI-comparable here; use tokenix Hit@3/context rows"
+            .to_string(),
     });
 
     Ok(rows)
@@ -643,10 +644,7 @@ fn competitive_feature_rows() -> Vec<FeatureRow> {
 
 fn print_feature_matrix() {
     println!("{}", "7. Feature Matrix vs Market".bold());
-    println!(
-        "  {:<24} {:<34} Competitor signal",
-        "Feature", "tokenix"
-    );
+    println!("  {:<24} {:<34} Competitor signal", "Feature", "tokenix");
     println!("  {}", "-".repeat(104).dimmed());
     for row in competitive_feature_rows() {
         println!(
