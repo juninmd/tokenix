@@ -103,6 +103,11 @@ enum Commands {
         jobs: Option<usize>,
         #[arg(long, help = "Embedding batch size for indexing")]
         embed_batch: Option<usize>,
+        #[arg(
+            long,
+            help = "Embedding model id (e.g. nomic-v1.5, bge-small). See `tokenix doctor`"
+        )]
+        model: Option<String>,
         #[arg(long, help = "Update file chunks and symbol graph without embedding")]
         no_embed: bool,
     },
@@ -437,8 +442,17 @@ fn main() -> Result<()> {
             cpu_profile,
             jobs,
             embed_batch,
+            model,
             no_embed,
         } => {
+            if let Some(model) = model.as_deref() {
+                if !crate::embed::is_known_model(model) {
+                    let ids: Vec<&str> = crate::embed::MODELS.iter().map(|m| m.id).collect();
+                    anyhow::bail!("unknown --model '{model}'. Available: {}", ids.join(", "));
+                }
+                crate::embed::set_active_model(model);
+                set_env_override("TOKENIX_EMBED_MODEL", model);
+            }
             configure_index_limits(cpu_profile, only_cpu, jobs, embed_batch);
             cmd_index(&path, force, if_stale, no_embed)
         }
