@@ -870,6 +870,7 @@ fn cmd_context(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_pack(
     path: &Path,
     profile: pack::PackProfile,

@@ -281,6 +281,7 @@ fn changed_paths(repo_root: &Path, since: Option<&str>) -> BTreeSet<String> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_markdown(
     repo_root: &Path,
     profile: PackProfile,
@@ -328,6 +329,7 @@ fn format_markdown(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_xml(
     repo_root: &Path,
     profile: PackProfile,

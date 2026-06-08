@@ -101,7 +101,7 @@ pub fn db_path(repo_root: &Path) -> PathBuf {
 
     if std::env::var("TOKENIX_BRANCH_AWARE").is_ok_and(|v| v == "true" || v == "1") {
         if let Some(branch) = current_branch(repo_root) {
-            let safe = branch.replace('/', "_").replace('\\', "_");
+            let safe = branch.replace(['/', '\\'], "_");
             let branch_path = base.with_extension(format!("{}.db", safe));
             return branch_path;
         }

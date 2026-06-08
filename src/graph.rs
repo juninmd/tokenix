@@ -164,6 +164,7 @@ pub fn detect_cycles(edges: &[(i64, String, i64, String)]) -> Vec<Vec<String>> {
 
     let all_nodes: Vec<i64> = node_names.keys().cloned().collect();
 
+    #[allow(clippy::too_many_arguments)]
     fn strongconnect(
         v: i64,
         index_counter: &mut usize,
