@@ -104,7 +104,7 @@ pub fn active_model_id() -> String {
 
 /// Loaded models keyed by id. Leaked to `'static` so callers get a stable
 /// reference; the process loads each model at most once.
-static MODELS_CACHE: OnceCell<Mutex<HashMap<String, &'static TextEmbedding>>> = OnceCell::new();
+static MODELS_CACHE: OnceCell<Mutex<HashMap<String, &'static OnceCell<TextEmbedding>>>> = OnceCell::new();
 
 /// When true, the GPU execution provider is skipped even on a GPU-enabled build.
 /// Set by `main()` from the `--only-cpu` flag before the model is first used.
