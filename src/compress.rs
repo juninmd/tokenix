@@ -343,7 +343,7 @@ fn compress_git_status(lines: &[&str]) -> String {
                 .chars()
                 .all(|c| matches!(c, 'M' | 'A' | 'D' | 'R' | 'C' | 'U' | 'T' | ' '))
                 && code2 != "  ";
-        if is_porcelain && t.len() > 3 {
+        if is_porcelain && t.len() >= 3 {
             out.push(t.to_string());
             continue;
         }
@@ -509,8 +509,8 @@ fn compress_cargo_tree(lines: &[&str]) -> String {
             ' ', '|', '`', '+', '-', '\u{2502}', '\u{251c}', '\u{2514}', '\u{2500}',
         ]);
         let stripped = stripped.trim();
-        if stripped.is_empty() || stripped.ends_with("(*)") {
-            // skip duplicate-subtree markers; still record the crate name below
+        if stripped.is_empty() {
+            continue;
         }
         // A crate line looks like "name v1.2.3" or "name v1.2.3 (proc-macro)".
         let mut it = stripped.split_whitespace();
@@ -612,16 +612,25 @@ fn compress_grep(lines: &[&str]) -> String {
         if line.trim().is_empty() {
             continue;
         }
-        // path:line:content  OR  path:content — trim whitespace of the content part.
-        let compact = match line.match_indices(':').nth(1) {
-            Some((idx, _)) => {
+        let colons: Vec<usize> = line.match_indices(':').map(|(i, _)| i).collect();
+        let mut split_idx = None;
+        for &idx in &colons {
+            let prev_idx = colons.iter().rev().copied().find(|&p| p < idx);
+            let start = prev_idx.map(|p| p + 1).unwrap_or(0);
+            let part = &line[start..idx];
+            if !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()) {
+                split_idx = Some(idx);
+                break;
+            }
+        }
+        let split_idx = split_idx.or_else(|| colons.last().copied());
+
+        let compact = match split_idx {
+            Some(idx) => {
                 let (head, content) = line.split_at(idx + 1);
                 format!("{head}{}", content.trim())
             }
-            None => match line.split_once(':') {
-                Some((head, content)) => format!("{head}: {}", content.trim()),
-                None => line.trim().to_string(),
-            },
+            None => line.trim().to_string(),
         };
         if shown >= MAX_MATCHES {
             out.push(format!("... +{} more match line(s)", lines.len() - shown));
