@@ -21,7 +21,7 @@ tokenix --help
 
 | File | Purpose |
 |---|---|
-| `src/main.rs` | CLI entry (clap), command dispatch, `install-hook`/`remove-hook` helpers |
+| `src/main.rs` | CLI entry (clap), command dispatch, `install-hook`/`remove-hook` helpers. `banner()` = neon "tokenix" wordmark + tagline; `help_catalog()` = audience-grouped command list (AI agent vs human) + examples, wired via custom `HELP_TEMPLATE` (`before_help`/`after_help`); bare `tokenix` prints this help |
 | `src/chunker.rs` | Symbol-aware heuristic chunking, `generate_outline()`, token counting |
 | `src/embed.rs` | fastembed ONNX — `embed_documents()`, `embed_query()`. Model **registry** (`MODELS`, `spec_for`) + thread-local active model (`set_active_model`/`active_model_id`) + per-id loaded-model cache. Per-model query/doc prefixes; query cache keyed by model |
 | `src/store.rs` | SQLite schema, CRUD, cosine similarity search, hook log I/O, PID index lock, branch-aware DB paths |
@@ -33,7 +33,7 @@ tokenix --help
 | `src/hook.rs` | `run_hook()` — called by PreToolUse hook. Tries daemon first for Grep |
 | `src/daemon.rs` | Background TCP server (port 47392). Holds model + embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads |
 | `src/compress.rs` | Legacy `PostToolUse` compatibility compression: ANSI strip, emoji removal, blank-line collapse, repeat grouping, JSON compaction, cargo/git-log heuristics |
-| `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()` |
+| `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()`. `find_filter()` matches via `derive_command_candidates()`, which unwraps shell runners, strips `cd`/env prefixes, and (RTK-style) `split_on_operators()` splits compound commands quote-aware on `&&`/`\|\|`/`;`/`\|` so anchored `match_command` patterns match a base command in any segment/position |
 | `src/cmd_filter.rs` | `tokenix filter list/active/generate` subcommands |
 | `src/gain.rs` | `compute_gain()`, `GainStats`, `MODELS` pricing table (Anthropic/OpenAI/Google) |
 | `src/mcp.rs` | MCP server. `--profile full` exposes all tools; `--profile slim` exposes context/search/call meta-tools for progressive discovery |

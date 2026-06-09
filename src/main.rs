@@ -20,14 +20,19 @@ mod recordings;
 mod store;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use std::path::{Path, PathBuf};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
-#[command(name = "tokenix", version = VERSION, about = "Local semantic index for LLM token optimization")]
+#[command(
+    name = "tokenix",
+    version = VERSION,
+    about = "Local semantic index for LLM token optimization",
+    help_template = HELP_TEMPLATE
+)]
 struct Cli {
     /// Force CPU-only embedding, skipping the GPU even on a GPU-enabled build.
     /// GPU (DirectML/CUDA) is used by default when compiled with that support.
@@ -35,8 +40,13 @@ struct Cli {
     only_cpu: bool,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
+
+/// Top-level help layout: wordmark banner (before-help) → usage → grouped
+/// command catalog + examples (after-help). The default flat `{subcommands}`
+/// block is intentionally omitted so commands can be grouped by audience.
+const HELP_TEMPLATE: &str = "{before-help}{usage-heading} {usage}{after-help}";
 
 /// CPU usage profile for indexing. Embedding batch size (which drives peak
 /// memory) stays bounded across all profiles; profiles mainly scale thread use.
@@ -522,13 +532,29 @@ fn hook_command(tokenix_bin: &str, subcommand: &str) -> String {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // Build the command via the factory so the wordmark banner and grouped
+    // command catalog (both runtime-colored) can be attached as styled help.
+    let mut cmd = Cli::command()
+        .before_help(banner())
+        .after_help(help_catalog());
+    let matches = cmd.clone().get_matches();
+    let cli = Cli::from_arg_matches(&matches)?;
 
     // Must be set before the embedding model is first initialized.
     let only_cpu = cli.only_cpu;
     crate::embed::set_force_cpu(only_cpu);
 
-    let res = match cli.command {
+    // Bare `tokenix` with no subcommand: show the grouped help.
+    let command = match cli.command {
+        Some(command) => command,
+        None => {
+            cmd.print_help()?;
+            println!();
+            std::process::exit(0);
+        }
+    };
+
+    let res = match command {
         Commands::Index {
             path,
             force,
@@ -2565,6 +2591,172 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
     println!();
 
     Ok(())
+}
+
+/// Logo banner: the neon "tokenix" wordmark + a one-line tagline, inspired by
+/// tokenix-logo.png. Colors auto-disable on non-TTY / NO_COLOR via `colored`.
+fn banner() -> String {
+    // Wordmark — bright cyan, like the neon "tokenix" lettering.
+    let word = [
+        r" _        _              _      ",
+        r"| |_ ___ | | _____ _ __ (_)_  __",
+        r"| __/ _ \| |/ / _ \ '_ \| \ \/ /",
+        r"| || (_) |   <  __/ | | | |>  < ",
+        r" \__\___/|_|\_\___|_| |_|_/_/\_\",
+    ];
+    let mut out = String::new();
+    for line in word {
+        out.push_str(&format!("{}\n", line.bright_cyan().bold()));
+    }
+    out.push_str(&format!(
+        " {}  minimize LLM context, keep the signal",
+        "($)".yellow()
+    ));
+    out
+}
+
+/// Audience-grouped command catalog + examples, rendered as clap `after-help`.
+/// Commands the LLM/agent drives are separated from operator commands so each
+/// reader sees the surface that matters to them.
+fn help_catalog() -> String {
+    // (command, args, one-line description)
+    let ai: &[(&str, &str, &str)] = &[
+        (
+            "context",
+            "<task>",
+            "Build focused task context in one call",
+        ),
+        (
+            "explore",
+            "<symbol>",
+            "Graph-aware related symbols + source",
+        ),
+        ("query", "<text>", "Semantic search over the indexed repo"),
+        (
+            "grep",
+            "<pattern>",
+            "Exact regex/literal search (no embedding)",
+        ),
+        ("read", "<file>", "Smart reader: outline for large files"),
+        ("symbols", "<name>", "Find indexed symbols by name or path"),
+        ("callers", "<symbol>", "Symbols that call the target"),
+        ("callees", "<symbol>", "Symbols the target calls"),
+        ("impact", "<symbol>", "Bidirectional impact graph"),
+        (
+            "flow",
+            "<symbol>",
+            "Forward execution flow from an entry point",
+        ),
+        ("pack", "", "Bundle focused context for hookless tools"),
+        ("memory", "", "Store/list agent preference memory"),
+    ];
+    let human: &[(&str, &str, &str)] = &[
+        ("index", "[path]", "Index a repository for semantic search"),
+        (
+            "install-hook",
+            "",
+            "Wire tokenix into Claude / Copilot / Codex",
+        ),
+        ("remove-hook", "", "Remove tokenix hooks"),
+        ("doctor", "", "Diagnose embedding backend, GPU, daemon"),
+        (
+            "serve / stop",
+            "",
+            "Run/stop the background embedding daemon",
+        ),
+        ("gain", "", "Token-savings analytics (--cost-estimate)"),
+        ("stats", "", "Index statistics"),
+        ("tokenmap", "", "Token counts per file/folder tree"),
+        (
+            "benchmark",
+            "",
+            "Token-savings & retrieval-quality benchmark",
+        ),
+        ("filter", "", "Manage per-command output filters"),
+        (
+            "prompt-audit",
+            "",
+            "Audit MCP/tool prompt weight across agents",
+        ),
+        (
+            "session-audit",
+            "",
+            "Token-economy risks for this session/repo",
+        ),
+        ("artifacts", "", "Manage non-code context artifacts"),
+        ("cycles", "", "Detect circular dependencies"),
+        ("rebuild-graph", "", "Rebuild the symbol graph from chunks"),
+    ];
+
+    let mut out = String::new();
+    let render = |out: &mut String, rows: &[(&str, &str, &str)]| {
+        for (cmd, args, desc) in rows {
+            let invocation = if args.is_empty() {
+                cmd.to_string()
+            } else {
+                format!("{cmd} {args}")
+            };
+            out.push_str(&format!("  {:<26} {}\n", invocation.cyan(), desc.dimmed()));
+        }
+    };
+
+    out.push_str(&format!(
+        "{}\n",
+        "🤖 AI AGENT COMMANDS  (token-lean retrieval the LLM/hooks drive)"
+            .bold()
+            .underline()
+    ));
+    render(&mut out, ai);
+
+    out.push_str(&format!(
+        "\n{}\n",
+        "🧑 HUMAN COMMANDS  (setup, ops & analytics you run yourself)"
+            .bold()
+            .underline()
+    ));
+    render(&mut out, human);
+
+    out.push_str(&format!(
+        "\n{} {}\n",
+        "⚙  INTERNAL".bold(),
+        "hook · hook-post · mcp · run  (invoked by hooks/agents, not by hand)".dimmed()
+    ));
+
+    out.push_str(&format!("\n{}\n", "EXAMPLES".bold().underline()));
+    out.push_str(&format!(
+        "  {}\n",
+        "# AI agents — token-lean retrieval".dimmed()
+    ));
+    for ex in [
+        "tokenix context \"add rate limiting to the API\"",
+        "tokenix query \"where is JWT validated\" --budget 2000",
+        "tokenix read src/auth.rs --symbol validate_token",
+        "tokenix explore TokenStore",
+    ] {
+        out.push_str(&format!("  {}\n", ex.cyan()));
+    }
+    out.push_str(&format!("\n  {}\n", "# Humans — setup & insight".dimmed()));
+    for (ex, note) in [
+        ("tokenix index .", "build the index"),
+        ("tokenix install-hook --tool all", "wire into your AI tools"),
+        ("tokenix gain --cost-estimate", "see tokens & $ saved"),
+        ("tokenix doctor", "check GPU / model / daemon"),
+    ] {
+        out.push_str(&format!(
+            "  {:<36} {}\n",
+            ex.cyan(),
+            format!("# {note}").dimmed()
+        ));
+    }
+
+    out.push_str(&format!(
+        "\n{}  {}   {}  {}\n",
+        "Global:".bold(),
+        "--only-cpu".cyan(),
+        "Details:".bold(),
+        "tokenix <command> --help".cyan()
+    ));
+    out
 }
 
 fn format_num(n: i64) -> String {

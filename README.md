@@ -351,46 +351,63 @@ tokenix install-hook --tool all
 
 ## 📖 Commands Reference
 
+> Run bare `tokenix` (or `tokenix --help`) for an audience-grouped
+> command catalog with examples. The reference below mirrors that grouping:
+> **AI agent commands** (the LLM/hooks drive these for token-lean retrieval) vs
+> **human commands** (setup, ops & analytics you run yourself).
+
+### 🤖 AI agent commands
+
 | Command | Description |
 |---|---|
-| `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
-| `tokenix query TEXT` | Semantic search over indexed chunks |
-| `tokenix grep PATTERN` | Exact regex/literal search over indexed content (no embedding) |
 | `tokenix context TEXT` | One-call task context: entry points, relevant source, compact outlines, strict budget modes |
 | `tokenix explore TEXT` | Graph-aware exploration: entry points, relationships, grouped source |
-| `tokenix pack` | Budgeted repo pack for non-hook AI tools (`--mode/--profile`, `--changed`, `--token-map`) |
-| `tokenix memory add TEXT` | Save a preference (`--global` or `--project`) for future context |
-| `tokenix memory list` | List global and project preferences |
-| `tokenix memory remove TEXT` | Remove preferences matching text |
-| `tokenix memory edit TEXT` | Replace preferences matching text |
+| `tokenix query TEXT` | Semantic search over indexed chunks |
+| `tokenix grep PATTERN` | Exact regex/literal search over indexed content (no embedding) |
 | `tokenix read FILE` | Smart reader — outline for large files, full for small |
 | `tokenix symbols QUERY` | Find indexed symbols by name or path |
 | `tokenix callers SYMBOL` | Show symbols that call/reference a symbol |
 | `tokenix callees SYMBOL` | Show symbols called/referenced by a symbol |
 | `tokenix impact SYMBOL` | Bidirectional impact graph (`--format html\|mermaid` for vis.js graph or Mermaid flowchart) |
 | `tokenix flow SYMBOL` | Forward call-flow trace from a symbol (`--depth`, `--format text\|mermaid`) |
-| `tokenix cycles` | Detect circular dependencies in the symbol graph using Tarjan's SCC algorithm |
-| `tokenix tokenmap` | Directory tree map with token counts (`--format html` supported) |
-| `tokenix rebuild-graph` | Rebuild graph tables from existing chunks without re-embedding |
-| `tokenix gain` | Token savings analytics (`--cost-estimate` adds a per-model cost table) |
-| `tokenix prompt-audit` | Audit MCP/tool token weight across agents; warns on bloat (`--agent`, `--json`, `--recommend`, `--profile-impact`) |
-| `tokenix session-audit` | Token-economy health check: index, hook events, MCP/tool weight, cache hygiene |
-| `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark (`--competitive`, `--json`) |
-| `tokenix stats` | Index statistics (files, chunks, tokens, age) |
-| `tokenix artifacts list` | List context artifacts defined in `.tokenix/artifacts.json` |
-| `tokenix artifacts show NAME` | Show context artifact content |
+| `tokenix pack` | Budgeted repo pack for non-hook AI tools (`--mode/--profile`, `--changed`, `--token-map`) |
+| `tokenix memory add TEXT` | Save a preference (`--global` or `--project`) for future context |
+| `tokenix memory list` | List global and project preferences |
+| `tokenix memory remove TEXT` | Remove preferences matching text |
+| `tokenix memory edit TEXT` | Replace preferences matching text |
+
+### 🧑 Human commands
+
+| Command | Description |
+|---|---|
+| `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
+| `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
+| `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
+| `tokenix doctor` | Diagnose embedding backend, GPU availability, model cache, and daemon |
 | `tokenix serve` | Start the background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
-| `tokenix doctor` | Diagnose embedding backend, GPU availability, model cache, and daemon |
+| `tokenix gain` | Token savings analytics (`--cost-estimate` adds a per-model cost table) |
+| `tokenix stats` | Index statistics (files, chunks, tokens, age) |
+| `tokenix tokenmap` | Directory tree map with token counts (`--format html` supported) |
+| `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark (`--competitive`, `--json`) |
 | `tokenix filter list` | Show top Bash commands by tokens wasted (no filter yet) |
 | `tokenix filter active` | Show active user and bundled output filters |
 | `tokenix filter generate [CMD]` | AI-generate a TOML output filter for a command |
 | `tokenix filter record [CMD]` | Record real command output for richer filter generation |
-| `tokenix run -- CMD` | Run a command and compress its output through tokenix filters |
-| `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
-| `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
+| `tokenix prompt-audit` | Audit MCP/tool token weight across agents; warns on bloat (`--agent`, `--json`, `--recommend`, `--profile-impact`) |
+| `tokenix session-audit` | Token-economy health check: index, hook events, MCP/tool weight, cache hygiene |
+| `tokenix artifacts list` | List context artifacts defined in `.tokenix/artifacts.json` |
+| `tokenix artifacts show NAME` | Show context artifact content |
+| `tokenix cycles` | Detect circular dependencies in the symbol graph using Tarjan's SCC algorithm |
+| `tokenix rebuild-graph` | Rebuild graph tables from existing chunks without re-embedding |
+
+### ⚙ Internal (invoked by hooks/agents, not by hand)
+
+| Command | Description |
+|---|---|
 | `tokenix hook` | `PreToolUse` handler — intercepts large reads, semantic grep, and noisy Bash commands (called by AI tools) |
 | `tokenix hook-post` | Legacy `PostToolUse` compatibility handler |
+| `tokenix run -- CMD` | Run a command and compress its output through tokenix filters |
 | `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools (`--profile slim\|full`) |
 
 <details>
@@ -489,7 +506,7 @@ on_empty = "uv: ok"
 
 | Field | Description |
 |---|---|
-| `match_command` | Rust regex matched against the full Bash command line |
+| `match_command` | Rust regex matched against the command. Compound commands are split (quote-aware) on `&&`, `\|\|`, `;`, and `\|`, and each segment is matched independently, so anchoring on the base command (e.g. `^gitleaks\b`) still matches `cd repo && gitleaks`, `cd repo;gitleaks`, or `producer \| gitleaks` |
 | `strip_ansi` | Remove ANSI colour codes before filtering |
 | `strip_lines_matching` | Drop lines matching any of these regex patterns |
 | `keep_lines_matching` | Keep only lines matching these patterns |

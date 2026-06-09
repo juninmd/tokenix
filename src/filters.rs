@@ -530,23 +530,110 @@ pub fn get_effective_command(cmd: &str) -> String {
     current
 }
 
+/// Split a shell command into segments on the operators `&&`, `||`, `;` and the
+/// pipe `|`, quote- and escape-aware. Operators are recognized regardless of
+/// surrounding whitespace, so `a;b` and `a ; b` segment identically (RTK-style).
+/// Quoted operators (e.g. `echo "a;b"`) are left intact.
+pub fn split_on_operators(cmd: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaping = false;
+
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+
+        if escaping {
+            current.push(c);
+            escaping = false;
+            i += 1;
+            continue;
+        }
+        if c == '\\' {
+            current.push(c);
+            escaping = true;
+            i += 1;
+            continue;
+        }
+        if let Some(q) = quote {
+            current.push(c);
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '\'' || c == '"' {
+            quote = Some(c);
+            current.push(c);
+            i += 1;
+            continue;
+        }
+
+        let next = chars.get(i + 1).copied();
+        // Two-char operators `&&` / `||` first, so the trailing `|` of `||`
+        // is not mistaken for a pipe split.
+        if (c == '&' && next == Some('&')) || (c == '|' && next == Some('|')) {
+            push_segment(&mut segments, &mut current);
+            i += 2;
+            continue;
+        }
+        if c == ';' || c == '|' {
+            push_segment(&mut segments, &mut current);
+            i += 1;
+            continue;
+        }
+
+        current.push(c);
+        i += 1;
+    }
+    push_segment(&mut segments, &mut current);
+    segments
+}
+
+fn push_segment(segments: &mut Vec<String>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        segments.push(trimmed.to_string());
+    }
+    current.clear();
+}
+
+fn push_unique(candidates: &mut Vec<String>, candidate: &str) {
+    let trimmed = candidate.trim();
+    if !trimmed.is_empty() && !candidates.iter().any(|c| c == trimmed) {
+        candidates.push(trimmed.to_string());
+    }
+}
+
 pub fn derive_command_candidates(cmd: &str) -> Vec<String> {
     let mut candidates = Vec::new();
 
-    let original = cmd.trim().to_string();
-    if !original.is_empty() {
-        candidates.push(original);
+    push_unique(&mut candidates, cmd);
+
+    let shell_body = unwrap_shell_runner(cmd);
+    if let Some(body) = &shell_body {
+        push_unique(&mut candidates, body);
     }
 
-    if let Some(shell_body) = unwrap_shell_runner(cmd) {
-        if !shell_body.is_empty() && shell_body != cmd {
-            candidates.push(shell_body.clone());
+    push_unique(&mut candidates, &get_effective_command(cmd));
+
+    // Operator-aware segmentation (RTK-style): split compound commands and add
+    // each segment plus its effective form, so a filter anchored on its base
+    // command matches regardless of position or spacing — e.g. `cd x;gitleaks`,
+    // `npm i && gitleaks`, or `producer | gitleaks`.
+    let mut bases = vec![cmd.to_string()];
+    if let Some(body) = shell_body {
+        bases.push(body);
+    }
+    for base in &bases {
+        for segment in split_on_operators(base) {
+            let effective = get_effective_command(&segment);
+            push_unique(&mut candidates, &segment);
+            push_unique(&mut candidates, &effective);
         }
-    }
-
-    let effective = get_effective_command(cmd);
-    if !effective.is_empty() && !candidates.contains(&effective) {
-        candidates.push(effective);
     }
 
     candidates
@@ -1262,6 +1349,69 @@ on_empty = "empty filter output"
         // Would panic with naive &l[..4] because 'é'/'ç' straddle the boundary.
         let out = apply_filter("café\nação\n", &f);
         assert_eq!(out, "caf\naç");
+    }
+
+    #[test]
+    fn split_on_operators_handles_compound_commands() {
+        // Spaced and unspaced operators segment identically.
+        assert_eq!(
+            split_on_operators("cd foo && gitleaks detect"),
+            vec!["cd foo", "gitleaks detect"]
+        );
+        assert_eq!(
+            split_on_operators("cd foo;gitleaks"),
+            vec!["cd foo", "gitleaks"]
+        );
+        assert_eq!(split_on_operators("a || b"), vec!["a", "b"]);
+        assert_eq!(
+            split_on_operators("producer | gitleaks detect"),
+            vec!["producer", "gitleaks detect"]
+        );
+        // Quoted operators are not split points.
+        assert_eq!(
+            split_on_operators(r#"echo "a;b" && x"#),
+            vec![r#"echo "a;b""#, "x"]
+        );
+    }
+
+    #[test]
+    fn derive_candidates_segments_compound_commands() {
+        let candidates = derive_command_candidates("cd foo;gitleaks detect --source .");
+        assert!(
+            candidates.iter().any(|c| c == "gitleaks detect --source ."),
+            "expected a gitleaks segment candidate, got: {candidates:?}"
+        );
+    }
+
+    #[test]
+    fn find_filter_matches_command_after_cd_and_pipe() {
+        let f = FilterDef {
+            description: None,
+            match_command: "^gitleaks\\b".to_string(),
+            strip_ansi: false,
+            strip_lines_matching: vec![],
+            keep_lines_matching: vec![],
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            on_empty: None,
+            match_output: vec![],
+            truncate_lines_at: None,
+            filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
+        };
+        let filters = [f];
+        // Unspaced semicolon, cd prefix, and a pipe all resolve to the filter.
+        assert!(find_filter("cd repo;gitleaks detect", &filters).is_some());
+        assert!(find_filter("npm i && gitleaks detect", &filters).is_some());
+        assert!(find_filter("cat x | gitleaks detect", &filters).is_some());
+        // A bare argument named gitleaks must NOT match (anchored base command).
+        assert!(find_filter("echo gitleaks", &filters).is_none());
     }
 
     #[test]

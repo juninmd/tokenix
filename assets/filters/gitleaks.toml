@@ -1,0 +1,88 @@
+[filters.gitleaks]
+description = "Compact gitleaks secret-scan output: keep findings + summary, drop the ASCII banner and routine INF log noise"
+match_command = "^gitleaks\\b"
+strip_ansi = true
+filter_stderr = true
+# Clean run: gitleaks logs "no leaks found". Collapse the whole scan to one line,
+# but never mask a run that also surfaced findings or a hard error.
+match_output = [
+  { pattern = "no leaks found", message = "gitleaks: no leaks found", unless = "leaks found:|Finding:|level=error|\\bERR\\b|\\bFTL\\b|\\bfatal\\b" }
+]
+# Findings are printed as aligned `Field:` blocks; keep only those plus the
+# summary and any error/warning. The banner glyphs and INF progress lines match
+# none of these, so they fall away.
+keep_lines_matching = [
+  "Finding:",
+  "Secret:",
+  "RuleID:",
+  "Entropy:",
+  "File:",
+  "Line:",
+  "Commit:",
+  "Author:",
+  "Email:",
+  "Date:",
+  "Fingerprint:",
+  "Link:",
+  "leaks found",
+  "\\bERR\\b",
+  "\\bFTL\\b",
+  "level=error",
+  "\\bfatal\\b"
+]
+max_lines = 80
+on_empty = "gitleaks: no findings"
+
+[[tests.gitleaks]]
+name = "clean scan collapses to one line"
+input = """
+    ○
+    │╲
+    │ ○
+    ○ ░
+    ░    gitleaks
+
+11:20AM INF 240 commits scanned.
+11:20AM INF scan completed in 1.2s
+11:20AM INF no leaks found
+"""
+expected = "gitleaks: no leaks found"
+
+[[tests.gitleaks]]
+name = "finding keeps fields and summary, drops banner/noise"
+input = """
+    ○
+    │╲
+    │ ○
+    ○ ░
+    ░    gitleaks
+
+11:25AM INF 240 commits scanned.
+Finding:     aws_secret = AKIAIOSFODNN7EXAMPLE
+Secret:      AKIAIOSFODNN7EXAMPLE
+RuleID:      aws-access-token
+Entropy:     3.684211
+File:        config/secrets.yml
+Line:        12
+Commit:      9d8e7f6a5b4c3d2e1f0a
+Author:      Jane Doe
+Email:       jane@example.com
+Date:        2023-01-02T03:04:05Z
+Fingerprint: 9d8e7f6a:config/secrets.yml:aws-access-token:12
+
+11:25AM WRN leaks found: 1
+"""
+expected = """
+Finding:     aws_secret = AKIAIOSFODNN7EXAMPLE
+Secret:      AKIAIOSFODNN7EXAMPLE
+RuleID:      aws-access-token
+Entropy:     3.684211
+File:        config/secrets.yml
+Line:        12
+Commit:      9d8e7f6a5b4c3d2e1f0a
+Author:      Jane Doe
+Email:       jane@example.com
+Date:        2023-01-02T03:04:05Z
+Fingerprint: 9d8e7f6a:config/secrets.yml:aws-access-token:12
+11:25AM WRN leaks found: 1
+"""
