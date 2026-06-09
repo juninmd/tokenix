@@ -773,7 +773,7 @@ mod tests {
 
     #[test]
     fn scan_content_attaches_repo_from_same_line() {
-        let line = r#"{"cwd":"/srv/app","gitBranch":"dev","secret":"ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"}"#;
+        let line = r#"{"cwd":"/srv/app","gitBranch":"dev","secret":"ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"}"#; // gitleaks:allow synthetic test fixture
         let hits = scan_content(line, &bundled_rules());
         let gh = hits.iter().find(|h| h.rule == "github-token").unwrap();
         assert_eq!(gh.repo.as_deref(), Some("/srv/app"));
@@ -798,8 +798,8 @@ mod tests {
     fn detects_high_signal_credentials() {
         let content = concat!(
             "user pasted AKIAIOSFODNN7EXAMPLE into the chat\n",
-            "and the key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123 too\n",
-            "github ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n",
+            "and the key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123 too\n", // gitleaks:allow synthetic test fixture
+            "github ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n", // gitleaks:allow synthetic test fixture
         );
         let hits = scan_content(content, &bundled_rules());
         let rules_hit: Vec<&str> = hits.iter().map(|h| h.rule.as_str()).collect();
@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn generic_rule_flags_high_entropy_assignment() {
-        let hits = scan_content("API_KEY: 9f8Xq2Lp7Zr4Tn1Bv6Kd3Mw\n", &bundled_rules());
+        let hits = scan_content("API_KEY: 9f8Xq2Lp7Zr4Tn1Bv6Kd3Mw\n", &bundled_rules()); // gitleaks:allow synthetic test fixture
         assert!(hits.iter().any(|h| h.rule == "generic-secret-assignment"));
     }
 
