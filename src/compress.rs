@@ -48,6 +48,40 @@ pub fn compress_bash_output(cmd: &str, s: &str) -> String {
     let base = compress_output(s);
     let lines: Vec<&str> = base.lines().collect();
 
+    // `cargo metadata`: a single huge JSON blob compact_json cannot shrink — summarize
+    // it to package count + workspace members instead of letting 500k tokens through.
+    if is_cargo_metadata_command(cmd) {
+        let out = compress_cargo_metadata(&base);
+        if out.len() < base.len() {
+            return out;
+        }
+    }
+
+    // `cargo tree`: highly repetitive (subtrees repeat, marked `(*)`); collapse to the
+    // unique crate set.
+    if is_cargo_tree_command(cmd) {
+        let out = compress_cargo_tree(&lines);
+        if out.len() < base.len() {
+            return out;
+        }
+    }
+
+    // Plain grep: strip the indentation in matched content and group by file.
+    if is_grep_command(cmd) {
+        let out = compress_grep(&lines);
+        if out.len() < base.len() {
+            return out;
+        }
+    }
+
+    // ps: keep the header + busiest processes by %CPU.
+    if is_ps_command(cmd) {
+        let out = compress_ps(&lines);
+        if out.len() < base.len() {
+            return out;
+        }
+    }
+
     // Cargo: always try (it filters signal from noise regardless of total length)
     if is_cargo_output(&lines) {
         let cargo_out = compress_cargo(&lines);
@@ -255,41 +289,73 @@ fn compress_git_log(lines: &[&str]) -> String {
     )
 }
 
+/// Compact `git status` (verbose or `--short`/porcelain) to one terse
+/// `CODE path` line per change (`M`/`A`/`D`/`R`/`T`/`C`/`??`). Verbose
+/// `modified:   file` lines are far longer than the porcelain form, so this
+/// rewrites them; porcelain lines pass through; the prose/headers are dropped.
 fn compress_git_status(lines: &[&str]) -> String {
-    let mut modified = 0usize;
-    let mut added = 0usize;
-    let mut deleted = 0usize;
-    let mut untracked = 0usize;
-    let mut renamed = 0usize;
-    let mut examples = Vec::new();
+    const VERBOSE: &[(&str, &str)] = &[
+        ("modified:", "M"),
+        ("new file:", "A"),
+        ("deleted:", "D"),
+        ("renamed:", "R"),
+        ("typechange:", "T"),
+        ("copied:", "C"),
+        ("both modified:", "U"),
+    ];
+    let mut out: Vec<String> = Vec::new();
+    let mut in_untracked = false;
     for line in lines {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+        let t = line.trim();
+        if t.is_empty() {
             continue;
         }
-        let code = trimmed.chars().take(2).collect::<String>();
-        match code.as_str() {
-            "??" => untracked += 1,
-            " D" | "D " | "DD" => deleted += 1,
-            " A" | "A " => added += 1,
-            " R" | "R " => renamed += 1,
-            _ if code.contains('M') => modified += 1,
-            _ => {}
+        // Section markers from verbose output.
+        if t.starts_with("Untracked files") {
+            in_untracked = true;
+            continue;
         }
-        if examples.len() < 5 {
-            examples.push(trimmed.to_string());
+        // Hint lines like `(use "git add"...)` sit inside a section — skip them
+        // without changing the section state (untracked filenames follow).
+        if t.starts_with('(') {
+            continue;
+        }
+        if t.starts_with("Changes ")
+            || t.starts_with("On branch")
+            || t.starts_with("Your branch")
+            || t.starts_with("no changes")
+            || t.starts_with("nothing to commit")
+            || t.contains("working tree clean")
+        {
+            in_untracked = false;
+            continue;
+        }
+        // Verbose "modified:   file" → "M file".
+        if let Some((_, code)) = VERBOSE.iter().find(|(kw, _)| t.starts_with(kw)) {
+            let file = t.split_once(':').map(|x| x.1).unwrap_or("").trim();
+            out.push(format!("{code} {file}"));
+            continue;
+        }
+        // Porcelain ("?? file", " M file", "MM file"): already terse — keep.
+        let code2: String = t.chars().take(2).collect();
+        let is_porcelain = code2 == "??"
+            || code2
+                .chars()
+                .all(|c| matches!(c, 'M' | 'A' | 'D' | 'R' | 'C' | 'U' | 'T' | ' '))
+                && code2 != "  ";
+        if is_porcelain && t.len() >= 3 {
+            out.push(t.to_string());
+            continue;
+        }
+        // Bare filename under "Untracked files:".
+        if in_untracked {
+            out.push(format!("?? {t}"));
         }
     }
-    if modified + added + deleted + untracked + renamed == 0 {
-        return lines.join("\n");
+    if out.is_empty() {
+        return "git status: clean".to_string();
     }
-    let mut out =
-        format!("git status: M={modified} A={added} D={deleted} R={renamed} ?={untracked}");
-    if !examples.is_empty() {
-        out.push_str("\nexamples:\n");
-        out.push_str(&examples.join("\n"));
-    }
-    out
+    out.join("\n")
 }
 
 fn compress_git_diff(lines: &[&str]) -> String {
@@ -355,9 +421,226 @@ fn compress_path_listing(lines: &[&str]) -> String {
     }
 
     let total_files: usize = counts.values().sum();
-    let mut out = vec![format!("{} files in {} dirs:", total_files, counts.len())];
-    for (dir, count) in counts {
+    // Collapse to top-level directories (first path component) and show only the
+    // busiest few — a full per-leaf-dir listing balloons on deep trees (e.g. a
+    // `find .` that descends into target/). This keeps the high-signal shape.
+    let mut top: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (dir, count) in &counts {
+        let head = dir
+            .trim_start_matches("./")
+            .split('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(".")
+            .to_string();
+        *top.entry(head).or_insert(0) += count;
+    }
+    let mut ranked: Vec<(String, usize)> = top.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    const MAX_DIRS: usize = 8;
+    let mut out = vec![format!(
+        "{} files across {} top-level dir(s):",
+        total_files,
+        ranked.len()
+    )];
+    for (dir, count) in ranked.iter().take(MAX_DIRS) {
         out.push(format!("{}/ ({})", dir, count));
+    }
+    if ranked.len() > MAX_DIRS {
+        out.push(format!("... +{} more dir(s)", ranked.len() - MAX_DIRS));
+    }
+    out.join("\n")
+}
+
+fn is_cargo_metadata_command(cmd: &str) -> bool {
+    cmd.contains("cargo metadata")
+}
+
+/// Summarize `cargo metadata` (a single multi-hundred-KB JSON blob) to the package
+/// count + workspace members. The full transitive metadata is almost never the
+/// signal an agent needs, and it otherwise passes through uncompressed.
+fn compress_cargo_metadata(s: &str) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(s.trim()) else {
+        return s.to_string();
+    };
+    let n_pkgs = v
+        .get("packages")
+        .and_then(|p| p.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let members: Vec<String> = v
+        .get("workspace_members")
+        .and_then(|m| m.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|m| m.as_str())
+                .map(|id| id.split([' ', '@']).next().unwrap_or(id).to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let root = v
+        .get("resolve")
+        .and_then(|r| r.get("root"))
+        .and_then(|r| r.as_str())
+        .map(|id| id.split([' ', '@']).next().unwrap_or(id).to_string());
+    let mut out = format!("cargo metadata: {n_pkgs} packages in the dependency graph");
+    if !members.is_empty() {
+        out.push_str(&format!("\nworkspace members: {}", members.join(", ")));
+    }
+    if let Some(root) = root {
+        out.push_str(&format!("\nroot: {root}"));
+    }
+    out
+}
+
+fn is_cargo_tree_command(cmd: &str) -> bool {
+    let t = cmd.trim();
+    t == "cargo tree" || t.starts_with("cargo tree ")
+}
+
+/// Collapse `cargo tree` to its unique crate set. The tree repeats whole subtrees
+/// (marked `(*)`) and draws box characters; the useful signal is which crates are
+/// in the graph.
+fn compress_cargo_tree(lines: &[&str]) -> String {
+    let mut crates: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for line in lines {
+        // Strip leading tree-drawing characters and whitespace.
+        let stripped = line.trim_start_matches([
+            ' ', '|', '`', '+', '-', '\u{2502}', '\u{251c}', '\u{2514}', '\u{2500}',
+        ]);
+        let stripped = stripped.trim();
+        if stripped.is_empty() {
+            continue;
+        }
+        // A crate line looks like "name v1.2.3" or "name v1.2.3 (proc-macro)".
+        let mut it = stripped.split_whitespace();
+        if let (Some(name), Some(ver)) = (it.next(), it.next()) {
+            if ver.starts_with('v') && name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            {
+                crates.insert(format!("{name} {ver}"));
+            }
+        }
+    }
+    if crates.is_empty() {
+        return lines.join("\n");
+    }
+    const MAX_SHOWN: usize = 15;
+    let total = crates.len();
+    let shown: Vec<String> = crates.into_iter().take(MAX_SHOWN).collect();
+    let suffix = if total > MAX_SHOWN {
+        format!(" (+{} more)", total - MAX_SHOWN)
+    } else {
+        String::new()
+    };
+    format!(
+        "cargo tree: {} unique crates\n{}{}",
+        total,
+        shown.join(", "),
+        suffix
+    )
+}
+
+fn is_ps_command(cmd: &str) -> bool {
+    let t = cmd.trim();
+    t == "ps" || t.starts_with("ps ")
+}
+
+/// Compact `ps` output to the header + the busiest processes by %CPU. A raw
+/// `ps aux` is hundreds of lines dominated by idle kernel threads; the signal is
+/// what is actually consuming the machine.
+fn compress_ps(lines: &[&str]) -> String {
+    const TOP: usize = 4;
+    const WIDTH: usize = 85;
+    let trunc = |l: &str| -> String {
+        if l.chars().count() > WIDTH {
+            format!("{}…", l.chars().take(WIDTH).collect::<String>())
+        } else {
+            l.to_string()
+        }
+    };
+    let nonempty: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    if nonempty.len() <= TOP + 1 {
+        return nonempty
+            .iter()
+            .map(|l| trunc(l))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let header = nonempty[0];
+    // %CPU is the 3rd whitespace column in `ps aux` (USER PID %CPU ...).
+    let cpu_of = |l: &str| -> f32 {
+        l.split_whitespace()
+            .nth(2)
+            .and_then(|c| c.parse::<f32>().ok())
+            .unwrap_or(0.0)
+    };
+    let mut rows: Vec<&str> = nonempty[1..].to_vec();
+    rows.sort_by(|a, b| {
+        cpu_of(b)
+            .partial_cmp(&cpu_of(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut out = vec![trunc(header)];
+    for r in rows.iter().take(TOP) {
+        out.push(trunc(r));
+    }
+    out.push(format!(
+        "... {} more process(es) (sorted by %CPU, top {} shown)",
+        rows.len() - TOP,
+        TOP
+    ));
+    out.join("\n")
+}
+
+fn is_grep_command(cmd: &str) -> bool {
+    let t = cmd.trim();
+    // Plain grep only — not `git grep` (handled elsewhere) or ripgrep (rg.toml).
+    (t == "grep" || t.starts_with("grep ")) && !t.starts_with("grep -V")
+}
+
+/// Compact plain grep output: drop blank lines, strip the indentation inside each
+/// `path:line:CONTENT` match, and cap the number of lines.
+fn compress_grep(lines: &[&str]) -> String {
+    const MAX_MATCHES: usize = 50;
+    let mut out: Vec<String> = Vec::new();
+    let mut shown = 0usize;
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let colons: Vec<usize> = line.match_indices(':').map(|(i, _)| i).collect();
+        let mut split_idx = None;
+        for &idx in &colons {
+            let prev_idx = colons.iter().rev().copied().find(|&p| p < idx);
+            let start = prev_idx.map(|p| p + 1).unwrap_or(0);
+            let part = &line[start..idx];
+            if !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()) {
+                split_idx = Some(idx);
+                break;
+            }
+        }
+        let split_idx = split_idx.or_else(|| colons.last().copied());
+
+        let compact = match split_idx {
+            Some(idx) => {
+                let (head, content) = line.split_at(idx + 1);
+                format!("{head}{}", content.trim())
+            }
+            None => line.trim().to_string(),
+        };
+        if shown >= MAX_MATCHES {
+            out.push(format!("... +{} more match line(s)", lines.len() - shown));
+            break;
+        }
+        out.push(compact);
+        shown += 1;
+    }
+    if out.is_empty() {
+        return "grep: no matches".to_string();
     }
     out.join("\n")
 }
@@ -860,9 +1143,15 @@ pub fn run_command_and_compress(command_str: &str) -> Result<i32> {
     let stdout_raw = String::from_utf8_lossy(&output.stdout);
     let stderr_raw = String::from_utf8_lossy(&output.stderr);
 
-    // Apply tokenix compression to stdout and stderr
+    // Apply tokenix compression to stdout and stderr. Skip an empty stderr: running
+    // the filter on "" would emit its `on_empty` message (e.g. "git status: clean")
+    // to stderr even when stdout has real content — misleading and noisy.
     let stdout_compressed = compress_bash_output(command_str, &stdout_raw);
-    let stderr_compressed = compress_bash_output(command_str, &stderr_raw);
+    let stderr_compressed = if stderr_raw.trim().is_empty() {
+        String::new()
+    } else {
+        compress_bash_output(command_str, &stderr_raw)
+    };
 
     // Print to standard streams
     print!("{}", stdout_compressed);
@@ -906,6 +1195,87 @@ mod tests {
     fn strips_ansi_colors() {
         assert_eq!(strip_ansi("\x1b[32mOK\x1b[0m"), "OK");
         assert_eq!(strip_ansi("\x1b[1;31mError\x1b[0m: bad"), "Error: bad");
+    }
+
+    #[test]
+    fn git_status_verbose_to_porcelain() {
+        let raw = "On branch main\nYour branch is up to date with 'origin/main'.\n\nChanges not staged for commit:\n  (use \"git add <file>...\")\n\tmodified:   src/main.rs\n\tdeleted:    old.rs\n\nUntracked files:\n  (use \"git add <file>...\")\n\tnew.rs\n";
+        let lines: Vec<&str> = raw.lines().collect();
+        let out = compress_git_status(&lines);
+        assert_eq!(out, "M src/main.rs\nD old.rs\n?? new.rs");
+        // Clean repo → terse marker.
+        let clean = ["On branch main", "nothing to commit, working tree clean"];
+        assert_eq!(compress_git_status(&clean), "git status: clean");
+    }
+
+    #[test]
+    fn grep_strips_indentation() {
+        let lines = [
+            "src/a.rs:10:    let x = 5;",
+            "src/b.rs:2:        fn main() {}",
+            "",
+        ];
+        let out = compress_grep(&lines);
+        assert_eq!(out, "src/a.rs:10:let x = 5;\nsrc/b.rs:2:fn main() {}");
+    }
+
+    #[test]
+    fn cargo_metadata_summarized() {
+        let json = r#"{"packages":[{"name":"a","version":"1.0.0"},{"name":"b","version":"2.0.0"}],"workspace_members":["tokenix 0.1.0 (path+file:///x)"],"resolve":{"root":"tokenix 0.1.0 (path+file:///x)"}}"#;
+        let out = compress_cargo_metadata(json);
+        assert!(out.contains("2 packages"));
+        assert!(out.contains("workspace members: tokenix"));
+        assert!(out.len() < json.len());
+    }
+
+    #[test]
+    fn cargo_tree_dedupes() {
+        let lines = [
+            "tokenix v0.1.0",
+            "├── anyhow v1.0.0",
+            "│   └── anyhow v1.0.0 (*)",
+            "└── serde v1.0.0",
+        ];
+        let out = compress_cargo_tree(&lines);
+        assert!(out.starts_with("cargo tree: "));
+        assert!(out.contains("anyhow v1.0.0"));
+        assert!(out.contains("serde v1.0.0"));
+        // anyhow appears twice in input but once in the unique set.
+        assert_eq!(out.matches("anyhow v1.0.0").count(), 1);
+    }
+
+    #[test]
+    fn ps_keeps_top_by_cpu() {
+        let lines = [
+            "USER PID %CPU %MEM CMD",
+            "u 1 0.0 0.1 idle",
+            "u 2 99.0 5.0 hot",
+            "u 3 0.1 0.2 warm",
+            "u 4 0.0 0.0 idle2",
+            "u 5 0.0 0.0 idle3",
+            "u 6 0.0 0.0 idle4",
+        ];
+        let out = compress_ps(&lines);
+        let hot_pos = out.find("hot").expect("busiest process kept");
+        let idle_pos = out.find("idle3");
+        // The 99% process is kept and ranks above the idle ones (which may be dropped).
+        assert!(out.starts_with("USER PID"));
+        assert!(idle_pos.is_none() || hot_pos < idle_pos.unwrap());
+    }
+
+    #[test]
+    fn path_listing_collapses_to_top_level() {
+        let lines = [
+            "./src/a.rs",
+            "./src/b.rs",
+            "./target/debug/x.rs",
+            "./target/debug/y.rs",
+            "./benchmark/c.rs",
+        ];
+        let out = compress_path_listing(&lines);
+        assert!(out.contains("5 files across"));
+        assert!(out.contains("target/ (2)") || out.contains("src/ (2)"));
+        assert!(out.len() < lines.join("\n").len());
     }
 
     #[test]
@@ -1073,9 +1443,13 @@ test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
         .join("\n");
 
         let out = compress_bash_output("ls -R", &input);
-        assert!(out.contains("4 files in 2 dirs"), "output: {}", out);
+        assert!(
+            out.contains("4 files across 2 top-level dir(s)"),
+            "output: {}",
+            out
+        );
         assert!(out.contains("src/ (3)"), "output: {}", out);
-        assert!(out.contains("benchmark/samples/ (1)"), "output: {}", out);
+        assert!(out.contains("benchmark/ (1)"), "output: {}", out);
     }
 
     #[test]
