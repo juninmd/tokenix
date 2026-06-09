@@ -534,9 +534,14 @@ pub fn graph_impact(
 
 /// Load all graph edges as (caller_id, caller_name, callee_id, callee_name) tuples.
 /// Used for circular dependency detection.
-pub fn load_all_graph_edges(conn: &Connection) -> Result<Vec<(i64, String, i64, String)>> {
+/// Graph edge enriched with each endpoint's symbol name and `path:line` location.
+/// Tuple order: (caller_id, caller_name, caller_loc, callee_id, callee_name, callee_loc).
+pub type GraphEdgeRow = (i64, String, String, i64, String, String);
+
+pub fn load_all_graph_edges(conn: &Connection) -> Result<Vec<GraphEdgeRow>> {
     let mut stmt = conn.prepare(
-        "SELECT e.caller_chunk_id, from_node.name, e.callee_chunk_id, to_node.name
+        "SELECT e.caller_chunk_id, from_node.name, from_node.path, from_node.start_line,
+                e.callee_chunk_id, to_node.name, to_node.path, to_node.start_line
          FROM graph_edges e
          JOIN graph_nodes from_node ON from_node.chunk_id = e.caller_chunk_id
          JOIN graph_nodes to_node ON to_node.chunk_id = e.callee_chunk_id",
@@ -545,8 +550,10 @@ pub fn load_all_graph_edges(conn: &Connection) -> Result<Vec<(i64, String, i64, 
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, String>(3)?,
+            format!("{}:{}", row.get::<_, String>(2)?, row.get::<_, i64>(3)?),
+            row.get::<_, i64>(4)?,
+            row.get::<_, String>(5)?,
+            format!("{}:{}", row.get::<_, String>(6)?, row.get::<_, i64>(7)?),
         ))
     })?;
     Ok(rows.filter_map(|r| r.ok()).collect())

@@ -145,11 +145,12 @@ fn pagerank(node_ids: &[i64], edges: &[(i64, i64)]) -> Vec<(i64, f32)> {
 
 /// Detect circular dependencies using Tarjan's SCC algorithm.
 /// Returns cycles (SCCs with size > 1) as lists of symbol names.
-pub fn detect_cycles(edges: &[(i64, String, i64, String)]) -> Vec<Vec<String>> {
+pub fn detect_cycles(edges: &[store::GraphEdgeRow]) -> Vec<Vec<String>> {
     let mut adj: HashMap<i64, Vec<i64>> = HashMap::new();
     let mut node_names: HashMap<i64, String> = HashMap::new();
+    let mut node_labels: HashMap<i64, String> = HashMap::new();
 
-    for (caller_id, caller_name, callee_id, callee_name) in edges {
+    for (caller_id, caller_name, caller_loc, callee_id, callee_name, callee_loc) in edges {
         adj.entry(*caller_id).or_default().push(*callee_id);
         node_names
             .entry(*caller_id)
@@ -157,6 +158,12 @@ pub fn detect_cycles(edges: &[(i64, String, i64, String)]) -> Vec<Vec<String>> {
         node_names
             .entry(*callee_id)
             .or_insert_with(|| callee_name.clone());
+        node_labels
+            .entry(*caller_id)
+            .or_insert_with(|| format!("{caller_name} ({caller_loc})"));
+        node_labels
+            .entry(*callee_id)
+            .or_insert_with(|| format!("{callee_name} ({callee_loc})"));
     }
 
     let mut index_counter: usize = 0;
@@ -241,11 +248,22 @@ pub fn detect_cycles(edges: &[(i64, String, i64, String)]) -> Vec<Vec<String>> {
     }
 
     sccs.into_iter()
+        // Drop homonym artifacts: an SCC whose nodes all share one normalized
+        // name is fabricated by name-based reference resolution linking same-named
+        // symbols across files, not a real dependency cycle.
+        .filter(|scc| {
+            let mut names = scc
+                .iter()
+                .map(|id| node_names.get(id).map(|n| normalize_name(n)));
+            let first = names.next().flatten();
+            !names.all(|n| n == first)
+        })
         .map(|scc| {
             scc.into_iter()
                 .map(|id| {
-                    node_names
-                        .remove(&id)
+                    node_labels
+                        .get(&id)
+                        .cloned()
                         .unwrap_or_else(|| format!("node_{id}"))
                 })
                 .collect()
@@ -932,6 +950,52 @@ mod tests {
         assert_eq!(
             aliases.get("deleteUser").map(String::as_str),
             Some("deleteUser")
+        );
+    }
+
+    fn edge(
+        from_id: i64,
+        from: &str,
+        from_loc: &str,
+        to_id: i64,
+        to: &str,
+        to_loc: &str,
+    ) -> store::GraphEdgeRow {
+        (
+            from_id,
+            from.to_string(),
+            from_loc.to_string(),
+            to_id,
+            to.to_string(),
+            to_loc.to_string(),
+        )
+    }
+
+    #[test]
+    fn detect_cycles_reports_real_cycle_with_locations() {
+        // a -> b -> a, distinct symbols: a real dependency cycle.
+        let edges = vec![
+            edge(1, "a", "src/a.rs:1", 2, "b", "src/b.rs:1"),
+            edge(2, "b", "src/b.rs:1", 1, "a", "src/a.rs:1"),
+        ];
+        let cycles = detect_cycles(&edges);
+        assert_eq!(cycles.len(), 1, "expected one cycle: {cycles:?}");
+        let mut members = cycles[0].clone();
+        members.sort();
+        assert_eq!(members, vec!["a (src/a.rs:1)", "b (src/b.rs:1)"]);
+    }
+
+    #[test]
+    fn detect_cycles_drops_homonym_artifact() {
+        // Two same-named symbols in different files, linked by name-based
+        // resolution. This is not a real cycle and must be filtered out.
+        let edges = vec![
+            edge(1, "now_ts", "src/a.rs:1", 2, "now_ts", "src/b.rs:1"),
+            edge(2, "now_ts", "src/b.rs:1", 1, "now_ts", "src/a.rs:1"),
+        ];
+        assert!(
+            detect_cycles(&edges).is_empty(),
+            "homonym SCC should be dropped"
         );
     }
 }
