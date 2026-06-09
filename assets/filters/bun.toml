@@ -1,0 +1,66 @@
+[filters.bun]
+description = "Compact bun command output"
+match_command = "^bun\\s+(run|test|install|add|remove|pm|x|build|dev)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\d+ packages",
+  "^\\s*installed",
+  "^\\s*removed",
+  "^\\s*cached",
+  "^\\s*resolved",
+  "^\\s*fetching",
+  "^\\s*downloading",
+  "^\\s*extracting",
+  "^\\s*linking",
+  "^\\s*done",
+  "^\\s*elapsed",
+]
+keep_lines_matching = [
+  "error",
+  "ERROR",
+  "fail",
+  "FAIL",
+  "panic",
+  "warning",
+  "WARNING",
+  "WARN",
+]
+max_lines = 40
+on_empty = "bun: ok"
+replace_patterns = [
+  ["bun v[\\d.]+", "bun v<version>"],
+  ["\\d+\\.\\d+s", "<duration>"],
+  ["\\d+\\.\\d+ms", "<duration>"],
+  ["[a-z0-9_-]+@[\\d.]+", "<package>@<version>"],
+]
+extract_sections = [
+  { start_pattern = "error:", end_pattern = "^\\s*$", include_markers = true, max_matches = 3 },
+  { start_pattern = "FAIL", end_pattern = "^\\s*$", include_markers = true, max_matches = 5 },
+]
+deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
+token_budget = 1500
+
+[[tests.bun]]
+name = "install clean"
+input = """
+bun install v1.1.0
+installed 142 packages in 1.2s
+elapsed 1.5s
+"""
+expected = "bun: ok"
+
+[[tests.bun]]
+name = "test failure"
+input = """
+$ bun test
+running tests...
+test/add.test.ts:12:3: expected 3 but got 4
+  FAIL test/add.test.ts [FAILED]
+
+1 fail
+0 pass
+"""
+expected = """
+  FAIL test/add.test.ts [FAILED]
+1 fail"""

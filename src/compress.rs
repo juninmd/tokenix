@@ -118,6 +118,51 @@ pub fn compress_bash_output(cmd: &str, s: &str) -> String {
         }
     }
 
+    // Kubernetes: compress kubectl output
+    if is_kubectl_command(cmd) {
+        let kube_out = compress_kubectl(&lines);
+        if kube_out.len() < base.len() {
+            return kube_out;
+        }
+    }
+
+    // npm/yarn/pnpm/bun: compress package manager output
+    if is_pkg_manager_command(cmd) {
+        let pkg_out = compress_pkg_manager(&lines);
+        if pkg_out.len() < base.len() {
+            return pkg_out;
+        }
+    }
+
+    // Terraform: compress terraform output
+    if is_terraform_command(cmd) {
+        let tf_out = compress_terraform(&lines);
+        if tf_out.len() < base.len() {
+            return tf_out;
+        }
+    }
+
+    // Docker compose: compress compose output
+    if is_docker_compose_command(cmd) {
+        let dc_out = compress_docker_compose(&lines);
+        if dc_out.len() < base.len() {
+            return dc_out;
+        }
+    }
+
+    // Make/ninja/cmake: compress build system output
+    if is_build_command(cmd) {
+        let build_out = compress_build(&lines);
+        if build_out.len() < base.len() {
+            return build_out;
+        }
+    }
+
+    // Generic: aggressive truncation for very long output
+    if lines.len() > BASH_MAX_LINES * 2 {
+        return aggressive_truncate(&lines);
+    }
+
     if lines.len() <= BASH_MAX_LINES {
         return base;
     }
@@ -392,6 +437,298 @@ fn compress_git_diff(lines: &[&str]) -> String {
         "git diff: files={files} hunks={hunks} +{additions} -{deletions}\n{}",
         keep.join("\n")
     )
+}
+
+/// Aggressive truncation for very long output - keeps only errors, head, tail
+fn aggressive_truncate(lines: &[&str]) -> String {
+    const HEAD_KEEP: usize = 20;
+    const TAIL_KEEP: usize = 10;
+    const MAX_TOTAL: usize = HEAD_KEEP + TAIL_KEEP + 1;
+
+    if lines.len() <= MAX_TOTAL {
+        return lines.join("\n");
+    }
+
+    // Priority: error/warning lines
+    let mut priority = Vec::new();
+    let mut other_head = Vec::new();
+    let mut other_tail = Vec::new();
+
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        let is_priority = t.starts_with("error")
+            || t.starts_with("warning")
+            || t.starts_with("FAIL")
+            || t.starts_with("panic")
+            || t.contains("error[")
+            || t.contains("warning[")
+            || t.contains("ERROR")
+            || t.contains("FAILED");
+
+        if is_priority && priority.len() < 50 {
+            priority.push(line.to_string());
+        } else if i < HEAD_KEEP {
+            other_head.push(line.to_string());
+        } else if i >= lines.len() - TAIL_KEEP {
+            other_tail.push(line.to_string());
+        }
+    }
+
+    let mut result = Vec::new();
+    result.extend(other_head);
+    if !priority.is_empty() {
+        result.push("[PRIORITY LINES]".to_string());
+        result.extend(priority);
+    }
+    result.push(format!(
+        "[... {} lines omitted ...]",
+        lines.len() - result.len() - other_tail.len()
+    ));
+    result.extend(other_tail);
+    result.join("\n")
+}
+
+fn is_kubectl_command(cmd: &str) -> bool {
+    let t = cmd.trim();
+    t == "kubectl" || t.starts_with("kubectl ") || t == "k" || t.starts_with("k ")
+}
+
+fn compress_kubectl(lines: &[&str]) -> String {
+    // kubectl get: tabular - keep header + first/last few rows
+    // kubectl describe: verbose - summarize
+    // kubectl logs: similar to plain logs
+    let first_nonempty = lines.iter().find(|l| !l.trim().is_empty());
+    if let Some(first) = first_nonempty {
+        let t = first.trim();
+        if t.starts_with("NAME") && t.contains("READY") {
+            // kubectl get pods/nodes/etc - tabular
+            let header = first.to_string();
+            let data: Vec<&str> = lines
+                .iter()
+                .skip(1)
+                .filter(|l| !l.trim().is_empty())
+                .copied()
+                .collect();
+            if data.len() <= 20 {
+                return lines.join("\n");
+            }
+            let mut out = vec![header];
+            out.extend(data.iter().take(10).map(|s| s.to_string()));
+            out.push(format!("... {} more rows ...", data.len() - 10));
+            out.extend(data.iter().rev().take(5).rev().map(|s| s.to_string()));
+            return out.join("\n");
+        }
+        if t.starts_with("Name:") || t.starts_with("Namespace:") {
+            // kubectl describe - very verbose, summarize
+            return "kubectl describe: <resource details> (use filter for full output)".to_string();
+        }
+    }
+    lines.join("\n")
+}
+
+fn is_pkg_manager_command(cmd: &str) -> bool {
+    let t = cmd.trim();
+    t.starts_with("npm ")
+        || t.starts_with("yarn ")
+        || t.starts_with("pnpm ")
+        || t.starts_with("bun ")
+        || t.starts_with("cargo ")
+        || t.starts_with("pip ")
+        || t.starts_with("uv ")
+        || t.starts_with("composer ")
+        || t.starts_with("gem ")
+        || t.starts_with("go ")
+        || t.starts_with("gradle ")
+        || t.starts_with("maven ")
+        || t.starts_with("mvn ")
+        || t.starts_with("dotnet ")
+}
+
+fn compress_pkg_manager(lines: &[&str]) -> String {
+    // Generic package manager output: progress bars, downloading, extracting
+    // Keep errors, summary, final status
+    let mut result = Vec::new();
+    let mut in_progress = false;
+
+    for line in lines {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let is_progress = t.starts_with("Progress:")
+            || t.starts_with("Downloading")
+            || t.starts_with("Extracting")
+            || t.starts_with("Installing")
+            || t.starts_with("Building")
+            || t.starts_with("Compiling")
+            || t.starts_with("Resolving")
+            || t.starts_with("Fetching")
+            || t.contains("█")
+            || t.contains("░")
+            || t.contains("▓")
+            || t.chars().filter(|c| *c == '=' || *c == '>').count() > 10;
+
+        if is_progress {
+            if !in_progress {
+                result.push("[package operations...]".to_string());
+                in_progress = true;
+            }
+        } else {
+            in_progress = false;
+            let is_important = t.starts_with("error")
+                || t.starts_with("warning")
+                || t.starts_with("FAIL")
+                || t.starts_with("Success")
+                || t.starts_with("Done")
+                || t.starts_with("added")
+                || t.starts_with("removed")
+                || t.starts_with("updated")
+                || t.contains("vulnerab")
+                || t.contains("audit");
+            if is_important || result.len() < 30 {
+                result.push(line.to_string());
+            }
+        }
+    }
+    result.join("\n")
+}
+
+fn is_terraform_command(cmd: &str) -> bool {
+    let t = cmd.trim();
+    t.starts_with("terraform ")
+}
+
+fn compress_terraform(lines: &[&str]) -> String {
+    // Terraform: very verbose, keep plan summary, errors, apply status
+    let mut result = Vec::new();
+    let mut in_plan = false;
+
+    for line in lines {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.starts_with("Plan:")
+            || t.starts_with("Apply complete")
+            || t.starts_with("Destroy complete")
+        {
+            result.push(line.to_string());
+            continue;
+        }
+        if t.starts_with("Error:") || t.starts_with("Warning:") {
+            result.push(line.to_string());
+            continue;
+        }
+        if t.starts_with("+ ") || t.starts_with("~ ") || t.starts_with("- ") || t.starts_with("/ ")
+        {
+            if !in_plan {
+                result.push("[resource changes...]".to_string());
+                in_plan = true;
+            }
+        } else {
+            in_plan = false;
+        }
+        if result.len() < 40 {
+            result.push(line.to_string());
+        }
+    }
+    result.join("\n")
+}
+
+fn is_docker_compose_command(cmd: &str) -> bool {
+    let t = cmd.trim();
+    t.starts_with("docker-compose ") || t.starts_with("docker compose ")
+}
+
+fn compress_docker_compose(lines: &[&str]) -> String {
+    // Docker compose: container status, logs
+    let mut result = Vec::new();
+    for line in lines {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.starts_with("Creating")
+            || t.starts_with("Starting")
+            || t.starts_with("Stopping")
+            || t.starts_with("Removing")
+            || t.starts_with("Building")
+            || t.starts_with("Pulling")
+        {
+            result.push("[container ops...]".to_string());
+        } else if t.starts_with("error") || t.starts_with("Error") || t.starts_with("FAIL") {
+            result.push(line.to_string());
+        } else if result.len() < 30 {
+            result.push(line.to_string());
+        }
+    }
+    result.join("\n")
+}
+
+fn is_build_command(cmd: &str) -> bool {
+    let t = cmd.trim();
+    t.starts_with("make ")
+        || t.starts_with("ninja ")
+        || t.starts_with("cmake ")
+        || t.starts_with("bazel ")
+        || t.starts_with("sbt ")
+        || t.starts_with("mvn ")
+        || t.starts_with("gradle ")
+        || t.starts_with("cargo build")
+        || t.starts_with("cargo test")
+        || t.starts_with("go build")
+        || t.starts_with("go test")
+        || t.starts_with("dotnet build")
+        || t.starts_with("dotnet test")
+}
+
+fn compress_build(lines: &[&str]) -> String {
+    // Build systems: lots of "Compiling", "Building", "Linking" lines
+    // Keep errors, warnings, final status
+    let mut result = Vec::new();
+    let mut in_compile = false;
+
+    for line in lines {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let is_compile = t.starts_with("Compiling")
+            || t.starts_with("Building")
+            || t.starts_with("Linking")
+            || t.starts_with("Generating")
+            || t.starts_with("Running")
+            || t.starts_with("CC ")
+            || t.starts_with("CXX ")
+            || t.starts_with("LD ")
+            || t.starts_with("AR ")
+            || t.starts_with("[")
+                && (t.contains("%")
+                    || t.contains("/") && t.chars().filter(|c| c.is_ascii_digit()).count() > 3);
+
+        if is_compile {
+            if !in_compile {
+                result.push("[build steps...]".to_string());
+                in_compile = true;
+            }
+        } else {
+            in_compile = false;
+            let is_important = t.starts_with("error")
+                || t.starts_with("warning")
+                || t.starts_with("FAIL")
+                || t.starts_with("Error")
+                || t.starts_with("Warning")
+                || t.starts_with("Finished")
+                || t.starts_with("Built")
+                || t.starts_with("Build complete")
+                || t.starts_with("Build failed")
+                || t.contains("test result:");
+            if is_important || result.len() < 50 {
+                result.push(line.to_string());
+            }
+        }
+    }
+    result.join("\n")
 }
 
 fn compress_path_listing(lines: &[&str]) -> String {
@@ -669,7 +1006,96 @@ pub fn compress_output(s: &str) -> String {
     let s = strip_ansi(s);
     let s = remove_emojis(&s);
     let s = collapse_blank_lines(&s);
-    group_repeated_lines(&s)
+    let s = group_repeated_lines(&s);
+
+    // Additional generic aggressive compression
+    generic_aggressive_compress(&s)
+}
+
+fn generic_aggressive_compress(s: &str) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    if lines.len() <= 50 {
+        return s.to_string();
+    }
+
+    // Detect and compress common patterns
+    let mut result: Vec<String> = Vec::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i];
+
+        // Skip progress bars and spinners
+        if line.contains("█")
+            || line.contains("░")
+            || line.contains("▓")
+            || line
+                .chars()
+                .filter(|c| *c == '=' || *c == '>' || *c == '#')
+                .count()
+                > 15
+        {
+            if result.is_empty() || !result.last().unwrap().contains("progress") {
+                result.push("[progress bar omitted]".to_string());
+            }
+            i += 1;
+            continue;
+        }
+
+        // Collapse repeated similar lines (download, extracting, etc.)
+        let prefixes = [
+            "Downloading ",
+            "Extracting ",
+            "Installing ",
+            "Fetching ",
+            "Resolving ",
+            "Building ",
+            "Compiling ",
+            "Generating ",
+            "Running ",
+            "Testing ",
+            "Checking ",
+            "Verifying ",
+        ];
+        let mut matched_prefix = None;
+        for prefix in &prefixes {
+            if line.starts_with(prefix) {
+                matched_prefix = Some(*prefix);
+                break;
+            }
+        }
+        if let Some(prefix) = matched_prefix {
+            let mut count = 1;
+            let mut j = i + 1;
+            while j < lines.len() && lines[j].starts_with(prefix) && count < 100 {
+                count += 1;
+                j += 1;
+            }
+            if count >= 3 {
+                result.push(format!("{} ({} similar lines)", line, count - 1));
+                i = j;
+                continue;
+            }
+        }
+
+        result.push(line.to_string());
+        i += 1;
+    }
+
+    // If still too long, apply head/tail truncation
+    if result.len() > 100 {
+        const HEAD: usize = 40;
+        const TAIL: usize = 20;
+        if result.len() > HEAD + TAIL {
+            let omitted = result.len() - HEAD - TAIL;
+            let mut truncated = result[..HEAD].to_vec();
+            truncated.push(format!("[... {} lines omitted ...]", omitted));
+            truncated.extend(result[result.len() - TAIL..].to_vec());
+            return truncated.join("\n");
+        }
+    }
+
+    result.join("\n")
 }
 
 /// Compact pretty-printed JSON (pure JSON or NDJSON) into single-line form.

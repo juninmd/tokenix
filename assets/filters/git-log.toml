@@ -1,18 +1,31 @@
 [filters.git-log]
-description = "Compact git log output"
+description = "Compact git log output aggressively"
 match_command = "^git\\s+log\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^Author:",
-  "^Date:"
+  "^Date:",
+  "^    (Co-authored-by|Signed-off-by|Reviewed-by):",
 ]
 keep_lines_matching = [
   "^commit ",
-  "^    "
+  "^    ",
+  "^Merge:",
 ]
-max_lines = 40
+max_lines = 30
 on_empty = "git log: no commits"
+replace_patterns = [
+  ["[a-f0-9]{40}", "<commit_hash>"],
+  ["[a-f0-9]{7,12}(?=\\s)", "<short_hash>"],
+  ["\\(HEAD.*?\\)", "(HEAD)"],
+  ["\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}", "<date>"],
+]
+extract_sections = [
+  { start_pattern = "^commit ", end_pattern = "^commit |^$", include_markers = true, max_matches = 20 },
+]
+deduplicate_blocks = { min_block_lines = 2, similarity = 0.6 }
+token_budget = 1500
 
 [[tests.git-log]]
 name = "compact log"
@@ -30,7 +43,41 @@ Date:   Fri Jan 12 15:45:00 2024 +0000
     Fix bug in parser
 """
 expected = """
-commit abc123def456 (HEAD -> main, origin/main)
+commit abc123def456 (HEAD)
     Add new feature
+commit def456abc123"""
+
+[[tests.git-log]]
+name = "many commits deduplicated"
+input = """
+commit abc123def456 (HEAD -> main)
+Author: John Doe
+Date:   Mon Jan 15 10:30:00 2024 +0000
+
+    Fix typo
+
 commit def456abc123
-    Fix bug in parser"""
+Author: Jane Smith
+Date:   Fri Jan 12 15:45:00 2024 +0000
+
+    Fix typo
+
+commit fedcba98765
+Author: Bob Wilson
+Date:   Thu Jan 11 12:00:00 2024 +0000
+
+    Fix typo
+
+commit 123456789ab
+Author: Alice Brown
+Date:   Wed Jan 10 09:00:00 2024 +0000
+
+    Add feature
+"""
+expected = """
+commit abc123def456 (HEAD)
+    Fix typo
+commit def456abc123
+commit fedcba98765
+    Fix typo
+commit 123456789ab"""

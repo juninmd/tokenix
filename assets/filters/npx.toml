@@ -1,5 +1,5 @@
 [filters.npx]
-description = "Compact npx output"
+description = "Compact npx output aggressively"
 match_command = "^npx\\b"
 strip_ansi = true
 strip_lines_matching = [
@@ -8,10 +8,36 @@ strip_lines_matching = [
   "^\\s*npm WARN",
   "^Need to install",
   "^installing",
-  "^installed"
+  "^installed",
+  "^\\s*\\d+ packages?",
+  "^\\s*in \\d+[a-z]*",
+  "audited \\d+ packages",
+  "found \\d+ vulnerabilities",
 ]
-max_lines = 50
+keep_lines_matching = [
+  "error",
+  "ERROR",
+  "fail",
+  "FAIL",
+  "Error:",
+  "created",
+  "Created",
+  "done",
+  "success",
+]
+max_lines = 40
 on_empty = "npx: done"
+replace_patterns = [
+  ["Need to install the following packages?:", "installing:"],
+  ["\\d+ packages? in \\d+[a-z]*", "<N> packages"],
+  ["create-react-app@[\\d.]+", "create-react-app@<version>"],
+  ["[a-z-]+@[\\d.]+", "<package>@<version>"],
+]
+extract_sections = [
+  { start_pattern = "Error:", end_pattern = "^\\s*$", include_markers = true, max_matches = 3 },
+]
+deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
+token_budget = 1500
 
 [[tests.npx]]
 name = "command runs"
@@ -22,8 +48,14 @@ Ok to proceed? (y) y
 ...
 Created react app in my-app
 """
+expected = "Created react app in my-app"
+
+[[tests.npx]]
+name = "error preserved"
+input = """
+Need to install the following packages:
+  some-package@1.0.0
+Error: EACCES: permission denied, mkdir '/usr/local/lib/node_modules/some-package'
+"""
 expected = """
-  create-react-app@5.0.1
-Ok to proceed? (y) y
-...
-Created react app in my-app"""
+Error: EACCES: permission denied, mkdir '/usr/local/lib/node_modules/some-package'"""

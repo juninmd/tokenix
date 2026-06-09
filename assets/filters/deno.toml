@@ -1,0 +1,73 @@
+[filters.deno]
+description = "Compact deno command output"
+match_command = "^deno\\s+(run|test|fmt|lint|check|install|compile|bundle|doc|info|cache|upgrade|vendor)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Download ",
+  "^\\s*Check ",
+  "^\\s*Compile ",
+  "^\\s*running \\d+ test",
+  "^\\s*test result: ok\\.",
+  "^\\s*ok\\s+",
+  "^\\s*std\\.fs\\.",
+  "^\\s*std\\.path\\.",
+]
+keep_lines_matching = [
+  "error",
+  "ERROR",
+  "fail",
+  "FAIL",
+  "panic",
+  "thread.*panicked",
+  "test result:",
+  "warning",
+  "WARNING",
+]
+max_lines = 50
+on_empty = "deno: ok"
+replace_patterns = [
+  ["https://deno\\.land/[^\\s]+", "https://deno.land/<module>"],
+  ["https://cdn\\.deno\\.land/[^\\s]+", "https://cdn.deno.land/<module>"],
+  ["file://[^\\s]+", "file://<path>"],
+  ["\\d+\\.\\d+s", "<duration>"],
+  ["\\d+\\.\\d+ms", "<duration>"],
+]
+extract_sections = [
+  { start_pattern = "^\\s*error\\[", end_pattern = "^\\s*$", include_markers = true, max_matches = 5 },
+  { start_pattern = "thread '.*' panicked", end_pattern = "^\\s*$", include_markers = true, max_matches = 3 },
+]
+deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
+token_budget = 2000
+
+[[tests.deno]]
+name = "test passes"
+input = """
+Check file:///home/user/project/main.ts
+running 3 tests
+test test_add ... ok
+test test_sub ... ok
+test test_mul ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+"""
+expected = "deno: ok"
+
+[[tests.deno]]
+name = "test failure preserved"
+input = """
+Check file:///home/user/project/main.ts
+running 3 tests
+test test_add ... ok
+test test_fail ... FAILED
+
+failures:
+    test_fail
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+"""
+expected = """
+test test_fail ... FAILED
+failures:
+    test_fail
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"""

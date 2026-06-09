@@ -37,6 +37,109 @@ pub struct FilterDef {
     #[serde(default)]
     #[allow(dead_code)]
     pub filter_stderr: bool,
+
+    /// Regex replacement rules: each entry is [pattern, replacement].
+    /// Applied after line filtering, before sizing. Enables custom transformations
+    /// like shortening paths, normalizing timestamps, etc.
+    #[serde(default)]
+    pub replace_patterns: Vec<[String; 2]>,
+
+    /// Extract only content between start/end markers (inclusive).
+    /// Useful for pulling out specific sections like test failures, error blocks, etc.
+    #[serde(default)]
+    pub extract_sections: Vec<ExtractSection>,
+
+    /// Semantic filter: keep only lines semantically relevant to a query.
+    /// Uses embeddings to score relevance. Requires daemon or in-process embed.
+    #[serde(default)]
+    pub semantic_filter: Option<SemanticFilterDef>,
+
+    /// Deduplicate similar blocks (not just exact lines).
+    /// Groups consecutive blocks by structural similarity.
+    #[serde(default)]
+    pub deduplicate_blocks: Option<DeduplicateBlocksDef>,
+
+    /// Intelligent JSON summarization beyond simple compaction.
+    /// Extracts key fields, summarizes arrays, preserves structure.
+    #[serde(default)]
+    pub summarize_json: Option<SummarizeJsonDef>,
+
+    /// Hard token budget: truncate intelligently to stay under token limit.
+    /// Prioritizes head/tail/errors/semantic relevance.
+    pub token_budget: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ExtractSection {
+    pub start_pattern: String,
+    pub end_pattern: String,
+    #[serde(default)]
+    pub include_markers: bool,
+    #[serde(default)]
+    pub max_matches: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SemanticFilterDef {
+    /// Query to score relevance against (e.g., "error", "test failure", "build output")
+    pub query: String,
+    /// Minimum cosine similarity to keep (0.0-1.0)
+    #[serde(default = "default_semantic_threshold")]
+    pub threshold: f32,
+    /// Always keep lines matching these patterns regardless of score
+    #[serde(default)]
+    pub always_keep: Vec<String>,
+    /// Model to use (defaults to index model)
+    pub model: Option<String>,
+}
+
+fn default_semantic_threshold() -> f32 {
+    0.3
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DeduplicateBlocksDef {
+    /// Minimum lines per block to consider for deduplication
+    #[serde(default = "default_min_block_lines")]
+    pub min_block_lines: usize,
+    /// Similarity threshold for block comparison (0.0-1.0)
+    #[serde(default = "default_block_similarity")]
+    pub similarity: f32,
+    /// Regex to identify block boundaries (default: blank line)
+    #[serde(default)]
+    pub block_delimiter: Option<String>,
+}
+
+fn default_min_block_lines() -> usize {
+    3
+}
+
+fn default_block_similarity() -> f32 {
+    0.8
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SummarizeJsonDef {
+    /// Max array elements to show before summarizing
+    #[serde(default = "default_max_array_items")]
+    pub max_array_items: usize,
+    /// Max object depth to traverse
+    #[serde(default = "default_max_depth")]
+    pub max_depth: usize,
+    /// Fields to always include (dot notation for nested)
+    #[serde(default)]
+    pub always_include: Vec<String>,
+    /// Fields to exclude
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
+fn default_max_array_items() -> usize {
+    10
+}
+
+fn default_max_depth() -> usize {
+    3
 }
 
 #[derive(Debug, Deserialize)]
@@ -475,7 +578,7 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
         output.to_string()
     };
 
-    let mut lines: Vec<&str> = s.lines().collect();
+    let mut lines: Vec<String> = s.lines().map(|l| l.to_string()).collect();
 
     if !f.strip_lines_matching.is_empty() {
         let patterns: Vec<Regex> = f
@@ -495,9 +598,35 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
         lines.retain(|l| patterns.iter().any(|re| re.is_match(l)));
     }
 
+    // NEW: extract_sections - extract content between markers
+    if !f.extract_sections.is_empty() {
+        lines = apply_extract_sections(lines, &f.extract_sections);
+    }
+
+    // NEW: replace_patterns - regex replacements
+    if !f.replace_patterns.is_empty() {
+        lines = apply_replace_patterns(lines, &f.replace_patterns);
+    }
+
+    // NEW: deduplicate_blocks - structural deduplication
+    if let Some(dedup) = &f.deduplicate_blocks {
+        lines = apply_deduplicate_blocks(lines, dedup);
+    }
+
+    // NEW: semantic_filter - embedding-based relevance filtering
+    if let Some(semantic) = &f.semantic_filter {
+        lines = apply_semantic_filter(lines, semantic);
+    }
+
+    // NEW: summarize_json - intelligent JSON summarization
+    if let Some(summarize) = &f.summarize_json {
+        lines = apply_summarize_json(lines, summarize);
+    }
+
     let lines = apply_sizing(lines, f);
 
-    let result = if let Some(max_len) = f.truncate_lines_at {
+    // NEW: token_budget - hard token limit with smart truncation
+    let mut result = if let Some(max_len) = f.truncate_lines_at {
         lines
             .iter()
             .map(|l| truncate_at_char_boundary(l, max_len))
@@ -507,12 +636,394 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
         lines.join("\n")
     };
 
+    if let Some(budget) = f.token_budget {
+        result = apply_token_budget(&result, budget);
+    }
+
     if result.trim().is_empty() {
         if let Some(msg) = &f.on_empty {
             return msg.clone();
         }
     }
     result
+}
+
+fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Vec<String> {
+    let mut result = Vec::new();
+    let content = lines.join("\n");
+
+    for section in sections {
+        let start_re = match Regex::new(&section.start_pattern) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let end_re = match Regex::new(&section.end_pattern) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let mut matches = 0;
+        let max_matches = section.max_matches.unwrap_or(usize::MAX);
+
+        let mut in_section = false;
+        let mut section_lines = Vec::new();
+
+        for line in content.lines() {
+            let start_match = start_re.is_match(line);
+            let end_match = end_re.is_match(line);
+
+            if start_match && !in_section {
+                in_section = true;
+                if section.include_markers {
+                    section_lines.push(line.to_string());
+                }
+                continue;
+            }
+
+            if in_section {
+                if section.include_markers || !end_match {
+                    section_lines.push(line.to_string());
+                }
+                if end_match {
+                    result.extend(section_lines.drain(..));
+                    matches += 1;
+                    in_section = false;
+                    if matches >= max_matches {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Handle unclosed section
+        if in_section && section.include_markers {
+            result.extend(section_lines);
+        }
+    }
+
+    if result.is_empty() {
+        lines
+    } else {
+        result
+    }
+}
+
+fn apply_replace_patterns(lines: Vec<String>, patterns: &[[String; 2]]) -> Vec<String> {
+    lines
+        .into_iter()
+        .map(|mut line| {
+            for [pattern, replacement] in patterns {
+                if let Ok(re) = Regex::new(pattern) {
+                    line = re.replace_all(&line, replacement.as_str()).to_string();
+                }
+            }
+            line
+        })
+        .collect()
+}
+
+fn apply_deduplicate_blocks(lines: Vec<String>, dedup: &DeduplicateBlocksDef) -> Vec<String> {
+    let delimiter = dedup.block_delimiter.as_deref().unwrap_or(r"^\s*$");
+    let delim_re = match Regex::new(delimiter) {
+        Ok(r) => r,
+        Err(_) => return lines,
+    };
+
+    let mut blocks: Vec<Vec<String>> = Vec::new();
+    let mut current_block = Vec::new();
+
+    for line in &lines {
+        if delim_re.is_match(line) && !current_block.is_empty() {
+            if current_block.len() >= dedup.min_block_lines {
+                blocks.push(current_block);
+            }
+            current_block = Vec::new();
+        } else {
+            current_block.push(line.clone());
+        }
+    }
+    if !current_block.is_empty() && current_block.len() >= dedup.min_block_lines {
+        blocks.push(current_block);
+    }
+
+    if blocks.len() < 2 {
+        return lines;
+    }
+
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < blocks.len() {
+        let block = &blocks[i];
+        result.extend(block.iter().cloned());
+
+        // Check next blocks for similarity
+        let mut j = i + 1;
+        let mut similar_count = 0;
+        while j < blocks.len() {
+            if blocks_similar(block, &blocks[j], dedup.similarity) {
+                similar_count += 1;
+                j += 1;
+            } else {
+                break;
+            }
+        }
+
+        if similar_count > 0 {
+            result.push(format!(
+                "[... {} similar block(s) omitted ...]",
+                similar_count
+            ));
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+
+    result
+}
+
+fn blocks_similar(a: &[String], b: &[String], threshold: f32) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let matches = a.iter().zip(b.iter()).filter(|(x, y)| x == y).count();
+    (matches as f32 / a.len() as f32) >= threshold
+}
+
+fn apply_semantic_filter(lines: Vec<String>, semantic: &SemanticFilterDef) -> Vec<String> {
+    // Try to use real embeddings via daemon or in-process
+    if let Ok(filtered) = apply_semantic_filter_with_embeddings(&lines, semantic) {
+        return filtered;
+    }
+
+    // Fallback: keyword-based heuristic
+    apply_semantic_filter_keyword_fallback(lines, semantic)
+}
+
+fn apply_semantic_filter_with_embeddings(
+    lines: &[String],
+    semantic: &SemanticFilterDef,
+) -> Result<Vec<String>, anyhow::Error> {
+    use crate::embed::{embed_query, set_active_model};
+
+    // Set model if specified
+    if let Some(model) = &semantic.model {
+        set_active_model(model);
+    }
+
+    // Embed the query
+    let query_vec = embed_query(&semantic.query)?;
+
+    // Embed each line (or small groups) and compute similarity
+    let always_keep_patterns: Vec<Regex> = semantic
+        .always_keep
+        .iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect();
+
+    let mut results = Vec::new();
+
+    for line in lines {
+        // Always keep lines matching always_keep patterns
+        if always_keep_patterns.iter().any(|re| re.is_match(line)) {
+            results.push(line.clone());
+            continue;
+        }
+
+        // Skip very short lines
+        if line.trim().len() < 5 {
+            continue;
+        }
+
+        // Embed the line
+        let line_vec = embed_query(line)?;
+
+        // Compute cosine similarity
+        let similarity = cosine_similarity(&query_vec, &line_vec);
+
+        if similarity >= semantic.threshold {
+            results.push(line.clone());
+        }
+    }
+
+    Ok(results)
+}
+
+fn apply_semantic_filter_keyword_fallback(
+    lines: Vec<String>,
+    semantic: &SemanticFilterDef,
+) -> Vec<String> {
+    let query_terms: Vec<&str> = semantic.query.split_whitespace().collect();
+    let always_keep_patterns: Vec<Regex> = semantic
+        .always_keep
+        .iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect();
+
+    lines
+        .into_iter()
+        .filter(|line| {
+            if always_keep_patterns.iter().any(|re| re.is_match(line)) {
+                return true;
+            }
+            // Simple keyword overlap as proxy for semantic relevance
+            let line_lower = line.to_lowercase();
+            query_terms
+                .iter()
+                .any(|term| line_lower.contains(&term.to_lowercase()))
+        })
+        .collect()
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        0.0
+    } else {
+        dot / (norm_a * norm_b)
+    }
+}
+
+fn apply_summarize_json(lines: Vec<String>, summarize: &SummarizeJsonDef) -> Vec<String> {
+    let content = lines.join("\n");
+    let trimmed = content.trim();
+
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return lines;
+    }
+
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return lines;
+    };
+
+    summarize_json_value(&mut value, summarize, 0);
+
+    let result = serde_json::to_string_pretty(&value).unwrap_or(content);
+    result.lines().map(|l| l.to_string()).collect()
+}
+
+fn summarize_json_value(value: &mut serde_json::Value, summarize: &SummarizeJsonDef, depth: usize) {
+    if depth >= summarize.max_depth {
+        return;
+    }
+
+    match value {
+        serde_json::Value::Object(map) => {
+            let keys_to_remove: Vec<String> =
+                map.keys()
+                    .filter(|k| {
+                        let path = if depth == 0 { k.as_str() } else { "" };
+                        summarize.exclude.iter().any(|ex| {
+                            k.as_str() == ex.as_str() || (depth == 0 && path == ex.as_str())
+                        })
+                    })
+                    .cloned()
+                    .collect();
+            for k in keys_to_remove {
+                map.remove(&k);
+            }
+
+            for (k, v) in map.iter_mut() {
+                let full_path = if depth == 0 {
+                    k.clone()
+                } else {
+                    format!("{}.{}", depth, k)
+                };
+                if summarize
+                    .always_include
+                    .iter()
+                    .any(|inc| inc == &full_path || inc == k)
+                {
+                    continue;
+                }
+                summarize_json_value(v, summarize, depth + 1);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            if arr.len() > summarize.max_array_items {
+                let shown = arr.drain(summarize.max_array_items..).collect::<Vec<_>>();
+                let count = shown.len();
+                arr.push(serde_json::Value::String(format!(
+                    "... {} more item(s) omitted ...",
+                    count
+                )));
+            }
+            for item in arr.iter_mut() {
+                summarize_json_value(item, summarize, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_token_budget(text: &str, budget: usize) -> String {
+    let tokens = crate::chunker::count_tokens(text);
+    if tokens <= budget {
+        return text.to_string();
+    }
+
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return text.to_string();
+    }
+
+    // Priority order: errors/warnings > head > tail > middle
+    let mut priority_lines = Vec::new();
+    let mut other_lines = Vec::new();
+
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        let is_high_priority = t.starts_with("error")
+            || t.starts_with("warning")
+            || t.starts_with("FAIL")
+            || t.starts_with("panic")
+            || t.contains("error[")
+            || t.contains("warning[")
+            || i < lines.len() / 4
+            || i >= lines.len() * 3 / 4;
+        if is_high_priority {
+            priority_lines.push((i, *line));
+        } else {
+            other_lines.push((i, *line));
+        }
+    }
+
+    let mut result = Vec::new();
+    let mut used = 0usize;
+
+    for (_, line) in priority_lines {
+        let line_tokens = crate::chunker::count_tokens(line);
+        if used + line_tokens > budget {
+            break;
+        }
+        result.push(line.to_string());
+        used += line_tokens;
+    }
+
+    // Fill remaining budget with other lines (prefer head/tail)
+    for (_, line) in other_lines {
+        let line_tokens = crate::chunker::count_tokens(line);
+        if used + line_tokens > budget {
+            break;
+        }
+        result.push(line.to_string());
+        used += line_tokens;
+    }
+
+    if result.len() < lines.len() {
+        result.push(format!(
+            "[... {} lines omitted to fit token budget {} ...]",
+            lines.len() - result.len(),
+            budget
+        ));
+    }
+
+    result.join("\n")
 }
 
 /// Truncate `s` to at most `max_bytes`, backing off to the nearest char
@@ -529,7 +1040,7 @@ fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-fn apply_sizing<'a>(mut lines: Vec<&'a str>, f: &FilterDef) -> Vec<&'a str> {
+fn apply_sizing(mut lines: Vec<String>, f: &FilterDef) -> Vec<String> {
     if let Some(head) = f.head_lines {
         lines.truncate(head);
     } else if let Some(tail) = f.tail_lines {
@@ -566,6 +1077,33 @@ head_lines = 30            # keep first N lines
 tail_lines = 10            # keep last N lines
 truncate_lines_at = 120    # truncate individual lines at N chars
 on_empty = "command: ok"   # message when filter produces empty output
+
+# ADVANCED (tokenix extensions beyond RTK):
+replace_patterns = [       # regex replacements: [[pattern, replacement], ...]
+  ["\\d+\\.\\d+s", "<duration>"],
+  ["/home/[^/]+/", "~/"],
+]
+extract_sections = [       # extract content between markers
+  {{ start_pattern = "---- FAILURES ----", end_pattern = "^\\s*$", include_markers = true, max_matches = 3 }},
+]
+semantic_filter = {{       # embedding-based relevance filtering (uses daemon/embed)
+  query = "test failure error panic",
+  threshold = 0.3,
+  always_keep = ["^error\\[", "^FAIL"],
+  model = "nomic-v1.5"
+}}
+deduplicate_blocks = {{    # structural block deduplication
+  min_block_lines = 3,
+  similarity = 0.8,
+  block_delimiter = "^\\s*$"
+}}
+summarize_json = {{        # intelligent JSON summarization
+  max_array_items = 10,
+  max_depth = 3,
+  always_include = ["packages", "workspace_members"],
+  exclude = ["manifest", "dependencies"]
+}}
+token_budget = 2000        # hard token limit with smart truncation
 ```
 
 Rules:
@@ -573,6 +1111,12 @@ Rules:
 - Use keep_lines_matching only if output has a clear signal/noise separation
 - Use match_output for commands that succeed silently or with a predictable summary line
 - Set on_empty when the command normally succeeds silently
+- Use replace_patterns to normalize paths, timestamps, IDs, etc.
+- Use extract_sections to pull out failure blocks, error sections, etc.
+- Use semantic_filter for query-aware relevance (requires embed model)
+- Use deduplicate_blocks for repetitive output (test runs, build steps)
+- Use summarize_json for large JSON (cargo metadata, API responses)
+- Use token_budget as a hard cap with priority-based truncation
 - match_command must be a valid Rust regex matching `{command}` or its typical invocations
 - Return ONLY valid TOML, no markdown code fences, no explanations
 
@@ -708,6 +1252,12 @@ on_empty = "empty filter output"
             match_output: vec![],
             truncate_lines_at: Some(4),
             filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
         };
         // Would panic with naive &l[..4] because 'é'/'ç' straddle the boundary.
         let out = apply_filter("café\nação\n", &f);
@@ -733,6 +1283,12 @@ on_empty = "empty filter output"
             }],
             truncate_lines_at: None,
             filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
         };
         // Pattern present, no error → short-circuit to message
         assert_eq!(apply_filter("total size is 100\n", &f), "ok (synced)");

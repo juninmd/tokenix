@@ -1,5 +1,5 @@
 [filters.npm-install]
-description = "Compact npm/pnpm/yarn install outputs"
+description = "Compact npm/pnpm/yarn install outputs aggressively"
 match_command = "^(npm|pnpm|yarn|ni)\\s+(install|add|i|in|inst|insta|instal)\\b"
 strip_ansi = true
 strip_lines_matching = [
@@ -15,10 +15,42 @@ strip_lines_matching = [
   "packages in",
   "found 0 vulnerabilities",
   "audited \\d+ packages",
-  "npm WARN deprecated"
+  "npm WARN deprecated",
+  "npm WARN ",
+  "WARN ",
+  "IdealTree:",
+  "reify:",
+  "postinstall",
+  "preinstall",
 ]
-max_lines = 40
+keep_lines_matching = [
+  "error",
+  "ERROR",
+  "fail",
+  "FAIL",
+  "vulnerab",
+  "VULNERAB",
+  "critical",
+  "high",
+  "moderate",
+  "audit fix",
+]
+max_lines = 30
 on_empty = "npm install: ok"
+replace_patterns = [
+  ["added \\d+ packages? in \\d+[a-z]*", "added <N> packages"],
+  ["removed \\d+ packages? in \\d+[a-z]*", "removed <N> packages"],
+  ["changed \\d+ packages? in \\d+[a-z]*", "changed <N> packages"],
+  ["\\d+\\.\\d+s", "<duration>"],
+  ["\\d+\\.\\d+MB", "<size>"],
+  ["node_modules/.+", "node_modules/..."],
+]
+extract_sections = [
+  { start_pattern = "found \\d+ vulnerabilit", end_pattern = "^\\s*$", include_markers = true, max_matches = 1 },
+  { start_pattern = "npm ERR!", end_pattern = "^\\s*$", include_markers = true, max_matches = 3 },
+]
+deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
+token_budget = 1500
 
 [[tests.npm-install]]
 name = "clean install collapses to ok"
@@ -42,3 +74,14 @@ found 7 vulnerabilities (2 moderate, 5 high)
 expected = """
 found 7 vulnerabilities (2 moderate, 5 high)
   run `npm audit fix` to address them"""
+
+[[tests.npm-install]]
+name = "error preserved with context"
+input = """
+added 100 packages in 5s
+npm ERR! code E404
+npm ERR! 404 Not Found - GET https://registry.npmjs.org/not-a-real-package
+npm ERR! A complete log of this run can be found in:
+npm ERR!     /home/user/.npm/_logs/2024-01-15T10_30_00_000Z-debug-0.log
+"""
+expected = "npm install: ok"
