@@ -28,7 +28,7 @@ tokenix --help
 | `src/indexer.rs` | File walk + incremental index pipeline. Embeds in batches of 512, resumable checkpoints |
 | `src/query.rs` | Hybrid semantic/lexical ranking (FTS5 + BM25 + RRF), strict `context` modes, budget enforcement, cross-project search |
 | `src/pack.rs` | `tokenix pack` — budgeted repo map + focused context, changed-file packs, token maps, and safety report |
-| `src/graph.rs` | Symbol graph with PageRank, cycle detection (Tarjan's SCC), tree-sitter references, HTML + Mermaid export |
+| `src/graph.rs` | Symbol graph with PageRank, cycle detection (Tarjan's SCC, homonym-filtered, `path:line`-annotated), tree-sitter references, HTML + Mermaid export |
 | `src/artifacts.rs` | Context artifacts — index non-code files (schemas, API specs, docs) via `.tokenix/artifacts.json` |
 | `src/hook.rs` | `run_hook()` — called by PreToolUse hook. Tries daemon first for Grep |
 | `src/daemon.rs` | Background TCP server (port 47392). Holds model + embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads |
@@ -38,6 +38,7 @@ tokenix --help
 | `src/gain.rs` | `compute_gain()`, `GainStats`, `MODELS` pricing table (Anthropic/OpenAI/Google) |
 | `src/mcp.rs` | MCP server. `--profile full` exposes all tools; `--profile slim` exposes context/search/call meta-tools for progressive discovery |
 | `src/mcp_audit.rs` | `tokenix prompt-audit` / `session-audit` — per-agent MCP config discovery + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report |
+| `src/secrets_scan.rs` | `tokenix scan-secrets` — gitleaks-style credential scan of Claude/Gemini/Copilot/Antigravity conversation transcripts under `~`; rules loaded from TOML (`assets/secret-rules/` bundled via `rust-embed`, extended by `<repo>/` then `~/.tokenix/secret-rules/*.toml`, later `id` wins), backtracking-free regex + entropy-gated generic rule. Each finding is attributed to its repo + git branch via the transcript line's `cwd`/`gitBranch` (Claude), falling back to the project dir slug. Report supports `--filter` (substring), `--group <value\|rule\|agent\|file\|repo>`, `--reveal` (raw values, default redacted), `--json`; exit 1 on hits |
 | `assets/filters/` | 73 TOML output filters embedded via `rust-embed`. User filters in `~/.tokenix/filters/` take priority |
 
 ## SQLite Schema
@@ -206,6 +207,8 @@ but a `node` grandchild may linger briefly until stdin EOF. Kill-the-tree
 5. Document in `README.md`
 
 **Add an agent to `prompt-audit`:** `mcp_audit.rs` — add an `Agent` variant (with `label`/`key`/`native_tokens`), a `discover_<agent>()` config source, and an `AuditAgent` value + mapping in `main.rs`. Reuse `parse_json_map` for JSON `mcpServers`-style configs.
+
+**Add a `scan-secrets` rule:** no Rust change needed — append a `[[rules]]` block (`id`, `pattern`, optional `capture`/`min_entropy`) to `assets/secret-rules/default.toml` (or a new bundled `*.toml`), or to `~/.tokenix/secret-rules/*.toml` / `<repo>/.tokenix/secret-rules/*.toml` at runtime. Patterns use the backtracking-free `regex` crate (no lookaround). `secrets_scan.rs::compile_rules` dedups by `id` (later source wins) and skips invalid regexes with a stderr warning.
 
 **Change token budget:** `query.rs` — `DEFAULT_BUDGET` constant, or pass `--budget` flag.
 

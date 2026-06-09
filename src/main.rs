@@ -17,6 +17,7 @@ mod memory;
 mod pack;
 mod query;
 mod recordings;
+mod secrets_scan;
 mod store;
 
 use anyhow::Result;
@@ -95,6 +96,55 @@ enum AuditAgent {
 enum McpProfile {
     Slim,
     Full,
+}
+
+#[derive(Copy, Clone, ValueEnum)]
+enum ScanAgent {
+    #[value(name = "claude")]
+    Claude,
+    #[value(name = "gemini")]
+    Gemini,
+    #[value(name = "copilot")]
+    Copilot,
+    #[value(name = "antigravity")]
+    Antigravity,
+    #[value(name = "all")]
+    All,
+}
+
+impl ScanAgent {
+    fn as_str(self) -> &'static str {
+        match self {
+            ScanAgent::Claude => "claude",
+            ScanAgent::Gemini => "gemini",
+            ScanAgent::Copilot => "copilot",
+            ScanAgent::Antigravity => "antigravity",
+            ScanAgent::All => "all",
+        }
+    }
+}
+
+#[derive(Copy, Clone, ValueEnum)]
+enum GroupBy {
+    None,
+    Value,
+    Rule,
+    Agent,
+    File,
+    Repo,
+}
+
+impl GroupBy {
+    fn to_mode(self) -> secrets_scan::GroupMode {
+        match self {
+            GroupBy::None => secrets_scan::GroupMode::None,
+            GroupBy::Value => secrets_scan::GroupMode::Value,
+            GroupBy::Rule => secrets_scan::GroupMode::Rule,
+            GroupBy::Agent => secrets_scan::GroupMode::Agent,
+            GroupBy::File => secrets_scan::GroupMode::File,
+            GroupBy::Repo => secrets_scan::GroupMode::Repo,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -400,6 +450,24 @@ enum Commands {
         /// Check prompt-cache hygiene inputs such as MCP churn and hook/index freshness
         #[arg(long)]
         cache_hygiene: bool,
+    },
+    /// Scan AI agent conversation transcripts for exposed credentials (gitleaks-style, no git)
+    ScanSecrets {
+        /// Which agent's conversations to scan
+        #[arg(long, value_enum, default_value = "all")]
+        agent: ScanAgent,
+        /// Filter findings by a case-insensitive substring (rule, agent, file, or value)
+        #[arg(long)]
+        filter: Option<String>,
+        /// Group the report by detected value, rule, agent, file, or repo
+        #[arg(long, value_enum, default_value = "none")]
+        group: GroupBy,
+        /// Reveal raw secret values instead of redacting them
+        #[arg(long)]
+        reveal: bool,
+        /// Emit machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
     },
     /// Manage context artifacts (non-code files in .tokenix/artifacts.json)
     #[command(subcommand)]
@@ -714,6 +782,25 @@ fn main() -> Result<()> {
             json,
             cache_hygiene,
         } => cmd_session_audit(&path, json, cache_hygiene),
+        Commands::ScanSecrets {
+            agent,
+            filter,
+            group,
+            reveal,
+            json,
+        } => {
+            let found = secrets_scan::run(secrets_scan::Options {
+                agent: agent.as_str().to_string(),
+                json,
+                search: filter,
+                group: group.to_mode(),
+                reveal,
+            })?;
+            if found > 0 {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         Commands::Artifacts(action) => match action {
             ArtifactsAction::List { path } => cmd_artifacts_list(&path),
             ArtifactsAction::Show { name, path } => cmd_artifacts_show(&path, &name),
@@ -2665,6 +2752,11 @@ fn help_catalog() -> String {
             "session-audit",
             "",
             "Token-economy risks for this session/repo",
+        ),
+        (
+            "scan-secrets",
+            "",
+            "Scan AI agent conversations for exposed credentials",
         ),
         ("artifacts", "", "Manage non-code context artifacts"),
         ("cycles", "", "Detect circular dependencies"),

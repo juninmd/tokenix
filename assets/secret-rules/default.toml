@@ -1,0 +1,300 @@
+# Default credential patterns for `tokenix scan-secrets`.
+#
+# Add your own patterns without touching this file: drop a `*.toml` with the
+# same `[[rules]]` shape into `~/.tokenix/secret-rules/` (user) or
+# `<repo>/.tokenix/secret-rules/` (per-project). A user/local rule whose `id`
+# matches a bundled one overrides it; new ids are appended.
+#
+# Fields per rule:
+#   id          unique label shown in output (required)
+#   pattern     Rust `regex` crate syntax — backtracking-free, no lookaround (required)
+#   capture     capture group holding the secret, 0 = whole match (default 0)
+#   min_entropy minimum Shannon entropy in bits/char to accept the match,
+#               0 disables the gate (default 0.0; use ~3.5 for generic rules)
+#
+# Patterns are anchored on distinctive provider prefixes to stay high-signal and
+# low-false-positive. Generic / context rules with an entropy gate are kept LAST
+# so a specific provider rule wins when both match the same secret on one line.
+
+# --- Cloud providers -------------------------------------------------------
+
+[[rules]]
+id = "aws-access-key-id"
+pattern = '\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[0-9A-Z]{16}\b'
+
+[[rules]]
+id = "aws-secret-access-key"
+pattern = '''(?i)aws_?secret_?(?:access_?)?key["' ]?\s*[:=]\s*["']?([A-Za-z0-9/+]{40})'''
+capture = 1
+min_entropy = 4.0
+
+[[rules]]
+id = "google-api-key"
+pattern = '\bAIza[0-9A-Za-z_-]{35}\b'
+
+[[rules]]
+id = "gcp-oauth-client-secret"
+pattern = '\bGOCSPX-[0-9A-Za-z_-]{28}\b'
+
+[[rules]]
+id = "digitalocean-token"
+pattern = '\bdo[oprt]_v1_[0-9a-f]{64}\b'
+
+[[rules]]
+id = "azure-storage-account-key"
+pattern = '(?i)AccountKey=([A-Za-z0-9+/]{86}==)'
+capture = 1
+
+# --- Version control / CI --------------------------------------------------
+
+[[rules]]
+id = "github-token"
+pattern = '\bgh[pousr]_[0-9A-Za-z]{36,255}\b'
+
+[[rules]]
+id = "github-pat-fine-grained"
+pattern = '\bgithub_pat_[0-9A-Za-z_]{22,}\b'
+
+[[rules]]
+id = "gitlab-pat"
+pattern = '\bglpat-[0-9A-Za-z_-]{20,}\b'
+
+[[rules]]
+id = "gitlab-runner-token"
+pattern = '\bGR1348941[0-9A-Za-z_-]{20}\b'
+
+[[rules]]
+id = "gitlab-pipeline-trigger-token"
+pattern = '\bglptt-[0-9a-f]{40}\b'
+
+[[rules]]
+id = "gitlab-feed-token"
+pattern = '\bglft-[0-9A-Za-z_-]{20}\b'
+
+# --- LLM / AI providers ----------------------------------------------------
+
+[[rules]]
+id = "openrouter-key"
+pattern = '\bsk-or-v1-[0-9a-f]{64}\b'
+
+[[rules]]
+id = "llm-api-key"
+pattern = '\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}\b'
+
+[[rules]]
+id = "huggingface-token"
+pattern = '\bhf_[0-9A-Za-z]{34,}\b'
+
+[[rules]]
+id = "replicate-token"
+pattern = '\br8_[0-9A-Za-z]{37,}\b'
+
+[[rules]]
+id = "groq-key"
+pattern = '\bgsk_[0-9A-Za-z]{40,}\b'
+
+[[rules]]
+id = "perplexity-key"
+pattern = '\bpplx-[0-9A-Za-z]{40,}\b'
+
+[[rules]]
+id = "xai-key"
+pattern = '\bxai-[0-9A-Za-z]{80}\b'
+
+[[rules]]
+id = "databricks-token"
+pattern = '\bdapi[0-9a-f]{32,}\b'
+
+# --- Payments / commerce ---------------------------------------------------
+
+[[rules]]
+id = "stripe-secret-key"
+pattern = '\b(?:sk|rk)_live_[0-9A-Za-z]{20,}\b'
+
+[[rules]]
+id = "stripe-webhook-secret"
+pattern = '\bwhsec_[0-9A-Za-z]{32,}\b'
+
+[[rules]]
+id = "shopify-token"
+pattern = '\bshp(?:at|ca|pa|ss)_[0-9a-fA-F]{32}\b'
+
+[[rules]]
+id = "square-access-token"
+pattern = '\b(?:sq0atp-|sq0csp-|EAAA)[0-9A-Za-z_-]{22,}\b'
+
+[[rules]]
+id = "paypal-braintree-token"
+pattern = '\baccess_token\$production\$[0-9a-z]{16}\$[0-9a-f]{32}\b'
+
+# --- Comms / messaging -----------------------------------------------------
+
+[[rules]]
+id = "slack-token"
+pattern = '\bxox[baprs]-[0-9A-Za-z-]{10,}\b'
+
+[[rules]]
+id = "slack-app-token"
+pattern = '\bxapp-[0-9]-[A-Z0-9]+-[0-9]+-[0-9a-f]+\b'
+
+[[rules]]
+id = "slack-webhook"
+pattern = 'https://hooks\.slack\.com/services/[A-Za-z0-9/]+'
+
+[[rules]]
+id = "discord-bot-token"
+pattern = '\b[MNO][A-Za-z0-9_-]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}\b'
+
+[[rules]]
+id = "discord-webhook"
+pattern = 'https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+'
+
+[[rules]]
+id = "telegram-bot-token"
+pattern = '\b[0-9]{8,10}:[A-Za-z0-9_-]{35}\b'
+
+[[rules]]
+id = "twilio-api-key"
+pattern = '\bSK[0-9a-fA-F]{32}\b'
+
+[[rules]]
+id = "twilio-account-sid"
+pattern = '\bAC[0-9a-fA-F]{32}\b'
+
+[[rules]]
+id = "sendgrid-key"
+pattern = '\bSG\.[0-9A-Za-z_-]{22}\.[0-9A-Za-z_-]{43}\b'
+
+[[rules]]
+id = "mailgun-key"
+pattern = '\bkey-[0-9a-f]{32}\b'
+
+[[rules]]
+id = "mailchimp-key"
+pattern = '\b[0-9a-f]{32}-us[0-9]{1,2}\b'
+
+# --- Packages / registries -------------------------------------------------
+
+[[rules]]
+id = "npm-token"
+pattern = '\bnpm_[0-9A-Za-z]{36}\b'
+
+[[rules]]
+id = "pypi-token"
+pattern = '\bpypi-AgEIcHlwaS5vcmc[0-9A-Za-z_-]{50,}\b'
+
+[[rules]]
+id = "rubygems-key"
+pattern = '\brubygems_[0-9a-f]{48}\b'
+
+[[rules]]
+id = "dockerhub-pat"
+pattern = '\bdckr_pat_[0-9A-Za-z_-]{27,}\b'
+
+[[rules]]
+id = "artifactory-token"
+pattern = '\bcmVmdGtuOjAx[0-9A-Za-z]{59,}\b'
+
+# --- Observability / infra SaaS --------------------------------------------
+
+[[rules]]
+id = "sonarqube-token"
+pattern = '\bsq[apu]_[0-9a-f]{40}\b'
+
+[[rules]]
+id = "grafana-service-account-token"
+pattern = '\bglsa_[0-9A-Za-z]{32}_[0-9A-Fa-f]{8}\b'
+
+[[rules]]
+id = "grafana-cloud-token"
+pattern = '\bglc_[A-Za-z0-9+/]{32,}={0,2}\b'
+
+[[rules]]
+id = "vault-service-token"
+pattern = '\bhvs\.[0-9A-Za-z_-]{20,}\b'
+
+[[rules]]
+id = "newrelic-user-key"
+pattern = '\bNRAK-[0-9A-Z]{27}\b'
+
+[[rules]]
+id = "newrelic-license-key"
+pattern = '\b[0-9a-f]{40}NRAL\b'
+
+[[rules]]
+id = "sentry-dsn"
+pattern = 'https://[0-9a-f]{32}@[0-9a-z.-]+/[0-9]+'
+
+[[rules]]
+id = "sentry-auth-token"
+pattern = '\bsntrys_[A-Za-z0-9+/=_-]{40,}\b'
+
+[[rules]]
+id = "datadog-token"
+pattern = '\bdd[a-z]{2}_[0-9A-Za-z]{40,}\b'
+
+# --- Product / workflow SaaS -----------------------------------------------
+
+[[rules]]
+id = "linear-api-key"
+pattern = '\blin_api_[0-9A-Za-z]{40}\b'
+
+[[rules]]
+id = "notion-token"
+pattern = '\b(?:secret_|ntn_)[0-9A-Za-z]{43}\b'
+
+[[rules]]
+id = "airtable-token"
+pattern = '\bpat[0-9A-Za-z]{14}\.[0-9a-f]{64}\b'
+
+[[rules]]
+id = "supabase-token"
+pattern = '\bsbp_[0-9a-f]{40}\b'
+
+[[rules]]
+id = "planetscale-token"
+pattern = '\bpscale_(?:tkn|pw)_[0-9A-Za-z_-]{32,}\b'
+
+[[rules]]
+id = "doppler-token"
+pattern = '\bdp\.(?:pt|st|ct|sa|sct)\.[0-9A-Za-z]{40,}\b'
+
+[[rules]]
+id = "firebase-cloud-messaging-key"
+pattern = '\bAAAA[A-Za-z0-9_-]{7}:[A-Za-z0-9_-]{140}\b'
+
+# --- Keys, tokens & generic last-resort rules ------------------------------
+
+[[rules]]
+id = "private-key-block"
+pattern = '-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----'
+
+[[rules]]
+id = "age-secret-key"
+pattern = '\bAGE-SECRET-KEY-1[0-9A-Z]{58}\b'
+
+[[rules]]
+id = "jwt"
+pattern = '\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'
+
+# Credentials embedded in a URL or DB connection string — redact the password.
+# Scheme is restricted to credential-bearing protocols to avoid matching arbitrary
+# `foo://a:b@c` strings that appear in prose/logs.
+[[rules]]
+id = "basic-auth-url"
+pattern = '(?i)(?:https?|ftps?|smtps?|ldaps?)://[^\s/:@]{1,64}:([^\s/:@${}<>%][^\s/:@]{5,63})@[^\s/]+'
+capture = 1
+min_entropy = 3.5
+
+[[rules]]
+id = "db-connection-uri"
+pattern = '(?i)(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^\s:@/]+:([^\s:@/${}<>%][^\s:@/]{3,})@'
+capture = 1
+min_entropy = 2.8
+
+# Generic `key = value` assignment, entropy-gated to cut false positives.
+[[rules]]
+id = "generic-secret-assignment"
+pattern = '''(?i)(?:api[_-]?key|secret|token|password|passwd|pwd|access[_-]?token|client[_-]?secret|private[_-]?key)["' ]?\s*[:=]\s*["']?([A-Za-z0-9+/_-]{16,})'''
+capture = 1
+min_entropy = 3.5

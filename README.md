@@ -134,7 +134,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Repository pack** | `tokenix pack` emits a budgeted, secret-safe repo map with changed-file packs, token maps, and safety reporting |
 | **Symbol graph** | `tokenix symbols`, `callers`, `callees`, `impact`, `flow`, and `cycles` trace relationships, call-flow, and circular deps between indexed symbols |
 | **Interactive HTML/Mermaid graphs** | `tokenix impact --format html\|mermaid` exports vis.js / Mermaid flowcharts; `tokenix flow --format mermaid` traces call flow |
-| **Cycle detection** | `tokenix cycles` finds circular dependencies via Tarjan's strongly-connected components algorithm |
+| **Cycle detection** | `tokenix cycles` finds circular dependencies via Tarjan's strongly-connected components algorithm, dropping same-name (homonym) false positives and annotating each node with `path:line` |
 | **Token map** | `tokenix tokenmap` shows a directory tree with token counts per file/folder |
 | **Preference memory** | `tokenix memory add/list` stores global and project preferences in editable Markdown; context/explore include saved preferences |
 | **Dynamic language detection** | Map custom file extensions to any built-in parser via a project `.tokenix.toml` — no recompile needed |
@@ -156,6 +156,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Slim MCP profile** | `tokenix mcp --profile slim` exposes 3 meta-tools instead of the full tool surface for hosts that support progressive discovery |
 | **MCP/prompt weight audit** | `tokenix prompt-audit --recommend --profile-impact` connects to configured MCP servers, tokenizes tool schemas, and shows full-vs-slim MCP savings |
 | **Session audit** | `tokenix session-audit --cache-hygiene` combines index freshness, hook history, MCP/tool weight, and prompt-cache stability risks |
+| **Conversation secret scan** | `tokenix scan-secrets` — gitleaks-style credential scan of Claude / Gemini / Copilot / Antigravity conversation transcripts (no git); findings are always redacted, exits non-zero when any are found. Patterns live in TOML (`assets/secret-rules/`), extensible via `~/.tokenix/secret-rules/*.toml` or `<repo>/.tokenix/secret-rules/*.toml` |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
@@ -302,6 +303,26 @@ compose); misses are included as measured. Pass `--refresh-index` to re-embed
 first, `--cases FILE` for project-specific cases, and `--json` for a
 machine-readable summary.
 
+### 10. Scan conversations for exposed secrets
+
+```bash
+tokenix scan-secrets                          # all agents, redacted, exit 1 on hits
+tokenix scan-secrets --group value            # one block per distinct secret
+tokenix scan-secrets --group repo             # group by the repo it leaked from
+tokenix scan-secrets --filter telegram        # filter rule/agent/file/value/repo/branch
+tokenix scan-secrets --agent claude --json    # machine-readable
+tokenix scan-secrets --filter aws --reveal    # print raw values (warns on stderr)
+```
+
+Like `gitleaks --no-git`, but it walks each AI agent's **conversation transcripts**
+(Claude `~/.claude/projects`, Gemini `~/.gemini/tmp,history`, Copilot
+`~/.copilot/session-state,logs`, Antigravity `~/.gemini/antigravity`) for pasted
+credentials. Every finding is **redacted by default** and attributed to the
+**repository + git branch** it was exposed in (from each Claude message's
+`cwd`/`gitBranch`, falling back to the project directory). Detection patterns are
+TOML `[[rules]]` in `assets/secret-rules/`, extensible without a rebuild via
+`~/.tokenix/secret-rules/*.toml` or `<repo>/.tokenix/secret-rules/*.toml`.
+
 ---
 
 ## 🔧 Setup by Tool
@@ -392,6 +413,7 @@ tokenix install-hook --tool all
 | `tokenix filter record [CMD]` | Record real command output for richer filter generation |
 | `tokenix prompt-audit` | Audit MCP/tool token weight across agents; warns on bloat (`--agent`, `--json`, `--recommend`, `--profile-impact`) |
 | `tokenix session-audit` | Token-economy health check: index, hook events, MCP/tool weight, cache hygiene |
+| `tokenix scan-secrets` | Scan AI agent conversation transcripts for exposed credentials, gitleaks-style; attributes each to its repo + git branch (`--agent`, `--filter`, `--group`, `--reveal`, `--json`) |
 | `tokenix artifacts list` | List context artifacts defined in `.tokenix/artifacts.json` |
 | `tokenix artifacts show NAME` | Show context artifact content |
 | `tokenix cycles` | Detect circular dependencies in the symbol graph using Tarjan's SCC algorithm |
@@ -439,6 +461,8 @@ tokenix install-hook --tool all
 **`tokenix prompt-audit`** — `--agent <claude\|codex\|copilot\|antigravity\|all>` (default `all`), `--json`, `--recommend`, `--profile-impact`
 
 **`tokenix session-audit`** — `--json`, `--cache-hygiene`, `--path/-p`
+
+**`tokenix scan-secrets`** — `--agent <claude\|gemini\|copilot\|antigravity\|all>` (default `all`), `--filter <substr>` (case-insensitive match over rule/agent/file/value/repo/branch), `--group <none\|value\|rule\|agent\|file\|repo>` (default `none`; `value` collapses each distinct secret into one block with its occurrence count, `repo` groups by the repository the secret was exposed in), `--reveal` (print raw values instead of redacting — warns on stderr), `--json`. Each finding is attributed to its **repository + git branch** when recoverable: Claude transcripts carry an exact `cwd`/`gitBranch` per message; otherwise the project directory is used as a best-effort `~slug:`/`~dir:` label. Scans each agent's conversation transcripts under `~` (Claude `~/.claude/projects`, Gemini `~/.gemini/tmp,history`, Copilot `~/.copilot/session-state,logs`, Antigravity `~/.gemini/antigravity`) for credential patterns; output is redacted by default and exit code is `1` when findings exist. Patterns are TOML `[[rules]]` (`id`, `pattern`, optional `capture`/`min_entropy`): bundled defaults in `assets/secret-rules/`, extended/overridden by `<repo>/.tokenix/secret-rules/*.toml` then `~/.tokenix/secret-rules/*.toml` (later sources win on matching `id`).
 
 **`tokenix mcp`** — `--profile <full\|slim>` (default `full`)
 
