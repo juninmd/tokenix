@@ -180,6 +180,17 @@ Keep competitor rows optional and fail-open; missing external tools must not
 fail the benchmark. Current known gaps to prioritize next: remote repo pack and
 learned/adapter-based reranking.
 
+**Fairness contract (do not regress).** The default benchmark must stay
+impartial: tokenix and any competitor are scored on identical input and counted
+with the same `count_tokens`. In the Filter Parity table, a token-cheaper output
+only counts as a `win` if it preserves the golden signal — `parity_verdict`
+applies `preserves_signal` to *both* tokenix (`tk-lossy`) and RTK (`rtk-lossy`),
+so neither side can win by dropping information. Semantic Hit@1/Hit@3 are
+reported as measured (misses included), never filtered to flatter tokenix.
+Default scenarios span Rust/TS/Go/Python plus SQLite vector search and command
+output (cargo, git, npm, docker compose). Verdict logic is unit-tested in
+`benchmark.rs`.
+
 **Windows caveat:** `npx`/`uvx` run via `cmd /C`; `child.kill()` kills the wrapper
 but a `node` grandchild may linger briefly until stdin EOF. Kill-the-tree
 (`taskkill /T`) is a possible hardening follow-up.

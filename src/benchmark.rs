@@ -274,6 +274,27 @@ fn default_context_bench_cases() -> Vec<ContextBenchCase> {
             task: "how does cargo output compression keep errors".to_string(),
             expected_paths: vec!["src/compress.rs".to_string()],
         },
+        ContextBenchCase {
+            label: "Vector search".to_string(),
+            task: "how is cosine similarity vector search implemented over sqlite blobs"
+                .to_string(),
+            expected_paths: vec!["src/store.rs".to_string()],
+        },
+        ContextBenchCase {
+            label: "Savings analytics".to_string(),
+            task: "how are token savings computed from the hook event log".to_string(),
+            expected_paths: vec!["src/gain.rs".to_string(), "src/store.rs".to_string()],
+        },
+        ContextBenchCase {
+            label: "Python auth".to_string(),
+            task: "python jwt bearer token validation refresh revocation role guard".to_string(),
+            expected_paths: vec!["benchmark/samples/auth_middleware.py".to_string()],
+        },
+        ContextBenchCase {
+            label: "Go middleware".to_string(),
+            task: "go http auth middleware bearer token rate limiting handler".to_string(),
+            expected_paths: vec!["benchmark/samples/api_handler.go".to_string()],
+        },
     ]
 }
 
@@ -682,6 +703,8 @@ fn measure_command_compression(repo_root: &Path, rtk: bool) -> Result<Vec<CmdRow
         ("git log -n 5", sample_git_log(repo_root)),
         ("cargo check", sample_cargo_check()),
         ("ls -R", sample_file_listing(repo_root)),
+        ("npm install", sample_npm_install()),
+        ("docker compose up", sample_docker_compose()),
     ];
 
     let mut rows = Vec::new();
@@ -780,6 +803,32 @@ fn sample_cargo_check() -> String {
         "88  |     if index_staleness(repo_root, MAX_INDEX_AGE_SECS).stale {",
         "    |                                          ^^^^^^^^^^^^^^^^^^ not found in this scope",
         "error: could not compile `tokenix` due to 1 previous error; 1 warning emitted",
+    ]
+    .join("\n")
+}
+
+fn sample_npm_install() -> String {
+    [
+        "npm warn deprecated inflight@1.0.6: This module is not supported",
+        "npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported",
+        "added 1 package, and audited 1281 packages in 12s",
+        "143 packages are looking for funding",
+        "  run `npm fund` for details",
+        "found 0 vulnerabilities",
+    ]
+    .join("\n")
+}
+
+fn sample_docker_compose() -> String {
+    [
+        "Creating network \"app_default\" with the default driver",
+        "Pulling db (postgres:16-alpine)...",
+        "Building api",
+        "Starting app_db_1    ... done",
+        "Starting app_redis_1 ... done",
+        "Starting app_api_1   ... done",
+        "Attaching to app_db_1, app_redis_1, app_api_1",
+        "app_api_1   | listening on :3000",
     ]
     .join("\n")
 }
@@ -887,6 +936,35 @@ struct ParityRow {
     tokenix: usize,
     rtk: Option<usize>,
     rtk_kept_signal: bool,
+    tokenix_kept_signal: bool,
+}
+
+/// Impartial per-filter verdict. tokenix and RTK are held to the SAME bar:
+/// emitting fewer tokens only counts as a real win if the golden signal survives
+/// (`*_kept`). A token-cheaper output that dropped signal is flagged lossy for
+/// whichever tool did it, so neither side can "win" by throwing information away.
+fn parity_verdict(
+    tokenix: usize,
+    rtk: Option<usize>,
+    tokenix_kept: bool,
+    rtk_kept: bool,
+) -> &'static str {
+    match rtk {
+        None => "n/a",
+        Some(rtk) => {
+            if tokenix <= rtk {
+                if tokenix_kept {
+                    "win"
+                } else {
+                    "tk-lossy"
+                }
+            } else if !rtk_kept {
+                "rtk-lossy"
+            } else {
+                "behind"
+            }
+        }
+    }
 }
 
 /// Lenient signal-preservation check: at least 70% of the must-keep "signal
@@ -937,10 +1015,14 @@ fn measure_filter_parity(repo_root: &Path, rtk: bool) -> Vec<ParityRow> {
         let (mut in_tok, mut tk_tok, mut rtk_tok) = (0usize, 0usize, 0usize);
         let mut rtk_any = false;
         let mut rtk_kept = true;
+        let mut tk_kept = true;
         for (i, case) in cases.iter().enumerate() {
             in_tok += count_tokens(&case.input);
             let tk_out = apply_filter(&case.input, fdef);
             tk_tok += count_tokens(&tk_out);
+            if !preserves_signal(&case.expected, &tk_out) {
+                tk_kept = false;
+            }
             let rtk_out = if rtk {
                 rtk_pipe_by_name(rtk_filter, &case.input)
             } else {
@@ -972,6 +1054,7 @@ fn measure_filter_parity(repo_root: &Path, rtk: bool) -> Vec<ParityRow> {
             tokenix: tk_tok,
             rtk: rtk_any.then_some(rtk_tok),
             rtk_kept_signal: rtk_kept,
+            tokenix_kept_signal: tk_kept,
         });
     }
     rows
@@ -994,20 +1077,13 @@ fn print_filter_parity(rows: &[ParityRow]) {
             .rtk
             .map(|t| format_num(t as i64))
             .unwrap_or_else(|| "n/a".to_string());
-        let verdict = match r.rtk {
-            Some(rtk) => {
-                total += 1;
-                if r.tokenix <= rtk {
-                    wins += 1;
-                    "win"
-                } else if !r.rtk_kept_signal {
-                    "rtk-lossy"
-                } else {
-                    "behind"
-                }
-            }
-            None => "n/a",
-        };
+        let verdict = parity_verdict(r.tokenix, r.rtk, r.tokenix_kept_signal, r.rtk_kept_signal);
+        if r.rtk.is_some() {
+            total += 1;
+        }
+        if verdict == "win" {
+            wins += 1;
+        }
         println!(
             "  {:<13} {:<16} {:>6} {:>8} {:>8} {:>8} {:>6.1}% {:>10}",
             r.rtk_filter,
@@ -1022,13 +1098,13 @@ fn print_filter_parity(rows: &[ParityRow]) {
     }
     println!("  {}", "-".repeat(82).dimmed());
     println!(
-        "  tokenix ties-or-beats RTK on {} of {} pipeable filters",
+        "  tokenix ties-or-beats RTK on {} of {} pipeable filters (signal-preserving only)",
         format!("{wins}").green(),
         total
     );
     println!(
         "  {}",
-        "rtk-lossy = RTK emitted fewer tokens only by dropping golden signal; behind = real loss"
+        "win = tokenix <= RTK with golden signal kept; tk-lossy / rtk-lossy = that side saved tokens only by dropping signal; behind = real loss"
             .dimmed()
     );
     println!(
@@ -1727,4 +1803,77 @@ fn format_num(n: i64) -> String {
         out.push(ch);
     }
     out.chars().rev().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parity_verdict_is_impartial_about_dropped_signal() {
+        // tokenix cheaper AND keeps signal -> clean win
+        assert_eq!(parity_verdict(25, Some(73), true, true), "win");
+        // tie counts toward "ties-or-beats" only when signal survives
+        assert_eq!(parity_verdict(40, Some(40), true, true), "win");
+        // tokenix cheaper but DROPPED signal -> flagged, not a win (the fairness fix)
+        assert_eq!(parity_verdict(20, Some(73), false, true), "tk-lossy");
+        // RTK cheaper but dropped signal -> RTK flagged
+        assert_eq!(parity_verdict(80, Some(60), true, false), "rtk-lossy");
+        // RTK genuinely cheaper with signal kept -> tokenix is behind
+        assert_eq!(parity_verdict(80, Some(60), true, true), "behind");
+        // no RTK output -> not comparable
+        assert_eq!(parity_verdict(20, None, true, true), "n/a");
+    }
+
+    #[test]
+    fn saved_pct_handles_zero_baseline() {
+        assert_eq!(saved_pct(0, 0), 0.0);
+        assert_eq!(saved_pct(100, 25), 75.0);
+        assert_eq!(saved_pct(100, 100), 0.0);
+    }
+
+    #[test]
+    fn preserves_signal_detects_dropped_tokens() {
+        let expected = "error[E0425] cannot find value MAX_INDEX_AGE_SECS in scope";
+        // keeps the long signal words -> preserved
+        assert!(preserves_signal(
+            expected,
+            "error[E0425]: cannot find value MAX_INDEX_AGE_SECS in scope here"
+        ));
+        // drops the identifiers -> not preserved
+        assert!(!preserves_signal(expected, "build failed"));
+        // empty golden reference cannot penalize either tool
+        assert!(preserves_signal("", "anything"));
+    }
+
+    #[test]
+    fn matches_expected_path_checks_substring() {
+        let expected = vec!["src/hook.rs".to_string()];
+        assert!(matches_expected_path(
+            "see src/hook.rs:88 for detail",
+            &expected
+        ));
+        assert!(!matches_expected_path("see src/query.rs", &expected));
+    }
+
+    #[test]
+    fn format_num_groups_thousands() {
+        assert_eq!(format_num(1_234_567), "1,234,567");
+        assert_eq!(format_num(42), "42");
+    }
+
+    #[test]
+    fn default_cases_cover_multiple_languages() {
+        let cases = default_context_bench_cases();
+        assert!(cases.len() >= 8, "expected broadened scenario set");
+        let paths: String = cases
+            .iter()
+            .flat_map(|c| c.expected_paths.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for needle in ["src/store.rs", ".py", ".go", ".ts", ".rs"] {
+            assert!(paths.contains(needle), "missing coverage for {needle}");
+        }
+    }
 }

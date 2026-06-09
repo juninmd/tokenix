@@ -306,6 +306,14 @@ they are installed, and prints a feature matrix against current market signals:
 | Remote repo pack | Not yet | Repomix `--remote`; Cody remote context |
 | Learned rerank model | Not yet; heuristic hybrid ranker | Continue rerank role; cloud IDE rerankers |
 
+The default `tokenix benchmark` (no flags) is impartial by construction: tokenix
+and RTK get identical input counted with the same tokenizer, and the Filter
+Parity table only credits a `win` when the cheaper output keeps the golden
+signal — a side that saves tokens by dropping information is flagged `tk-lossy`
+or `rtk-lossy`. Scenarios span Rust/TS/Go/Python, SQLite vector search, and
+command output (cargo, git, npm, docker compose); semantic Hit@1/Hit@3 are
+reported as measured, misses included.
+
 ---
 
 ## 🔧 Setup by Tool
