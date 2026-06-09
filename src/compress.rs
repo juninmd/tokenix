@@ -656,9 +656,11 @@ fn compress_docker_compose(lines: &[&str]) -> String {
             || t.starts_with("Pulling")
         {
             result.push("[container ops...]".to_string());
-        } else if t.starts_with("error") || t.starts_with("Error") || t.starts_with("FAIL") {
-            result.push(line.to_string());
-        } else if result.len() < 30 {
+        } else if t.starts_with("error")
+            || t.starts_with("Error")
+            || t.starts_with("FAIL")
+            || result.len() < 30
+        {
             result.push(line.to_string());
         }
     }

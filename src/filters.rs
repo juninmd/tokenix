@@ -772,7 +772,7 @@ fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Ve
                     section_lines.push(line.to_string());
                 }
                 if end_match {
-                    result.extend(section_lines.drain(..));
+                    result.append(&mut section_lines);
                     matches += 1;
                     in_section = false;
                     if matches >= max_matches {
