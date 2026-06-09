@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use crate::chunker::{count_tokens, generate_outline, should_index};
+use crate::filters::{apply_filter, FilterDef};
 
 use crate::indexer;
 use crate::query::{build_task_context, query_index};
@@ -170,6 +171,11 @@ pub fn run_benchmark(
 
     let cmd_rows = measure_command_compression(repo_root, rtk_available)?;
     print_command_compression(&cmd_rows);
+
+    let parity_rows = measure_filter_parity(repo_root, rtk_available);
+    if !parity_rows.is_empty() {
+        print_filter_parity(&parity_rows);
+    }
 
     if competitive {
         let league_rows = measure_competitive_league(repo_root, &context_cases, query_budget)?;
@@ -707,6 +713,13 @@ fn rtk_pipe_filter(cmd: &str, input: &str) -> Option<String> {
         "ls -R" => "find",
         _ => return None,
     };
+    rtk_pipe_by_name(filter, input)
+}
+
+/// Pipe `input` through `rtk pipe -f <filter>`. Returns None if rtk is absent
+/// or does not recognize the filter (non-zero exit), so callers can tell a real
+/// RTK filter from an unsupported one.
+fn rtk_pipe_by_name(filter: &str, input: &str) -> Option<String> {
     let exe = if cfg!(windows) { "rtk.exe" } else { "rtk" };
     let mut child = Command::new(exe)
         .args(["pipe", "-f", filter])
@@ -823,6 +836,205 @@ fn print_command_compression(rows: &[CmdRow]) {
             vs_rtk
         );
     }
+    println!();
+}
+
+// --- Filter parity vs RTK -------------------------------------------------
+// RTK's `pipe -f <name>` accepts exactly these built-in filters. Each is mapped
+// to the tokenix bundled filter that handles the same command. The generic RTK
+// `log` filter has no tokenix equivalent and is intentionally omitted.
+const RTK_PARITY_MAP: &[(&str, &str)] = &[
+    ("cargo", "cargo-check"),
+    ("cargo-test", "cargo-test"),
+    ("pytest", "pytest"),
+    ("go-test", "go-test"),
+    ("go-build", "go-build"),
+    ("tsc", "tsc"),
+    ("vitest", "vitest"),
+    ("grep", "rg"),
+    ("rg", "rg"),
+    ("find", "fd"),
+    ("fd", "fd"),
+    ("git-log", "git-log"),
+    ("git-diff", "git-diff"),
+    ("git-status", "git-status-short"),
+    ("mypy", "mypy"),
+    ("ruff-check", "ruff"),
+    ("ruff-format", "ruff"),
+    ("prettier", "prettier"),
+];
+
+#[derive(Deserialize)]
+struct ParityFile {
+    #[serde(default)]
+    filters: std::collections::HashMap<String, FilterDef>,
+    #[serde(default)]
+    tests: std::collections::HashMap<String, Vec<ParityCase>>,
+}
+
+#[derive(Deserialize)]
+struct ParityCase {
+    input: String,
+    #[serde(default)]
+    expected: String,
+}
+
+struct ParityRow {
+    rtk_filter: &'static str,
+    tokenix_filter: &'static str,
+    cases: usize,
+    input: usize,
+    tokenix: usize,
+    rtk: Option<usize>,
+    rtk_kept_signal: bool,
+}
+
+/// Lenient signal-preservation check: at least 70% of the must-keep "signal
+/// words" from the golden `expected` output (paths, identifiers, error codes,
+/// counts) must still appear in `candidate`. Tolerates reformatting while
+/// catching genuine information loss. The LLM verification pass is authoritative.
+fn preserves_signal(expected: &str, candidate: &str) -> bool {
+    let key: Vec<&str> = expected
+        .split(|c: char| c.is_whitespace())
+        .filter(|w| w.len() >= 5)
+        .collect();
+    if key.is_empty() {
+        return true;
+    }
+    let hit = key.iter().filter(|w| candidate.contains(**w)).count();
+    hit * 100 >= key.len() * 70
+}
+
+/// Feed every RTK-pipeable filter's golden inputs through both tokenix's own
+/// filter and `rtk pipe -f <name>`, counting tokens identically for both.
+fn measure_filter_parity(repo_root: &Path, rtk: bool) -> Vec<ParityRow> {
+    let dump_dir = std::env::var_os("TOKENIX_PARITY_DUMP")
+        .map(|_| std::env::temp_dir().join("tokenix_parity"));
+    if let Some(dir) = &dump_dir {
+        let _ = std::fs::create_dir_all(dir);
+    }
+
+    let mut rows = Vec::new();
+    for (rtk_filter, tk_filter) in RTK_PARITY_MAP {
+        let path = repo_root
+            .join("assets/filters")
+            .join(format!("{tk_filter}.toml"));
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(parsed) = toml::from_str::<ParityFile>(&raw) else {
+            continue;
+        };
+        let (Some(fdef), Some(cases)) =
+            (parsed.filters.get(*tk_filter), parsed.tests.get(*tk_filter))
+        else {
+            continue;
+        };
+        if cases.is_empty() {
+            continue;
+        }
+
+        let (mut in_tok, mut tk_tok, mut rtk_tok) = (0usize, 0usize, 0usize);
+        let mut rtk_any = false;
+        let mut rtk_kept = true;
+        for (i, case) in cases.iter().enumerate() {
+            in_tok += count_tokens(&case.input);
+            let tk_out = apply_filter(&case.input, fdef);
+            tk_tok += count_tokens(&tk_out);
+            let rtk_out = if rtk {
+                rtk_pipe_by_name(rtk_filter, &case.input)
+            } else {
+                None
+            };
+            if let Some(ref ro) = rtk_out {
+                rtk_any = true;
+                rtk_tok += count_tokens(ro);
+                if !preserves_signal(&case.expected, ro) {
+                    rtk_kept = false;
+                }
+            }
+            if let Some(dir) = &dump_dir {
+                let stem = format!("{rtk_filter}__{tk_filter}__{i}");
+                let _ = std::fs::write(dir.join(format!("{stem}.input.txt")), &case.input);
+                let _ = std::fs::write(dir.join(format!("{stem}.expected.txt")), &case.expected);
+                let _ = std::fs::write(dir.join(format!("{stem}.tokenix.txt")), &tk_out);
+                if let Some(ro) = &rtk_out {
+                    let _ = std::fs::write(dir.join(format!("{stem}.rtk.txt")), ro);
+                }
+            }
+        }
+
+        rows.push(ParityRow {
+            rtk_filter,
+            tokenix_filter: tk_filter,
+            cases: cases.len(),
+            input: in_tok,
+            tokenix: tk_tok,
+            rtk: rtk_any.then_some(rtk_tok),
+            rtk_kept_signal: rtk_kept,
+        });
+    }
+    rows
+}
+
+fn print_filter_parity(rows: &[ParityRow]) {
+    println!(
+        "{}",
+        "6. Filter Parity vs RTK (identical golden input via `rtk pipe -f`)".bold()
+    );
+    println!(
+        "  {:<13} {:<16} {:>6} {:>8} {:>8} {:>8} {:>7} {:>10}",
+        "RTK -f", "tokenix", "cases", "input", "tokenix", "RTK", "Saved", "vs RTK"
+    );
+    println!("  {}", "-".repeat(82).dimmed());
+
+    let (mut wins, mut total) = (0usize, 0usize);
+    for r in rows {
+        let rtk_str = r
+            .rtk
+            .map(|t| format_num(t as i64))
+            .unwrap_or_else(|| "n/a".to_string());
+        let verdict = match r.rtk {
+            Some(rtk) => {
+                total += 1;
+                if r.tokenix <= rtk {
+                    wins += 1;
+                    "win"
+                } else if !r.rtk_kept_signal {
+                    "rtk-lossy"
+                } else {
+                    "behind"
+                }
+            }
+            None => "n/a",
+        };
+        println!(
+            "  {:<13} {:<16} {:>6} {:>8} {:>8} {:>8} {:>6.1}% {:>10}",
+            r.rtk_filter,
+            r.tokenix_filter,
+            r.cases,
+            format_num(r.input as i64),
+            format_num(r.tokenix as i64),
+            rtk_str,
+            saved_pct(r.input, r.tokenix),
+            verdict
+        );
+    }
+    println!("  {}", "-".repeat(82).dimmed());
+    println!(
+        "  tokenix ties-or-beats RTK on {} of {} pipeable filters",
+        format!("{wins}").green(),
+        total
+    );
+    println!(
+        "  {}",
+        "rtk-lossy = RTK emitted fewer tokens only by dropping golden signal; behind = real loss"
+            .dimmed()
+    );
+    println!(
+        "  {}",
+        "RTK built-in `log` has no tokenix equivalent (excluded).".dimmed()
+    );
     println!();
 }
 
