@@ -20,10 +20,7 @@ instance_ip = "54.123.45.67"
 instance_id = "i-1234567890abcdef0"
 vpc_id = "vpc-12345678"
 """
-expected = """
-instance_ip = "54.123.45.67"
-instance_id = "i-1234567890abcdef0"
-vpc_id = "vpc-12345678""""""
+expected = "instance_ip = \"54.123.45.67\"\ninstance_id = \"i-1234567890abcdef0\"\nvpc_id = \"vpc-12345678\""
 
 [[tests.terraform-output]]
 name = "json output"

@@ -24,7 +24,4 @@ digraph {
   "aws_s3_bucket.data" -> "provider.aws"
 }
 """
-expected = """
-digraph {
-  "aws_instance.web" -> "provider.aws"
-  "aws_s3_bucket.data" -> "provider.aws""""""
+expected = "digraph {\n  \"aws_instance.web\" -> \"provider.aws\"\n  \"aws_s3_bucket.data\" -> \"provider.aws\""

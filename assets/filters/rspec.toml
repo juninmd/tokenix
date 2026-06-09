@@ -58,7 +58,4 @@ Failures:
 Finished in 0.5 seconds
 5 examples, 1 failure
 """
-expected = """
-Failures:
-     Failure/Error: expect(user.name).to eq("John")
-       expected: "John""""""
+expected = "Failures:\n     Failure/Error: expect(user.name).to eq(\"John\")\n       expected: \"John\""
