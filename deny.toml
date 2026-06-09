@@ -22,12 +22,6 @@ version = 2
 # a written rationale — any NEW advisory still fails CI.
 yanked = "deny"
 ignore = [
-  # ring AES/QUIC panic on overflow-check. Low severity for tokenix (it does not
-  # use ring's AES/QUIC header-protection path; ring is a transitive TLS dep).
-  # Upgrade to ring >=0.17.12 is currently blocked by a transitive `cc = "~1.0"`
-  # pin in the graph (every ring >=0.17.12 needs cc >=1.1). Tracked follow-up:
-  # relax the cc pin (bump the pinning crate), then `cargo update -p ring`.
-  { id = "RUSTSEC-2025-0009", reason = "transitive ring TLS dep; AES/QUIC path unused; upgrade blocked by cc=~1.0 pin — remove after bumping ring>=0.17.12" },
   # number_prefix: unmaintained, pulled transitively via indicatif. No reachable
   # maintained replacement without an upstream indicatif change.
   { id = "RUSTSEC-2025-0119", reason = "unmaintained transitive dep via indicatif; no direct control — revisit on indicatif update" },
