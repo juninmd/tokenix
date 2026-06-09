@@ -40,15 +40,4 @@ warning: Variable 'x' is assigned a value but never used.
 15 │     let x = 5;
    │     ^^^^^^^^^^
 """
-expected = """
-error: Unexpected console statement. Use a logger instead.
-  ┌─ src/main.ts:10:1
-  │
-10 │ console.log("hello");
-   │ ^^^^^^^^^^^^^^^^^^^
-
-warning: Variable 'x' is assigned a value but never used.
-  ┌─ src/main.ts:15:5
-  │
-15 │     let x = 5;
-   │     ^^^^^^^^^^"""
+expected = "error: Unexpected console statement. Use a logger instead.\nwarning: Variable 'x' is assigned a value but never used."

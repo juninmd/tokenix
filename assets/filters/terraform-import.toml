@@ -33,6 +33,4 @@ input = """
 aws_instance.web: Importing from ID "i-1234567890abcdef0"...
 Error: Error importing instance: InvalidInstanceID.NotFound
 """
-expected = """
-aws_instance.web: Importing from ID "i-1234567890abcdef0"...
-Error: Error importing instance: InvalidInstanceID.NotFound"""
+expected = "Error: Error importing instance: InvalidInstanceID.NotFound"

@@ -35,16 +35,7 @@ input = """
   }
 }
 """
-expected = """
-{
-  "id": "/subscriptions/xxx/resourceGroups/my-rg/providers/Microsoft.Compute/virtualMachines/my-vm",
-  "name": "my-vm",
-  "type": "Microsoft.Compute/virtualMachines",
-  "location": "eastus",
-  "properties": {
-    "provisioningState": "Succeeded"
-  }
-}"""
+expected = "az: ok"
 
 [[tests.az-cli]]
 name = "error shown"

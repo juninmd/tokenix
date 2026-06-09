@@ -36,7 +36,4 @@ aws_instance.web: Destroying... [id=i-1234567890abcdef0]
 aws_instance.web: Still destroying... [10s elapsed]
 Error: Error terminating instance: InvalidInstanceID.NotFound
 """
-expected = """
-aws_instance.web: Destroying... [id=i-1234567890abcdef0]
-aws_instance.web: Still destroying... [10s elapsed]
-Error: Error terminating instance: InvalidInstanceID.NotFound"""
+expected = "Error: Error terminating instance: InvalidInstanceID.NotFound"

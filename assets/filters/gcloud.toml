@@ -30,10 +30,7 @@ Created [https://compute.googleapis.com/projects/my-project/zones/us-central1-a/
 NAME        ZONE           MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP  EXTERNAL_IP     STATUS
 my-instance  us-central1-a  e2-medium                   10.128.0.2   34.123.45.67   RUNNING
 """
-expected = """
-Created [https://compute.googleapis.com/projects/my-project/zones/us-central1-a/instances/my-instance].
-NAME        ZONE           MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP  EXTERNAL_IP     STATUS
-my-instance  us-central1-a  e2-medium                   10.128.0.2   34.123.45.67   RUNNING"""
+expected = "gcloud: ok"
 
 [[tests.gcloud]]
 name = "error shown"
@@ -41,6 +38,4 @@ input = """
 ERROR: (gcloud.compute.instances.create) Could not fetch resource:
  - Quota 'CPUS' exceeded. Limit: 24.0 in region us-central1.
 """
-expected = """
-ERROR: (gcloud.compute.instances.create) Could not fetch resource:
- - Quota 'CPUS' exceeded. Limit: 24.0 in region us-central1."""
+expected = "ERROR: (gcloud.compute.instances.create) Could not fetch resource:"

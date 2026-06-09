@@ -32,7 +32,10 @@ Progress: resolved 120, reused 118, downloaded 2, added 120
 
 Done in 2.3s
 """
-expected = "pnpm install: ok"
+expected = """
+Packages: +120
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ 100%
+Done in 2.3s"""
 
 [[tests.pnpm-install]]
 name = "vulnerabilities shown"
@@ -44,5 +47,6 @@ found 5 vulnerabilities (2 moderate, 3 high)
 run `pnpm audit` to address them
 """
 expected = """
+Packages: +120
 found 5 vulnerabilities (2 moderate, 3 high)
 run `pnpm audit` to address them"""

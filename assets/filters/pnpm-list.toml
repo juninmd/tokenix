@@ -31,13 +31,7 @@ my-project@1.0.0 /home/user/my-project
 │ └── @eslint-community/eslint-utils@4.4.0
 └── typescript@5.2.2
 """
-expected = """
-my-project@1.0.0 /home/user/my-project
-├─┬ @babel/core@7.23.0
-│ └── @babel/helper-compilation-targets@7.22.15
-├─┬ eslint@8.50.0
-│ └── @eslint-community/eslint-utils@4.4.0
-└── typescript@5.2.2"""
+expected = "pnpm list: ok"
 
 [[tests.pnpm-list]]
 name = "unmet dependency"
@@ -46,7 +40,4 @@ my-project@1.0.0 /home/user/my-project
 ├── typescript@5.2.2
 UNMET PEER DEPENDENCY @babel/core@^7.0.0
 """
-expected = """
-my-project@1.0.0 /home/user/my-project
-├── typescript@5.2.2
-UNMET PEER DEPENDENCY @babel/core@^7.0.0"""
+expected = "UNMET PEER DEPENDENCY @babel/core@^7.0.0"

@@ -20,13 +20,11 @@ name = "taint resource"
 input = """
 Resource instance aws_instance.web has been marked as tainted.
 """
-expected = """
-Resource instance aws_instance.web has been marked as tainted."""
+expected = "tofu taint: done"
 
 [[tests.tofu-taint]]
 name = "untaint"
 input = """
 Resource instance aws_instance.web has been marked as untainted.
 """
-expected = """
-Resource instance aws_instance.web has been marked as untainted."""
+expected = "tofu taint: done"

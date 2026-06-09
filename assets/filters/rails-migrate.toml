@@ -33,9 +33,7 @@ input = """
    -> 0.0080s
 == 20240115100001 AddEmailToUsers: migrated (0.0082s) =========================
 """
-expected = """
-== 20240115100000 CreateUsers: migrated (0.0153s) ==============================
-== 20240115100001 AddEmailToUsers: migrated (0.0082s) ========================="""
+expected = "rails db:migrate: ok"
 
 [[tests.rails-migrate]]
 name = "no pending migrations"

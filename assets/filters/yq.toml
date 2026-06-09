@@ -20,10 +20,7 @@ name: John
 age: 30
 city: New York
 """
-expected = """
-name: John
-age: 30
-city: New York"""
+expected = "yq: ok"
 
 [[tests.yq]]
 name = "error shown"

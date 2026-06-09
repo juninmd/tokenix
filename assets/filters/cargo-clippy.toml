@@ -49,18 +49,5 @@ Finished dev [unoptimized + debuginfo] target(s) in 0.5s
 """
 expected = """
 warning: unused import: `std::io::Write`
- --> src/main.rs:5:5
-  |
-5 | use std::io::Write;
-  |     ^^^^^^^^^^^^^^
-  |
   = note: `#[warn(unused_imports)]` on by default
-  = help: remove the import
-
-warning: this `if` can be removed
- --> src/main.rs:10:5
-  |
-10 |     if true {
-  |     ^^^^^^^
-  |
-  = help: remove the `if` block"""
+warning: this `if` can be removed"""

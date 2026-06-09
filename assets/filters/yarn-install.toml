@@ -12,7 +12,10 @@ strip_lines_matching = [
   "success.*saved",
   "Done in",
   "warning.*package-lock",
-  "warning.*deprecated"
+  "warning.*deprecated",
+  "^yarn install v",
+  "^yarn add v",
+  "^\\[\\d+/\\d+\\]"
 ]
 max_lines = 40
 on_empty = "yarn install: ok"

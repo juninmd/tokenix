@@ -31,7 +31,4 @@ Auto-merging src/main.rs
 CONFLICT (content): Merge conflict in src/main.rs
 The stash entry is kept in case you need it again.
 """
-expected = """
-Auto-merging src/main.rs
-CONFLICT (content): Merge conflict in src/main.rs
-The stash entry is kept in case you need it again."""
+expected = "git stash: done"

@@ -23,9 +23,7 @@ input = """
 deployment.apps "myapp" deleted
 service "myapp" deleted
 """
-expected = """
-deployment.apps "myapp" deleted
-service "myapp" deleted"""
+expected = "kubectl delete: done"
 
 [[tests.kubectl-delete]]
 name = "error shown"

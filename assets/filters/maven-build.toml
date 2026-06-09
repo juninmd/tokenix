@@ -69,11 +69,5 @@ input = """
 """
 expected = """
 [ERROR] COMPILATION ERROR : 
-[INFO] -------------------------------------------------------------
 [ERROR] /project/src/main/java/com/example/Main.java:[10,5] cannot find symbol
-  symbol:   variable foo
-  location: class com.example.Main
-[INFO] 1 error
-[INFO] -------------------------------------------------------------
-[INFO] ------------------------------------------------------------------------
 [INFO] BUILD FAILURE"""

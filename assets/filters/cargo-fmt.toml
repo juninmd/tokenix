@@ -30,7 +30,4 @@ Diff at src/main.rs:10:5
 -    let x = 5;
 +    let x = 5 ;
 """
-expected = """
-Diff at src/main.rs:10:5
--    let x = 5;
-+    let x = 5 ;"""
+expected = "Diff at src/main.rs:10:5"

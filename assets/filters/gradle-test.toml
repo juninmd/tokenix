@@ -53,16 +53,6 @@ Execution failed for task ':test'.
 BUILD FAILED in 5s
 """
 expected = """
-> Task :test FAILED
 com.example.MyTest > testAdd FAILED
     java.lang.AssertionError: expected:<3> but was:<4>
-
-> Task :test FAILED
-
-FAILURE: Build failed with an exception.
-
-* What went wrong:
-Execution failed for task ':test'.
-> There were failing tests. See the report at: file:///build/reports/tests/test/index.html
-
 BUILD FAILED in 5s"""

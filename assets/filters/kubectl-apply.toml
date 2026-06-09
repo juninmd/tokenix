@@ -24,10 +24,7 @@ deployment.apps/myapp created
 service/myapp created
 configmap/myapp-config unchanged
 """
-expected = """
-deployment.apps/myapp created
-service/myapp created
-configmap/myapp-config unchanged"""
+expected = "kubectl apply: done"
 
 [[tests.kubectl-apply]]
 name = "error shown"

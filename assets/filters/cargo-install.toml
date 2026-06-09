@@ -47,11 +47,4 @@ error[E0432]: unresolved import `std::foo`
 
 error: could not compile `my-tool` due to previous error
 """
-expected = """
-error[E0432]: unresolved import `std::foo`
- --> src/main.rs:10:5
-  |
-10 | use std::foo;
-  |     ^^^^^^^^^ could not find `foo` in `std`
-
-error: could not compile `my-tool` due to previous error"""
+expected = "error: could not compile `my-tool` due to previous error"

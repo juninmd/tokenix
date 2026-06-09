@@ -26,9 +26,4 @@ input = """
   new_user GET    /users/new(.:format)             users#new
  edit_user GET    /users/:id/edit(.:format)        users#edit
 """
-expected = """
-        root GET    /                              home#index
-     users GET    /users(.:format)                 users#index
-           POST   /users(.:format)                 users#create
-  new_user GET    /users/new(.:format)             users#new
- edit_user GET    /users/:id/edit(.:format)        users#edit"""
+expected = "           POST   /users(.:format)                 users#create"

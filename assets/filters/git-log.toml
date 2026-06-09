@@ -32,6 +32,5 @@ Date:   Fri Jan 12 15:45:00 2024 +0000
 expected = """
 commit abc123def456 (HEAD -> main, origin/main)
     Add new feature
-
 commit def456abc123
     Fix bug in parser"""

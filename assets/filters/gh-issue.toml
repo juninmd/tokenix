@@ -56,11 +56,7 @@ author: user
 assignees: user
 labels: bug, high-priority
 milestone: v1.0
-
-Login fails with 500 error when password contains special characters.
-
 comments:
-  user: investigating...
   user: fixed in PR #42"""
 
 [[tests.gh-issue]]

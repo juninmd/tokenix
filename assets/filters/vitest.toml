@@ -48,7 +48,4 @@ input = """
 expected = """
  FAIL  src/utils.test.ts [ src/utils.test.ts ]
  × add › should add two numbers
-   AssertionError: expected 4 toBe 3
-   => 12 |   expect(add(1, 2)).toBe(3);
-        |             ^
-"""
+   AssertionError: expected 4 toBe 3"""

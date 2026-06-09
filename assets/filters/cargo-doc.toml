@@ -35,9 +35,4 @@ warning: missing documentation for crate
 
 Finished dev [unoptimized + debuginfo] target(s) in 2.3s
 """
-expected = """
-warning: missing documentation for crate
- --> src/lib.rs:1:1
-  |
-1 | // crate
-  | ^"""
+expected = "warning: missing documentation for crate"

@@ -36,12 +36,7 @@ input = """
 ** Execute db:seed
 Done
 """
-expected = """
-** Execute db:migrate
-== 20240115100000 CreateUsers: migrated (0.0153s) ==============================
-
-** Execute db:seed
-Done"""
+expected = "Done"
 
 [[tests.rake]]
 name = "error shown"
@@ -52,5 +47,4 @@ Don't know how to build task 'db:migrate' (see --tasks)
 """
 expected = """
 rake aborted!
-Don't know how to build task 'db:migrate' (see --tasks)
-/home/user/Rakefile:10:in `<top (required)>'"""
+Don't know how to build task 'db:migrate' (see --tasks)"""

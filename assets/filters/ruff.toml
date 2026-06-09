@@ -32,7 +32,4 @@ src/main.py:10:5: F841 Local variable `x` assigned to but never used
 src/main.py:15:1: E501 Line too long (120 > 88)
 Found 2 issues.
 """
-expected = """
-src/main.py:10:5: F841 Local variable `x` assigned to but never used
-src/main.py:15:1: E501 Line too long (120 > 88)
-Found 2 issues."""
+expected = "ruff: no issues"

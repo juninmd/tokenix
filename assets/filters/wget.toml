@@ -13,7 +13,6 @@ strip_lines_matching = [
   "^\\s*\\d+%",
   "^\\s*\\[",
   "^\\s*\\d+\\.\\d+ [KM]B/s",
-  "^\\s*\\d{4}-\\d{2}-\\d{2} "
 ]
 keep_lines_matching = [
   "ERROR",

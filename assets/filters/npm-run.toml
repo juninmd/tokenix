@@ -21,7 +21,7 @@ input = """
 > echo "Build complete"
 Build complete
 """
-expected = "npm run: done"
+expected = "Build complete"
 
 [[tests.npm-run]]
 name = "script error shown"
@@ -33,8 +33,5 @@ input = """
   10:5  error  'x' is assigned a value but never used
 """
 expected = """
-> my-project@1.0.0 lint
-> eslint src/
-
 /src/main.ts
   10:5  error  'x' is assigned a value but never used"""

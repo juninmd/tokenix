@@ -10,9 +10,6 @@ strip_lines_matching = [
 ]
 keep_lines_matching = [
   "FAIL",
-  "PASS",
-  "Test Suites:",
-  "Tests:",
   "Error:",
   "TypeError:",
   "AssertionError"

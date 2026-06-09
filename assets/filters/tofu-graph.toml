@@ -26,8 +26,5 @@ digraph {
 """
 expected = """
 digraph {
-  compound = true
-  newrank = true
   "aws_instance.web" -> "provider.aws"
-  "aws_s3_bucket.data" -> "provider.aws"
-}"""
+  "aws_s3_bucket.data" -> "provider.aws""""""

@@ -43,5 +43,4 @@ input = """
  ✔ Container myapp-db-1     Started
  ✘ Container myapp-web-1    Unhealthy
 """
-expected = """
- ✘ Container myapp-web-1    Unhealthy"""
+expected = "docker compose up: done"

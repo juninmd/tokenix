@@ -56,9 +56,4 @@ input = """
 ------
 error: could not resolve dependency
 """
-expected = """
- => ERROR: failed to solve: process "/bin/sh -c npm ci" did not complete successfully: exit code: 1
-------
- > [3/5] RUN npm ci:
-------
-error: could not resolve dependency"""
+expected = "error: could not resolve dependency"

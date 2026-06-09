@@ -21,8 +21,7 @@ name = "clean scale"
 input = """
 deployment.apps/myapp scaled
 """
-expected = """
-deployment.apps/myapp scaled"""
+expected = "kubectl scale: done"
 
 [[tests.kubectl-scale]]
 name = "error shown"

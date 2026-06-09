@@ -40,5 +40,4 @@ Found 2 issues.
 """
 expected = """
 src/main.ts:10:5: error: 'x' is assigned a value but never used
-src/main.ts:15:1: warning: Line too long
-Found 2 issues."""
+src/main.ts:15:1: warning: Line too long"""

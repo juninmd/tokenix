@@ -36,10 +36,8 @@ lib/utils.rb:1:1: E: Lint/Syntax: syntax error, unexpected end-of-input
 15 files inspected, 3 offenses detected
 """
 expected = """
-app/models/user.rb:10:5: W: Layout/LineLength: Line is too long. [120/80]
-app/controllers/users_controller.rb:5:3: C: Style/GuardClause: Use guard clause instead of wrapping the code inside a conditional.
 lib/utils.rb:1:1: E: Lint/Syntax: syntax error, unexpected end-of-input
-3 offenses detected"""
+15 files inspected, 3 offenses detected"""
 
 [[tests.rubocop]]
 name = "no offenses"
@@ -49,4 +47,4 @@ Inspecting 5 files
 
 5 files inspected, no offenses detected
 """
-expected = "rubocop: no offenses"
+expected = "5 files inspected, no offenses detected"

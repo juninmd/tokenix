@@ -34,15 +34,7 @@ Events:
   Normal  Started    9m    kubelet            Started container nginx
 """
 expected = """
-Name:         myapp
-Namespace:    default
-Labels:       app=myapp
-Annotations:  <none>
-Selector:     app=myapp
-Replicas:     3 desired | 3 updated | 3 total | 3 available | 3 ready
 Events:
-  Type    Reason     Age   From               Message
-  ----    ------     ----  ----               -------
   Normal  Scheduled  10m   default-scheduler  Successfully assigned default/myapp-abc123 to node1
   Normal  Pulling    10m   kubelet            Pulling image "nginx:latest"
   Normal  Pulled     9m    kubelet            Successfully pulled image "nginx:latest"

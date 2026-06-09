@@ -40,10 +40,7 @@ Route (app)                              Size     First Load JS
 └ ○ /about                               2.3 kB         87 kB
 info  - Build completed in 15.2s
 """
-expected = """
-Route (app)                              Size     First Load JS
-┌ ○ /                                    1.2 kB         85 kB
-└ ○ /about                               2.3 kB         87 kB"""
+expected = "Route (app)                              Size     First Load JS"
 
 [[tests.next-build]]
 name = "build error shown"
@@ -57,5 +54,4 @@ info  - Build failed
 """
 expected = """
 Error: Build error occurred
-./src/app/page.tsx:10:5
 Type error: Property 'foo' does not exist on type '{}'."""

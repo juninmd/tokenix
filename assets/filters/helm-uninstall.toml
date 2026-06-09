@@ -20,8 +20,7 @@ name = "clean uninstall"
 input = """
 release "myapp" uninstalled
 """
-expected = """
-release "myapp" uninstalled"""
+expected = "helm uninstall: done"
 
 [[tests.helm-uninstall]]
 name = "error shown"

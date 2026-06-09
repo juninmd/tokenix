@@ -46,7 +46,5 @@ input = """
 [ERROR] There are test failures.
 """
 expected = """
-[INFO] Tests run: 10, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 2.3 s
-[INFO] ------------------------------------------------------------------------
 [ERROR] BUILD FAILURE
 [ERROR] There are test failures."""

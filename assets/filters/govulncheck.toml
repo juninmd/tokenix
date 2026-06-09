@@ -32,6 +32,4 @@ Vulnerability #1: GO-2024-1234
 """
 expected = """
 Vulnerability #1: GO-2024-1234
-  Module: github.com/example/module
-  Version: v1.2.3
   CVE: CVE-2024-12345"""

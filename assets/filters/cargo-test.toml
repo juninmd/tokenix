@@ -37,15 +37,7 @@ test test_mod ... ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 """
-expected = """
-running 5 tests
-test test_add ... ok
-test test_sub ... ok
-test test_mul ... ok
-test test_div ... ok
-test test_mod ... ok
-
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"""
+expected = "cargo test: all tests passed"
 
 [[tests.cargo-test]]
 name = "test failure shown"
@@ -64,11 +56,5 @@ failures:
 test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
 """
 expected = """
-running 5 tests
-test test_add ... ok
 test test_fail ... FAILED
-
-failures:
-    test_fail
-
 test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"""

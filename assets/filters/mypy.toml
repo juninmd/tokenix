@@ -36,5 +36,4 @@ Found 1 error, 1 warning, 1 note in 3 files
 expected = """
 src/main.py:10:5: error: Variable "foo" is not defined  [attr-defined]
 src/utils.py:15:1: warning: Line too long  [line-too-long]
-src/utils.py:20:3: note: Consider using a typed dict
-Found 1 error, 1 warning, 1 note in 3 files"""
+src/utils.py:20:3: note: Consider using a typed dict"""

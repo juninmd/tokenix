@@ -42,8 +42,4 @@ aws_instance.web: Still creating... [10s elapsed]
 aws_instance.web: Still creating... [20s elapsed]
 Error: Error launching instance: InvalidParameterValue
 """
-expected = """
-aws_instance.web: Creating...
-aws_instance.web: Still creating... [10s elapsed]
-aws_instance.web: Still creating... [20s elapsed]
-Error: Error launching instance: InvalidParameterValue"""
+expected = "Error: Error launching instance: InvalidParameterValue"

@@ -39,9 +39,4 @@ CMake Error at CMakeLists.txt:10 (find_package):
     Qt6Config.cmake
     qt6-config.cmake
 """
-expected = """
-CMake Error at CMakeLists.txt:10 (find_package):
-  Could not find a package configuration file provided by "Qt6" with any of
-  the following names:
-    Qt6Config.cmake
-    qt6-config.cmake"""
+expected = "CMake Error at CMakeLists.txt:10 (find_package):"

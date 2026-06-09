@@ -57,14 +57,7 @@ Tests:       1 failed, 14 passed, 15 total
 expected = """
  FAIL  src/utils.test.ts
   ● add › should add two numbers
-
     expect(received).toBe(expected) // Object.is equality
-
     Expected: 3
     Received: 4
-
-      12 |   expect(add(1, 2)).toBe(3);
-      13 | });
-
-Test Suites: 1 failed, 1 passed, 2 total
-Tests:       1 failed, 14 passed, 15 total"""
+      12 |   expect(add(1, 2)).toBe(3);"""

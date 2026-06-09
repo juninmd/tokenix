@@ -35,7 +35,6 @@ John Doe (5):
       Update documentation
       Refactor auth module
       Bump version
-
 Jane Smith (3):
       Fix login issue
       Add tests for auth

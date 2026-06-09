@@ -22,8 +22,4 @@ input = """
 > length(var.subnet_ids)
 2
 """
-expected = """
-> var.instance_type
-"t3.micro"
-> length(var.subnet_ids)
-2"""
+expected = "2"

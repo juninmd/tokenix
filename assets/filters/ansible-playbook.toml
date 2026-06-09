@@ -51,5 +51,4 @@ fatal: [web1]: FAILED! => {"msg": "Failed to install nginx: apt update failed"}
 PLAY RECAP *******************************************************************
 web1                   : ok=1    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0
 """
-expected = """
-fatal: [web1]: FAILED! => {"msg": "Failed to install nginx: apt update failed}"""
+expected = "fatal: [web1]: FAILED! => {\"msg\": \"Failed to install nginx: apt update failed\"}"

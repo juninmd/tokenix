@@ -29,4 +29,7 @@ Test Suites: 1 passed, 1 total
 Tests:       10 passed, 10 total
 Done in 2.34s.
 """
-expected = "pnpm test: passed"
+expected = """
+ PASS  src/utils.test.ts
+Test Suites: 1 passed, 1 total
+Tests:       10 passed, 10 total"""

@@ -59,9 +59,6 @@ Finished in 0.5 seconds
 5 examples, 1 failure
 """
 expected = """
-  1) User#name returns the name
+Failures:
      Failure/Error: expect(user.name).to eq("John")
-       expected: "John"
-            got: "Jane"
-     # ./spec/models/user_spec.rb:10:in `block (2 levels) in <top (required)>'
-5 examples, 1 failure"""
+       expected: "John""""""

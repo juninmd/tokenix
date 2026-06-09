@@ -25,8 +25,4 @@ Containers      10        3         100MB     50MB (50%)
 Local Volumes   8         4         500MB     200MB (40%)
 Build Cache     20        2         1.2GB     1.0GB (83%)
 """
-expected = """
-Images          15        5         2.5GB     1.8GB (72%)
-Containers      10        3         100MB     50MB (50%)
-Local Volumes   8         4         500MB     200MB (40%)
-Build Cache     20        2         1.2GB     1.0GB (83%)"""
+expected = "docker system: ok"

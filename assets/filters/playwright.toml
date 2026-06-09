@@ -34,7 +34,9 @@ Running 10 tests using 2 workers
 
 10 passed (2.5s)
 """
-expected = "playwright test: all passed"
+expected = """
+  ✓ test1.spec.ts:1:1  passed (1.2s)
+  ✓ test2.spec.ts:1:1  passed (0.8s)"""
 
 [[tests.playwright]]
 name = "test failures shown"
@@ -49,6 +51,7 @@ Running 10 tests using 2 workers
 9 passed, 1 failed (2.5s)
 """
 expected = """
+  ✓ test1.spec.ts:1:1  passed (1.2s)
   ✗ test2.spec.ts:1:1  failed (0.8s)
     Error: expect(received).toBe(expected)
     Expected: 3

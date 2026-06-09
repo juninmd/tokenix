@@ -47,8 +47,4 @@ Test Case '-[MyPackageTests testAdd]' failed (0.001 seconds).
 Test Suite 'MyPackageTests' failed at 2024-01-15 10:30:00.126
 	Executed 2 tests, with 1 failure (1 unexpected) in 0.002 seconds
 """
-expected = """
-Test Case '-[MyPackageTests testAdd]' failed (0.001 seconds).
-	MyPackageTests.swift:15: XCTAssertEqual failed: ("4") is not equal to ("3")
-Test Suite 'MyPackageTests' failed at 2024-01-15 10:30:00.126
-	Executed 2 tests, with 1 failure (1 unexpected) in 0.002 seconds"""
+expected = "	MyPackageTests.swift:15: XCTAssertEqual failed: (\"4\") is not equal to (\"3\")"

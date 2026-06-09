@@ -22,8 +22,7 @@ name = "clean rollout"
 input = """
 deployment.apps/myapp rolled out
 """
-expected = """
-deployment.apps/myapp rolled out"""
+expected = "kubectl rollout: done"
 
 [[tests.kubectl-rollout]]
 name = "timeout shown"

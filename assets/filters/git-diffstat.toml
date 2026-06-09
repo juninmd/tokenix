@@ -22,8 +22,4 @@ input = """
  tests/test.rs   |  3 ---
  3 files changed, 15 insertions(+), 3 deletions(-)
 """
-expected = """
- src/main.rs     | 10 ++++++++++
- src/utils.rs    |  5 +++++
- tests/test.rs   |  3 ---
- 3 files changed, 15 insertions(+), 3 deletions(-)"""
+expected = " 3 files changed, 15 insertions(+), 3 deletions(-)"

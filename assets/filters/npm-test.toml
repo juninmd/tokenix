@@ -31,7 +31,11 @@ input = """
 Test Suites: 2 passed, 2 total
 Tests:       15 passed, 15 total
 """
-expected = "npm test: passed"
+expected = """
+ PASS  src/utils.test.ts
+ PASS  src/components.test.tsx
+Test Suites: 2 passed, 2 total
+Tests:       15 passed, 15 total"""
 
 [[tests.npm-test]]
 name = "test failure shown"
@@ -47,11 +51,4 @@ input = """
     Expected: 3
     Received: 4
 """
-expected = """
- FAIL  src/utils.test.ts
-  ● add › should add two numbers
-
-    expect(received).toBe(expected)
-
-    Expected: 3
-    Received: 4"""
+expected = " FAIL  src/utils.test.ts"

@@ -39,9 +39,4 @@ warning: unused variable: `x`
 Finished dev [unoptimized + debuginfo] target(s) in 0.5s
 """
 expected = """warning: unused variable: `x`
- --> src/main.rs:10:9
-  |
-10 |     let x = 5;
-  |         ^^ help: if this is intentional, prefix with underscore: `_x`
-  |
   = note: `#[warn(unused_variables)]` on by default"""

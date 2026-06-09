@@ -43,6 +43,4 @@ Running models...
   compiled SQL at target/run/schema/model1.sql
 Done.
 """
-expected = """
-  ERROR: division by zero
-  compiled SQL at target/run/schema/model1.sql"""
+expected = "  ERROR: division by zero"

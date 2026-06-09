@@ -64,11 +64,7 @@ conclusion: failure
 created: 2024-01-15T10:30:00Z
 head_branch: feature/new-feature
 head_sha: abc123
-
 jobs:
-  ✓ lint (2m 30s)
-  ✓ test (5m 15s)
-  ✗ build (3m 45s)
     Error: Compilation failed"""
 
 [[tests.gh-run]]

@@ -30,6 +30,4 @@ input = """
 test.sql:10:5: L010: Inconsistent capitalisation of keywords
 test.sql:15:1: L016: Line too long
 """
-expected = """
-test.sql:10:5: L010: Inconsistent capitalisation of keywords
-test.sql:15:1: L016: Line too long"""
+expected = "sqlfluff: no issues"

@@ -42,11 +42,4 @@ Resource actions are indicated with the following symbols:
 
 Plan: 2 to add, 1 to change, 1 to destroy.
 """
-expected = """
-Terraform used the selected providers to generate the following execution plan.
-Resource actions are indicated with the following symbols:
-  + create
-  ~ update in-place
-  - destroy
-
-Plan: 2 to add, 1 to change, 1 to destroy."""
+expected = "terraform plan: no changes"

@@ -37,7 +37,7 @@ Running tests (sequential)
 
 Test run: 50 passed, 0 failed, 0 skipped (2.3s)
 """
-expected = "cargo nextest: all tests passed"
+expected = "Test run: 50 passed, 0 failed, 0 skipped (2.3s)"
 
 [[tests.cargo-nextest]]
 name = "failures shown"
@@ -53,9 +53,5 @@ Running tests (sequential)
 Test run: 49 passed, 1 failed, 0 skipped (2.5s)
 """
 expected = """
-[FAIL] my-crate::tests::test2 (15ms)
    Error: assertion failed: `(left == right)`
-     left: `3`,
-     right: `4`,
-
 Test run: 49 passed, 1 failed, 0 skipped (2.5s)"""

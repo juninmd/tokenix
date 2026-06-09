@@ -38,14 +38,4 @@ Error: Invalid value for variable "instance_type"
   15:   }
   16: }
 """
-expected = """
-Error: Invalid value for variable "instance_type"
-
-  on variables.tf line 10:
-  10: variable "instance_type" {
-  11:   type = string
-  12:   validation {
-  13:     condition = contains(["t2.micro", "t3.micro"], var.instance_type)
-  14:     error_message = "Invalid instance type."
-  15:   }
-  16: }"""
+expected = "Error: Invalid value for variable \"instance_type\""

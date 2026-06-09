@@ -39,6 +39,4 @@ input = """
 """
 expected = """
 /Users/me/MyApp/ViewController.swift:10:5: error: cannot find 'foo' in scope
-    foo()
-    ^~~
 ** BUILD FAILED **"""

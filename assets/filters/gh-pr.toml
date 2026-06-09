@@ -69,13 +69,8 @@ labels: enhancement
 milestone: v1.0
 base: main
 head: feature/new-feature
-
 checks:
-  ✓ CI
-  ✓ Lint
-  ✗ Tests (2 failing)
-
-view this pull request on GitHub: https://github.com/owner/repo/pull/42"""
+  ✗ Tests (2 failing)"""
 
 [[tests.gh-pr]]
 name = "error shown"

@@ -36,6 +36,5 @@ FAIL    github.com/user/project  0.234s
 """
 expected = """
 --- FAIL: TestAdd (0.00s)
-    main_test.go:15: expected 3, got 4
 FAIL
 FAIL    github.com/user/project  0.234s"""

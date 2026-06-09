@@ -64,18 +64,5 @@ Execution failed for task ':compileJava'.
 BUILD FAILED in 5s
 """
 expected = """
-> Task :compileJava FAILED
-/src/main/java/com/example/Main.java:10: error: cannot find symbol
-  symbol:   variable foo
-  location: class com.example.Main
-1 error
-
-> Task :compileJava FAILED
-
-FAILURE: Build failed with an exception.
-
-* What went wrong:
-Execution failed for task ':compileJava'.
 > Compilation failed; see the compiler error output for details.
-
 BUILD FAILED in 5s"""

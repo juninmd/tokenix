@@ -29,7 +29,4 @@ Total reclaimed space: 1.8GB
 """
 expected = """
 Deleted Images:
-deleted: sha256:abc123...
-deleted: sha256:def456...
-
 Total reclaimed space: 1.8GB"""

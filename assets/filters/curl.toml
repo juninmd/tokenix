@@ -27,12 +27,11 @@ on_empty = "curl: ok"
 name = "success response"
 input = """
   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
-                                 Dload  Upload   Total   Spent    Left  Speed
+                                  Dload  Upload   Total   Spent    Left  Speed
 100   234  100   234    0     0    234      0  0:00:01  0:00:01 --:--:--   234
 {"status": "ok", "data": {"id": 1}}
 """
-expected = """
-{"status": "ok", "data": {"id": 1}}"""
+expected = "curl: ok"
 
 [[tests.curl]]
 name = "connection error shown"

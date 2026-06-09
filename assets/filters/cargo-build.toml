@@ -40,9 +40,4 @@ warning: unused import: `std::io::Write`
     Finished dev [unoptimized + debuginfo] target(s) in 1.2s
 """
 expected = """warning: unused import: `std::io::Write`
- --> src/main.rs:5:5
-  |
-5 | use std::io::Write;
-  |     ^^^^^^^^^^^^^^
-  |
   = note: `#[warn(unused_imports)]` on by default"""

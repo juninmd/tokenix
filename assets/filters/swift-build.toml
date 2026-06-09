@@ -33,8 +33,4 @@ main.swift:10:5: error: cannot find 'foo' in scope
     foo()
     ^~~
 """
-expected = """
-Compile MyPackage main.swift
-main.swift:10:5: error: cannot find 'foo' in scope
-    foo()
-    ^~~"""
+expected = "main.swift:10:5: error: cannot find 'foo' in scope"

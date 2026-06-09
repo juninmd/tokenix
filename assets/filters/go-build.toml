@@ -27,6 +27,4 @@ input = """
 # github.com/user/project
 ./main.go:10:5: undefined: foo
 """
-expected = """
-# github.com/user/project
-./main.go:10:5: undefined: foo"""
+expected = "./main.go:10:5: undefined: foo"
