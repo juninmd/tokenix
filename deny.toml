@@ -22,9 +22,6 @@ version = 2
 # a written rationale — any NEW advisory still fails CI.
 yanked = "deny"
 ignore = [
-  # number_prefix: unmaintained, pulled transitively via indicatif. No reachable
-  # maintained replacement without an upstream indicatif change.
-  { id = "RUSTSEC-2025-0119", reason = "unmaintained transitive dep via indicatif; no direct control — revisit on indicatif update" },
   # paste: unmaintained proc-macro, pulled transitively via tokenizers/ort. No
   # reachable maintained replacement without an upstream change.
   { id = "RUSTSEC-2024-0436", reason = "unmaintained transitive dep via tokenizers/ort; no direct control — revisit on upstream update" },
