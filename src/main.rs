@@ -305,15 +305,8 @@ enum Commands {
             help = "Token budget for semantic queries"
         )]
         budget: usize,
-        #[arg(
-            long,
-            help = "Path to a local CodeGraph checkout for a lightweight comparison"
-        )]
-        compare_codegraph: Option<PathBuf>,
         #[arg(long, help = "TOML file with project-specific benchmark cases")]
         cases: Option<PathBuf>,
-        #[arg(long, help = "Include optional market-tool comparison arms")]
-        competitive: bool,
         #[arg(long, help = "Emit machine-readable benchmark summary")]
         json: bool,
     },
@@ -662,21 +655,11 @@ fn main() -> Result<()> {
             path,
             refresh_index,
             budget,
-            compare_codegraph,
             cases,
-            competitive,
             json,
         } => {
             let repo_root = find_repo_root(&path);
-            benchmark::run_benchmark(
-                &repo_root,
-                refresh_index,
-                budget,
-                compare_codegraph.as_deref(),
-                cases.as_deref(),
-                competitive,
-                json,
-            )
+            benchmark::run_benchmark(&repo_root, refresh_index, budget, cases.as_deref(), json)
         }
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
         Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),

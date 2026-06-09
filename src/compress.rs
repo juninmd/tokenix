@@ -1516,7 +1516,7 @@ pub fn run_hook_post() -> Result<()> {
     // Code sends to the model. Exit 0 silently to avoid the empty-stderr blocking
     // error, and do NOT log savings the model never actually receives. Real Bash
     // compression must move to a PreToolUse command rewrite (run the command
-    // through tokenix before execution), the way rtk wraps `rtk <cmd>`.
+    // through tokenix before execution, wrapping it as `tokenix run <cmd>`).
     if input.dialect == PostDialect::ClaudeNoop {
         std::process::exit(0);
     }

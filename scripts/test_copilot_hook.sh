@@ -81,7 +81,7 @@ fi
 if echo "$OUT" | grep -q "no changes added to commit"; then
   fail "git status filter did not strip help-hint line" "out: $OUT"
 else
-  pass "git status RTK filter stripped help-hint line"
+  pass "git status filter stripped help-hint line"
 fi
 
 # git diff → git-diff filter strips diff headers (diff --git, index, ---, +++).
@@ -96,7 +96,7 @@ fi
 if echo "$OUT" | grep -q "diff --git"; then
   fail "git diff filter did not strip 'diff --git' header" "out: $OUT"
 else
-  pass "git diff RTK filter stripped 'diff --git' header"
+  pass "git diff filter stripped 'diff --git' header"
 fi
 
 # toolArgs as a JSON-encoded string (Copilot sometimes does this).

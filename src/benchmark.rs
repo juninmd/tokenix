@@ -2,17 +2,14 @@ use anyhow::Result;
 use colored::Colorize;
 use serde::Deserialize;
 use std::collections::BTreeSet;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use crate::chunker::{count_tokens, generate_outline, should_index};
-use crate::filters::{apply_filter, FilterDef};
 
 use crate::indexer;
 use crate::query::{build_task_context, query_index};
-use crate::store::{count_stats, index_staleness, open_db};
+use crate::store::index_staleness;
 
 struct ReadRow {
     path: String,
@@ -72,20 +69,6 @@ struct ContextArmRow {
     note: &'static str,
 }
 
-struct CompetitiveRow {
-    tool: &'static str,
-    status: String,
-    tokens: Option<usize>,
-    quality: Option<String>,
-    note: String,
-}
-
-struct FeatureRow {
-    feature: &'static str,
-    tokenix: &'static str,
-    competitors: &'static str,
-}
-
 #[derive(Deserialize)]
 struct BenchCases {
     #[serde(default)]
@@ -105,20 +88,11 @@ pub fn run_benchmark(
     repo_root: &Path,
     refresh_index: bool,
     query_budget: usize,
-    codegraph_path: Option<&Path>,
     cases_path: Option<&Path>,
-    competitive: bool,
     json_out: bool,
 ) -> Result<()> {
     if json_out {
-        return run_benchmark_json(
-            repo_root,
-            refresh_index,
-            query_budget,
-            codegraph_path,
-            cases_path,
-            competitive,
-        );
+        return run_benchmark_json(repo_root, refresh_index, query_budget, cases_path);
     }
 
     println!();
@@ -153,7 +127,6 @@ pub fn run_benchmark(
         println!();
     }
 
-    let rtk_available = check_rtk();
     let context_cases = load_context_bench_cases(cases_path)?;
 
     let read_rows = measure_read_reduction(repo_root)?;
@@ -162,33 +135,17 @@ pub fn run_benchmark(
     let workflow_rows = measure_targeted_workflows(repo_root)?;
     print_targeted_workflows(&workflow_rows);
 
-    let query_rows =
-        measure_semantic_quality(repo_root, query_budget, rtk_available, &context_cases)?;
+    let query_rows = measure_semantic_quality(repo_root, query_budget, &context_cases)?;
     print_semantic_quality(&query_rows, query_budget);
 
-    let context_rows = measure_context_homologation(repo_root, codegraph_path, &context_cases)?;
+    let context_rows = measure_context_homologation(repo_root, &context_cases)?;
     print_context_homologation(&context_rows);
 
-    let cmd_rows = measure_command_compression(repo_root, rtk_available)?;
+    let cmd_rows = measure_command_compression(repo_root)?;
     print_command_compression(&cmd_rows);
 
-    let parity_rows = measure_filter_parity(repo_root, rtk_available);
-    if !parity_rows.is_empty() {
-        print_filter_parity(&parity_rows);
-    }
-
-    if competitive {
-        let league_rows = measure_competitive_league(repo_root, &context_cases, query_budget)?;
-        print_competitive_league(&league_rows);
-        print_feature_matrix();
-    }
-
     print_verdict(&read_rows, &workflow_rows, &query_rows, &cmd_rows);
-    if let Some(path) = codegraph_path {
-        print_codegraph_comparison(repo_root, path, &workflow_rows, &query_rows, &context_rows)?;
-    } else {
-        print_internal_graph_stats(repo_root)?;
-    }
+    print_internal_graph_stats(repo_root)?;
     Ok(())
 }
 
@@ -196,26 +153,17 @@ fn run_benchmark_json(
     repo_root: &Path,
     refresh_index: bool,
     query_budget: usize,
-    codegraph_path: Option<&Path>,
     cases_path: Option<&Path>,
-    competitive: bool,
 ) -> Result<()> {
     if refresh_index {
         let _ = indexer::index_repo(repo_root, false, |_| {})?;
     }
-    let rtk_available = check_rtk();
     let context_cases = load_context_bench_cases(cases_path)?;
     let read_rows = measure_read_reduction(repo_root)?;
     let workflow_rows = measure_targeted_workflows(repo_root)?;
-    let query_rows =
-        measure_semantic_quality(repo_root, query_budget, rtk_available, &context_cases)?;
-    let context_rows = measure_context_homologation(repo_root, codegraph_path, &context_cases)?;
-    let cmd_rows = measure_command_compression(repo_root, rtk_available)?;
-    let competitive_rows = if competitive {
-        measure_competitive_league(repo_root, &context_cases, query_budget)?
-    } else {
-        Vec::new()
-    };
+    let query_rows = measure_semantic_quality(repo_root, query_budget, &context_cases)?;
+    let context_rows = measure_context_homologation(repo_root, &context_cases)?;
+    let cmd_rows = measure_command_compression(repo_root)?;
     let out = serde_json::json!({
         "read_saved_pct": saved_pct(
             read_rows.iter().map(|r| r.raw_tokens).sum(),
@@ -235,18 +183,6 @@ fn run_benchmark_json(
             cmd_rows.iter().map(|r| r.vanilla).sum(),
             cmd_rows.iter().map(|r| r.tokenix).sum(),
         ),
-        "competitive": competitive_rows.iter().map(|row| serde_json::json!({
-            "tool": row.tool,
-            "status": row.status,
-            "tokens": row.tokens,
-            "quality": row.quality,
-            "note": row.note,
-        })).collect::<Vec<_>>(),
-        "feature_matrix": competitive_feature_rows().iter().map(|row| serde_json::json!({
-            "feature": row.feature,
-            "tokenix": row.tokenix,
-            "competitors": row.competitors,
-        })).collect::<Vec<_>>(),
     });
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
@@ -326,7 +262,6 @@ fn load_context_bench_cases(cases_path: Option<&Path>) -> Result<Vec<ContextBenc
 
 fn measure_context_homologation(
     repo_root: &Path,
-    codegraph_path: Option<&Path>,
     cases: &[ContextBenchCase],
 ) -> Result<Vec<ContextArmRow>> {
     let mut rows = Vec::new();
@@ -358,40 +293,6 @@ fn measure_context_homologation(
             quality_ok: Some(matches_expected_path(&tokenix, &case.expected_paths)),
             note: "context --budget 1200",
         });
-
-        if let Some(root) = codegraph_path {
-            let start = Instant::now();
-            let codegraph = run_codegraph_context(root, repo_root, &case.task).unwrap_or_default();
-            rows.push(ContextArmRow {
-                label: case.label.clone(),
-                arm: "codegraph",
-                tokens: if codegraph.is_empty() {
-                    None
-                } else {
-                    Some(count_tokens(&codegraph))
-                },
-                latency_ms: if codegraph.is_empty() {
-                    None
-                } else {
-                    Some(start.elapsed().as_millis())
-                },
-                quality_ok: if codegraph.is_empty() {
-                    None
-                } else {
-                    Some(matches_expected_path(&codegraph, &case.expected_paths))
-                },
-                note: "context --max-nodes 12 --max-code 4",
-            });
-        }
-
-        rows.push(ContextArmRow {
-            label: case.label.clone(),
-            arm: "rtk",
-            tokens: None,
-            latency_ms: None,
-            quality_ok: None,
-            note: "not a code-context tool",
-        });
     }
     Ok(rows)
 }
@@ -400,33 +301,8 @@ fn matches_expected_path(output: &str, expected_paths: &[String]) -> bool {
     expected_paths.iter().any(|path| output.contains(path))
 }
 
-fn run_codegraph_context(root: &Path, repo_root: &Path, task: &str) -> Result<String> {
-    let candidates = [root.join("dist/bin/codegraph.js")];
-    let Some(cli) = candidates.iter().find(|path| path.exists()) else {
-        return Ok(String::new());
-    };
-    let out = std::process::Command::new("node")
-        .arg(cli)
-        .arg("context")
-        .arg(task)
-        .arg("--path")
-        .arg(repo_root)
-        .arg("--max-nodes")
-        .arg("12")
-        .arg("--max-code")
-        .arg("4")
-        .output()?;
-    if !out.status.success() {
-        return Ok(String::new());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
-}
-
 fn print_context_homologation(rows: &[ContextArmRow]) {
-    println!(
-        "{}",
-        "4. Context Homologation: Vanilla vs tokenix vs CodeGraph vs RTK".bold()
-    );
+    println!("{}", "4. Context Homologation: Vanilla vs tokenix".bold());
     println!(
         "  {:<18} {:<10} {:>9} {:>8} {:>7}  Note",
         "Case", "Arm", "Tokens", "ms", "OK"
@@ -457,7 +333,7 @@ fn print_context_homologation(rows: &[ContextArmRow]) {
     }
 
     println!("  {}", "-".repeat(86).dimmed());
-    for arm in ["vanilla", "tokenix", "codegraph"] {
+    for arm in ["vanilla", "tokenix"] {
         let arm_rows: Vec<&ContextArmRow> = rows
             .iter()
             .filter(|row| row.arm == arm && row.tokens.is_some())
@@ -482,222 +358,13 @@ fn print_context_homologation(rows: &[ContextArmRow]) {
     println!();
 }
 
-fn measure_competitive_league(
-    repo_root: &Path,
-    cases: &[ContextBenchCase],
-    budget: usize,
-) -> Result<Vec<CompetitiveRow>> {
-    let case = cases
-        .first()
-        .cloned()
-        .unwrap_or_else(|| default_context_bench_cases().into_iter().next().unwrap());
-    let mut rows = Vec::new();
-
-    let tokenix = build_task_context(repo_root, &case.task, budget, 4).unwrap_or_default();
-    rows.push(CompetitiveRow {
-        tool: "tokenix context",
-        status: "measured".to_string(),
-        tokens: Some(count_tokens(&tokenix)),
-        quality: Some(if matches_expected_path(&tokenix, &case.expected_paths) {
-            "hit".to_string()
-        } else {
-            "miss".to_string()
-        }),
-        note: format!("budget {budget}, case `{}`", case.label),
-    });
-
-    let pack = crate::pack::build_pack(
-        repo_root,
-        crate::pack::PackOptions {
-            profile: crate::pack::PackProfile::Plan,
-            budget: budget.max(2_000),
-            format: crate::pack::PackFormat::Markdown,
-            changed: false,
-            since: None,
-            token_map: true,
-        },
-    )
-    .unwrap_or_default();
-    rows.push(CompetitiveRow {
-        tool: "tokenix pack",
-        status: "measured".to_string(),
-        tokens: Some(count_tokens(&pack)),
-        quality: Some(if matches_expected_path(&pack, &case.expected_paths) {
-            "hit".to_string()
-        } else {
-            "miss".to_string()
-        }),
-        note: "local repo pack with token map".to_string(),
-    });
-
-    rows.push(measure_external_pack(
-        repo_root,
-        "repomix",
-        &[".", "--stdout"],
-        &case.expected_paths,
-        "Repomix whole-repo pack if installed",
-    ));
-    rows.push(measure_external_pack(
-        repo_root,
-        "aider",
-        &["--show-repo-map", "--no-gitignore"],
-        &case.expected_paths,
-        "Aider repo map if installed",
-    ));
-    rows.push(CompetitiveRow {
-        tool: "cursor/continue/cody",
-        status: "documented".to_string(),
-        tokens: None,
-        quality: None,
-        note: "IDE/cloud tools are not CLI-comparable here; use tokenix Hit@3/context rows"
-            .to_string(),
-    });
-
-    Ok(rows)
-}
-
-fn measure_external_pack(
-    repo_root: &Path,
-    exe: &'static str,
-    args: &[&str],
-    expected_paths: &[String],
-    note: &str,
-) -> CompetitiveRow {
-    let command = if cfg!(windows) {
-        format!("{exe}.cmd")
-    } else {
-        exe.to_string()
-    };
-    let Ok(out) = Command::new(&command)
-        .args(args)
-        .current_dir(repo_root)
-        .output()
-    else {
-        return CompetitiveRow {
-            tool: exe,
-            status: "skipped".to_string(),
-            tokens: None,
-            quality: None,
-            note: "not installed or not on PATH".to_string(),
-        };
-    };
-    if !out.status.success() {
-        return CompetitiveRow {
-            tool: exe,
-            status: "skipped".to_string(),
-            tokens: None,
-            quality: None,
-            note: "command failed; not counted".to_string(),
-        };
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    CompetitiveRow {
-        tool: exe,
-        status: "measured".to_string(),
-        tokens: Some(count_tokens(&stdout)),
-        quality: Some(if matches_expected_path(&stdout, expected_paths) {
-            "hit".to_string()
-        } else {
-            "miss".to_string()
-        }),
-        note: note.to_string(),
-    }
-}
-
-fn print_competitive_league(rows: &[CompetitiveRow]) {
-    println!("{}", "6. Competitive League".bold());
-    println!(
-        "  {:<22} {:<10} {:>9} {:>8}  Note",
-        "Tool", "Status", "Tokens", "Quality"
-    );
-    println!("  {}", "-".repeat(90).dimmed());
-    for row in rows {
-        let tokens = row
-            .tokens
-            .map(|t| format_num(t as i64))
-            .unwrap_or_else(|| "n/a".to_string());
-        let quality = row.quality.as_deref().unwrap_or("n/a");
-        println!(
-            "  {:<22} {:<10} {:>9} {:>8}  {}",
-            row.tool,
-            row.status,
-            tokens,
-            quality,
-            row.note.dimmed()
-        );
-    }
-    println!();
-}
-
-fn competitive_feature_rows() -> Vec<FeatureRow> {
-    vec![
-        FeatureRow {
-            feature: "Budgeted repo map",
-            tokenix: "pack/context strict budget",
-            competitors: "Aider repo-map; Repomix pack",
-        },
-        FeatureRow {
-            feature: "Graph-aware context",
-            tokenix: "symbols/callers/callees/impact",
-            competitors: "Aider graph rank; Cody Code Graph",
-        },
-        FeatureRow {
-            feature: "Semantic index",
-            tokenix: "local fastembed SQLite",
-            competitors: "Cursor/Continue embeddings; Augment engine",
-        },
-        FeatureRow {
-            feature: "Progressive MCP",
-            tokenix: "slim profile + meta-tools",
-            competitors: "MCP progressive discovery best practice",
-        },
-        FeatureRow {
-            feature: "Output savings",
-            tokenix: "PreToolUse command rewrite + filters",
-            competitors: "RTK-style compression; Repomix not command-output focused",
-        },
-        FeatureRow {
-            feature: "Remote repo pack",
-            tokenix: "not yet",
-            competitors: "Repomix --remote; Cody remote context",
-        },
-        FeatureRow {
-            feature: "Rerank model",
-            tokenix: "hybrid lexical/semantic heuristics",
-            competitors: "Continue rerank role; cloud IDE rerankers",
-        },
-    ]
-}
-
-fn print_feature_matrix() {
-    println!("{}", "7. Feature Matrix vs Market".bold());
-    println!("  {:<24} {:<34} Competitor signal", "Feature", "tokenix");
-    println!("  {}", "-".repeat(104).dimmed());
-    for row in competitive_feature_rows() {
-        println!(
-            "  {:<24} {:<34} {}",
-            row.feature, row.tokenix, row.competitors
-        );
-    }
-    println!();
-}
-
-fn check_rtk() -> bool {
-    let cmd = if cfg!(windows) { "rtk.exe" } else { "rtk" };
-    std::process::Command::new(cmd)
-        .arg("--version")
-        .output()
-        .is_ok()
-}
-
 struct CmdRow {
     cmd: &'static str,
     vanilla: usize,
     tokenix: usize,
-    rtk: Option<usize>,
 }
 
-fn measure_command_compression(repo_root: &Path, rtk: bool) -> Result<Vec<CmdRow>> {
+fn measure_command_compression(repo_root: &Path) -> Result<Vec<CmdRow>> {
     let cases = [
         ("git status --short", sample_git_status(repo_root)),
         ("git log -n 5", sample_git_log(repo_root)),
@@ -714,48 +381,13 @@ fn measure_command_compression(repo_root: &Path, rtk: bool) -> Result<Vec<CmdRow
         let tokenix_out = crate::compress::compress_bash_output(cmd_str, &vanilla_out);
         let tokenix_tokens = count_tokens(&tokenix_out);
 
-        let rtk_tokens = rtk
-            .then(|| rtk_pipe_filter(cmd_str, &vanilla_out).map(|out| count_tokens(&out)))
-            .flatten();
-
         rows.push(CmdRow {
             cmd: cmd_str,
             vanilla: vanilla_tokens,
             tokenix: tokenix_tokens,
-            rtk: rtk_tokens,
         });
     }
     Ok(rows)
-}
-
-fn rtk_pipe_filter(cmd: &str, input: &str) -> Option<String> {
-    let filter = match cmd {
-        "git status" | "git status --short" => "git-status",
-        "git log -n 5" => "git-log",
-        "cargo check" => "cargo",
-        "ls -R" => "find",
-        _ => return None,
-    };
-    rtk_pipe_by_name(filter, input)
-}
-
-/// Pipe `input` through `rtk pipe -f <filter>`. Returns None if rtk is absent
-/// or does not recognize the filter (non-zero exit), so callers can tell a real
-/// RTK filter from an unsupported one.
-fn rtk_pipe_by_name(filter: &str, input: &str) -> Option<String> {
-    let exe = if cfg!(windows) { "rtk.exe" } else { "rtk" };
-    let mut child = Command::new(exe)
-        .args(["pipe", "-f", filter])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    child.stdin.as_mut()?.write_all(input.as_bytes()).ok()?;
-    let out = child.wait_with_output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 fn sample_git_status(repo_root: &Path) -> String {
@@ -766,7 +398,7 @@ fn sample_git_status(repo_root: &Path) -> String {
         .ok()
         .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
         .filter(|out| !out.trim().is_empty())
-        .unwrap_or_else(|| " M src/query.rs\n M src/benchmark.rs\n?? .cgcignore\n".to_string())
+        .unwrap_or_else(|| " M src/query.rs\n M src/benchmark.rs\n?? notes.txt\n".to_string())
 }
 
 fn sample_git_log(repo_root: &Path) -> String {
@@ -861,256 +493,20 @@ fn sample_file_listing(repo_root: &Path) -> String {
 fn print_command_compression(rows: &[CmdRow]) {
     println!("{}", "5. Command Output Compression".bold());
     println!(
-        "  {:<20} {:>10} {:>10} {:>10} {:>8} {:>9}",
-        "Command", "Vanilla", "tokenix", "RTK", "Saved", "vs RTK"
+        "  {:<20} {:>10} {:>10} {:>8}",
+        "Command", "Vanilla", "tokenix", "Saved"
     );
-    println!("  {}", "-".repeat(75).dimmed());
+    println!("  {}", "-".repeat(52).dimmed());
 
     for row in rows {
-        let rtk_str = row
-            .rtk
-            .map(|t| format_num(t as i64))
-            .unwrap_or_else(|| "n/a".to_string());
-        let vs_rtk = row
-            .rtk
-            .map(|rtk| if row.tokenix <= rtk { "ok" } else { "behind" })
-            .unwrap_or("n/a");
         println!(
-            "  {:<20} {:>10} {:>10} {:>10} {:>7.1}% {:>9}",
+            "  {:<20} {:>10} {:>10} {:>7.1}%",
             row.cmd,
             format_num(row.vanilla as i64),
             format_num(row.tokenix as i64),
-            rtk_str,
             saved_pct(row.vanilla, row.tokenix),
-            vs_rtk
         );
     }
-    println!();
-}
-
-// --- Filter parity vs RTK -------------------------------------------------
-// RTK's `pipe -f <name>` accepts exactly these built-in filters. Each is mapped
-// to the tokenix bundled filter that handles the same command. The generic RTK
-// `log` filter has no tokenix equivalent and is intentionally omitted.
-const RTK_PARITY_MAP: &[(&str, &str)] = &[
-    ("cargo", "cargo-check"),
-    ("cargo-test", "cargo-test"),
-    ("pytest", "pytest"),
-    ("go-test", "go-test"),
-    ("go-build", "go-build"),
-    ("tsc", "tsc"),
-    ("vitest", "vitest"),
-    ("grep", "rg"),
-    ("rg", "rg"),
-    ("find", "fd"),
-    ("fd", "fd"),
-    ("git-log", "git-log"),
-    ("git-diff", "git-diff"),
-    ("git-status", "git-status-short"),
-    ("mypy", "mypy"),
-    ("ruff-check", "ruff"),
-    ("ruff-format", "ruff"),
-    ("prettier", "prettier"),
-];
-
-#[derive(Deserialize)]
-struct ParityFile {
-    #[serde(default)]
-    filters: std::collections::HashMap<String, FilterDef>,
-    #[serde(default)]
-    tests: std::collections::HashMap<String, Vec<ParityCase>>,
-}
-
-#[derive(Deserialize)]
-struct ParityCase {
-    input: String,
-    #[serde(default)]
-    expected: String,
-}
-
-struct ParityRow {
-    rtk_filter: &'static str,
-    tokenix_filter: &'static str,
-    cases: usize,
-    input: usize,
-    tokenix: usize,
-    rtk: Option<usize>,
-    rtk_kept_signal: bool,
-    tokenix_kept_signal: bool,
-}
-
-/// Impartial per-filter verdict. tokenix and RTK are held to the SAME bar:
-/// emitting fewer tokens only counts as a real win if the golden signal survives
-/// (`*_kept`). A token-cheaper output that dropped signal is flagged lossy for
-/// whichever tool did it, so neither side can "win" by throwing information away.
-fn parity_verdict(
-    tokenix: usize,
-    rtk: Option<usize>,
-    tokenix_kept: bool,
-    rtk_kept: bool,
-) -> &'static str {
-    match rtk {
-        None => "n/a",
-        Some(rtk) => {
-            if tokenix <= rtk {
-                if tokenix_kept {
-                    "win"
-                } else {
-                    "tk-lossy"
-                }
-            } else if !rtk_kept {
-                "rtk-lossy"
-            } else {
-                "behind"
-            }
-        }
-    }
-}
-
-/// Lenient signal-preservation check: at least 70% of the must-keep "signal
-/// words" from the golden `expected` output (paths, identifiers, error codes,
-/// counts) must still appear in `candidate`. Tolerates reformatting while
-/// catching genuine information loss. The LLM verification pass is authoritative.
-fn preserves_signal(expected: &str, candidate: &str) -> bool {
-    let key: Vec<&str> = expected
-        .split(|c: char| c.is_whitespace())
-        .filter(|w| w.len() >= 5)
-        .collect();
-    if key.is_empty() {
-        return true;
-    }
-    let hit = key.iter().filter(|w| candidate.contains(**w)).count();
-    hit * 100 >= key.len() * 70
-}
-
-/// Feed every RTK-pipeable filter's golden inputs through both tokenix's own
-/// filter and `rtk pipe -f <name>`, counting tokens identically for both.
-fn measure_filter_parity(repo_root: &Path, rtk: bool) -> Vec<ParityRow> {
-    let dump_dir = std::env::var_os("TOKENIX_PARITY_DUMP")
-        .map(|_| std::env::temp_dir().join("tokenix_parity"));
-    if let Some(dir) = &dump_dir {
-        let _ = std::fs::create_dir_all(dir);
-    }
-
-    let mut rows = Vec::new();
-    for (rtk_filter, tk_filter) in RTK_PARITY_MAP {
-        let path = repo_root
-            .join("assets/filters")
-            .join(format!("{tk_filter}.toml"));
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(parsed) = toml::from_str::<ParityFile>(&raw) else {
-            continue;
-        };
-        let (Some(fdef), Some(cases)) =
-            (parsed.filters.get(*tk_filter), parsed.tests.get(*tk_filter))
-        else {
-            continue;
-        };
-        if cases.is_empty() {
-            continue;
-        }
-
-        let (mut in_tok, mut tk_tok, mut rtk_tok) = (0usize, 0usize, 0usize);
-        let mut rtk_any = false;
-        let mut rtk_kept = true;
-        let mut tk_kept = true;
-        for (i, case) in cases.iter().enumerate() {
-            in_tok += count_tokens(&case.input);
-            let tk_out = apply_filter(&case.input, fdef);
-            tk_tok += count_tokens(&tk_out);
-            if !preserves_signal(&case.expected, &tk_out) {
-                tk_kept = false;
-            }
-            let rtk_out = if rtk {
-                rtk_pipe_by_name(rtk_filter, &case.input)
-            } else {
-                None
-            };
-            if let Some(ref ro) = rtk_out {
-                rtk_any = true;
-                rtk_tok += count_tokens(ro);
-                if !preserves_signal(&case.expected, ro) {
-                    rtk_kept = false;
-                }
-            }
-            if let Some(dir) = &dump_dir {
-                let stem = format!("{rtk_filter}__{tk_filter}__{i}");
-                let _ = std::fs::write(dir.join(format!("{stem}.input.txt")), &case.input);
-                let _ = std::fs::write(dir.join(format!("{stem}.expected.txt")), &case.expected);
-                let _ = std::fs::write(dir.join(format!("{stem}.tokenix.txt")), &tk_out);
-                if let Some(ro) = &rtk_out {
-                    let _ = std::fs::write(dir.join(format!("{stem}.rtk.txt")), ro);
-                }
-            }
-        }
-
-        rows.push(ParityRow {
-            rtk_filter,
-            tokenix_filter: tk_filter,
-            cases: cases.len(),
-            input: in_tok,
-            tokenix: tk_tok,
-            rtk: rtk_any.then_some(rtk_tok),
-            rtk_kept_signal: rtk_kept,
-            tokenix_kept_signal: tk_kept,
-        });
-    }
-    rows
-}
-
-fn print_filter_parity(rows: &[ParityRow]) {
-    println!(
-        "{}",
-        "6. Filter Parity vs RTK (identical golden input via `rtk pipe -f`)".bold()
-    );
-    println!(
-        "  {:<13} {:<16} {:>6} {:>8} {:>8} {:>8} {:>7} {:>10}",
-        "RTK -f", "tokenix", "cases", "input", "tokenix", "RTK", "Saved", "vs RTK"
-    );
-    println!("  {}", "-".repeat(82).dimmed());
-
-    let (mut wins, mut total) = (0usize, 0usize);
-    for r in rows {
-        let rtk_str = r
-            .rtk
-            .map(|t| format_num(t as i64))
-            .unwrap_or_else(|| "n/a".to_string());
-        let verdict = parity_verdict(r.tokenix, r.rtk, r.tokenix_kept_signal, r.rtk_kept_signal);
-        if r.rtk.is_some() {
-            total += 1;
-        }
-        if verdict == "win" {
-            wins += 1;
-        }
-        println!(
-            "  {:<13} {:<16} {:>6} {:>8} {:>8} {:>8} {:>6.1}% {:>10}",
-            r.rtk_filter,
-            r.tokenix_filter,
-            r.cases,
-            format_num(r.input as i64),
-            format_num(r.tokenix as i64),
-            rtk_str,
-            saved_pct(r.input, r.tokenix),
-            verdict
-        );
-    }
-    println!("  {}", "-".repeat(82).dimmed());
-    println!(
-        "  tokenix ties-or-beats RTK on {} of {} pipeable filters (signal-preserving only)",
-        format!("{wins}").green(),
-        total
-    );
-    println!(
-        "  {}",
-        "win = tokenix <= RTK with golden signal kept; tk-lossy / rtk-lossy = that side saved tokens only by dropping signal; behind = real loss"
-            .dimmed()
-    );
-    println!(
-        "  {}",
-        "RTK built-in `log` has no tokenix equivalent (excluded).".dimmed()
-    );
     println!();
 }
 
@@ -1119,13 +515,12 @@ fn print_internal_graph_stats(repo_root: &Path) -> Result<()> {
     let node_count: i64 = conn.query_row("SELECT COUNT(*) FROM graph_nodes", [], |r| r.get(0))?;
     let edge_count: i64 = conn.query_row("SELECT COUNT(*) FROM graph_edges", [], |r| r.get(0))?;
 
-    println!("{}", "5. Internal Symbol Graph (CodeGraph baseline)".bold());
+    println!("{}", "6. Internal Symbol Graph".bold());
     println!("  Nodes (symbols): {}", format_num(node_count).green());
     println!("  Edges (relations): {}", format_num(edge_count).green());
     println!(
         "  - tokenix uses this graph to boost RAG results by resolving callee/caller proximity."
     );
-    println!("  - CodeGraph MCP servers typically offer similar structural context.");
     println!();
     Ok(())
 }
@@ -1257,7 +652,6 @@ fn symbol_content(path: &str, content: &str, symbol: &str) -> String {
 fn measure_semantic_quality(
     repo_root: &Path,
     query_budget: usize,
-    _rtk: bool,
     context_cases: &[ContextBenchCase],
 ) -> Result<Vec<QueryRow>> {
     let cases = if context_cases.is_empty() {
@@ -1560,208 +954,6 @@ fn print_verdict(
     println!();
 }
 
-fn print_codegraph_comparison(
-    repo_root: &Path,
-    codegraph_path: &Path,
-    workflow_rows: &[WorkflowRow],
-    _query_rows: &[QueryRow],
-    context_rows: &[ContextArmRow],
-) -> Result<()> {
-    let flow_raw: usize = workflow_rows.iter().map(|r| r.raw_tokens).sum();
-    let flow_tokenix: usize = workflow_rows.iter().map(|r| r.total_tokens).sum();
-    let readme = read_readme(codegraph_path);
-    let codegraph_cli = [codegraph_path.join("dist/bin/codegraph.js")]
-        .into_iter()
-        .find(|path| path.exists());
-    let tokenix_stats = open_db(repo_root, false)?
-        .as_ref()
-        .and_then(|conn| count_stats(conn).ok());
-    let codegraph_stats = codegraph_cli
-        .as_ref()
-        .and_then(|cli| codegraph_status(cli, repo_root).ok())
-        .flatten();
-
-    println!("{}", "6. CodeGraph Comparison".bold());
-    if codegraph_cli.is_some() {
-        println!("  Status: {}", "local CLI available".green());
-    } else {
-        println!(
-            "  Status: {}",
-            "local CLI not built; static repo signals only".yellow()
-        );
-    }
-
-    println!("  {}", "-".repeat(91).dimmed());
-    println!(
-        "  {:<28} {:<28} {:<28}",
-        "Capability", "tokenix (measured)", "CodeGraph (measured/est)"
-    );
-    println!("  {}", "-".repeat(91).dimmed());
-
-    let avg_tokens = |arm: &str| {
-        let rows: Vec<&ContextArmRow> = context_rows
-            .iter()
-            .filter(|row| row.arm == arm && row.tokens.is_some())
-            .collect();
-        if rows.is_empty() {
-            "n/a".to_string()
-        } else {
-            format_num(
-                (rows.iter().filter_map(|row| row.tokens).sum::<usize>() / rows.len()) as i64,
-            )
-        }
-    };
-    let avg_latency = |arm: &str| {
-        let rows: Vec<&ContextArmRow> = context_rows
-            .iter()
-            .filter(|row| row.arm == arm && row.latency_ms.is_some())
-            .collect();
-        if rows.is_empty() {
-            "n/a".to_string()
-        } else {
-            format!(
-                "{}ms",
-                rows.iter().filter_map(|row| row.latency_ms).sum::<u128>() / rows.len() as u128
-            )
-        }
-    };
-
-    println!(
-        "  {:<28} {:<28} {:<28}",
-        "Context Tokens (avg)",
-        avg_tokens("tokenix"),
-        avg_tokens("codegraph")
-    );
-    println!(
-        "  {:<28} {:<28} {:<28}",
-        "Token reduction (workflow)",
-        if workflow_rows.is_empty() {
-            "n/a".to_string()
-        } else {
-            format!("{:.1}%", saved_pct(flow_raw, flow_tokenix))
-        },
-        "not applicable (graph-based)"
-    );
-    println!(
-        "  {:<28} {:<28} {:<28}",
-        "Context quality",
-        quality_summary(context_rows, "tokenix"),
-        quality_summary(context_rows, "codegraph")
-    );
-    println!(
-        "  {:<28} {:<28} {:<28}",
-        "Search Latency",
-        avg_latency("tokenix"),
-        avg_latency("codegraph")
-    );
-    println!(
-        "  {:<28} {:<28} {:<28}",
-        "Indexed files",
-        tokenix_stats
-            .as_ref()
-            .map(|stats| format_num(stats.files))
-            .unwrap_or_else(|| "n/a".to_string()),
-        codegraph_stats
-            .as_ref()
-            .map(|stats| format_num(stats.files))
-            .unwrap_or_else(|| "n/a".to_string())
-    );
-    println!(
-        "  {:<28} {:<28} {:<28}",
-        "Index shape",
-        tokenix_stats
-            .as_ref()
-            .map(|stats| format!("{} chunks", format_num(stats.chunks)))
-            .unwrap_or_else(|| "n/a".to_string()),
-        codegraph_stats
-            .as_ref()
-            .map(|stats| {
-                format!(
-                    "{} nodes / {} edges",
-                    format_num(stats.nodes),
-                    format_num(stats.edges)
-                )
-            })
-            .unwrap_or_else(|| "n/a".to_string())
-    );
-    println!(
-        "  {:<28} {:<28} {:<28}",
-        "MCP/context feature",
-        "native CLI context",
-        yes_no_plain(contains_any(&readme, &["mcp", "context", "graph"]))
-    );
-    println!();
-    Ok(())
-}
-
-fn quality_summary(rows: &[ContextArmRow], arm: &str) -> String {
-    let measured: Vec<&ContextArmRow> = rows
-        .iter()
-        .filter(|row| row.arm == arm && row.quality_ok.is_some())
-        .collect();
-    if measured.is_empty() {
-        return "n/a".to_string();
-    }
-    let ok = measured
-        .iter()
-        .filter(|row| row.quality_ok == Some(true))
-        .count();
-    format!("{}/{}", ok, measured.len())
-}
-
-struct CodeGraphStatus {
-    files: i64,
-    nodes: i64,
-    edges: i64,
-}
-
-fn codegraph_status(cli: &Path, repo_root: &Path) -> Result<Option<CodeGraphStatus>> {
-    let out = Command::new("node")
-        .arg(cli)
-        .arg("status")
-        .arg(repo_root)
-        .output()?;
-    if !out.status.success() {
-        return Ok(None);
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    Ok(Some(CodeGraphStatus {
-        files: parse_status_count(&stdout, "Files:").unwrap_or(0),
-        nodes: parse_status_count(&stdout, "Nodes:").unwrap_or(0),
-        edges: parse_status_count(&stdout, "Edges:").unwrap_or(0),
-    }))
-}
-
-fn parse_status_count(stdout: &str, label: &str) -> Option<i64> {
-    stdout
-        .lines()
-        .find_map(|line| line.split_once(label).map(|(_, value)| value))
-        .and_then(|value| value.split_whitespace().next())
-        .and_then(|value| value.replace(',', "").parse().ok())
-}
-
-fn read_readme(root: &Path) -> String {
-    for name in ["README.md", "readme.md", "README"] {
-        let path = root.join(name);
-        if let Ok(content) = std::fs::read_to_string(path) {
-            return content.to_ascii_lowercase();
-        }
-    }
-    String::new()
-}
-
-fn contains_any(haystack: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| haystack.contains(needle))
-}
-
-fn yes_no_plain(value: bool) -> &'static str {
-    if value {
-        "claimed"
-    } else {
-        "not found"
-    }
-}
-
 fn rel_path(repo_root: &Path, path: &Path) -> String {
     path.strip_prefix(repo_root)
         .unwrap_or(path)
@@ -1810,40 +1002,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parity_verdict_is_impartial_about_dropped_signal() {
-        // tokenix cheaper AND keeps signal -> clean win
-        assert_eq!(parity_verdict(25, Some(73), true, true), "win");
-        // tie counts toward "ties-or-beats" only when signal survives
-        assert_eq!(parity_verdict(40, Some(40), true, true), "win");
-        // tokenix cheaper but DROPPED signal -> flagged, not a win (the fairness fix)
-        assert_eq!(parity_verdict(20, Some(73), false, true), "tk-lossy");
-        // RTK cheaper but dropped signal -> RTK flagged
-        assert_eq!(parity_verdict(80, Some(60), true, false), "rtk-lossy");
-        // RTK genuinely cheaper with signal kept -> tokenix is behind
-        assert_eq!(parity_verdict(80, Some(60), true, true), "behind");
-        // no RTK output -> not comparable
-        assert_eq!(parity_verdict(20, None, true, true), "n/a");
-    }
-
-    #[test]
     fn saved_pct_handles_zero_baseline() {
         assert_eq!(saved_pct(0, 0), 0.0);
         assert_eq!(saved_pct(100, 25), 75.0);
         assert_eq!(saved_pct(100, 100), 0.0);
-    }
-
-    #[test]
-    fn preserves_signal_detects_dropped_tokens() {
-        let expected = "error[E0425] cannot find value MAX_INDEX_AGE_SECS in scope";
-        // keeps the long signal words -> preserved
-        assert!(preserves_signal(
-            expected,
-            "error[E0425]: cannot find value MAX_INDEX_AGE_SECS in scope here"
-        ));
-        // drops the identifiers -> not preserved
-        assert!(!preserves_signal(expected, "build failed"));
-        // empty golden reference cannot penalize either tool
-        assert!(preserves_signal("", "anything"));
     }
 
     #[test]

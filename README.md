@@ -142,9 +142,9 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Multi-agent safe index** | PID-based index lock prevents concurrent reindex; resumable checkpoints survive mid-index process kills |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
 | **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash commands before execution |
-| **RTK-grade compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, and ANSI/Emoji stripping |
+| **Structural output compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, and ANSI/Emoji stripping |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
-| **Output filters** | 203+ RTK-compatible TOML filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
+| **Output filters** | 203+ TOML output filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
 | **Filter generation** | `tokenix filter generate` writes a TOML filter for a command; `tokenix filter record` captures real output for richer generation |
 | **GPU acceleration (opt-in)** | Build with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU; GPU is used by default at runtime with automatic CPU fallback, or force CPU with `--only-cpu` |
 | **Environment diagnostics** | `tokenix doctor` reports the compiled backend, detected GPU, CUDA/cuDNN status, model cache, and daemon |
@@ -179,9 +179,9 @@ tokenix has two modes:
 1. **Manual mode**: run `tokenix query`, `tokenix read`, `tokenix context`, etc. directly when you want compact context.
 2. **Hook mode**: install hooks so supported AI tools call tokenix automatically before large reads and before noisy Bash commands execute.
 
-### Output compression (RTK mode)
+### Output compression
 
-tokenix includes output-filtering logic inspired by RTK (Rust Token Killer). It doesn't just truncate output; it understands the structure of common CLI tools.
+tokenix includes structural output-filtering logic. It doesn't just truncate output; it understands the structure of common CLI tools.
 
 - **Fuzzy grouping:** collapses hundreds of `Compiling…` or `Removing…` lines into a single summary line.
 - **Structural compaction:** compacts pretty-printed JSON and NDJSON into single-line formats.
@@ -285,34 +285,22 @@ The slim profile advertises only `tokenix_context`, `tokenix_search_tools`, and
 `tokenix_call`, reducing tool-schema tokens while preserving access to the full
 tokenix capability set through the meta-tool path.
 
-### 9. Competitive benchmark
+### 9. Benchmark
 
 ```bash
-tokenix benchmark --competitive
-tokenix benchmark --competitive --json
+tokenix benchmark
+tokenix benchmark --json
 ```
 
-`--competitive` adds a market-facing scorecard. It measures tokenix `context`
-and `pack`, auto-detects optional CLI competitors such as Repomix and Aider when
-they are installed, and prints a feature matrix against current market signals:
-
-| Feature | tokenix | Market signal |
-|---|---|---|
-| Budgeted repo map | `pack` + strict-budget `context` | Aider repo-map; Repomix pack |
-| Graph-aware context | `symbols`, `callers`, `callees`, `impact`, `flow`, `cycles` | Aider graph rank; Sourcegraph Cody Code Graph |
-| Semantic index | Local fastembed + SQLite + FTS5 BM25 | Cursor/Continue embeddings; Augment Context Engine |
-| Progressive MCP | `mcp --profile slim` + meta-tools | MCP progressive discovery |
-| Output savings | PreToolUse command rewrite + filters | RTK-style shell output compression |
-| Remote repo pack | Not yet | Repomix `--remote`; Cody remote context |
-| Learned rerank model | Not yet; heuristic hybrid ranker | Continue rerank role; cloud IDE rerankers |
-
-The default `tokenix benchmark` (no flags) is impartial by construction: tokenix
-and RTK get identical input counted with the same tokenizer, and the Filter
-Parity table only credits a `win` when the cheaper output keeps the golden
-signal — a side that saves tokens by dropping information is flagged `tk-lossy`
-or `rtk-lossy`. Scenarios span Rust/TS/Go/Python, SQLite vector search, and
-command output (cargo, git, npm, docker compose); semantic Hit@1/Hit@3 are
-reported as measured, misses included.
+`tokenix benchmark` measures tokenix against a plain **vanilla** baseline using
+the actual index/search code — no external tools involved. It reports read-only
+token reduction on large files, targeted outline+symbol workflows, semantic
+search Hit@1/Hit@3, context homologation (vanilla full file vs tokenix budgeted
+context), and command-output compression. Scenarios span Rust/TS/Go/Python,
+SQLite vector search, and common command output (cargo, git, npm, docker
+compose); misses are included as measured. Pass `--refresh-index` to re-embed
+first, `--cases FILE` for project-specific cases, and `--json` for a
+machine-readable summary.
 
 ---
 
@@ -397,7 +385,7 @@ tokenix install-hook --tool all
 | `tokenix gain` | Token savings analytics (`--cost-estimate` adds a per-model cost table) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix tokenmap` | Directory tree map with token counts (`--format html` supported) |
-| `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark (`--competitive`, `--json`) |
+| `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark — vanilla vs tokenix (`--json`) |
 | `tokenix filter list` | Show top Bash commands by tokens wasted (no filter yet) |
 | `tokenix filter active` | Show active user and bundled output filters |
 | `tokenix filter generate [CMD]` | AI-generate a TOML output filter for a command |
@@ -446,7 +434,7 @@ tokenix install-hook --tool all
 
 **`tokenix pack`** — `--mode/--profile <plan\|debug\|audit\|security\|review>`, `--budget N` (8000), `--format <markdown\|xml\|json>`, `--changed`, `--since REF`, `--token-map`, `--output/-o`
 
-**`tokenix benchmark`** — `--budget N` (1200), `--competitive`, `--json`, `--refresh-index`, `--cases FILE`, `--compare-codegraph PATH`
+**`tokenix benchmark`** — `--budget N` (1200), `--json`, `--refresh-index`, `--cases FILE`
 
 **`tokenix prompt-audit`** — `--agent <claude\|codex\|copilot\|antigravity\|all>` (default `all`), `--json`, `--recommend`, `--profile-impact`
 
@@ -495,7 +483,7 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
-3. **Bundled filters** — 203+ RTK-compatible TOML filters shipped inside the binary, covering `uv sync`, `cargo build`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, `kubectl`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 203+ TOML output filters shipped inside the binary, covering `uv sync`, `cargo build`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, `kubectl`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -561,7 +549,7 @@ src/
 └── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
 assets/
-└── filters/       203+ RTK-compatible TOML filters, embedded in the binary via rust-embed
+└── filters/       203+ TOML output filters, embedded in the binary via rust-embed
 ```
 
 ### GPU acceleration (opt-in)

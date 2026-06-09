@@ -5,7 +5,6 @@ This document lists external repositories, specifications, and documentation cit
 ## Code Repositories
 
 - [juninmd/tokenix](https://github.com/juninmd/tokenix) — Official GitHub repository for Tokenix.
-- [rtk-ai/rtk](https://github.com/rtk-ai/rtk) — Reference and inspiration source for Tokenix output reduction filters.
 - [rust-lang/rust](https://github.com/rust-lang/rust) — The Rust programming language source repository.
 
 ## Packages and Registry

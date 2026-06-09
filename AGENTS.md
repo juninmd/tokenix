@@ -33,12 +33,12 @@ tokenix --help
 | `src/hook.rs` | `run_hook()` — called by PreToolUse hook. Tries daemon first for Grep |
 | `src/daemon.rs` | Background TCP server (port 47392). Holds model + embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads |
 | `src/compress.rs` | Legacy `PostToolUse` compatibility compression: ANSI strip, emoji removal, blank-line collapse, repeat grouping, JSON compaction, cargo/git-log heuristics |
-| `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()`. `find_filter()` matches via `derive_command_candidates()`, which unwraps shell runners, strips `cd`/env prefixes, and (RTK-style) `split_on_operators()` splits compound commands quote-aware on `&&`/`\|\|`/`;`/`\|` so anchored `match_command` patterns match a base command in any segment/position |
+| `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()`. `find_filter()` matches via `derive_command_candidates()`, which unwraps shell runners, strips `cd`/env prefixes, and `split_on_operators()` splits compound commands quote-aware on `&&`/`\|\|`/`;`/`\|` so anchored `match_command` patterns match a base command in any segment/position |
 | `src/cmd_filter.rs` | `tokenix filter list/active/generate` subcommands |
 | `src/gain.rs` | `compute_gain()`, `GainStats`, `MODELS` pricing table (Anthropic/OpenAI/Google) |
 | `src/mcp.rs` | MCP server. `--profile full` exposes all tools; `--profile slim` exposes context/search/call meta-tools for progressive discovery |
 | `src/mcp_audit.rs` | `tokenix prompt-audit` / `session-audit` — per-agent MCP config discovery + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report |
-| `assets/filters/` | 73 RTK-compatible TOML filters embedded via `rust-embed`. User filters in `~/.tokenix/filters/` take priority |
+| `assets/filters/` | 73 TOML output filters embedded via `rust-embed`. User filters in `~/.tokenix/filters/` take priority |
 
 ## SQLite Schema
 
@@ -170,22 +170,17 @@ It uses indexed context, file token counts, and symbol outlines; it must skip
 obvious secrets, credentials, `.env`, key files, `.git`, and build output by
 default. Do not turn `pack` into a raw full-repo dump.
 
-## Competitive Benchmark
+## Benchmark
 
-`tokenix benchmark --competitive` prints measured tokenix context/pack rows,
-optional Repomix/Aider rows when installed, and a feature matrix covering Aider
-repo-map, Repomix pack/remote, Sourcegraph Cody graph context, Cursor/Continue
-embeddings/rerank, Augment context engine, and MCP progressive discovery.
-Keep competitor rows optional and fail-open; missing external tools must not
-fail the benchmark. Current known gaps to prioritize next: remote repo pack and
-learned/adapter-based reranking.
+`tokenix benchmark` measures tokenix against a plain **vanilla** baseline only —
+no external tools. It prints read-only token reduction, targeted
+outline+symbol workflows, semantic Hit@1/Hit@3, context homologation (vanilla
+full file vs tokenix budgeted context), and command-output compression. Flags:
+`--budget N`, `--refresh-index`, `--cases FILE`, `--json`.
 
-**Fairness contract (do not regress).** The default benchmark must stay
-impartial: tokenix and any competitor are scored on identical input and counted
-with the same `count_tokens`. In the Filter Parity table, a token-cheaper output
-only counts as a `win` if it preserves the golden signal — `parity_verdict`
-applies `preserves_signal` to *both* tokenix (`tk-lossy`) and RTK (`rtk-lossy`),
-so neither side can win by dropping information. Semantic Hit@1/Hit@3 are
+**Fairness contract (do not regress).** Benchmark is tokenix-vs-vanilla only —
+do not add competitor/market comparison arms. Vanilla and tokenix are scored on
+identical input counted with the same `count_tokens`. Semantic Hit@1/Hit@3 are
 reported as measured (misses included), never filtered to flatter tokenix.
 Default scenarios span Rust/TS/Go/Python plus SQLite vector search and command
 output (cargo, git, npm, docker compose). Verdict logic is unit-tested in

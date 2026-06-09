@@ -1,7 +1,5 @@
 ﻿target/
 .tokenix/
-.codegraph/
-.cgcignore
 tokenix.egg-info/
 *.pyc
 __pycache__/

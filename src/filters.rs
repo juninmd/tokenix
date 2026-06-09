@@ -532,7 +532,7 @@ pub fn get_effective_command(cmd: &str) -> String {
 
 /// Split a shell command into segments on the operators `&&`, `||`, `;` and the
 /// pipe `|`, quote- and escape-aware. Operators are recognized regardless of
-/// surrounding whitespace, so `a;b` and `a ; b` segment identically (RTK-style).
+/// surrounding whitespace, so `a;b` and `a ; b` segment identically.
 /// Quoted operators (e.g. `echo "a;b"`) are left intact.
 pub fn split_on_operators(cmd: &str) -> Vec<String> {
     let mut segments = Vec::new();
@@ -620,7 +620,7 @@ pub fn derive_command_candidates(cmd: &str) -> Vec<String> {
 
     push_unique(&mut candidates, &get_effective_command(cmd));
 
-    // Operator-aware segmentation (RTK-style): split compound commands and add
+    // Operator-aware segmentation: split compound commands and add
     // each segment plus its effective form, so a filter anchored on its base
     // command matches regardless of position or spacing — e.g. `cd x;gitleaks`,
     // `npm i && gitleaks`, or `producer | gitleaks`.
@@ -1144,7 +1144,7 @@ fn apply_sizing(mut lines: Vec<String>, f: &FilterDef) -> Vec<String> {
 /// Generate the TOML prompt to send to an AI CLI for filter creation.
 pub fn build_filter_prompt(command: &str, sample_output: &str) -> String {
     format!(
-        r#"Generate an RTK-format TOML filter for the command `{command}`.
+        r#"Generate a tokenix TOML filter for the command `{command}`.
 
 TOML filter schema (all fields optional except match_command):
 ```
@@ -1165,7 +1165,7 @@ tail_lines = 10            # keep last N lines
 truncate_lines_at = 120    # truncate individual lines at N chars
 on_empty = "command: ok"   # message when filter produces empty output
 
-# ADVANCED (tokenix extensions beyond RTK):
+# ADVANCED (extended filtering capabilities):
 replace_patterns = [       # regex replacements: [[pattern, replacement], ...]
   ["\\d+\\.\\d+s", "<duration>"],
   ["/home/[^/]+/", "~/"],
