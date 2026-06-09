@@ -136,8 +136,7 @@ pub fn active_model_id() -> String {
 
 /// Loaded models keyed by id. Leaked to `'static` so callers get a stable
 /// reference; the process loads each model at most once.
-static MODELS_CACHE: OnceCell<Mutex<HashMap<String, &'static Mutex<TextEmbedding>>>> =
-    OnceCell::new();
+static MODELS_CACHE: OnceCell<Mutex<HashMap<String, &'static TextEmbedding>>> = OnceCell::new();
 
 /// When true, the GPU execution provider is skipped even on a GPU-enabled build.
 /// Set by `main()` from the `--only-cpu` flag before the model is first used.
@@ -246,7 +245,7 @@ fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
 /// Get (loading once) the model for a friendly id. The lock is held across the
 /// load so two threads never load the same model twice; after first load it is a
 /// brief map lookup.
-fn model_for(id: &str) -> Result<&'static Mutex<TextEmbedding>> {
+fn model_for(id: &str) -> Result<&'static TextEmbedding> {
     let cache = MODELS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut map = cache
         .lock()
@@ -263,9 +262,8 @@ fn model_for(id: &str) -> Result<&'static Mutex<TextEmbedding>> {
         } => build_custom_embedding(id, hf_repo, onnx_file, pooling.clone()),
     }
     .map_err(|e| anyhow!("Embedding model '{id}' init failed: {e}"))?;
-    // Leak once: the model lives for the rest of the process anyway. fastembed 5
-    // takes `&mut self` for embed(), so wrap in a Mutex for interior mutability.
-    let leaked: &'static Mutex<TextEmbedding> = Box::leak(Box::new(Mutex::new(te)));
+    // Leak once: the model lives for the rest of the process anyway.
+    let leaked: &'static TextEmbedding = Box::leak(Box::new(te));
     map.insert(id.to_string(), leaked);
     Ok(leaked)
 }
@@ -403,8 +401,6 @@ pub fn embed_documents(texts: &[String]) -> Result<Vec<Vec<f32>>> {
         .map(|t| format!("{}{t}", spec.doc_prefix))
         .collect();
     model_for(&id)?
-        .lock()
-        .map_err(|_| anyhow!("embedding model lock poisoned"))?
         .embed(prefixed, None)
         .map_err(|e| anyhow!("{e}"))
 }
@@ -437,8 +433,6 @@ pub fn embed_query(text: &str) -> Result<Vec<f32>> {
     // 2. Generate embedding if not cached
     let prefixed = format!("{}{text}", spec.query_prefix);
     let vec = model_for(&id)?
-        .lock()
-        .map_err(|_| anyhow!("embedding model lock poisoned"))?
         .embed(vec![prefixed], None)
         .map_err(|e| anyhow!("{e}"))?
         .into_iter()
