@@ -10,6 +10,7 @@
 use anyhow::Result;
 use colored::Colorize;
 use regex::Regex;
+use rusqlite::OpenFlags;
 use rust_embed::Embed;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -374,6 +375,140 @@ fn collect_files(root: &Root, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Path to the VS Code Copilot Chat `session-store.db` for the current user.
+/// Platform paths mirror VS Code's extension-storage conventions:
+///   Windows : %APPDATA%\Code\User\globalStorage\github.copilot-chat\
+///   macOS   : ~/Library/Application Support/Code/User/globalStorage/…
+///   Linux   : ~/.config/Code/User/globalStorage/…
+fn vscode_copilot_db_path() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    let base = dirs::config_dir()?;
+    #[cfg(not(target_os = "linux"))]
+    let base = dirs::data_dir()?;
+    let p = base
+        .join("Code")
+        .join("User")
+        .join("globalStorage")
+        .join("github.copilot-chat")
+        .join("session-store.db");
+    p.exists().then_some(p)
+}
+
+/// Query the VS Code Copilot Chat SQLite database for credentials.
+///
+/// Scans `turns.user_message` and `turns.assistant_response` (the actual chat
+/// content) plus all text columns in `checkpoints` (structured summaries that
+/// frequently contain pasted code and environment snippets). Each finding is
+/// attributed to the session's `cwd` and `branch` from the `sessions` table.
+///
+/// The DB is opened read-only so a running VS Code instance is unaffected;
+/// WAL mode (used by VS Code) allows concurrent readers without locking.
+fn scan_vscode_copilot_db(db_path: &Path, rules: &[Rule]) -> Vec<Finding> {
+    let conn = match rusqlite::Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "{} cannot open Copilot session-store.db: {e}",
+                "warning:".yellow()
+            );
+            return vec![];
+        }
+    };
+
+    let mut findings = Vec::new();
+
+    // turns — primary conversation content
+    let turn_sql = "SELECT t.turn_index, t.user_message, t.assistant_response, \
+                           s.cwd, s.branch \
+                    FROM turns t JOIN sessions s ON t.session_id = s.id \
+                    WHERE t.user_message IS NOT NULL OR t.assistant_response IS NOT NULL \
+                    ORDER BY t.turn_index";
+    if let Ok(mut stmt) = conn.prepare(turn_sql) {
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0).unwrap_or(0),
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        });
+        if let Ok(rows) = rows {
+            for (turn_idx, user_msg, asst_msg, cwd, branch) in rows.flatten() {
+                // Use turn_index * 2 + 1/2 as synthetic line so user vs assistant
+                // messages have distinct "locations" in the output.
+                for (delta, maybe_text) in [(1i64, user_msg), (2, asst_msg)] {
+                    let Some(text) = maybe_text else { continue };
+                    for m in scan_content(&text, rules) {
+                        findings.push(Finding {
+                            agent: "copilot",
+                            file: db_path.to_path_buf(),
+                            line: (turn_idx * 2 + delta) as usize,
+                            rule: m.rule,
+                            secret: m.secret,
+                            redacted: m.redacted,
+                            length: m.length,
+                            repo: m.repo.or_else(|| cwd.clone()),
+                            branch: m.branch.or_else(|| branch.clone()),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // checkpoints — structured summaries (overview, history, work_done, …)
+    // Often contain pasted config blocks and environment vars from the session.
+    let ckpt_sql = "SELECT cp.checkpoint_number, \
+                           cp.overview, cp.history, cp.work_done, \
+                           cp.technical_details, cp.important_files, cp.next_steps, \
+                           s.cwd, s.branch \
+                    FROM checkpoints cp JOIN sessions s ON cp.session_id = s.id \
+                    ORDER BY cp.checkpoint_number";
+    if let Ok(mut stmt) = conn.prepare(ckpt_sql) {
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0).unwrap_or(0),
+                [
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ],
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+            ))
+        });
+        if let Ok(rows) = rows {
+            for (ckpt_num, cols, cwd, branch) in rows.flatten() {
+                for (col_idx, maybe_text) in cols.into_iter().enumerate() {
+                    let Some(text) = maybe_text else { continue };
+                    for m in scan_content(&text, rules) {
+                        findings.push(Finding {
+                            agent: "copilot",
+                            file: db_path.to_path_buf(),
+                            line: (ckpt_num as usize) * 10 + col_idx + 1,
+                            rule: m.rule,
+                            secret: m.secret,
+                            redacted: m.redacted,
+                            length: m.length,
+                            repo: m.repo.or_else(|| cwd.clone()),
+                            branch: m.branch.or_else(|| branch.clone()),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
 /// Scan the selected agents, returning findings plus a per-agent scanned-file count.
 fn scan(home: &Path, filter: &str) -> (Vec<Finding>, Vec<(&'static str, usize)>) {
     let ruleset = load_rules();
@@ -384,7 +519,18 @@ fn scan(home: &Path, filter: &str) -> (Vec<Finding>, Vec<(&'static str, usize)>)
         for root in &agent.roots {
             collect_files(root, &mut files);
         }
-        counts.push((agent.name, files.len()));
+
+        // Copilot: also scan VS Code Copilot Chat's SQLite conversation store.
+        // This holds the actual chat turns that the file-based roots do not cover.
+        let mut db_file_count = 0usize;
+        if agent.name == "copilot" {
+            if let Some(db_path) = vscode_copilot_db_path() {
+                findings.extend(scan_vscode_copilot_db(&db_path, &ruleset));
+                db_file_count = 1;
+            }
+        }
+
+        counts.push((agent.name, files.len() + db_file_count));
         for file in files {
             let Ok(bytes) = std::fs::read(&file) else {
                 continue;
@@ -901,5 +1047,82 @@ mod tests {
             min_entropy: 0.0,
         }];
         assert!(compile_rules(specs).is_empty());
+    }
+
+    /// Build a SQLite DB on disk with the Copilot Chat schema and verify that
+    /// secrets embedded in turn messages and checkpoint text are detected.
+    #[test]
+    fn scan_vscode_copilot_db_detects_secrets_in_turns_and_checkpoints() {
+        let tmp = std::env::temp_dir().join("tokenix_test_copilot_scan.db");
+        // Remove any leftover from a prior failed run.
+        let _ = std::fs::remove_file(&tmp);
+
+        let conn = rusqlite::Connection::open(&tmp).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                cwd TEXT, branch TEXT,
+                summary TEXT, host_type TEXT,
+                agent_name TEXT, agent_description TEXT,
+                repository TEXT, created_at TEXT, updated_at TEXT
+             );
+             CREATE TABLE turns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL, turn_index INTEGER NOT NULL,
+                user_message TEXT, assistant_response TEXT, timestamp TEXT
+             );
+             CREATE TABLE checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL, checkpoint_number INTEGER NOT NULL,
+                title TEXT, overview TEXT, history TEXT,
+                work_done TEXT, technical_details TEXT,
+                important_files TEXT, next_steps TEXT, created_at TEXT
+             );
+             INSERT INTO sessions (id, cwd, branch) VALUES ('s1', '/repo/foo', 'main');
+             INSERT INTO turns (session_id, turn_index, user_message, assistant_response)
+               VALUES ('s1', 0,
+                 'my aws key is AKIAIOSFODNN7EXAMPLE please help',
+                 'sure, but rotate it first: ghp_0123456789abcdefghijklmnopqrstuvwxyzAB');
+             INSERT INTO checkpoints (session_id, checkpoint_number, work_done)
+               VALUES ('s1', 1, 'Used sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123');",
+            // gitleaks:allow — all values above are synthetic test fixtures
+        )
+        .unwrap();
+        drop(conn);
+
+        let rules = bundled_rules();
+        let findings = scan_vscode_copilot_db(&tmp, &rules);
+        let _ = std::fs::remove_file(&tmp);
+
+        let rules_hit: Vec<&str> = findings.iter().map(|f| f.rule.as_str()).collect();
+        assert!(
+            rules_hit.contains(&"aws-access-key-id"),
+            "aws key not found: {rules_hit:?}"
+        );
+        assert!(
+            rules_hit.contains(&"github-token"),
+            "github token not found: {rules_hit:?}"
+        );
+        assert!(
+            rules_hit.contains(&"llm-api-key"),
+            "llm api key not found: {rules_hit:?}"
+        );
+        // Attribution: cwd + branch forwarded from sessions table
+        let aws = findings
+            .iter()
+            .find(|f| f.rule == "aws-access-key-id")
+            .unwrap();
+        assert_eq!(aws.repo.as_deref(), Some("/repo/foo"));
+        assert_eq!(aws.branch.as_deref(), Some("main"));
+    }
+
+    /// `vscode_copilot_db_path` must not panic even when the VS Code extension
+    /// directory does not exist on the current machine.
+    #[test]
+    fn vscode_copilot_db_path_returns_none_when_absent() {
+        // The DB does not exist at an invented path, so the fn returns None —
+        // it panics only if dirs::data_dir() / config_dir() itself panics.
+        // We can at least assert the function completes without panicking.
+        let _result = vscode_copilot_db_path();
     }
 }

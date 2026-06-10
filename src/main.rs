@@ -360,6 +360,11 @@ enum Commands {
         history: bool,
         #[arg(long, help = "Show the per-model cost-estimate table")]
         cost_estimate: bool,
+        #[arg(
+            long,
+            help = "Aggregate savings across all indexed projects (ignores --path)"
+        )]
+        global: bool,
     },
     /// Pack focused repository context for AI tools that cannot call tokenix hooks
     Pack {
@@ -791,7 +796,14 @@ fn main() -> Result<()> {
             path,
             history,
             cost_estimate,
-        } => cmd_gain(&path, history, cost_estimate),
+            global,
+        } => {
+            if global {
+                cmd_gain_global(history, cost_estimate)
+            } else {
+                cmd_gain(&path, history, cost_estimate)
+            }
+        }
         Commands::Pack {
             path,
             profile,
@@ -1942,6 +1954,9 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
         }
     }
 
+    // ── by command ────────────────────────────────────────────────────────────
+    print_by_command(&stats.by_command, stats.tokens_saved);
+
     // ── history ───────────────────────────────────────────────────────────────
     if history {
         let events = store::read_hook_log(&repo_root);
@@ -1982,6 +1997,344 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
                 action,
                 saved_str,
                 reason_str
+            );
+        }
+    }
+
+    println!();
+    Ok(())
+}
+
+fn print_by_command(by_command: &[(String, usize, i64)], tokens_saved: i64) {
+    const TOP_N: usize = 15;
+    let visible: Vec<_> = by_command.iter().take(TOP_N).collect();
+    if visible.is_empty() {
+        return;
+    }
+    println!();
+    println!("  {}", "BY COMMAND  (Bash filters)".bold().underline());
+    for (cmd, count, saved) in &visible {
+        let bar = mini_bar(*saved, tokens_saved, 20);
+        let pct = if tokens_saved > 0 {
+            (*saved as f64 / tokens_saved as f64) * 100.0
+        } else {
+            0.0
+        };
+        let avg = if *count > 0 {
+            *saved / *count as i64
+        } else {
+            0
+        };
+        println!(
+            "  {:<28} {:>4}×   {} {}  {}",
+            cmd.bold(),
+            count,
+            format_num(*saved).green(),
+            format!("({:.0}% · avg {}/call)", pct, format_num(avg)).dimmed(),
+            bar.bright_black()
+        );
+    }
+    if by_command.len() > TOP_N {
+        println!(
+            "  {}",
+            format!("  … +{} more commands", by_command.len() - TOP_N).dimmed()
+        );
+    }
+}
+
+fn cmd_gain_global(history: bool, cost_estimate: bool) -> Result<()> {
+    let global = gain::compute_global_gain();
+    let stats = &global.aggregate;
+
+    // ── header ────────────────────────────────────────────────────────────────
+    let inner = " tokenix gain  ·  ALL PROJECTS ";
+    let width = inner.len().max(64);
+    let pad = width - inner.len();
+    println!("\n{}", format!("╭{}╮", "─".repeat(width)).bright_black());
+    println!(
+        "{}{}{}{}",
+        "│".bright_black(),
+        inner.bold(),
+        " ".repeat(pad),
+        "│".bright_black()
+    );
+    println!("{}", format!("╰{}╯", "─".repeat(width)).bright_black());
+
+    if stats.total_calls == 0 {
+        println!(
+            "{}",
+            "  No hook events found in any project. Run `tokenix install-hook` first.".yellow()
+        );
+        return Ok(());
+    }
+
+    // ── aggregate token summary ───────────────────────────────────────────────
+    println!();
+    let bar = reduction_bar(stats.pct_saved, 18);
+    let intercept_pct = if stats.total_calls > 0 {
+        (stats.intercepted as f64 / stats.total_calls as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    println!(
+        "  {}                              {}",
+        "TOKEN SUMMARY".bold().underline(),
+        "HOOK CALLS".bold().underline()
+    );
+    println!(
+        "  {:<26} {:>14}    {:<22} {:>8}",
+        "Original (would-be)",
+        format_num(stats.tokens_original).yellow(),
+        "Total",
+        format_num(stats.total_calls as i64)
+    );
+    println!(
+        "  {:<26} {:>14}    {:<22} {:>8}",
+        "After optimization",
+        format_num(stats.tokens_used).cyan(),
+        "Intercepted",
+        format!(
+            "{}  ({:.0}%)",
+            format_num(stats.intercepted as i64).green(),
+            intercept_pct
+        )
+    );
+    println!(
+        "  {:<26} {:>14}    {:<22} {:>8}",
+        "Saved",
+        format_num(stats.tokens_saved).green().bold(),
+        "Passed through",
+        format_num(stats.passed as i64).dimmed()
+    );
+    println!(
+        "  {:<26} {:>14}",
+        "Reduction",
+        format!("{:.1}%  {}", stats.pct_saved, bar).green().bold()
+    );
+
+    // ── cost estimate ─────────────────────────────────────────────────────────
+    if cost_estimate {
+        println!();
+        println!(
+            "  {}",
+            "COST ESTIMATE  (input tokens · USD)".bold().underline()
+        );
+        let col_model = 27usize;
+        let col_price = 9usize;
+        let col_val = 12usize;
+        let sep = format!(
+            "    {}  {}  {}  {}  {}",
+            "─".repeat(col_model),
+            "─".repeat(col_price),
+            "─".repeat(col_val),
+            "─".repeat(col_val),
+            "─".repeat(col_val)
+        );
+        println!(
+            "  {}",
+            format!(
+                "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
+                "Model",
+                "$/1M in",
+                "Without",
+                "With",
+                "Saved",
+                col_model = col_model,
+                col_price = col_price,
+                col_val = col_val
+            )
+            .bold()
+            .bright_black()
+        );
+        println!("  {}", sep.bright_black());
+        for row in &stats.cost_rows {
+            let marker = if row.reference { " ★" } else { "  " };
+            let m = gain::MODELS.iter().find(|m| m.name == row.model).unwrap();
+            let line = format!(
+                "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
+                format!("{}{}", row.model, marker),
+                format!("${:.2}", m.input_per_1m),
+                format!("${:.4}", row.without_usd),
+                format!("${:.4}", row.with_usd),
+                format!("${:.4}", row.saved_usd),
+                col_model = col_model,
+                col_price = col_price,
+                col_val = col_val
+            );
+            if row.reference {
+                println!("  {}", line.bold());
+            } else {
+                println!("  {}", line);
+            }
+        }
+        println!("  {}", sep.bright_black());
+        println!(
+            "  {}",
+            format!(
+                "    ★ reference model · prices collected {}",
+                gain::PRICING_COLLECTED_AT
+            )
+            .dimmed()
+        );
+    } else {
+        println!();
+        println!(
+            "  {}",
+            "Run with --cost-estimate to show the per-model cost table.".dimmed()
+        );
+    }
+
+    // ── by tool ───────────────────────────────────────────────────────────────
+    if !stats.by_tool.is_empty() {
+        println!();
+        println!("  {}", "BY TOOL".bold().underline());
+        for (tool, count, saved) in &stats.by_tool {
+            let bar = mini_bar(*saved, stats.tokens_saved, 20);
+            let pct = if stats.tokens_saved > 0 {
+                (*saved as f64 / stats.tokens_saved as f64) * 100.0
+            } else {
+                0.0
+            };
+            let avg = if *count > 0 {
+                *saved / *count as i64
+            } else {
+                0
+            };
+            println!(
+                "  {:<14} {:>5} calls   {} {}  {}",
+                tool.bold(),
+                count,
+                format_num(*saved).green(),
+                format!("({:.0}% · avg {}/call)", pct, format_num(avg)).dimmed(),
+                bar.bright_black()
+            );
+        }
+    }
+
+    // ── by command ────────────────────────────────────────────────────────────
+    print_by_command(&stats.by_command, stats.tokens_saved);
+
+    // ── per-project table ─────────────────────────────────────────────────────
+    if !global.projects.is_empty() {
+        const MAX_PROJECTS: usize = 20;
+        println!();
+        println!("  {}", "BY PROJECT".bold().underline());
+        let max_saved = global
+            .projects
+            .iter()
+            .map(|(_, s, _, _)| *s)
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let visible = global.projects.iter().take(MAX_PROJECTS);
+        for (label, saved, total, intercepted) in visible {
+            let bar = mini_bar(*saved, max_saved, 16);
+            let pct = if *total > 0 {
+                (*intercepted as f64 / *total as f64) * 100.0
+            } else {
+                0.0
+            };
+            // Show only the last two path components to keep lines compact.
+            let short_label = {
+                let p = std::path::Path::new(label.as_str());
+                let parts: Vec<_> = p.components().collect();
+                if parts.len() >= 2 {
+                    let tail = parts[parts.len() - 2..]
+                        .iter()
+                        .map(|c| c.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    tail
+                } else {
+                    label.clone()
+                }
+            };
+            println!(
+                "  {:<36} {} saved   {} {}",
+                short_label.bold(),
+                format_num(*saved).green(),
+                format!("{}/{} intercepted ({:.0}%)", intercepted, total, pct).dimmed(),
+                bar.bright_black()
+            );
+        }
+        if global.projects.len() > MAX_PROJECTS {
+            println!(
+                "  {}",
+                format!(
+                    "  … +{} more projects",
+                    global.projects.len() - MAX_PROJECTS
+                )
+                .dimmed()
+            );
+        }
+    }
+
+    // ── history ───────────────────────────────────────────────────────────────
+    if history {
+        // Show last 30 events across all projects, most recent first.
+        let mut all_events: Vec<(String, store::HookEvent)> = store::list_all_project_logs()
+            .into_iter()
+            .flat_map(|entry| {
+                let label = {
+                    let p = std::path::Path::new(&entry.label);
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| entry.label.clone())
+                };
+                store::read_hook_log_from_path(&entry.log_path)
+                    .into_iter()
+                    .map(move |e| (label.clone(), e))
+            })
+            .collect();
+        all_events.sort_by(|a, b| {
+            b.1.ts
+                .partial_cmp(&a.1.ts)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let show = all_events.len().min(30);
+        println!();
+        println!(
+            "  {}",
+            format!("LAST {} EVENTS  (all projects)", show)
+                .bold()
+                .underline()
+        );
+        for (proj, e) in all_events.iter().take(show) {
+            let ts = format_ts(e.ts);
+            let action = if e.action == "intercepted" {
+                format!("{:<11}", "intercepted").green().to_string()
+            } else {
+                format!("{:<11}", "pass").dimmed().to_string()
+            };
+            let phase = match e.phase.as_str() {
+                "pre" => "pre ".dimmed().to_string(),
+                "post" => "post".dimmed().to_string(),
+                other => other.dimmed().to_string(),
+            };
+            let saved_str = if e.saved_tokens > 0 {
+                format!("saved {:>6}", format_num(e.saved_tokens))
+                    .green()
+                    .to_string()
+            } else {
+                format!("saved {:>6}", "0").dimmed().to_string()
+            };
+            let cmd_str = if !e.command.is_empty() {
+                format!("  ({})", e.command).dimmed().to_string()
+            } else if !e.reason.is_empty() {
+                format!("  ({})", e.reason).dimmed().to_string()
+            } else {
+                String::new()
+            };
+            println!(
+                "  {} {} {:<8} {}  {}  {} {}",
+                ts.bright_black(),
+                phase,
+                e.tool.bold(),
+                action,
+                saved_str,
+                format!("[{}]", proj).bright_black(),
+                cmd_str
             );
         }
     }

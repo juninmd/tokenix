@@ -125,6 +125,64 @@ pub fn write_project_name(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// One project entry discovered from `~/.tokenix/`.
+pub struct ProjectEntry {
+    /// Human-readable root path (from the `.name` file, or the id when absent).
+    pub label: String,
+    /// Filesystem path to the project's hook log (`{id}.log`).
+    pub log_path: PathBuf,
+}
+
+/// Enumerate every project that has a hook log in `~/.tokenix/`.
+/// Returns entries sorted by label for stable output ordering.
+pub fn list_all_project_logs() -> Vec<ProjectEntry> {
+    let Some(dir) = global_dir() else {
+        return vec![];
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
+    let mut projects: Vec<ProjectEntry> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let stem = path.file_stem()?.to_str()?.to_string();
+            // Keep only primary logs (not rotated `.log.1`).
+            if path.extension()?.to_str()? != "log" {
+                return None;
+            }
+            let name_path = dir.join(format!("{}.name", stem));
+            let label = std::fs::read_to_string(&name_path)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|_| stem.clone());
+            Some(ProjectEntry {
+                label,
+                log_path: path,
+            })
+        })
+        .collect();
+    projects.sort_by(|a, b| a.label.cmp(&b.label));
+    projects
+}
+
+/// Read hook events directly from a log path (without requiring a repo root).
+pub fn read_hook_log_from_path(log_path: &Path) -> Vec<HookEvent> {
+    let mut events = Vec::new();
+    let rotated = rotated_log_path(log_path);
+    for path in [rotated, log_path.to_path_buf()] {
+        if !path.exists() {
+            continue;
+        }
+        events.extend(
+            std::fs::read_to_string(&path)
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|l| serde_json::from_str::<HookEvent>(l).ok()),
+        );
+    }
+    events
+}
+
 pub fn open_db(repo_root: &Path, create: bool) -> Result<Option<Connection>> {
     let path = db_path(repo_root);
     if !create && !path.exists() {

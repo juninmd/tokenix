@@ -505,6 +505,106 @@ fn strip_leading_env_assignments(argv: &[String]) -> Vec<String> {
     argv[index..].to_vec()
 }
 
+/// Strip known Unix command-timing / resource-limit wrappers that prefix the
+/// real command without altering its behaviour for filter-matching purposes:
+///
+/// - `timeout [OPTS] DURATION CMD`  (GNU coreutils)
+/// - `time CMD`
+/// - `nice [-n N] CMD`
+/// - `ionice [-c C] [-n N] [-t] CMD`
+///
+/// Each wrapper is peeled in a loop so stacked prefixes like
+/// `timeout 30 nice -n 10 pnpm run test` resolve to `pnpm run test`.
+fn strip_leading_wrappers(argv: &[String]) -> Vec<String> {
+    let mut index = 0;
+
+    loop {
+        if index >= argv.len() {
+            break;
+        }
+        let name_raw = std::path::Path::new(&argv[index])
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(&argv[index])
+            .to_lowercase();
+        let name = name_raw.strip_suffix(".exe").unwrap_or(&name_raw);
+
+        match name {
+            // `time CMD` — single token prefix
+            "time" => {
+                index += 1;
+            }
+            // `nice [-n N | --adjustment[=]N] CMD`
+            "nice" => {
+                index += 1;
+                if index < argv.len() {
+                    let a = &argv[index];
+                    if a == "-n" || a == "--adjustment" {
+                        index += 2;
+                    } else if a.starts_with("--adjustment=") {
+                        index += 1;
+                    }
+                }
+            }
+            // `ionice [-c C] [-n N] [-t] CMD`
+            "ionice" => {
+                index += 1;
+                while index < argv.len() {
+                    let a = &argv[index];
+                    if (a == "-c" || a == "-n") && index + 1 < argv.len() {
+                        index += 2;
+                    } else if a == "-t" {
+                        index += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            // `timeout [OPTS] DURATION CMD`
+            // Options: --foreground, --preserve-status, --verbose, -k DUR, -s SIG
+            "timeout" => {
+                index += 1;
+                let mut found_duration = false;
+                while index < argv.len() {
+                    let a = &argv[index];
+                    if matches!(
+                        a.as_str(),
+                        "--foreground" | "--preserve-status" | "--verbose"
+                    ) {
+                        index += 1;
+                        continue;
+                    }
+                    if (a == "-k" || a == "--kill-after" || a == "-s" || a == "--signal")
+                        && index + 1 < argv.len()
+                    {
+                        index += 2;
+                        continue;
+                    }
+                    if a.starts_with("--kill-after=") || a.starts_with("--signal=") {
+                        index += 1;
+                        continue;
+                    }
+                    if a.starts_with('-') {
+                        index += 1;
+                        continue;
+                    }
+                    // First non-option argument is the DURATION — skip it.
+                    index += 1;
+                    found_duration = true;
+                    break;
+                }
+                if !found_duration {
+                    // Malformed `timeout` invocation — stop peeling.
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+
+    argv[index..].to_vec()
+}
+
 fn strip_cd_and_operators(mut argv: &[String]) -> &[String] {
     for _ in 0..8 {
         if argv.is_empty() {
@@ -542,7 +642,8 @@ pub fn get_effective_command(cmd: &str) -> String {
         }
 
         let stripped_env = strip_leading_env_assignments(&tokens);
-        let stripped_cd = strip_cd_and_operators(&stripped_env);
+        let stripped_wrappers = strip_leading_wrappers(&stripped_env);
+        let stripped_cd = strip_cd_and_operators(&stripped_wrappers);
 
         if stripped_cd.len() == tokens.len() {
             break;
@@ -1331,6 +1432,31 @@ on_empty = "empty filter output"
             get_effective_command("env CI=true cargo test"),
             "cargo test"
         );
+        // timeout wrapper
+        assert_eq!(
+            get_effective_command("timeout 180 pnpm run test"),
+            "pnpm run test"
+        );
+        assert_eq!(
+            get_effective_command("timeout -k 10 180 pnpm run test"),
+            "pnpm run test"
+        );
+        assert_eq!(
+            get_effective_command("timeout --foreground 60s cargo test --quiet"),
+            "cargo test --quiet"
+        );
+        // time wrapper
+        assert_eq!(
+            get_effective_command("time pnpm run build"),
+            "pnpm run build"
+        );
+        // nice wrapper
+        assert_eq!(get_effective_command("nice -n 10 make all"), "make all");
+        // stacked: timeout + nice
+        assert_eq!(
+            get_effective_command("timeout 30 nice -n 5 pnpm run test"),
+            "pnpm run test"
+        );
     }
 
     #[test]
@@ -1340,6 +1466,17 @@ on_empty = "empty filter output"
         assert!(candidates.contains(&"bash -c 'cd /app && cargo test'".to_string()));
         assert!(candidates.contains(&"cd /app && cargo test".to_string()));
         assert!(candidates.contains(&"cargo test".to_string()));
+    }
+
+    #[test]
+    fn timeout_wrapper_included_in_candidates() {
+        // Reported: `timeout 180 pnpm run test` must produce `pnpm run test`
+        // as a candidate so filters keyed on `pnpm run test` match.
+        let candidates = derive_command_candidates("timeout 180 pnpm run test");
+        assert!(
+            candidates.contains(&"pnpm run test".to_string()),
+            "candidates: {candidates:?}"
+        );
     }
 
     #[test]

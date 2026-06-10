@@ -1,4 +1,4 @@
-use crate::store::read_hook_log;
+use crate::store::{list_all_project_logs, read_hook_log, read_hook_log_from_path, HookEvent};
 use std::path::Path;
 
 pub struct ModelPrice {
@@ -80,10 +80,18 @@ pub struct GainStats {
     pub cost_rows: Vec<CostRow>,
     pub by_tool: Vec<(String, usize, i64)>,
     pub by_phase: Vec<(String, usize, i64)>,
+    /// Top Bash commands compressed by the filter system, sorted by tokens saved.
+    pub by_command: Vec<(String, usize, i64)>,
 }
 
-pub fn compute_gain(repo_root: &Path) -> GainStats {
-    let events = read_hook_log(repo_root);
+/// Aggregate stats across all projects, with per-project breakdown.
+pub struct GlobalGainStats {
+    pub aggregate: GainStats,
+    /// (label, tokens_saved, total_calls, intercepted) per project, desc by saved.
+    pub projects: Vec<(String, i64, usize, usize)>,
+}
+
+fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
     let intercepted_events: Vec<_> = events
         .iter()
         .filter(|e| e.action == "intercepted")
@@ -142,6 +150,22 @@ pub fn compute_gain(repo_root: &Path) -> GainStats {
         .collect();
     by_phase.sort_by(|a, b| a.0.cmp(&b.0));
 
+    // Bash commands compressed by the filter system (command field non-empty).
+    let mut by_cmd_map: std::collections::HashMap<String, (usize, i64)> =
+        std::collections::HashMap::new();
+    for e in &intercepted_events {
+        if !e.command.is_empty() {
+            let entry = by_cmd_map.entry(e.command.clone()).or_default();
+            entry.0 += 1;
+            entry.1 += e.saved_tokens;
+        }
+    }
+    let mut by_command: Vec<(String, usize, i64)> = by_cmd_map
+        .into_iter()
+        .map(|(k, (c, s))| (k, c, s))
+        .collect();
+    by_command.sort_by_key(|row| std::cmp::Reverse(row.2));
+
     GainStats {
         total_calls: events.len(),
         intercepted: intercepted_events.len(),
@@ -153,6 +177,42 @@ pub fn compute_gain(repo_root: &Path) -> GainStats {
         cost_rows,
         by_tool,
         by_phase,
+        by_command,
+    }
+}
+
+pub fn compute_gain(repo_root: &Path) -> GainStats {
+    stats_from_events(read_hook_log(repo_root))
+}
+
+/// Aggregate gain stats across every project that has a hook log in `~/.tokenix/`.
+pub fn compute_global_gain() -> GlobalGainStats {
+    let project_logs = list_all_project_logs();
+
+    let mut all_events: Vec<HookEvent> = Vec::new();
+    let mut projects: Vec<(String, i64, usize, usize)> = Vec::new();
+
+    for entry in &project_logs {
+        let events = read_hook_log_from_path(&entry.log_path);
+        let saved: i64 = events
+            .iter()
+            .filter(|e| e.action == "intercepted")
+            .map(|e| e.saved_tokens)
+            .sum();
+        let total = events.len();
+        let intercepted = events.iter().filter(|e| e.action == "intercepted").count();
+        if total > 0 {
+            projects.push((entry.label.clone(), saved, total, intercepted));
+        }
+        all_events.extend(events);
+    }
+
+    // Sort projects by tokens saved descending.
+    projects.sort_by_key(|(_, saved, _, _)| std::cmp::Reverse(*saved));
+
+    GlobalGainStats {
+        aggregate: stats_from_events(all_events),
+        projects,
     }
 }
 
