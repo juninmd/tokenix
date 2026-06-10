@@ -3,7 +3,7 @@
 
   <h1>tokenix</h1>
 
-  <p><strong>Local semantic context for AI coding agents, with fewer wasted tokens.</strong></p>
+  <p><strong>Local semantic search, symbol graphs, secrets scanning, output filters, and CLI hooks that save 60-90% LLM tokens.</strong></p>
 
   <p>
     <a href="https://github.com/juninmd/tokenix/releases"><img src="https://img.shields.io/github/v/release/juninmd/tokenix?style=flat-square&color=orange&label=release" alt="Latest Release" /></a>
