@@ -178,6 +178,11 @@ enum Commands {
         model: Option<String>,
         #[arg(long, help = "Update file chunks and symbol graph without embedding")]
         no_embed: bool,
+        #[arg(
+            long,
+            help = "Keep normal process priority (default lowers it so indexing never starves the PC)"
+        )]
+        no_low_priority: bool,
     },
     /// Semantic search over the indexed repository
     Query {
@@ -190,6 +195,8 @@ enum Commands {
         file: Option<String>,
         #[arg(long, help = "Cross-project search: additional project path(s)")]
         link: Vec<String>,
+        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -216,6 +223,8 @@ enum Commands {
         max_files: usize,
         #[arg(long, help = "Print per-section token breakdown to stderr")]
         budget_breakdown: bool,
+        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -228,6 +237,8 @@ enum Commands {
         max_symbols: usize,
         #[arg(long, help = "Print per-section token breakdown to stderr")]
         budget_breakdown: bool,
+        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -243,6 +254,8 @@ enum Commands {
         symbol: Option<String>,
         #[arg(short, long, help = "Line range e.g. 10-50")]
         lines: Option<String>,
+        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -251,6 +264,14 @@ enum Commands {
         query: String,
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
+        #[arg(
+            short,
+            long,
+            help = "Filter by symbol kind (function, struct, class, method, ...)"
+        )]
+        kind: Option<String>,
+        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -259,6 +280,8 @@ enum Commands {
         symbol: String,
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
+        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -267,6 +290,8 @@ enum Commands {
         symbol: String,
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
+        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -279,7 +304,7 @@ enum Commands {
         limit: usize,
         #[arg(
             long,
-            help = "Output format: text | html | mermaid",
+            help = "Output format: text | html | mermaid | json",
             default_value = "text"
         )]
         format: String,
@@ -290,6 +315,18 @@ enum Commands {
             default_value = "impact.html"
         )]
         output: String,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show file-level import dependencies of a file
+    Deps {
+        file: String,
+        #[arg(long, help = "Show files that import the target instead")]
+        reverse: bool,
+        #[arg(long, help = "Follow resolved imports transitively")]
+        transitive: bool,
+        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -411,6 +448,11 @@ enum Commands {
     },
     /// Stop the background embedding daemon
     Stop,
+    /// Inspect or control the background embedding daemon
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
     /// Diagnose embedding backend, GPU availability, model cache, and daemon
     Doctor,
     /// Generate and manage per-command output filters
@@ -496,6 +538,16 @@ enum ArtifactsAction {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Show daemon state: pid, port, uptime, model, cache size
+    Status,
+    /// Stop the running daemon
+    Stop,
+    /// Stop (if running) and start a fresh daemon
+    Restart,
 }
 
 #[derive(Subcommand)]
@@ -625,6 +677,7 @@ fn main() -> Result<()> {
             embed_batch,
             model,
             no_embed,
+            no_low_priority,
         } => {
             if let Some(model) = model.as_deref() {
                 if !crate::embed::is_known_model(model) {
@@ -635,6 +688,11 @@ fn main() -> Result<()> {
                 set_env_override("TOKENIX_EMBED_MODEL", model);
             }
             configure_index_limits(cpu_profile, only_cpu, jobs, embed_batch);
+            // PC-friendliness: indexing is the one long CPU-bound run; drop to
+            // below-normal priority unless the user opts out (flag or env).
+            if !no_low_priority && std::env::var_os("TOKENIX_FOREGROUND").is_none() {
+                indexer::lower_process_priority();
+            }
             cmd_index(&path, force, if_stale, no_embed)
         }
         Commands::Query {
@@ -643,8 +701,9 @@ fn main() -> Result<()> {
             k,
             file,
             link,
+            json,
             path,
-        } => cmd_query(&text, budget, k, file.as_deref(), &link, &path),
+        } => cmd_query(&text, budget, k, file.as_deref(), &link, json, &path),
         Commands::Grep {
             pattern,
             limit,
@@ -658,33 +717,52 @@ fn main() -> Result<()> {
             budget,
             max_files,
             budget_breakdown,
+            json,
             path,
-        } => cmd_context(&task, mode, budget, max_files, budget_breakdown, &path),
+        } => cmd_context(
+            &task,
+            mode,
+            budget,
+            max_files,
+            budget_breakdown,
+            json,
+            &path,
+        ),
         Commands::Explore {
             query,
             budget,
             max_symbols,
             budget_breakdown,
+            json,
             path,
-        } => cmd_explore(&query, budget, max_symbols, budget_breakdown, &path),
+        } => cmd_explore(&query, budget, max_symbols, budget_breakdown, json, &path),
         Commands::Memory { action } => cmd_memory(action),
         Commands::Read {
             file,
             symbol,
             lines,
+            json,
             path,
-        } => cmd_read(&file, symbol.as_deref(), lines.as_deref(), &path),
-        Commands::Symbols { query, limit, path } => cmd_symbols(&query, limit, &path),
+        } => cmd_read(&file, symbol.as_deref(), lines.as_deref(), json, &path),
+        Commands::Symbols {
+            query,
+            limit,
+            kind,
+            json,
+            path,
+        } => cmd_symbols(&query, limit, kind.as_deref(), json, &path),
         Commands::Callers {
             symbol,
             limit,
+            json,
             path,
-        } => cmd_graph_relations(&symbol, limit, &path, true),
+        } => cmd_graph_relations(&symbol, limit, json, &path, true),
         Commands::Callees {
             symbol,
             limit,
+            json,
             path,
-        } => cmd_graph_relations(&symbol, limit, &path, false),
+        } => cmd_graph_relations(&symbol, limit, json, &path, false),
         Commands::Impact {
             symbol,
             depth,
@@ -700,6 +778,13 @@ fn main() -> Result<()> {
             format,
             path,
         } => cmd_flow(&symbol, depth, limit, &format, &path),
+        Commands::Deps {
+            file,
+            reverse,
+            transitive,
+            json,
+            path,
+        } => cmd_deps(&file, reverse, transitive, json, &path),
         Commands::Cycles { path } => cmd_cycles(&path),
         Commands::RebuildGraph { path } => cmd_rebuild_graph(&path),
         Commands::Gain {
@@ -739,6 +824,11 @@ fn main() -> Result<()> {
         } => cmd_tokenmap(&path, &format, &output),
         Commands::Serve { port } => daemon::run_serve(port),
         Commands::Stop => daemon::run_stop(),
+        Commands::Daemon { action } => match action {
+            DaemonAction::Status => daemon::run_status(),
+            DaemonAction::Stop => daemon::run_stop(),
+            DaemonAction::Restart => daemon::run_restart(),
+        },
         Commands::Doctor => doctor::run_doctor(),
         Commands::Filter { action } => {
             let repo_root = find_repo_root(&PathBuf::from("."));
@@ -961,10 +1051,23 @@ fn cmd_context(
     budget: usize,
     max_files: usize,
     breakdown: bool,
+    json: bool,
     path: &Path,
 ) -> Result<()> {
     let repo_root = find_repo_root(path);
     let out = query::build_task_context_with_mode(&repo_root, task, mode, budget, max_files)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "task": task,
+                "budget": budget,
+                "tokens": chunker::count_tokens(&out),
+                "context": out,
+            }))?
+        );
+        return Ok(());
+    }
     println!("{}", out);
     if breakdown {
         print_budget_breakdown(&out, budget);
@@ -1139,10 +1242,23 @@ fn cmd_explore(
     budget: usize,
     max_symbols: usize,
     breakdown: bool,
+    json: bool,
     path: &Path,
 ) -> Result<()> {
     let repo_root = find_repo_root(path);
     let out = query::build_explore_context(&repo_root, query_text, budget, max_symbols)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "query": query_text,
+                "budget": budget,
+                "tokens": chunker::count_tokens(&out),
+                "context": out,
+            }))?
+        );
+        return Ok(());
+    }
     println!("{}", out);
     if breakdown {
         print_budget_breakdown(&out, budget);
@@ -1246,6 +1362,7 @@ fn cmd_query(
     k: usize,
     file: Option<&str>,
     link: &[String],
+    json: bool,
     path: &Path,
 ) -> Result<()> {
     if k == 0 {
@@ -1262,19 +1379,31 @@ fn cmd_query(
         let root_refs: Vec<&Path> = roots.iter().map(|p| p.as_path()).collect();
         let results = query::query_index_multi(&root_refs, text, budget, k, file)?
             .ok_or_else(|| anyhow::anyhow!("No indexed projects found. Run: tokenix index"))?;
-        println!("{}", query::format_results(&results, text));
+        print_search_results(&results, text, json)?;
         return Ok(());
     }
 
-    // Try to query via daemon if it's running
-    if let Some(output) = daemon::daemon_search(&repo_root, text, k, budget, file) {
-        println!("{}", output);
-        return Ok(());
+    // Try to query via daemon if it's running. The daemon returns pre-formatted
+    // text, so JSON output takes the direct path instead.
+    if !json {
+        if let Some(output) = daemon::daemon_search(&repo_root, text, k, budget, file) {
+            println!("{}", output);
+            return Ok(());
+        }
     }
 
     let results = query::query_index(&repo_root, text, budget, k, file)?
         .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))?;
-    println!("{}", query::format_results(&results, text));
+    print_search_results(&results, text, json)?;
+    Ok(())
+}
+
+fn print_search_results(results: &[store::SearchResult], text: &str, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(results)?);
+    } else {
+        println!("{}", query::format_results(results, text));
+    }
     Ok(())
 }
 
@@ -1297,12 +1426,22 @@ fn open_existing_index(path: &Path) -> Result<rusqlite::Connection> {
         .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))
 }
 
-fn cmd_symbols(query: &str, limit: usize, path: &Path) -> Result<()> {
+fn cmd_symbols(
+    query: &str,
+    limit: usize,
+    kind: Option<&str>,
+    json: bool,
+    path: &Path,
+) -> Result<()> {
     if limit == 0 {
         anyhow::bail!("limit must be >= 1");
     }
     let conn = open_existing_index(path)?;
-    let nodes = store::search_graph_nodes(&conn, query, limit)?;
+    let nodes = store::search_graph_nodes_kind(&conn, query, limit, kind)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&nodes)?);
+        return Ok(());
+    }
     println!(
         "{}",
         graph::format_nodes(&nodes, &format!("Symbols matching `{query}`"))
@@ -1310,7 +1449,13 @@ fn cmd_symbols(query: &str, limit: usize, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_graph_relations(symbol: &str, limit: usize, path: &Path, callers: bool) -> Result<()> {
+fn cmd_graph_relations(
+    symbol: &str,
+    limit: usize,
+    json: bool,
+    path: &Path,
+    callers: bool,
+) -> Result<()> {
     if limit == 0 {
         anyhow::bail!("limit must be >= 1");
     }
@@ -1320,6 +1465,10 @@ fn cmd_graph_relations(symbol: &str, limit: usize, path: &Path, callers: bool) -
     } else {
         store::graph_callees(&conn, symbol, limit)?
     };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&relations)?);
+        return Ok(());
+    }
     let title = if callers {
         format!("Callers of `{symbol}`")
     } else {
@@ -1339,7 +1488,9 @@ fn cmd_impact(
 ) -> Result<()> {
     let conn = open_existing_index(path)?;
     let relations = store::graph_impact(&conn, symbol, depth, limit)?;
-    if format_str.eq_ignore_ascii_case("html") {
+    if format_str.eq_ignore_ascii_case("json") {
+        println!("{}", serde_json::to_string_pretty(&relations)?);
+    } else if format_str.eq_ignore_ascii_case("html") {
         let html =
             graph::export_relations_to_html(&relations, &format!("Impact graph for `{symbol}`"));
         std::fs::write(output, html)?;
@@ -1388,9 +1539,69 @@ fn cmd_cycles(path: &Path) -> Result<()> {
 }
 
 fn cmd_rebuild_graph(path: &Path) -> Result<()> {
+    let repo_root = find_repo_root(path);
     let conn = open_existing_index(path)?;
+    // Idempotent: brings pre-upgrade DBs up to date (e.g. graph_imports table).
+    store::init_schema(&conn, 768)?;
     graph::rebuild_symbol_graph(&conn)?;
-    println!("{}", "Symbol graph rebuilt from indexed chunks".green());
+    let imports = graph::rebuild_import_graph(&conn, &repo_root)?;
+    println!(
+        "{}",
+        format!("Symbol graph rebuilt; import graph: {imports} edge(s)").green()
+    );
+    Ok(())
+}
+
+fn cmd_deps(file: &str, reverse: bool, transitive: bool, json: bool, path: &Path) -> Result<()> {
+    let conn = open_existing_index(path)?;
+    let mut edges = store::file_imports(&conn, file, reverse)?;
+
+    if transitive {
+        let mut seen = std::collections::HashSet::new();
+        let mut frontier: Vec<String> = edges
+            .iter()
+            .filter_map(|e| {
+                if reverse {
+                    Some(e.source_path.clone())
+                } else {
+                    e.resolved_path.clone()
+                }
+            })
+            .collect();
+        while let Some(next) = frontier.pop() {
+            if !seen.insert(next.clone()) {
+                continue;
+            }
+            for e in store::file_imports(&conn, &next, reverse)? {
+                let hop = if reverse {
+                    Some(e.source_path.clone())
+                } else {
+                    e.resolved_path.clone()
+                };
+                if let Some(h) = hop {
+                    if !seen.contains(&h) {
+                        frontier.push(h);
+                    }
+                }
+                edges.push(e);
+            }
+        }
+        edges.sort_by(|a, b| (&a.source_path, a.line).cmp(&(&b.source_path, b.line)));
+        edges.dedup_by(|a, b| {
+            a.source_path == b.source_path && a.target == b.target && a.line == b.line
+        });
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&edges)?);
+        return Ok(());
+    }
+    let title = if reverse {
+        format!("Files importing `{file}`")
+    } else {
+        format!("Imports of `{file}`")
+    };
+    println!("{}", graph::format_imports(&edges, &title, reverse));
     Ok(())
 }
 
@@ -1398,6 +1609,7 @@ fn cmd_read(
     file: &str,
     symbol: Option<&str>,
     lines_range: Option<&str>,
+    json: bool,
     path: &Path,
 ) -> Result<()> {
     let repo_root = find_repo_root(path);
@@ -1417,6 +1629,12 @@ fn cmd_read(
     let content = std::fs::read_to_string(&fp)?;
     let file_lines: Vec<&str> = content.lines().collect();
 
+    let rel = fp
+        .strip_prefix(&repo_root)
+        .unwrap_or(&fp)
+        .to_string_lossy()
+        .replace('\\', "/");
+
     if let Some(range) = lines_range {
         let parts: Vec<&str> = range.split('-').collect();
         if parts.len() == 2 {
@@ -1426,18 +1644,22 @@ fn cmd_read(
                     anyhow::bail!("Invalid line range. File has {} lines (1-{})", total, total);
                 }
                 let slice = file_lines[s - 1..e].join("\n");
-                println!("{}", slice);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "path": rel, "mode": "lines", "start": s, "end": e,
+                            "content": slice,
+                        }))?
+                    );
+                } else {
+                    println!("{}", slice);
+                }
                 return Ok(());
             }
         }
         anyhow::bail!("Invalid --lines format. Use: N-M");
     }
-
-    let rel = fp
-        .strip_prefix(&repo_root)
-        .unwrap_or(&fp)
-        .to_string_lossy()
-        .replace('\\', "/");
 
     if let Some(sym) = symbol {
         let chunks = chunker::chunk_file(&rel, &content);
@@ -1448,6 +1670,10 @@ fn cmd_read(
         if found.is_empty() {
             anyhow::bail!("Symbol not found: '{}'", sym);
         }
+        if json {
+            println!("{}", serde_json::to_string_pretty(&found)?);
+            return Ok(());
+        }
         for c in found {
             println!(
                 "# L{}-{} [{}] {}",
@@ -1455,6 +1681,28 @@ fn cmd_read(
             );
             println!("{}", c.content);
         }
+        return Ok(());
+    }
+
+    if json {
+        // Symbol outline as data: chunk metadata without bodies keeps the
+        // payload small regardless of file size.
+        let outline: Vec<serde_json::Value> = chunker::chunk_file(&rel, &content)
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "start_line": c.start_line, "end_line": c.end_line,
+                    "kind": c.kind, "symbol": c.symbol,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "path": rel, "mode": "outline", "lines": file_lines.len(),
+                "symbols": outline,
+            }))?
+        );
         return Ok(());
     }
 

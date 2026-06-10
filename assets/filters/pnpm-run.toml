@@ -1,0 +1,37 @@
+[filters.pnpm-run]
+description = "Compact pnpm run/exec/dlx script output"
+match_command = "^pnpm\\s+(run|exec|dlx)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^> ",
+  "^\\s*Progress:",
+  "^\\s*Packages:",
+  "^\\s*Downloading",
+  "^\\s*WARN\\s+deprecated",
+]
+max_lines = 50
+on_empty = "pnpm run: done"
+
+[[tests.pnpm-run]]
+name = "build script"
+input = """
+> my-app@1.0.0 build /repo
+> tsc -p .
+
+"""
+expected = "pnpm run: done"
+
+[[tests.pnpm-run]]
+name = "script error shown"
+input = """
+> my-app@1.0.0 lint /repo
+> eslint src/
+
+/repo/src/main.ts
+  4:7  error  'unused' is assigned a value but never used  no-unused-vars
+ELIFECYCLE Command failed with exit code 1.
+"""
+expected = """/repo/src/main.ts
+  4:7  error  'unused' is assigned a value but never used  no-unused-vars
+ELIFECYCLE Command failed with exit code 1."""

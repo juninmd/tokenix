@@ -1,0 +1,42 @@
+[filters.uv-add]
+description = "Compact uv add/remove/lock/venv/tool output"
+match_command = "^uv\\s+(add|remove|lock|venv|tool|python)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Resolved",
+  "^\\s*Prepared",
+  "^\\s*Installed",
+  "^\\s*Uninstalled",
+  "^\\s*Audited",
+  "^\\s*Building",
+  "^\\s*Built",
+  "^\\s*Downloading",
+  "^\\s*Downloaded",
+  "^\\s*Creating virtual environment",
+  "^\\s*Activate with",
+  "^\\s*[+~-]\\s\\S+==",
+]
+max_lines = 40
+on_empty = "uv: done"
+
+[[tests.uv-add]]
+name = "clean add"
+input = """
+Resolved 14 packages in 312ms
+Prepared 2 packages in 90ms
+Installed 2 packages in 18ms
+ + requests==2.32.3
+ + urllib3==2.2.1
+"""
+expected = "uv: done"
+
+[[tests.uv-add]]
+name = "resolution error shown"
+input = """
+Resolved 3 packages in 102ms
+  x No solution found when resolving dependencies:
+  help: requests>=99 was not found in the package registry
+"""
+expected = """  x No solution found when resolving dependencies:
+  help: requests>=99 was not found in the package registry"""

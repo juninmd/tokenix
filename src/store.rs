@@ -186,6 +186,16 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
             reference TEXT NOT NULL,
             edge_kind TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS graph_imports (
+            id INTEGER PRIMARY KEY,
+            source_path TEXT NOT NULL,
+            target TEXT NOT NULL,
+            resolved_path TEXT,
+            kind TEXT NOT NULL,
+            line INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_imports_source ON graph_imports(source_path);
+        CREATE INDEX IF NOT EXISTS idx_imports_resolved ON graph_imports(resolved_path);
         CREATE TABLE IF NOT EXISTS meta (
             key TEXT PRIMARY KEY,
             value TEXT
@@ -227,6 +237,9 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
         "ALTER TABLE graph_nodes ADD COLUMN rank REAL NOT NULL DEFAULT 0",
         [],
     );
+    // Migration for int8-quantized embeddings: rows with a non-NULL scale hold
+    // i8 vectors (1 byte/dim); NULL-scale rows are legacy f32 blobs (4 bytes/dim).
+    let _ = conn.execute("ALTER TABLE embeddings ADD COLUMN scale REAL", []);
     Ok(())
 }
 
@@ -239,6 +252,41 @@ pub fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
         .collect()
+}
+
+/// Symmetric int8 quantization: `scale = max|x| / 127`, each element stored as
+/// one signed byte. 4x smaller than f32 with near-lossless cosine similarity
+/// (the per-vector scale cancels out of the cosine entirely).
+pub fn quantize_q8(v: &[f32]) -> (Vec<u8>, f32) {
+    let max_abs = v.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let scale = if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 };
+    let data = v
+        .iter()
+        .map(|x| (x / scale).round().clamp(-127.0, 127.0) as i8 as u8)
+        .collect();
+    (data, scale)
+}
+
+/// Cosine similarity between an f32 query and an i8-quantized document vector.
+/// The document's quantization scale cancels in the cosine, so only the raw
+/// i8 bytes are needed.
+pub fn cosine_similarity_to_q8(query_vec: &[f32], query_norm: f32, bytes: &[u8]) -> f32 {
+    let mut dot = 0.0f32;
+    let mut nb = 0.0f32;
+    for (i, &b) in bytes.iter().enumerate() {
+        if i >= query_vec.len() {
+            break;
+        }
+        let y = b as i8 as f32;
+        dot += query_vec[i] * y;
+        nb += y * y;
+    }
+    let nb_sqrt = nb.sqrt();
+    if query_norm == 0.0 || nb_sqrt == 0.0 {
+        0.0
+    } else {
+        dot / (query_norm * nb_sqrt)
+    }
 }
 
 pub fn upsert_file(conn: &Connection, path: &str, mtime: f64, hash: &str) -> Result<i64> {
@@ -305,12 +353,64 @@ pub fn insert_chunk(conn: &Connection, chunk: NewChunk<'_>) -> Result<i64> {
 }
 
 pub fn insert_embedding(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> Result<()> {
-    let blob = serialize_vec(embedding);
+    let (blob, scale) = quantize_q8(embedding);
     conn.execute(
-        "INSERT OR REPLACE INTO embeddings(chunk_id,embedding) VALUES(?1,?2)",
-        params![chunk_id, blob],
+        "INSERT OR REPLACE INTO embeddings(chunk_id,embedding,scale) VALUES(?1,?2,?3)",
+        params![chunk_id, blob, scale],
     )?;
     Ok(())
+}
+
+/// One-time, embedding-free migration: re-encode legacy f32 rows to int8.
+/// Returns the number of converted rows. Cheap (pure CPU re-encode), so it
+/// runs opportunistically at index time.
+pub fn backfill_quantized_embeddings(conn: &Connection) -> Result<usize> {
+    let legacy: Vec<(i64, Vec<u8>)> = {
+        let mut stmt =
+            conn.prepare("SELECT chunk_id, embedding FROM embeddings WHERE scale IS NULL")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    if legacy.is_empty() {
+        return Ok(0);
+    }
+    let count = legacy.len();
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    for (chunk_id, blob) in legacy {
+        let (q8, scale) = quantize_q8(&deserialize_vec(&blob));
+        conn.execute(
+            "UPDATE embeddings SET embedding=?2, scale=?3 WHERE chunk_id=?1",
+            params![chunk_id, q8, scale],
+        )?;
+    }
+    conn.execute_batch("COMMIT")?;
+    // One-time space reclaim: the f32→i8 rewrite frees ~3/4 of the embedding
+    // pages, but only VACUUM returns them to the filesystem.
+    let _ = conn.execute_batch("VACUUM");
+    Ok(count)
+}
+
+/// Read-only probe: does this index have the `scale` column yet? Query paths
+/// open old DBs without running migrations (init_schema runs only at index
+/// time), so SELECTs must degrade to the legacy f32 layout when it is missing.
+fn embeddings_have_scale(conn: &Connection) -> bool {
+    conn.prepare("SELECT scale FROM embeddings LIMIT 0").is_ok()
+}
+
+/// (quantized_rows, total_rows) — used by `doctor` to report migration coverage.
+pub fn quantization_coverage(conn: &Connection) -> Result<(i64, i64)> {
+    let total: i64 = conn.query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0))?;
+    if !embeddings_have_scale(conn) {
+        return Ok((0, total));
+    }
+    let quantized: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM embeddings WHERE scale IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok((quantized, total))
 }
 
 pub fn cached_embeddings(
@@ -367,7 +467,7 @@ pub fn upsert_embedding_cache(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GraphNode {
     pub chunk_id: i64,
     pub path: String,
@@ -377,7 +477,7 @@ pub struct GraphNode {
     pub end_line: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GraphRelation {
     pub from: GraphNode,
     pub to: GraphNode,
@@ -389,6 +489,72 @@ pub fn clear_symbol_graph(conn: &Connection) -> Result<()> {
     conn.execute("DELETE FROM graph_edges", [])?;
     conn.execute("DELETE FROM graph_nodes", [])?;
     Ok(())
+}
+
+// ---- File-level import graph --------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportEdge {
+    pub source_path: String,
+    /// Module text as written in the source (`crate::store`, `./utils`, `os.path`).
+    pub target: String,
+    /// Repo-relative file the import resolves to; None = external dependency.
+    pub resolved_path: Option<String>,
+    pub kind: String,
+    pub line: usize,
+}
+
+pub fn clear_import_graph(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM graph_imports", [])?;
+    Ok(())
+}
+
+pub fn insert_import(conn: &Connection, edge: &ImportEdge) -> Result<()> {
+    conn.execute(
+        "INSERT INTO graph_imports(source_path,target,resolved_path,kind,line) VALUES(?1,?2,?3,?4,?5)",
+        params![
+            edge.source_path,
+            edge.target,
+            edge.resolved_path,
+            edge.kind,
+            edge.line as i64
+        ],
+    )?;
+    Ok(())
+}
+
+/// Outgoing imports of `path` (reverse=false) or files importing `path`
+/// (reverse=true). Matches by path substring so `deps indexer.rs` works.
+pub fn file_imports(conn: &Connection, path: &str, reverse: bool) -> Result<Vec<ImportEdge>> {
+    let sql = if reverse {
+        "SELECT source_path, target, resolved_path, kind, line FROM graph_imports
+         WHERE resolved_path IS NOT NULL AND instr(resolved_path, ?1) > 0
+         ORDER BY source_path, line"
+    } else {
+        "SELECT source_path, target, resolved_path, kind, line FROM graph_imports
+         WHERE instr(source_path, ?1) > 0
+         ORDER BY source_path, line"
+    };
+    let mut stmt = conn.prepare(sql).map_err(|_| {
+        anyhow::anyhow!("Import graph not built yet. Run: tokenix index (or rebuild-graph)")
+    })?;
+    let rows = stmt.query_map(params![path], |row| {
+        Ok(ImportEdge {
+            source_path: row.get(0)?,
+            target: row.get(1)?,
+            resolved_path: row.get(2)?,
+            kind: row.get(3)?,
+            line: row.get::<_, i64>(4)? as usize,
+        })
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// All indexed file paths — the resolution universe for import targets.
+pub fn all_file_paths(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT path FROM files")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
 /// Persist PageRank centrality scores onto graph nodes. Called after the edge
@@ -445,16 +611,29 @@ pub fn insert_graph_edge(
 }
 
 pub fn search_graph_nodes(conn: &Connection, query: &str, limit: usize) -> Result<Vec<GraphNode>> {
+    search_graph_nodes_kind(conn, query, limit, None)
+}
+
+pub fn search_graph_nodes_kind(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+    kind: Option<&str>,
+) -> Result<Vec<GraphNode>> {
     let pattern = format!("%{}%", query);
     let query_limit = (limit.max(1) * 4) as i64;
     let mut stmt = conn.prepare(
         "SELECT chunk_id,path,name,kind,start_line,end_line
          FROM graph_nodes
-         WHERE name = ?1 COLLATE NOCASE OR name LIKE ?2 COLLATE NOCASE OR path LIKE ?2 COLLATE NOCASE
+         WHERE (name = ?1 COLLATE NOCASE OR name LIKE ?2 COLLATE NOCASE OR path LIKE ?2 COLLATE NOCASE)
+           AND (?4 IS NULL OR kind = ?4 COLLATE NOCASE)
          ORDER BY CASE WHEN name = ?1 COLLATE NOCASE THEN 0 ELSE 1 END, rank DESC, path, start_line
          LIMIT ?3",
     )?;
-    let rows = stmt.query_map(params![query, pattern, query_limit], graph_node_from_row)?;
+    let rows = stmt.query_map(
+        params![query, pattern, query_limit, kind],
+        graph_node_from_row,
+    )?;
     let mut seen = HashSet::new();
     let mut nodes = Vec::new();
     for row in rows.filter_map(|row| row.ok()) {
@@ -473,6 +652,27 @@ pub fn search_graph_nodes(conn: &Connection, query: &str, limit: usize) -> Resul
         }
     }
     Ok(nodes)
+}
+
+/// (chunk_id, name, path) for every graph node — the incremental rebuild's
+/// table-backed resolution map.
+pub fn all_graph_node_names(conn: &Connection) -> Result<Vec<(i64, String, String)>> {
+    let mut stmt = conn.prepare("SELECT chunk_id, name, path FROM graph_nodes")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Bare (caller, callee) pairs for whole-graph PageRank recomputation.
+pub fn all_graph_edge_pairs(conn: &Connection) -> Result<Vec<(i64, i64)>> {
+    let mut stmt = conn.prepare("SELECT caller_chunk_id, callee_chunk_id FROM graph_edges")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
 pub fn graph_callers(conn: &Connection, symbol: &str, limit: usize) -> Result<Vec<GraphRelation>> {
@@ -713,7 +913,7 @@ fn graph_relation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphRel
     })
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[allow(dead_code)]
 pub struct SearchResult {
     pub id: i64,
@@ -765,72 +965,99 @@ pub fn search_similar(
     k: usize,
     file_filter: Option<&str>,
 ) -> Result<Vec<SearchResult>> {
-    let rows_data: Vec<(Vec<u8>, i64, String, i64, i64, String, String, String, i64)> =
-        if let Some(filter) = file_filter {
-            let mut stmt = conn.prepare(
-            "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding
+    type RowData = (
+        Vec<u8>,
+        Option<f64>,
+        i64,
+        String,
+        i64,
+        i64,
+        String,
+        String,
+        String,
+        i64,
+    );
+    // Pre-migration DBs have no `scale` column; select NULL so every row takes
+    // the legacy f32 path until `tokenix index` migrates the file.
+    let scale_expr = if embeddings_have_scale(conn) {
+        "e.scale"
+    } else {
+        "NULL"
+    };
+    let rows_data: Vec<RowData> = if let Some(filter) = file_filter {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding, {scale_expr}
              FROM embeddings e JOIN chunks c ON c.id = e.chunk_id
              WHERE instr(c.path, ?1) > 0"
-        )?;
-            let rows = stmt.query_map(params![filter], |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(8)?,
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
-                ))
-            })?;
-            let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
-            collected
-        } else {
-            let mut stmt = conn.prepare(
-            "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding
+        ))?;
+        let rows = stmt.query_map(params![filter], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(8)?,
+                row.get::<_, Option<f64>>(9)?,
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        })?;
+        let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+        collected
+    } else {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding, {scale_expr}
              FROM embeddings e JOIN chunks c ON c.id = e.chunk_id"
-        )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(8)?,
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
-                ))
-            })?;
-            let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
-            collected
-        };
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(8)?,
+                row.get::<_, Option<f64>>(9)?,
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        })?;
+        let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+        collected
+    };
 
     let query_norm: f32 = query_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
 
     use rayon::prelude::*;
     let mut scored: Vec<(f32, SearchResult)> = rows_data
         .into_par_iter()
-        .map(|(blob, id, path, sl, el, symbol, kind, content, tc)| {
-            let sim = cosine_similarity_to_bytes(query_vec, query_norm, &blob);
-            (
-                sim,
-                SearchResult {
-                    id,
-                    path,
-                    start_line: sl as usize,
-                    end_line: el as usize,
-                    symbol,
-                    kind,
-                    content,
-                    token_count: tc as usize,
-                    distance: 1.0 - sim,
-                },
-            )
-        })
+        .map(
+            |(blob, scale, id, path, sl, el, symbol, kind, content, tc)| {
+                // scale set → int8-quantized row; NULL → legacy f32 blob.
+                let sim = if scale.is_some() {
+                    cosine_similarity_to_q8(query_vec, query_norm, &blob)
+                } else {
+                    cosine_similarity_to_bytes(query_vec, query_norm, &blob)
+                };
+                (
+                    sim,
+                    SearchResult {
+                        id,
+                        path,
+                        start_line: sl as usize,
+                        end_line: el as usize,
+                        symbol,
+                        kind,
+                        content,
+                        token_count: tc as usize,
+                        distance: 1.0 - sim,
+                    },
+                )
+            },
+        )
         .collect();
 
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -1336,10 +1563,21 @@ fn default_phase() -> String {
     "pre".to_string()
 }
 
+/// Rotate the NDJSON hook log past this size; one rotated generation is kept
+/// so `gain` still sees recent history while the log stays bounded.
+const HOOK_LOG_MAX_BYTES: u64 = 5_000_000;
+
 pub fn log_hook_event(repo_root: &Path, event: &HookEvent) -> Result<()> {
     let log = log_path(repo_root);
     if let Some(parent) = log.parent() {
         std::fs::create_dir_all(parent)?;
+    }
+    // Fail-open like the rest of the hook path: a rotation error must never
+    // block logging (worst case the log keeps growing until the next attempt).
+    if std::fs::metadata(&log).is_ok_and(|m| m.len() > HOOK_LOG_MAX_BYTES) {
+        let rotated = rotated_log_path(&log);
+        let _ = std::fs::remove_file(&rotated);
+        let _ = std::fs::rename(&log, &rotated);
     }
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new()
@@ -1350,16 +1588,28 @@ pub fn log_hook_event(repo_root: &Path, event: &HookEvent) -> Result<()> {
     Ok(())
 }
 
+fn rotated_log_path(log: &Path) -> PathBuf {
+    let mut name = log.file_name().unwrap_or_default().to_os_string();
+    name.push(".1");
+    log.with_file_name(name)
+}
+
 pub fn read_hook_log(repo_root: &Path) -> Vec<HookEvent> {
     let log = log_path(repo_root);
-    if !log.exists() {
-        return vec![];
+    let mut events = Vec::new();
+    // Rotated generation first so events stay in chronological order.
+    for path in [rotated_log_path(&log), log] {
+        if !path.exists() {
+            continue;
+        }
+        events.extend(
+            std::fs::read_to_string(&path)
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|l| serde_json::from_str::<HookEvent>(l).ok()),
+        );
     }
-    std::fs::read_to_string(&log)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect()
+    events
 }
 
 // ---- Daemon helpers ---------------------------------------------------------
@@ -1372,20 +1622,28 @@ pub struct EmbeddingEntry {
     pub symbol: String,
     pub kind: String,
     pub token_count: usize,
-    pub embedding: Vec<f32>,
+    /// Int8-quantized vector (1 byte/dim). Legacy f32 rows are quantized at
+    /// load so the daemon cache holds 4x less RAM uniformly.
+    pub embedding_q8: Vec<i8>,
 }
 
 /// Load embeddings + metadata (no chunk content) for the daemon cache.
 /// Content is fetched on-demand via fetch_chunks_content() for top-K results only.
 pub fn load_all_embeddings(conn: &Connection) -> Result<Vec<EmbeddingEntry>> {
-    let mut stmt = conn.prepare(
+    let scale_expr = if embeddings_have_scale(conn) {
+        "e.scale"
+    } else {
+        "NULL"
+    };
+    let mut stmt = conn.prepare(&format!(
         "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, \
-                c.token_count, e.embedding \
+                c.token_count, e.embedding, {scale_expr} \
          FROM embeddings e JOIN chunks c ON c.id = e.chunk_id",
-    )?;
+    ))?;
     let entries = stmt
         .query_map([], |row| {
             let blob: Vec<u8> = row.get(7)?;
+            let scale: Option<f64> = row.get(8)?;
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
@@ -1395,11 +1653,18 @@ pub fn load_all_embeddings(conn: &Connection) -> Result<Vec<EmbeddingEntry>> {
                 row.get::<_, String>(5)?,
                 row.get::<_, i64>(6)?,
                 blob,
+                scale,
             ))
         })?
         .filter_map(|r| r.ok())
-        .map(
-            |(id, path, sl, el, symbol, kind, tc, blob)| EmbeddingEntry {
+        .map(|(id, path, sl, el, symbol, kind, tc, blob, scale)| {
+            let embedding_q8: Vec<i8> = if scale.is_some() {
+                blob.into_iter().map(|b| b as i8).collect()
+            } else {
+                let (q8, _) = quantize_q8(&deserialize_vec(&blob));
+                q8.into_iter().map(|b| b as i8).collect()
+            };
+            EmbeddingEntry {
                 id,
                 path,
                 start_line: sl as usize,
@@ -1407,9 +1672,9 @@ pub fn load_all_embeddings(conn: &Connection) -> Result<Vec<EmbeddingEntry>> {
                 symbol,
                 kind,
                 token_count: tc as usize,
-                embedding: deserialize_vec(&blob),
-            },
-        )
+                embedding_q8,
+            }
+        })
         .collect();
     Ok(entries)
 }
@@ -1478,6 +1743,109 @@ mod tests {
         let sim2 = cosine_similarity_to_bytes(&q, q_norm, &bytes);
 
         assert!((sim1 - sim2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_q8_cosine_matches_f32() {
+        // Pseudo-embedding with mixed signs/magnitudes; q8 cosine must track f32.
+        let doc: Vec<f32> = (0..768)
+            .map(|i| ((i as f32 * 0.37).sin() * 0.04) - 0.01)
+            .collect();
+        let query: Vec<f32> = (0..768)
+            .map(|i| ((i as f32 * 0.29).cos() * 0.05) + 0.005)
+            .collect();
+        let q_norm = query.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        let exact = cosine_similarity(&query, &doc);
+        let (q8, scale) = quantize_q8(&doc);
+        assert!(scale > 0.0);
+        assert_eq!(q8.len(), doc.len());
+        let approx = cosine_similarity_to_q8(&query, q_norm, &q8);
+
+        assert!(
+            (exact - approx).abs() < 0.01,
+            "q8 cosine drifted: exact={exact} approx={approx}"
+        );
+    }
+
+    #[test]
+    fn test_backfill_quantizes_legacy_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn, 4).unwrap();
+
+        let file_id = upsert_file(&conn, "src/a.rs", 1.0, "h").unwrap();
+        let chunk_id = insert_chunk(
+            &conn,
+            NewChunk {
+                file_id,
+                path: "src/a.rs",
+                start: 1,
+                end: 5,
+                symbol: "f",
+                kind: "function",
+                content: "fn f() {}",
+                token_count: 3,
+            },
+        )
+        .unwrap();
+        // Legacy f32 row (scale NULL), as written by pre-quantization builds.
+        let v = vec![0.1f32, -0.2, 0.3, -0.4];
+        conn.execute(
+            "INSERT INTO embeddings(chunk_id, embedding) VALUES(?1, ?2)",
+            params![chunk_id, serialize_vec(&v)],
+        )
+        .unwrap();
+
+        assert_eq!(backfill_quantized_embeddings(&conn).unwrap(), 1);
+        assert_eq!(backfill_quantized_embeddings(&conn).unwrap(), 0); // idempotent
+        let (quantized, total) = quantization_coverage(&conn).unwrap();
+        assert_eq!((quantized, total), (1, 1));
+
+        // Search still ranks the migrated row correctly via the q8 path.
+        let results = search_similar(&conn, &v, 1, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, chunk_id);
+        assert!(results[0].distance < 0.01, "self-similarity ~1.0");
+    }
+
+    #[test]
+    fn test_hook_log_rotation() {
+        let repo = std::env::temp_dir().join(format!("tokenix_test_rotate_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&repo);
+        let log = log_path(&repo);
+        if let Some(parent) = log.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        // Seed an oversized log so the next append rotates it.
+        std::fs::write(&log, vec![b'x'; (HOOK_LOG_MAX_BYTES + 1) as usize]).unwrap();
+
+        let ev = HookEvent {
+            ts: 1.0,
+            tool: "Read".to_string(),
+            action: "pass".to_string(),
+            reason: String::new(),
+            saved_tokens: 0,
+            actual_tokens: 0,
+            original_estimate: 0,
+            input_preview: String::new(),
+            phase: "pre".to_string(),
+            command: String::new(),
+        };
+        log_hook_event(&repo, &ev).unwrap();
+
+        let rotated = rotated_log_path(&log);
+        assert!(rotated.exists(), "oversized log must rotate to .1");
+        assert!(
+            std::fs::metadata(&log).unwrap().len() < 1_000,
+            "fresh log only holds the new event"
+        );
+        // Both generations are read; the rotated junk lines are skipped.
+        let events = read_hook_log(&repo);
+        assert_eq!(events.len(), 1);
+
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&rotated);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]

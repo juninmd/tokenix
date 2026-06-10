@@ -13,6 +13,24 @@ const MIN_LINES_FOR_OUTLINE: usize = 200;
 const MIN_QUERY_WORDS: usize = 3;
 const DAEMON_HOOK_TIMEOUT_MS: u64 = 2_000;
 
+/// Read intercept threshold, overridable via `[hook] read_min_lines` in
+/// `.tokenix.toml`. Tune down to intercept more reads (saving more tokens) or
+/// up for more verbatim file content.
+fn min_lines_for_outline() -> usize {
+    crate::chunker::hook_config()
+        .read_min_lines
+        .filter(|n| *n > 0)
+        .unwrap_or(MIN_LINES_FOR_OUTLINE)
+}
+
+/// Grep intercept threshold, overridable via `[hook] grep_min_words`.
+fn min_query_words() -> usize {
+    crate::chunker::hook_config()
+        .grep_min_words
+        .filter(|n| *n > 0)
+        .unwrap_or(MIN_QUERY_WORDS)
+}
+
 /// Normalized hook input used by tokenix.
 ///
 /// Claude Code sends `tool_name` and `tool_input` on stdin.
@@ -162,7 +180,7 @@ fn now_ts() -> f64 {
 }
 
 fn is_semantic_query(pattern: &str) -> bool {
-    pattern.split_whitespace().count() >= MIN_QUERY_WORDS
+    pattern.split_whitespace().count() >= min_query_words()
 }
 
 /// True if `s` looks like a plain identifier (no regex metacharacters).
@@ -238,14 +256,12 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     };
 
     let line_count = content.lines().count();
-    if line_count < MIN_LINES_FOR_OUTLINE {
+    let min_lines = min_lines_for_outline();
+    if line_count < min_lines {
         return (
             false,
             String::new(),
-            format!(
-                "small file ({} < {} lines)",
-                line_count, MIN_LINES_FOR_OUTLINE
-            ),
+            format!("small file ({} < {} lines)", line_count, min_lines),
         );
     }
 

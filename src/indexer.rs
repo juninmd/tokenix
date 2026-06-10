@@ -63,6 +63,24 @@ struct FilePlan {
     git_incremental: bool,
 }
 
+/// Drop the process to below-normal CPU priority so a long index run does not
+/// starve interactive use. Deliberately NOT `PROCESS_MODE_BACKGROUND_BEGIN`:
+/// that also demotes I/O and memory priority and can slow indexing ~10x.
+pub fn lower_process_priority() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentProcess, SetPriorityClass, BELOW_NORMAL_PRIORITY_CLASS,
+        };
+        SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
+    }
+    #[cfg(unix)]
+    unsafe {
+        // Errors (e.g. already niced) are harmless; scheduling stays as-is.
+        let _ = libc::nice(10);
+    }
+}
+
 fn mtime_of(path: &Path) -> f64 {
     std::fs::metadata(path)
         .ok()
@@ -302,6 +320,13 @@ where
 
     let conn = open_db(repo_root, true)?.unwrap();
     init_schema(&conn, 768)?;
+    // One-time int8 migration of legacy f32 rows: pure re-encode, no embedding.
+    let migrated = crate::store::backfill_quantized_embeddings(&conn)?;
+    if migrated > 0 {
+        progress_cb(&format!(
+            "quantized {migrated} stored embedding(s) to int8 (4x smaller, same recall)"
+        ));
+    }
     let existing: Arc<HashMap<String, (i64, f64, String)>> = Arc::new(load_all_file_info(&conn)?);
 
     let file_plan = plan_files(repo_root, options.force, &existing);
@@ -357,6 +382,7 @@ where
     // Phase 2: collect embeddings, reusing cache by chunk text hash.
     let mut file_embeddings: HashMap<usize, Vec<Option<Vec<f32>>>> = HashMap::new();
     let mut embed_jobs = Vec::new();
+    let mut candidate_count = 0usize;
 
     if options.no_embed {
         progress_cb("skipping embeddings (--no-embed); updating chunks and graph only");
@@ -383,6 +409,7 @@ where
             file_embeddings.insert(fi, embeddings);
         }
 
+        candidate_count = candidate_keys.len();
         let cached = cached_embeddings(&conn, &candidate_keys)?;
         for job in candidate_jobs {
             if let Some(embedding) = cached.get(&job.cache_key) {
@@ -410,20 +437,33 @@ where
     let new_embeddings = if embed_jobs.is_empty() {
         vec![]
     } else {
+        let cached_hits = candidate_count.saturating_sub(embed_jobs.len());
+        // A leftover checkpoint means the previous run died mid-embed. Its
+        // completed batches were committed to the embedding cache per batch,
+        // so they surface as cache hits here — only the remainder re-embeds.
+        if let Some((phase, batches_done)) = read_checkpoint(&conn) {
+            if phase == "embed" {
+                progress_cb(&format!(
+                    "resuming interrupted run: {batches_done} batch(es) already embedded (now cache hits)"
+                ));
+            }
+        }
         progress_cb(&format!(
-            "embedding {} uncached chunks via fastembed (ONNX), batch size {}...",
+            "embedding {} uncached chunks ({} cache hits) via fastembed (ONNX), batch size {}...",
             embed_jobs.len(),
+            cached_hits,
             embed_batch
         ));
+        let embed_pb = ProgressBar::new(embed_jobs.len() as u64);
+        embed_pb.set_style(
+            ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} chunks (eta {eta}) {msg}")
+                .unwrap()
+                .progress_chars("=>-"),
+        );
         let mut all: Vec<Vec<f32>> = Vec::with_capacity(embed_jobs.len());
         let total_batches = embed_jobs.len().div_ceil(embed_batch);
         for (batch_idx, batch) in embed_jobs.chunks(embed_batch).enumerate() {
-            progress_cb(&format!(
-                "embedding batch {}/{} ({} chunks)",
-                batch_idx + 1,
-                total_batches,
-                batch.len()
-            ));
+            embed_pb.set_message(format!("batch {}/{}", batch_idx + 1, total_batches));
             let texts: Vec<String> = batch.iter().map(|job| job.text.clone()).collect();
             let batch_embs = embed_documents(&texts).map_err(|e| {
                 anyhow::anyhow!(
@@ -434,18 +474,28 @@ where
                     e
                 )
             })?;
+            // Per-batch durability: commit this batch to the embedding cache
+            // now, so a crash/kill loses at most one batch of work. On rerun
+            // these chunks resolve as cache hits and are never re-embedded.
+            conn.execute_batch("BEGIN IMMEDIATE")?;
+            for (job, embedding) in batch.iter().zip(batch_embs.iter()) {
+                upsert_embedding_cache(&conn, &job.cache_key, embedding)?;
+            }
+            conn.execute_batch("COMMIT")?;
             all.extend(batch_embs);
+            embed_pb.inc(batch.len() as u64);
             save_checkpoint(&conn, "embed", batch_idx + 1)?;
             if embed_sleep > 0 && batch_idx + 1 < total_batches {
                 thread::sleep(Duration::from_millis(embed_sleep));
             }
         }
+        embed_pb.finish_and_clear();
         all
     };
 
-    // Phase 4: pair new embeddings back with files and update cache.
+    // Phase 4: pair new embeddings back with files (cache was already updated
+    // per batch in Phase 3 for crash durability).
     for (job, embedding) in embed_jobs.iter().zip(new_embeddings.iter()) {
-        upsert_embedding_cache(&conn, &job.cache_key, embedding)?;
         if let Some(file_embs) = file_embeddings.get_mut(&job.file_idx) {
             file_embs[job.chunk_idx] = Some(embedding.clone());
         }
@@ -530,8 +580,26 @@ where
     }
 
     if indexed > 0 || removed {
-        progress_cb("rebuilding symbol graph...");
-        crate::graph::rebuild_symbol_graph(&conn)?;
+        let changed_paths: Vec<String> = chunked
+            .iter()
+            .filter(|f| !f.skipped && f.error.is_none() && !f.chunks.is_empty())
+            .map(|f| f.rel.clone())
+            .collect();
+        // Incremental repair is worth it for small change sets on git runs;
+        // big batches (or full walks) fall back to the simpler full rebuild.
+        let small_change = changed_paths.len() * 5 < existing.len().max(1);
+        if file_plan.git_incremental && small_change && !changed_paths.is_empty() && !removed {
+            progress_cb(&format!(
+                "updating symbol graph incrementally ({} changed file(s))...",
+                changed_paths.len()
+            ));
+            crate::graph::update_symbol_graph_incremental(&conn, &changed_paths)?;
+        } else {
+            progress_cb("rebuilding symbol graph...");
+            crate::graph::rebuild_symbol_graph(&conn)?;
+        }
+        let import_edges = crate::graph::rebuild_import_graph(&conn, repo_root)?;
+        progress_cb(&format!("import graph: {import_edges} file-level edge(s)"));
     } else {
         progress_cb("no changes — skipping graph rebuild");
     }
@@ -563,7 +631,6 @@ fn save_checkpoint(conn: &rusqlite::Connection, phase: &str, count: usize) -> Re
     crate::store::set_meta(conn, "index_checkpoint", &format!("{phase}:{count}"))
 }
 
-#[allow(dead_code)] // retained for resumable-index work; not yet wired into the pipeline
 fn read_checkpoint(conn: &rusqlite::Connection) -> Option<(String, usize)> {
     crate::store::meta_value(conn, "index_checkpoint").and_then(|val| {
         val.split_once(':')

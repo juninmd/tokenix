@@ -49,6 +49,9 @@ tree-sitter-go = "0.25"
 tree-sitter-cpp = "0.23"
 reqwest = { version = "0.13.4", features = ["blocking", "json"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
+
 [features]
 default = []
 cuda = ["dep:ort", "ort/cuda"]

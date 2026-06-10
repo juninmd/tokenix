@@ -1,0 +1,40 @@
+[filters.vite]
+description = "Compact vite build output — drop transform/asset noise, keep errors"
+match_command = "^vite\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*vite v",
+  "transforming",
+  "modules transformed",
+  "computing gzip size",
+  "^\\s*dist/\\S+\\s+[\\d.]+\\s*[kM]?B",
+  "built in [\\d.]+m?s",
+]
+max_lines = 40
+on_empty = "vite: build succeeded"
+
+[[tests.vite]]
+name = "clean build"
+input = """
+vite v5.4.2 building for production...
+transforming (34) src/main.ts
+✓ 128 modules transformed.
+dist/index.html                 0.46 kB
+dist/assets/index-BQx2.css     12.10 kB
+dist/assets/index-Cf3k.js     143.52 kB
+✓ built in 1.24s
+"""
+expected = "vite: build succeeded"
+
+[[tests.vite]]
+name = "build error shown"
+input = """
+vite v5.4.2 building for production...
+✗ Build failed in 0.42s
+error during build:
+src/main.ts (3:9): "missing" is not exported by "src/util.ts"
+"""
+expected = """✗ Build failed in 0.42s
+error during build:
+src/main.ts (3:9): "missing" is not exported by "src/util.ts\""""

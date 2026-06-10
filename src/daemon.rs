@@ -36,6 +36,29 @@ fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     sum
 }
 
+/// Dot product of an f32 query against an int8-quantized document vector.
+/// The i8→f32 widening vectorizes; cache traffic is 4x lower than f32×f32.
+#[inline]
+fn dot_product_q8(a: &[f32], b: &[i8]) -> f32 {
+    let chunks = a.chunks_exact(8).zip(b.chunks_exact(8));
+    let mut sum: f32 = chunks
+        .map(|(ca, cb)| {
+            ca.iter()
+                .zip(cb.iter())
+                .map(|(x, y)| x * *y as f32)
+                .sum::<f32>()
+        })
+        .sum();
+    let rem_a = a.chunks_exact(8).remainder();
+    let rem_b = b.chunks_exact(8).remainder();
+    sum += rem_a
+        .iter()
+        .zip(rem_b.iter())
+        .map(|(x, y)| x * *y as f32)
+        .sum::<f32>();
+    sum
+}
+
 // ---- In-memory per-project cache --------------------------------------------
 
 const MAX_CACHED_PROJECTS: usize = 3;
@@ -53,7 +76,7 @@ struct CachedEntry {
     kind: String,
     token_count: usize,
     // content intentionally omitted — fetched from SQLite for top-K results only
-    embedding: Vec<f32>,
+    embedding: Vec<i8>,
     norm: f32,
 }
 
@@ -69,7 +92,12 @@ impl ProjectCache {
         let entries = store::load_all_embeddings(conn)?
             .into_iter()
             .map(|e| {
-                let norm: f32 = dot_product(&e.embedding, &e.embedding).sqrt();
+                let norm: f32 = e
+                    .embedding_q8
+                    .iter()
+                    .map(|&x| (x as f32) * (x as f32))
+                    .sum::<f32>()
+                    .sqrt();
                 CachedEntry {
                     id: e.id,
                     path: e.path,
@@ -78,7 +106,7 @@ impl ProjectCache {
                     symbol: e.symbol,
                     kind: e.kind,
                     token_count: e.token_count,
-                    embedding: e.embedding,
+                    embedding: e.embedding_q8,
                     norm,
                 }
             })
@@ -101,7 +129,7 @@ impl ProjectCache {
                     return None;
                 }
             }
-            let dot = dot_product(query, &e.embedding);
+            let dot = dot_product_q8(query, &e.embedding);
             let sim = if e.norm == 0.0 {
                 0.0
             } else {
@@ -175,6 +203,8 @@ impl CacheState {
 
 struct DaemonState {
     cache: Mutex<CacheState>,
+    started: std::time::Instant,
+    port: u16,
 }
 
 // ---- Protocol ---------------------------------------------------------------
@@ -192,6 +222,7 @@ enum Request {
         file: Option<String>,
     },
     Health,
+    Status,
 }
 
 fn default_k() -> usize {
@@ -218,6 +249,19 @@ struct RespHealth {
     ok: bool,
     cached_projects: usize,
     chunks: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DaemonStatus {
+    pub ok: bool,
+    pub pid: u32,
+    pub port: u16,
+    pub uptime_secs: u64,
+    pub cached_projects: usize,
+    pub chunks: usize,
+    /// Estimated bytes held by cached embedding vectors (f32) across projects.
+    pub cache_bytes: u64,
+    pub model: String,
 }
 
 // ---- Path helpers -----------------------------------------------------------
@@ -274,6 +318,8 @@ pub fn run_serve(port: Option<u16>) -> Result<()> {
 
     let state = Arc::new(DaemonState {
         cache: Mutex::new(CacheState::new()),
+        started: std::time::Instant::now(),
+        port,
     });
 
     let pool = Arc::new(
@@ -318,6 +364,75 @@ pub fn run_serve(port: Option<u16>) -> Result<()> {
             }
             Err(e) => eprintln!("[tokenix] accept error: {e}"),
         }
+    }
+    Ok(())
+}
+
+/// Query the running daemon's status over TCP. None = not reachable.
+fn fetch_status() -> Option<DaemonStatus> {
+    let port = daemon_port();
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
+    let mut stream =
+        TcpStream::connect_timeout(&addr, Duration::from_millis(CONNECT_TIMEOUT_MS)).ok()?;
+    stream.set_nodelay(true).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(READ_TIMEOUT_MS)))
+        .ok()?;
+    stream.write_all(b"{\"type\":\"status\"}\n").ok()?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).ok()?;
+    serde_json::from_str::<DaemonStatus>(line.trim())
+        .ok()
+        .filter(|s| s.ok)
+}
+
+pub fn run_status() -> Result<()> {
+    match fetch_status() {
+        Some(s) => {
+            println!("daemon: running");
+            println!("  pid: {}", s.pid);
+            println!("  port: {}", s.port);
+            println!("  uptime: {}s", s.uptime_secs);
+            println!("  model: {}", s.model);
+            println!(
+                "  cache: {} project(s), {} chunks, ~{:.1} MB embeddings",
+                s.cached_projects,
+                s.chunks,
+                s.cache_bytes as f64 / 1_048_576.0
+            );
+        }
+        None => {
+            // Distinguish "not running" from "stale pid file left behind".
+            let stale_pid = pid_path()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .filter(|pid| !is_process_alive(*pid));
+            if stale_pid.is_some() {
+                println!("daemon: not running (stale pid file; will be replaced on next start)");
+            } else {
+                println!(
+                    "daemon: not running (auto-starts on first query, or run `tokenix serve`)"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn run_restart() -> Result<()> {
+    if fetch_status().is_some() {
+        run_stop()?;
+        // Give the OS a moment to release the port before respawning.
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    if !spawn_daemon() {
+        anyhow::bail!("failed to spawn daemon");
+    }
+    std::thread::sleep(Duration::from_millis(800));
+    match fetch_status() {
+        Some(s) => println!("daemon restarted (pid {}, port {})", s.pid, s.port),
+        None => println!("daemon spawned; still warming up (check `tokenix daemon status`)"),
     }
     Ok(())
 }
@@ -516,6 +631,27 @@ fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) -> Result<()> {
                 ok: true,
                 cached_projects,
                 chunks,
+            })?
+        }
+        Ok(Request::Status) => {
+            let lock = state.cache.lock().unwrap();
+            let cached_projects = lock.projects.len();
+            let chunks: usize = lock.projects.values().map(|c| c.entries.len()).sum();
+            let cache_bytes: u64 = lock
+                .projects
+                .values()
+                .flat_map(|c| c.entries.iter())
+                .map(|e| e.embedding.len() as u64)
+                .sum();
+            serde_json::to_string(&DaemonStatus {
+                ok: true,
+                pid: std::process::id(),
+                port: state.port,
+                uptime_secs: state.started.elapsed().as_secs(),
+                cached_projects,
+                chunks,
+                cache_bytes,
+                model: crate::embed::active_model_id(),
             })?
         }
         Ok(Request::Search {

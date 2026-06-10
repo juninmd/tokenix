@@ -2,6 +2,34 @@
 
 **Goal**: Reduce token waste in Claude Code workflows through intelligent symbol indexing and semantic search.
 
+## Next Up (P2 — deferred from the 2026-06 optimization pass)
+
+Shipped in that pass: below-normal-priority indexing, embed progress bar, `--json`
+output across retrieval commands, hook.log rotation, `daemon status|stop|restart`,
+5 new filters (cargo-run, uv-add, pnpm-run, vite, node-test), int8-quantized
+embeddings (4x smaller DB/RAM), file-level import graph + `tokenix deps`,
+per-batch embed durability with crash resume, incremental symbol-graph repair,
+configurable hook thresholds (`[hook]` in `.tokenix.toml`), `symbols --kind`.
+
+Deferred:
+
+1. **New tree-sitter languages** — Java, C#, Ruby, PHP, Kotlin, Swift (skipped by
+   owner request 2026-06-10). Pattern per language ≈ 30-50 LOC: `Lang` enum +
+   `detect_lang` + `is_<lang>_symbol()` + dispatch in `chunker.rs`, reference
+   arm in `graph.rs`, fixture tests. Watch out for per-grammar identifier node
+   kinds (`constant` Ruby, `name` PHP, `simple_identifier` Kotlin/Swift) in
+   `find_first_identifier`.
+2. **`tokenix watch`** — explicit opt-in file watcher (`notify` crate, 2-5 s
+   debounce) running the git-incremental index at low priority. No auto-hooks.
+3. **ANN gate (HNSW)** — only if int8 brute-force proves insufficient past
+   ~50-100k chunks. Sidecar index, incremental rebuild. Do not build speculatively.
+4. **Transitive `--depth` on callers/impact** — BFS over `graph_edges` with the
+   existing SCC data as cycle guard.
+5. **Diff-aware Read intercept** — for files modified since last index, return
+   outline + changed-hunk context instead of full content. Measure with `gain`.
+6. **`filter generate` template fallback** — skeleton TOML from captured output
+   when no AI CLI is available; validate `semantic_filter.model` in `doctor`.
+
 ## Key Insights from Cluster Operations
 
 ### 1. **Verbose Output Patterns**

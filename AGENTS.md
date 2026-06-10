@@ -24,14 +24,14 @@ tokenix --help
 | `src/main.rs` | CLI entry (clap), command dispatch, `install-hook`/`remove-hook` helpers. `banner()` = neon "tokenix" wordmark + tagline; `help_catalog()` = audience-grouped command list (AI agent vs human) + examples, wired via custom `HELP_TEMPLATE` (`before_help`/`after_help`); bare `tokenix` prints this help |
 | `src/chunker.rs` | Symbol-aware heuristic chunking, `generate_outline()`, token counting |
 | `src/embed.rs` | fastembed ONNX — `embed_documents()`, `embed_query()`. Model **registry** (`MODELS`, `spec_for`) + thread-local active model (`set_active_model`/`active_model_id`) + per-id loaded-model cache. Per-model query/doc prefixes; query cache keyed by model |
-| `src/store.rs` | SQLite schema, CRUD, cosine similarity search, hook log I/O, PID index lock, branch-aware DB paths |
-| `src/indexer.rs` | File walk + incremental index pipeline. Embeds in batches of 512, resumable checkpoints |
+| `src/store.rs` | SQLite schema, CRUD, cosine similarity search (int8-quantized vectors + legacy f32 fallback, `quantize_q8`/`backfill_quantized_embeddings`), import graph (`graph_imports`, `file_imports`), hook log I/O + 5 MB rotation, PID index lock, branch-aware DB paths |
+| `src/indexer.rs` | File walk + incremental index pipeline. Runs at below-normal OS priority (`lower_process_priority()`, opt-out `--no-low-priority`/`TOKENIX_FOREGROUND`). Embeds in batches (default 16) with a progress bar; each batch commits to the embedding cache so a killed run resumes via cache hits |
 | `src/query.rs` | Hybrid semantic/lexical ranking (FTS5 + BM25 + RRF), strict `context` modes, budget enforcement, cross-project search |
 | `src/pack.rs` | `tokenix pack` — budgeted repo map + focused context, changed-file packs, token maps, and safety report |
-| `src/graph.rs` | Symbol graph with PageRank, cycle detection (Tarjan's SCC, homonym-filtered, `path:line`-annotated), tree-sitter references, HTML + Mermaid export |
+| `src/graph.rs` | Symbol graph with PageRank, cycle detection (Tarjan's SCC, homonym-filtered, `path:line`-annotated), tree-sitter references, incremental repair (`update_symbol_graph_incremental` — FTS-narrowed inbound-edge restore; `rebuild-graph` = full escape hatch), file-level import graph (`rebuild_import_graph`, per-language import extraction + path resolution), HTML + Mermaid export |
 | `src/artifacts.rs` | Context artifacts — index non-code files (schemas, API specs, docs) via `.tokenix/artifacts.json` |
-| `src/hook.rs` | `run_hook()` — called by PreToolUse hook. Tries daemon first for Grep |
-| `src/daemon.rs` | Background TCP server (port 47392). Holds model + embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads |
+| `src/hook.rs` | `run_hook()` — called by PreToolUse hook. Tries daemon first for Grep. Thresholds (Read 200 lines / Grep 3 words) overridable via `[hook]` in `.tokenix.toml` (`read_min_lines`, `grep_min_words`) |
+| `src/daemon.rs` | Background TCP server (port 47392). Holds model + int8-quantized embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads. Protocol: `search`/`health`/`status`; CLI `tokenix daemon status\|stop\|restart` |
 | `src/compress.rs` | Legacy `PostToolUse` compatibility compression: ANSI strip, emoji removal, blank-line collapse, repeat grouping, JSON compaction, cargo/git-log heuristics |
 | `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()`. `find_filter()` matches via `derive_command_candidates()`, which unwraps shell runners, strips `cd`/env prefixes, and `split_on_operators()` splits compound commands quote-aware on `&&`/`\|\|`/`;`/`\|` so anchored `match_command` patterns match a base command in any segment/position |
 | `src/cmd_filter.rs` | `tokenix filter list/active/generate` subcommands |
@@ -39,7 +39,7 @@ tokenix --help
 | `src/mcp.rs` | MCP server. `--profile full` exposes all tools; `--profile slim` exposes context/search/call meta-tools for progressive discovery |
 | `src/mcp_audit.rs` | `tokenix prompt-audit` / `session-audit` — per-agent MCP config discovery + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report |
 | `src/secrets_scan.rs` | `tokenix scan-secrets` — gitleaks-style credential scan of Claude/Gemini/Copilot/Antigravity conversation transcripts under `~`; rules loaded from TOML (`assets/secret-rules/` bundled via `rust-embed`, extended by `<repo>/` then `~/.tokenix/secret-rules/*.toml`, later `id` wins), backtracking-free regex + entropy-gated generic rule. Each finding is attributed to its repo + git branch via the transcript line's `cwd`/`gitBranch` (Claude), falling back to the project dir slug. Report supports `--filter` (substring), `--group <value\|rule\|agent\|file\|repo>`, `--reveal` (raw values, default redacted), `--json`; exit 1 on hits |
-| `assets/filters/` | 73 TOML output filters embedded via `rust-embed`. User filters in `~/.tokenix/filters/` take priority |
+| `assets/filters/` | 230+ TOML output filters embedded via `rust-embed`, each with golden `[[tests]]`. User filters in `~/.tokenix/filters/` take priority |
 
 ## SQLite Schema
 
@@ -47,13 +47,25 @@ tokenix --help
 files(id, path TEXT UNIQUE, mtime REAL, content_hash TEXT)
 chunks(id, file_id, path, start_line, end_line, symbol, kind, content, token_count)
 chunks_fts(rowid, content, symbol, path)   -- FTS5 virtual table for keyword search
-embeddings(chunk_id PK, embedding BLOB)    -- float32 LE, 768 dims
+embeddings(chunk_id PK, embedding BLOB, scale REAL)
+  -- scale NOT NULL → int8-quantized vector (1 byte/dim); scale NULL → legacy
+  -- float32 LE blob. Search branches per row; the scale cancels out of the
+  -- cosine, so q8 search needs only the raw bytes. Legacy rows are migrated
+  -- (re-encode only) by backfill_quantized_embeddings() at index time + VACUUM.
+embedding_cache(content_hash PK, embedding BLOB, updated_at)  -- stays float32 so
+  -- model switches and quantization changes never force a re-embed
+graph_nodes(chunk_id PK, file_id, path, name, kind, start_line, end_line, rank)
+graph_edges(id, caller_chunk_id, callee_chunk_id, reference, edge_kind)
+graph_imports(id, source_path, target, resolved_path, kind, line)
+  -- file-level import edges; resolved_path NULL = external dependency
 meta(key PK, value)                        -- 'indexed_at', git fingerprint
 ```
 
 `meta` stores `indexed_at` and a Git fingerprint (worktree root + branch + HEAD). Hooks and `--if-stale` treat a different fingerprint as stale so branch switches don't reuse stale context.
 
-Hook log: `.tokenix/hook.log` — NDJSON, one `HookEvent` per line.
+Query paths open old DBs without running migrations — SELECTs must degrade when the `scale` column is missing (`embeddings_have_scale()` probe selects `NULL` instead).
+
+Hook log: `.tokenix/hook.log` — NDJSON, one `HookEvent` per line. Rotates at 5 MB to `hook.log.1` (one generation kept); `read_hook_log()` reads both.
 
 ## Intercept Logic
 
@@ -67,6 +79,14 @@ Grep tool:
   pattern ≥ 3 words → return semantic results, exit 2 (intercept)
 
 Index missing or >1h old → always exit 0 regardless of tool
+```
+
+Both thresholds are per-project tunable via `.tokenix.toml`:
+
+```toml
+[hook]
+read_min_lines = 120   # default 200
+grep_min_words = 3     # default 3
 ```
 
 ## Critical Rules
@@ -95,10 +115,13 @@ Index missing or >1h old → always exit 0 regardless of tool
 tokenix serve            # start daemon (blocks; use & or detached)
 tokenix serve --port 9999
 tokenix stop             # stop daemon (reads ~/.tokenix/daemon.pid)
+tokenix daemon status    # pid, port, uptime, model, cached projects + RAM
+tokenix daemon restart   # stop (if running) + detached respawn
 
 # Health check
 echo '{"type":"health"}' | nc 127.0.0.1 47392
 # → {"ok":true,"cached_projects":1,"chunks":197}
+# Status over the same socket: {"type":"status"}
 ```
 
 Warm Grep calls via daemon: ~80ms vs ~430ms cold in-process. Daemon auto-starts on first Grep hook call.

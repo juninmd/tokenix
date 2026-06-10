@@ -45,11 +45,27 @@ pub fn run_doctor() -> Result<()> {
         "active",
         &format!("{} ({})", active, crate::embed::spec_for(&active).note),
     );
-    // If run inside an indexed repo, show the model that index was built with.
+    // If run inside an indexed repo, show the model that index was built with
+    // and how much of it is int8-quantized (legacy f32 rows migrate at index time).
     if let Ok(cwd) = std::env::current_dir() {
         let root = crate::store::find_project_root(&cwd);
         if let Some(indexed) = crate::store::index_model_id(&root) {
             kv("this repo's index", &indexed);
+            if let Ok(Some(conn)) = crate::store::open_db(&root, false) {
+                if let Ok((quantized, total)) = crate::store::quantization_coverage(&conn) {
+                    if total > 0 {
+                        let hint = if quantized < total {
+                            " (run `tokenix index` to migrate the rest)"
+                        } else {
+                            ""
+                        };
+                        kv(
+                            "int8 quantization",
+                            &format!("{quantized}/{total} embeddings{hint}"),
+                        );
+                    }
+                }
+            }
         }
     }
     let available: Vec<String> = crate::embed::MODELS

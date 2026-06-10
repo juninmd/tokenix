@@ -66,7 +66,7 @@ const SENSITIVE_NAMES: &[&str] = &[
 /// Sensitive file extensions, never indexed (keys, certs).
 const SENSITIVE_EXTS: &[&str] = &[".pem", ".key", ".pfx", ".p12", ".keystore", ".jks"];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[allow(dead_code)]
 pub struct Chunk {
     pub path: String,
@@ -120,6 +120,25 @@ struct ProjectConfig {
     languages: std::collections::HashMap<String, String>,
     #[serde(default)]
     index: IndexConfig,
+    #[serde(default)]
+    hook: HookConfig,
+}
+
+/// `[hook]` section of `.tokenix.toml`. All fields optional; defaults live at
+/// the use sites in hook.rs so the fail-open contract is untouched.
+#[derive(serde::Deserialize, Default, Clone)]
+pub struct HookConfig {
+    /// Read intercept: files with at least this many lines return an outline
+    /// instead of full content (default 200).
+    pub read_min_lines: Option<usize>,
+    /// Grep intercept: patterns with at least this many words are treated as
+    /// semantic queries (default 3).
+    pub grep_min_words: Option<usize>,
+}
+
+/// The resolved `[hook]` config for the current project (defaults if absent).
+pub fn hook_config() -> HookConfig {
+    load_project_config().map(|c| c.hook).unwrap_or_default()
 }
 
 /// `[index]` section of `.tokenix.toml`. All fields optional.

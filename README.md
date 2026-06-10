@@ -132,24 +132,28 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **One-call task context** | `tokenix context` combines semantic search, entry points, and compact outlines with strict budget modes (`plan`, `debug`, `audit`, `security`, `review`) |
 | **Graph-aware explore** | `tokenix explore` returns related symbols, relationship maps, and grouped source in one capped call |
 | **Repository pack** | `tokenix pack` emits a budgeted, secret-safe repo map with changed-file packs, token maps, and safety reporting |
-| **Symbol graph** | `tokenix symbols`, `callers`, `callees`, `impact`, `flow`, and `cycles` trace relationships, call-flow, and circular deps between indexed symbols |
+| **Symbol graph** | `tokenix symbols` (`--kind` filters by symbol type), `callers`, `callees`, `impact`, `flow`, and `cycles` trace relationships, call-flow, and circular deps between indexed symbols |
+| **Import graph** | `tokenix deps FILE` shows file-level import dependencies (`--reverse` for importers, `--transitive` to follow the chain); external deps are tracked too |
+| **Int8-quantized embeddings** | Vectors are stored int8-quantized (4x smaller DB + daemon RAM, near-identical recall); legacy f32 indexes migrate automatically on the next `tokenix index` |
+| **JSON output** | `--json` on `query`, `context`, `explore`, `read`, `symbols`, `callers`, `callees`, `deps` (+ `impact --format json`) for scripts and agent pipelines |
+| **PC-friendly indexing** | `tokenix index` runs at below-normal OS priority by default so long index runs never starve the machine (`--no-low-priority` opts out) |
 | **Interactive HTML/Mermaid graphs** | `tokenix impact --format html\|mermaid` exports vis.js / Mermaid flowcharts; `tokenix flow --format mermaid` traces call flow |
 | **Cycle detection** | `tokenix cycles` finds circular dependencies via Tarjan's strongly-connected components algorithm, dropping same-name (homonym) false positives and annotating each node with `path:line` |
 | **Token map** | `tokenix tokenmap` shows a directory tree with token counts per file/folder |
 | **Preference memory** | `tokenix memory add/list` stores global and project preferences in editable Markdown; context/explore include saved preferences |
 | **Dynamic language detection** | Map custom file extensions to any built-in parser via a project `.tokenix.toml` — no recompile needed |
 | **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C/C++ |
-| **Multi-agent safe index** | PID-based index lock prevents concurrent reindex; resumable checkpoints survive mid-index process kills |
+| **Multi-agent safe index** | PID-based index lock prevents concurrent reindex; embeddings are committed per batch, so a killed index run resumes from the last completed batch |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
-| **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash commands before execution |
+| **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash commands before execution; thresholds tunable via `[hook]` in `.tokenix.toml` |
 | **Structural output compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, and ANSI/Emoji stripping |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
-| **Output filters** | 203+ TOML output filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
+| **Output filters** | 230+ TOML output filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
 | **Filter generation** | `tokenix filter generate` writes a TOML filter for a command; `tokenix filter record` captures real output for richer generation |
 | **GPU acceleration (opt-in)** | Build with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU; GPU is used by default at runtime with automatic CPU fallback, or force CPU with `--only-cpu` |
 | **Environment diagnostics** | `tokenix doctor` reports the compiled backend, detected GPU, CUDA/cuDNN status, model cache, and daemon |
 | **Branch-aware indexing** | `TOKENIX_BRANCH_AWARE=true` isolates indexes per git branch |
-| **In-memory daemon** | `tokenix serve` keeps model + index in RAM so repeated hook calls avoid reloading the model each invocation |
+| **In-memory daemon** | `tokenix serve` keeps model + index in RAM so repeated hook calls avoid reloading the model each invocation; `tokenix daemon status\|stop\|restart` manages it |
 | **Graceful fallback** | Exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `1200`) |
 | **Savings analytics** | `tokenix gain` — token summary and by-tool histogram; `--cost-estimate` adds a per-model cost table (9 reference models across Anthropic / OpenAI / Google) |
@@ -243,12 +247,23 @@ tokenix read src/auth/middleware.rs --lines 45-80             # line range
 
 ```bash
 tokenix symbols validate_token
+tokenix symbols Token --kind struct          # filter by symbol kind
 tokenix callers validate_token
 tokenix callees run_hook
 tokenix impact update_user --depth 2
 tokenix impact update_user --format html --output update_user.html   # vis.js graph
+tokenix deps src/indexer.rs                  # file-level import dependencies
+tokenix deps src/store.rs --reverse          # who imports this file
+tokenix deps src/daemon.rs --transitive      # follow the import chain
 tokenix tokenmap                                                     # token tree
 tokenix rebuild-graph   # recompute relationships without re-embedding
+```
+
+Most retrieval commands accept `--json` for machine-readable output:
+
+```bash
+tokenix query "jwt validation" --json | jq '.[0].path'
+tokenix callers run_hook --json
 ```
 
 ### 7. Token savings analytics
@@ -382,9 +397,10 @@ tokenix install-hook --tool all
 | `tokenix query TEXT` | Semantic search over indexed chunks |
 | `tokenix grep PATTERN` | Exact regex/literal search over indexed content (no embedding) |
 | `tokenix read FILE` | Smart reader — outline for large files, full for small |
-| `tokenix symbols QUERY` | Find indexed symbols by name or path |
+| `tokenix symbols QUERY` | Find indexed symbols by name or path (`--kind` filters by symbol type) |
 | `tokenix callers SYMBOL` | Show symbols that call/reference a symbol |
 | `tokenix callees SYMBOL` | Show symbols called/referenced by a symbol |
+| `tokenix deps FILE` | File-level import dependencies (`--reverse`, `--transitive`, `--json`) |
 | `tokenix impact SYMBOL` | Bidirectional impact graph (`--format html\|mermaid` for vis.js graph or Mermaid flowchart) |
 | `tokenix flow SYMBOL` | Forward call-flow trace from a symbol (`--depth`, `--format text\|mermaid`) |
 | `tokenix pack` | Budgeted repo pack for non-hook AI tools (`--mode/--profile`, `--changed`, `--token-map`) |
@@ -403,6 +419,7 @@ tokenix install-hook --tool all
 | `tokenix doctor` | Diagnose embedding backend, GPU availability, model cache, and daemon |
 | `tokenix serve` | Start the background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
+| `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |
 | `tokenix gain` | Token savings analytics (`--cost-estimate` adds a per-model cost table) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix tokenmap` | Directory tree map with token counts (`--format html` supported) |
@@ -438,17 +455,21 @@ tokenix install-hook --tool all
 | `--only-cpu` | Force CPU embedding even on a GPU-enabled build (no-op on CPU-only builds) |
 | `TOKENIX_BRANCH_AWARE=true` | Env var: suffix SQLite DB per git branch (isolate indexes per branch) |
 
-**`tokenix index`** — `--force/-f`, `--cpu-profile <low\|default\|max>`, `--jobs N`, `--embed-batch N` (default 16 CPU / 64 GPU), `--if-stale`, `--path/-p`, `--model <id>`
+**`tokenix index`** — `--force/-f`, `--cpu-profile <low\|default\|max>`, `--jobs N`, `--embed-batch N` (default 16 CPU / 64 GPU), `--if-stale`, `--path/-p`, `--model <id>`, `--no-low-priority` (indexing runs at below-normal OS priority by default; this flag or `TOKENIX_FOREGROUND=1` keeps normal priority)
 
 **Embedding model** — default `nomic-v1.5`. Select another with `tokenix index --model <id>` or `TOKENIX_EMBED_MODEL=<id>`; run `tokenix doctor` to list available ids (`nomic-v1.5`, `bge-small`, `bge-base`, `minilm-l6`, `e5-small`, `jina-code`). The model is stamped into the index and read back at query time, so search always matches what was indexed; it is sticky across re-indexes and an explicit switch re-embeds. `nomic-v1.5` (768d) is the quality default; `bge-small` (384d) indexes faster; `e5-small` is multilingual; `jina-code` is code-specialized (a custom ONNX downloaded from Hugging Face on first use). Existing indexes keep working unchanged.
 
-**`tokenix query`** — `--budget/-b` (1200), `--k` (20), `--file/-f`, `--link` (cross-project, repeatable), `--path/-p`
+**`tokenix query`** — `--budget/-b` (1200), `--k` (20), `--file/-f`, `--link` (cross-project, repeatable), `--json`, `--path/-p`
+
+**`tokenix symbols`** — `--limit/-l` (20), `--kind/-k <function\|struct\|class\|method\|...>`, `--json`, `--path/-p`
+
+**`tokenix deps`** — `--reverse` (files importing the target), `--transitive` (follow resolved imports), `--json`, `--path/-p`
 
 **`tokenix grep`** — `--limit/-l` (20), `--ignore-case/-i`, `--file/-f`, `--path/-p`
 
 **`tokenix context`** — `--mode <plan\|debug\|audit\|security\|review>`, `--budget/-b` (1200), `--max-files`, `--budget-breakdown`, `--path/-p`
 
-**`tokenix impact`** — `--depth/-d` (2), `--limit/-l` (50), `--format <text\|html\|mermaid>`, `--output/-o`, `--path/-p`
+**`tokenix impact`** — `--depth/-d` (2), `--limit/-l` (50), `--format <text\|html\|mermaid\|json>`, `--output/-o`, `--path/-p`
 
 **`tokenix flow`** — `--depth/-d` (3), `--format <text\|mermaid>`, `--output/-o`, `--path/-p`
 
@@ -499,6 +520,21 @@ lua = "generic"      # use sliding-window chunks
 
 Valid parser values: `rust`, `python`, `typescript`, `javascript`, `go`, `cpp`, `c`, `generic`.
 
+### Hook tuning
+
+The same `.tokenix.toml` accepts a `[hook]` section to tune when the
+`PreToolUse` hook intercepts:
+
+```toml
+[hook]
+read_min_lines = 120   # outline files with >= this many lines (default 200)
+grep_min_words = 3     # treat Grep patterns with >= this many words as semantic (default 3)
+```
+
+Lower `read_min_lines` to intercept more reads (saving more tokens); raise it
+when you prefer verbatim file content. The fail-open contract is unchanged —
+hook errors never break the session.
+
 ---
 
 ## 🔧 Output Filters
@@ -507,7 +543,7 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
-3. **Bundled filters** — 203+ TOML output filters shipped inside the binary, covering `uv sync`, `cargo build`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `poetry`, `docker`, `kubectl`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 230+ TOML output filters shipped inside the binary, covering `uv`, `cargo build`/`cargo run`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -573,7 +609,7 @@ src/
 └── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
 assets/
-└── filters/       203+ TOML output filters, embedded in the binary via rust-embed
+└── filters/       230+ TOML output filters, embedded in the binary via rust-embed
 ```
 
 ### GPU acceleration (opt-in)
@@ -600,7 +636,7 @@ tokenix --only-cpu index .   # forces CPU on a GPU build
 
 ### Daemon
 
-The background daemon (`tokenix serve`) keeps the ONNX model and project embeddings in RAM. Hook calls route over TCP loopback instead of re-loading the model on each subprocess invocation, and it auto-starts on the first Grep hook call — you don't need to run it manually.
+The background daemon (`tokenix serve`) keeps the ONNX model and project embeddings in RAM (int8-quantized — 4x less memory than f32). Hook calls route over TCP loopback instead of re-loading the model on each subprocess invocation, and it auto-starts on the first Grep hook call — you don't need to run it manually. Manage it with `tokenix daemon status` (pid, port, uptime, model, cache size), `tokenix daemon stop`, and `tokenix daemon restart`.
 
 ### Embedding model
 
@@ -613,7 +649,7 @@ The background daemon (`tokenix serve`) keeps the ONNX model and project embeddi
 | Download | Automatic on first run |
 | Runtime | fastembed (ONNX Runtime, in-process) |
 
-Index storage lives at `~/.tokenix/<project-id>.db` (one DB per project). Embeddings are stored as raw `float32` blobs and cosine similarity is computed in Rust — no external vector database needed.
+Index storage lives at `~/.tokenix/<project-id>.db` (one DB per project). Embeddings are stored as **int8-quantized** blobs (4x smaller than f32, near-identical recall — the per-vector scale cancels out of the cosine) and similarity is computed in Rust — no external vector database needed. Indexes created before quantization migrate automatically (re-encode only, no re-embedding) on the next `tokenix index`; `tokenix doctor` reports migration coverage.
 
 ---
 

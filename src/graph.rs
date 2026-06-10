@@ -60,32 +60,7 @@ pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
 
     let mut inserted = HashSet::new();
     for chunk in &chunks {
-        let aliases = extract_import_aliases(&chunk.content);
-        for reference in extract_references(&chunk.content, &chunk.path) {
-            let resolved_reference = aliases
-                .get(&reference)
-                .or_else(|| aliases.get(&short_reference_name(&reference)))
-                .map(String::as_str)
-                .unwrap_or(&reference);
-            let targets = resolve_reference_targets(&by_name, resolved_reference);
-            if targets.is_empty() {
-                continue;
-            }
-            for target in targets {
-                if target.chunk_id == chunk.chunk_id {
-                    continue;
-                }
-                if inserted.insert((chunk.chunk_id, target.chunk_id)) {
-                    store::insert_graph_edge(
-                        conn,
-                        chunk.chunk_id,
-                        target.chunk_id,
-                        &reference,
-                        "references",
-                    )?;
-                }
-            }
-        }
+        insert_reference_edges(conn, chunk, &by_name, &mut inserted, None)?;
     }
 
     let node_ids: Vec<i64> = chunks.iter().map(|c| c.chunk_id).collect();
@@ -93,6 +68,122 @@ pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
     let ranks = pagerank(&node_ids, &edges);
     store::set_node_ranks(conn, &ranks)?;
 
+    Ok(())
+}
+
+/// Extract a chunk's references and insert resolved edges. When
+/// `only_targets_in` is set, edges are inserted only toward those paths —
+/// used by the incremental path to restore inbound edges without duplicating
+/// untouched ones.
+fn insert_reference_edges(
+    conn: &Connection,
+    chunk: &ChunkSymbol,
+    by_name: &HashMap<String, Vec<SymbolTarget>>,
+    inserted: &mut HashSet<(i64, i64)>,
+    only_targets_in: Option<&HashSet<&str>>,
+) -> Result<()> {
+    let aliases = extract_import_aliases(&chunk.content);
+    for reference in extract_references(&chunk.content, &chunk.path) {
+        let resolved_reference = aliases
+            .get(&reference)
+            .or_else(|| aliases.get(&short_reference_name(&reference)))
+            .map(String::as_str)
+            .unwrap_or(&reference);
+        let targets = resolve_reference_targets(by_name, resolved_reference);
+        for target in targets {
+            if target.chunk_id == chunk.chunk_id {
+                continue;
+            }
+            if let Some(filter) = only_targets_in {
+                if !filter.contains(target.path.as_str()) {
+                    continue;
+                }
+            }
+            if inserted.insert((chunk.chunk_id, target.chunk_id)) {
+                store::insert_graph_edge(
+                    conn,
+                    chunk.chunk_id,
+                    target.chunk_id,
+                    &reference,
+                    "references",
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Incremental symbol-graph refresh after `changed_paths` were re-chunked.
+/// `delete_chunks_for_file` already dropped those files' nodes and every edge
+/// touching them, so only two repairs are needed: (1) nodes + outgoing edges
+/// for the changed files, (2) inbound edges from unchanged callers — found via
+/// FTS candidate search instead of a whole-repo reference re-extract.
+/// `tokenix rebuild-graph` stays available as the full-rebuild escape hatch.
+pub fn update_symbol_graph_incremental(conn: &Connection, changed_paths: &[String]) -> Result<()> {
+    if changed_paths.is_empty() {
+        return Ok(());
+    }
+    let chunks = load_symbol_chunks_for_paths(conn, changed_paths)?;
+    for chunk in &chunks {
+        store::insert_graph_node(
+            conn,
+            chunk.chunk_id,
+            chunk.file_id,
+            &chunk.path,
+            &chunk.name,
+            &chunk.kind,
+            chunk.start_line,
+            chunk.end_line,
+        )?;
+    }
+
+    // Resolution map over the whole graph, table-backed (no chunk re-extract).
+    let mut by_name: HashMap<String, Vec<SymbolTarget>> = HashMap::new();
+    for (chunk_id, name, path) in store::all_graph_node_names(conn)? {
+        by_name
+            .entry(normalize_name(&name))
+            .or_default()
+            .push(SymbolTarget { chunk_id, path });
+    }
+
+    let changed_set: HashSet<&str> = changed_paths.iter().map(String::as_str).collect();
+    let mut inserted = HashSet::new();
+
+    // (1) Outgoing edges from the changed files' chunks.
+    for chunk in &chunks {
+        insert_reference_edges(conn, chunk, &by_name, &mut inserted, None)?;
+    }
+
+    // (2) Inbound edges: FTS narrows unchanged chunks that mention the changed
+    // files' symbol names; only their edges INTO changed files are re-inserted.
+    let mut candidate_ids: HashSet<i64> = HashSet::new();
+    for chunk in &chunks {
+        for (id, _) in store::search_fts(conn, &chunk.name, 400, None).unwrap_or_default() {
+            candidate_ids.insert(id);
+        }
+    }
+    let changed_ids: HashSet<i64> = chunks.iter().map(|c| c.chunk_id).collect();
+    for cand_id in candidate_ids {
+        if changed_ids.contains(&cand_id) {
+            continue;
+        }
+        let Some(cand) = load_symbol_chunk_by_id(conn, cand_id)? else {
+            continue;
+        };
+        if changed_set.contains(cand.path.as_str()) {
+            continue;
+        }
+        insert_reference_edges(conn, &cand, &by_name, &mut inserted, Some(&changed_set))?;
+    }
+
+    // Ranks shift globally with the new edge set: recompute over the full graph.
+    let node_ids: Vec<i64> = by_name
+        .values()
+        .flat_map(|targets| targets.iter().map(|t| t.chunk_id))
+        .collect();
+    let edges = store::all_graph_edge_pairs(conn)?;
+    let ranks = pagerank(&node_ids, &edges);
+    store::set_node_ranks(conn, &ranks)?;
     Ok(())
 }
 
@@ -433,6 +524,45 @@ pub fn format_relations_mermaid(relations: &[GraphRelation], title: &str) -> Str
     out.push_str(&format!("    %% {title}\n"));
     out.push_str("```\n");
     out
+}
+
+fn load_symbol_chunks_for_paths(conn: &Connection, paths: &[String]) -> Result<Vec<ChunkSymbol>> {
+    let placeholders = paths.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT id, file_id, path, symbol, kind, start_line, end_line, content
+         FROM chunks
+         WHERE symbol IS NOT NULL AND symbol != '' AND symbol != 'anonymous'
+           AND path IN ({placeholders})"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(paths.iter().map(String::as_str)),
+        chunk_symbol_from_row,
+    )?;
+    Ok(rows.filter_map(|row| row.ok()).collect())
+}
+
+fn load_symbol_chunk_by_id(conn: &Connection, chunk_id: i64) -> Result<Option<ChunkSymbol>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, file_id, path, symbol, kind, start_line, end_line, content
+         FROM chunks
+         WHERE id = ?1 AND symbol IS NOT NULL AND symbol != '' AND symbol != 'anonymous'",
+    )?;
+    let mut rows = stmt.query_map([chunk_id], chunk_symbol_from_row)?;
+    Ok(rows.next().and_then(|r| r.ok()))
+}
+
+fn chunk_symbol_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChunkSymbol> {
+    Ok(ChunkSymbol {
+        chunk_id: row.get(0)?,
+        file_id: row.get(1)?,
+        path: row.get(2)?,
+        name: row.get(3)?,
+        kind: row.get(4)?,
+        start_line: row.get::<_, i64>(5)? as usize,
+        end_line: row.get::<_, i64>(6)? as usize,
+        content: row.get(7)?,
+    })
 }
 
 fn load_symbol_chunks(conn: &Connection) -> Result<Vec<ChunkSymbol>> {
@@ -785,11 +915,448 @@ pub fn export_relations_to_html(relations: &[GraphRelation], title: &str) -> Str
     )
 }
 
+// ---- File-level import graph --------------------------------------------------
+
+/// Scan every indexed file for import statements and persist file→file edges.
+/// Reads source from disk (imports live between symbol chunks, so DB chunks
+/// can't see them). Unresolvable targets are stored with `resolved_path NULL`
+/// — still queryable as "which files touch <external dep>".
+pub fn rebuild_import_graph(conn: &Connection, repo_root: &std::path::Path) -> Result<usize> {
+    let paths = store::all_file_paths(conn)?;
+    let known: HashSet<&str> = paths.iter().map(String::as_str).collect();
+
+    store::clear_import_graph(conn)?;
+    let mut count = 0usize;
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    for path in &paths {
+        let Ok(content) = std::fs::read_to_string(repo_root.join(path)) else {
+            continue;
+        };
+        for (target, kind, line) in extract_file_imports(path, &content) {
+            let resolved = resolve_import_target(path, &target, &kind, &known);
+            store::insert_import(
+                conn,
+                &store::ImportEdge {
+                    source_path: path.clone(),
+                    target,
+                    resolved_path: resolved,
+                    kind,
+                    line,
+                },
+            )?;
+            count += 1;
+        }
+    }
+    conn.execute_batch("COMMIT")?;
+    Ok(count)
+}
+
+/// Extract (target, kind, 1-based line) import statements for the file's language.
+fn extract_file_imports(path: &str, content: &str) -> Vec<(String, String, usize)> {
+    let lang = crate::chunker::detect_lang(std::path::Path::new(path));
+    use crate::chunker::Lang;
+    let patterns: &[(&str, &str)] = match lang {
+        Lang::Rust => &[
+            (
+                r"^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([A-Za-z_][A-Za-z0-9_:]*)",
+                "use",
+            ),
+            (
+                r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([a-z_][a-z0-9_]*)\s*;",
+                "mod",
+            ),
+        ],
+        Lang::Python => &[
+            (r"^\s*from\s+([.\w]+)\s+import\b", "import"),
+            (r"^\s*import\s+([.\w]+)", "import"),
+        ],
+        Lang::TypeScript | Lang::JavaScript => &[
+            (
+                r#"^\s*(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]"#,
+                "import",
+            ),
+            (r#"\brequire\(\s*['"]([^'"]+)['"]\s*\)"#, "require"),
+        ],
+        Lang::Go => &[(r#"^\s*(?:import\s+)?(?:\w+\s+)?"([^"]+)""#, "import")],
+        Lang::Cpp => &[
+            (r#"^\s*#\s*include\s+"([^"]+)""#, "include"),
+            (r"^\s*#\s*include\s+<([^>]+)>", "include"),
+        ],
+        Lang::Generic => {
+            if path.ends_with(".sh") || path.ends_with(".bash") {
+                &[(r"^\s*(?:source|\.)\s+(\S+)", "source")]
+            } else {
+                return Vec::new();
+            }
+        }
+    };
+
+    let compiled: Vec<(Regex, &str)> = patterns
+        .iter()
+        .filter_map(|(p, k)| Regex::new(p).ok().map(|re| (re, *k)))
+        .collect();
+
+    // Go `import "x"` lines outside import blocks would false-positive on any
+    // string literal; restrict Go matching to import statements/blocks.
+    let mut in_go_import_block = false;
+    let mut out = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
+        if lang == Lang::Go {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("import (") {
+                in_go_import_block = true;
+                continue;
+            }
+            if in_go_import_block && trimmed.starts_with(')') {
+                in_go_import_block = false;
+                continue;
+            }
+            if !in_go_import_block && !trimmed.starts_with("import") {
+                continue;
+            }
+        }
+        for (re, kind) in &compiled {
+            if let Some(cap) = re.captures(line) {
+                if let Some(m) = cap.get(1) {
+                    out.push((m.as_str().to_string(), kind.to_string(), idx + 1));
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Best-effort heuristic mapping of an import target to an indexed repo file.
+fn resolve_import_target(
+    source_path: &str,
+    target: &str,
+    kind: &str,
+    known: &HashSet<&str>,
+) -> Option<String> {
+    let dir = source_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+
+    let exists = |p: &str| -> Option<String> {
+        let normalized = normalize_rel_path(p);
+        known.contains(normalized.as_str()).then_some(normalized)
+    };
+
+    match kind {
+        "use" => {
+            // Rust: crate::a::b → src/a/b.rs | src/a.rs | src/a/mod.rs (walk
+            // segments longest-first so `crate::store::open_db` hits store.rs).
+            let segs: Vec<&str> = target
+                .split("::")
+                .filter(|s| !["crate", "self", "super"].contains(s))
+                .collect();
+            for n in (1..=segs.len()).rev() {
+                let base = segs[..n].join("/");
+                for cand in [
+                    format!("src/{base}.rs"),
+                    format!("src/{base}/mod.rs"),
+                    format!("{base}.rs"),
+                ] {
+                    if let Some(hit) = exists(&cand) {
+                        return Some(hit);
+                    }
+                }
+            }
+            None
+        }
+        "mod" => {
+            // Rust: mod foo; → sibling foo.rs / foo/mod.rs.
+            for cand in [
+                format!("{dir}/{target}.rs"),
+                format!("{dir}/{target}/mod.rs"),
+            ] {
+                if let Some(hit) = exists(cand.trim_start_matches('/')) {
+                    return Some(hit);
+                }
+            }
+            None
+        }
+        "import" | "require" if target.starts_with('.') => {
+            // JS/TS relative or Python relative (leading dots).
+            if target.contains('/') || !target.contains('.') || target.ends_with(".js") {
+                // JS/TS style: ./x, ../x/y
+                let joined = format!("{dir}/{target}");
+                let exts = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+                for ext in exts {
+                    if let Some(hit) = exists(&format!("{joined}{ext}")) {
+                        return Some(hit);
+                    }
+                }
+                for idx in ["index.ts", "index.tsx", "index.js"] {
+                    if let Some(hit) = exists(&format!("{joined}/{idx}")) {
+                        return Some(hit);
+                    }
+                }
+                None
+            } else {
+                // Python relative: .mod / ..pkg.mod
+                let dots = target.chars().take_while(|&c| c == '.').count();
+                let rest = &target[dots..];
+                let mut base = dir.to_string();
+                for _ in 1..dots {
+                    base = base
+                        .rsplit_once('/')
+                        .map(|(d, _)| d.to_string())
+                        .unwrap_or_default();
+                }
+                let modpath = rest.replace('.', "/");
+                for cand in [
+                    format!("{base}/{modpath}.py"),
+                    format!("{base}/{modpath}/__init__.py"),
+                ] {
+                    if let Some(hit) = exists(cand.trim_start_matches('/')) {
+                        return Some(hit);
+                    }
+                }
+                None
+            }
+        }
+        "import" => {
+            // Python absolute: a.b.c → a/b/c.py | a/b/c/__init__.py.
+            // (Go package paths and JS bare specifiers won't match and stay external.)
+            let modpath = target.replace('.', "/");
+            for cand in [
+                format!("{modpath}.py"),
+                format!("{modpath}/__init__.py"),
+                format!("src/{modpath}.py"),
+            ] {
+                if let Some(hit) = exists(&cand) {
+                    return Some(hit);
+                }
+            }
+            None
+        }
+        "include" => {
+            // C/C++: resolve relative to the including file, then repo root.
+            for cand in [format!("{dir}/{target}"), target.to_string()] {
+                if let Some(hit) = exists(cand.trim_start_matches('/')) {
+                    return Some(hit);
+                }
+            }
+            None
+        }
+        "source" => exists(&format!("{dir}/{target}")).or_else(|| exists(target)),
+        _ => None,
+    }
+}
+
+/// Collapse `a/b/../c` and `./` segments into a clean repo-relative path.
+fn normalize_rel_path(p: &str) -> String {
+    let normalized = p.replace('\\', "/");
+    let mut out: Vec<&str> = Vec::new();
+    for seg in normalized.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s),
+        }
+    }
+    out.join("/")
+}
+
+pub fn format_imports(edges: &[store::ImportEdge], title: &str, reverse: bool) -> String {
+    if edges.is_empty() {
+        return format!("No imports found for: {title}");
+    }
+    let mut out = format!("## {title}\n");
+    for e in edges {
+        if reverse {
+            out.push_str(&format!(
+                "- {}:{} [{}] imports `{}`\n",
+                e.source_path,
+                e.line,
+                e.kind,
+                e.resolved_path.as_deref().unwrap_or(&e.target),
+            ));
+        } else {
+            match &e.resolved_path {
+                Some(r) => out.push_str(&format!(
+                    "- {}:{} [{}] -> {}\n",
+                    e.source_path, e.line, e.kind, r
+                )),
+                None => out.push_str(&format!(
+                    "- {}:{} [{}] -> {} (external)\n",
+                    e.source_path, e.line, e.kind, e.target
+                )),
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::{init_schema, insert_chunk, upsert_file, NewChunk};
     use rusqlite::Connection;
+
+    #[test]
+    fn incremental_update_matches_full_rebuild() {
+        use crate::store::delete_chunks_for_file;
+
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn, 4).unwrap();
+
+        let mk = |conn: &Connection, file_id: i64, path: &str, sym: &str, content: &str| {
+            insert_chunk(
+                conn,
+                NewChunk {
+                    file_id,
+                    path,
+                    start: 1,
+                    end: 5,
+                    symbol: sym,
+                    kind: "function",
+                    content,
+                    token_count: 5,
+                },
+            )
+            .unwrap()
+        };
+
+        let fa = upsert_file(&conn, "src/a.rs", 1.0, "ha").unwrap();
+        let fb = upsert_file(&conn, "src/b.rs", 1.0, "hb").unwrap();
+        let fc = upsert_file(&conn, "src/c.rs", 1.0, "hc").unwrap();
+        mk(
+            &conn,
+            fa,
+            "src/a.rs",
+            "alpha",
+            "fn alpha() { beta_helper(); }",
+        );
+        mk(
+            &conn,
+            fb,
+            "src/b.rs",
+            "beta_helper",
+            "fn beta_helper() { gamma_util(); }",
+        );
+        mk(&conn, fc, "src/c.rs", "gamma_util", "fn gamma_util() {}");
+
+        // Snapshot of the full rebuild's edges as name pairs.
+        let edge_names = |conn: &Connection| -> std::collections::BTreeSet<(String, String)> {
+            crate::store::load_all_graph_edges(conn)
+                .unwrap()
+                .into_iter()
+                .map(|(_, from, _, _, to, _)| (from, to))
+                .collect()
+        };
+        rebuild_symbol_graph(&conn).unwrap();
+        let full = edge_names(&conn);
+        assert!(full.contains(&("alpha".into(), "beta_helper".into())));
+        assert!(full.contains(&("beta_helper".into(), "gamma_util".into())));
+
+        // Simulate a re-index of src/b.rs: cascade delete + re-chunk.
+        delete_chunks_for_file(&conn, fb).unwrap();
+        let fb2 = upsert_file(&conn, "src/b.rs", 2.0, "hb2").unwrap();
+        mk(
+            &conn,
+            fb2,
+            "src/b.rs",
+            "beta_helper",
+            "fn beta_helper() { gamma_util(); }",
+        );
+
+        update_symbol_graph_incremental(&conn, &["src/b.rs".to_string()]).unwrap();
+        let incremental = edge_names(&conn);
+        assert_eq!(
+            full, incremental,
+            "incremental repair must reproduce the full rebuild's edge set"
+        );
+    }
+
+    #[test]
+    fn extracts_imports_per_language() {
+        let rust = extract_file_imports(
+            "src/main.rs",
+            "use crate::store::open_db;\npub mod daemon;\nuse anyhow::Result;\n",
+        );
+        assert!(rust.contains(&("crate::store::open_db".into(), "use".into(), 1)));
+        assert!(rust.contains(&("daemon".into(), "mod".into(), 2)));
+        assert!(rust.contains(&("anyhow::Result".into(), "use".into(), 3)));
+
+        let ts = extract_file_imports(
+            "src/app.ts",
+            "import { x } from './utils';\nimport React from 'react';\nconst y = require('../lib/db');\n",
+        );
+        assert!(ts.contains(&("./utils".into(), "import".into(), 1)));
+        assert!(ts.contains(&("react".into(), "import".into(), 2)));
+        assert!(ts.contains(&("../lib/db".into(), "require".into(), 3)));
+
+        let py = extract_file_imports(
+            "pkg/svc.py",
+            "from .models import User\nimport os.path\nfrom pkg.db import conn\n",
+        );
+        assert!(py.contains(&(".models".into(), "import".into(), 1)));
+        assert!(py.contains(&("os.path".into(), "import".into(), 2)));
+        assert!(py.contains(&("pkg.db".into(), "import".into(), 3)));
+
+        let c = extract_file_imports("src/a.c", "#include \"util.h\"\n#include <stdio.h>\n");
+        assert!(c.contains(&("util.h".into(), "include".into(), 1)));
+        assert!(c.contains(&("stdio.h".into(), "include".into(), 2)));
+    }
+
+    #[test]
+    fn resolves_import_targets_against_known_files() {
+        let known: HashSet<&str> = [
+            "src/store.rs",
+            "src/daemon.rs",
+            "src/utils.ts",
+            "lib/db.ts",
+            "pkg/models.py",
+            "pkg/db.py",
+            "src/util.h",
+        ]
+        .into_iter()
+        .collect();
+
+        // Rust: longest-prefix walk lands on the module file.
+        assert_eq!(
+            resolve_import_target("src/main.rs", "crate::store::open_db", "use", &known),
+            Some("src/store.rs".into())
+        );
+        assert_eq!(
+            resolve_import_target("src/main.rs", "daemon", "mod", &known),
+            Some("src/daemon.rs".into())
+        );
+        assert_eq!(
+            resolve_import_target("src/main.rs", "anyhow::Result", "use", &known),
+            None // external
+        );
+        // TS relative with extension probing + `..` normalization.
+        assert_eq!(
+            resolve_import_target("src/app.ts", "./utils", "import", &known),
+            Some("src/utils.ts".into())
+        );
+        assert_eq!(
+            resolve_import_target("src/app.ts", "../lib/db", "require", &known),
+            Some("lib/db.ts".into())
+        );
+        // Python relative + absolute.
+        assert_eq!(
+            resolve_import_target("pkg/svc.py", ".models", "import", &known),
+            Some("pkg/models.py".into())
+        );
+        assert_eq!(
+            resolve_import_target("pkg/svc.py", "pkg.db", "import", &known),
+            Some("pkg/db.py".into())
+        );
+        // C include relative to the including file.
+        assert_eq!(
+            resolve_import_target("src/a.c", "util.h", "include", &known),
+            Some("src/util.h".into())
+        );
+        assert_eq!(
+            resolve_import_target("src/a.c", "stdio.h", "include", &known),
+            None
+        );
+    }
 
     #[test]
     fn extracts_function_and_method_references() {

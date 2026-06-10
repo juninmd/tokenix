@@ -3170,6 +3170,7 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
