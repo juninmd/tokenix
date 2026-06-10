@@ -28,7 +28,9 @@ Deferred:
 5. **Diff-aware Read intercept** — for files modified since last index, return
    outline + changed-hunk context instead of full content. Measure with `gain`.
 6. **`filter generate` template fallback** — skeleton TOML from captured output
-   when no AI CLI is available; validate `semantic_filter.model` in `doctor`.
+   when no AI CLI is available. (`semantic_filter.model` validation in `doctor`
+   shipped 2026-06-10 robustness pass, along with the debug-build stack-overflow
+   fix, SQLite busy_timeout, and the daemon stale-cache reload fix.)
 
 ## Key Insights from Cluster Operations
 

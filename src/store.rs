@@ -136,7 +136,9 @@ pub fn open_db(repo_root: &Path, create: bool) -> Result<Option<Connection>> {
         }
     }
     let conn = Connection::open(&path).context("opening sqlite db")?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+    )?;
     Ok(Some(conn))
 }
 
@@ -1210,6 +1212,12 @@ pub fn fetch_chunks_by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<SearchR
     Ok(results)
 }
 
+/// Reciprocal-rank-fusion damping constant (the classic k=60) shared by every
+/// hybrid ranking path (store, daemon, query graph/path recall).
+pub const RRF_K: f32 = 60.0;
+/// Weight of the normalized BM25 score blended into the sparse-side RRF term.
+pub const BM25_WEIGHT: f32 = 0.3;
+
 pub fn hybrid_search(
     conn: &Connection,
     query_vec: &[f32],
@@ -1226,15 +1234,15 @@ pub fn hybrid_search(
     let mut rrf_scores: HashMap<i64, f32> = HashMap::new();
 
     for (rank, res) in dense_results.iter().enumerate() {
-        let score = 1.0 / (60.0 + rank as f32);
+        let score = 1.0 / (RRF_K + rank as f32);
         rrf_scores.insert(res.id, score);
     }
 
     for (rank, (id, bm25_score)) in sparse_results.iter().enumerate() {
         // Combine position-based RRF with BM25 score
-        let rrf_position = 1.0 / (60.0 + rank as f32);
+        let rrf_position = 1.0 / (RRF_K + rank as f32);
         let bm25_normalized = (*bm25_score).max(0.0) / (1.0 + bm25_score.max(0.0));
-        let score = rrf_position + 0.3 * bm25_normalized;
+        let score = rrf_position + BM25_WEIGHT * bm25_normalized;
         rrf_scores
             .entry(*id)
             .and_modify(|s| *s += score)

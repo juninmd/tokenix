@@ -90,6 +90,26 @@ pub fn run_doctor() -> Result<()> {
     }
     println!();
 
+    section("Filters");
+    let named: Vec<(String, crate::filters::FilterDef)> = crate::filters::load_user_filters_named()
+        .into_iter()
+        .chain(crate::filters::load_local_filters_named())
+        .collect();
+    let mut issue_count = 0usize;
+    for (name, def) in &named {
+        for issue in crate::filters::semantic_filter_issues(def) {
+            kv(name, &issue);
+            issue_count += 1;
+        }
+    }
+    if issue_count == 0 {
+        kv(
+            "user/local filters",
+            &format!("{} loaded, no config issues", named.len()),
+        );
+    }
+    println!();
+
     section("Daemon");
     kv(
         "status",

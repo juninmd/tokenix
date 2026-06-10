@@ -283,6 +283,30 @@ pub fn load_all_filters() -> Vec<FilterDef> {
     all
 }
 
+/// Config problems in a filter's semantic_filter section (unknown model,
+/// out-of-range threshold). Used by `tokenix doctor`; empty = healthy.
+pub fn semantic_filter_issues(f: &FilterDef) -> Vec<String> {
+    let mut issues = Vec::new();
+    if let Some(sem) = &f.semantic_filter {
+        if let Some(model) = &sem.model {
+            if !crate::embed::is_known_model(model) {
+                issues.push(format!(
+                    "semantic_filter.model '{}' unknown — falls back to '{}'",
+                    model,
+                    crate::embed::DEFAULT_MODEL_ID
+                ));
+            }
+        }
+        if !(0.0..=1.0).contains(&sem.threshold) {
+            issues.push(format!(
+                "semantic_filter.threshold {} outside 0.0-1.0",
+                sem.threshold
+            ));
+        }
+    }
+    issues
+}
+
 pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a FilterDef> {
     let candidates = derive_command_candidates(cmd);
     for f in filters {
@@ -895,6 +919,13 @@ fn apply_semantic_filter_with_embeddings(
 
     // Set model if specified
     if let Some(model) = &semantic.model {
+        if !crate::embed::is_known_model(model) {
+            eprintln!(
+                "[tokenix] warning: semantic_filter.model '{}' is unknown; falling back to '{}'",
+                model,
+                crate::embed::DEFAULT_MODEL_ID
+            );
+        }
         set_active_model(model);
     }
 
@@ -1349,6 +1380,46 @@ on_empty = "empty filter output"
         // Would panic with naive &l[..4] because 'é'/'ç' straddle the boundary.
         let out = apply_filter("café\nação\n", &f);
         assert_eq!(out, "caf\naç");
+    }
+
+    #[test]
+    fn semantic_filter_issues_flags_unknown_model_and_bad_threshold() {
+        let mut f = FilterDef {
+            description: None,
+            match_command: ".*".to_string(),
+            strip_ansi: false,
+            strip_lines_matching: vec![],
+            keep_lines_matching: vec![],
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            on_empty: None,
+            match_output: vec![],
+            truncate_lines_at: None,
+            filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: Some(SemanticFilterDef {
+                query: "errors".to_string(),
+                threshold: 1.5,
+                always_keep: vec![],
+                model: Some("does-not-exist".to_string()),
+            }),
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
+        };
+        let issues = semantic_filter_issues(&f);
+        assert_eq!(
+            issues.len(),
+            2,
+            "expected model + threshold issues: {issues:?}"
+        );
+
+        let sem = f.semantic_filter.as_mut().unwrap();
+        sem.model = Some("nomic-v1.5".to_string());
+        sem.threshold = 0.3;
+        assert!(semantic_filter_issues(&f).is_empty());
     }
 
     #[test]

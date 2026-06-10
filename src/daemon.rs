@@ -711,7 +711,7 @@ fn search_handler(
         let needs_reload = cache_lock
             .projects
             .get(&root_key)
-            .map(|c| (db_mtime - c.db_mtime).abs() > 0.5)
+            .map(|c| db_mtime != c.db_mtime)
             .unwrap_or(true);
 
         if needs_reload {
@@ -740,14 +740,14 @@ fn search_handler(
         for (rank, &(idx, sim)) in dense_results.iter().enumerate() {
             let id = pc.entries[idx].id;
             dense_map.insert(id, (idx, sim));
-            let score = 1.0 / (60.0 + rank as f32);
+            let score = 1.0 / (store::RRF_K + rank as f32);
             rrf_scores.insert(id, score);
         }
 
         for (rank, (id, bm25_score)) in sparse_results.iter().enumerate() {
-            let rrf_position = 1.0 / (60.0 + rank as f32);
+            let rrf_position = 1.0 / (store::RRF_K + rank as f32);
             let bm25_normalized = (*bm25_score).max(0.0) / (1.0 + bm25_score.max(0.0));
-            let score = rrf_position + 0.3 * bm25_normalized;
+            let score = rrf_position + store::BM25_WEIGHT * bm25_normalized;
             rrf_scores
                 .entry(*id)
                 .and_modify(|s| *s += score)

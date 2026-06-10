@@ -416,7 +416,7 @@ tokenix install-hook --tool all
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
-| `tokenix doctor` | Diagnose embedding backend, GPU availability, model cache, and daemon |
+| `tokenix doctor` | Diagnose embedding backend, GPU availability, model cache, daemon, and user/local filter config (unknown `semantic_filter.model`, bad threshold) |
 | `tokenix serve` | Start the background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
 | `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |

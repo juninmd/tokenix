@@ -180,10 +180,10 @@ fn add_symbol_recall_candidates(
         let mut rrf_score = rrf_hybrid;
 
         if let Some(rank) = graph_ids.iter().position(|&x| x == r.id) {
-            rrf_score += 1.0 / (60.0 + rank as f32);
+            rrf_score += 1.0 / (crate::store::RRF_K + rank as f32);
         }
         if let Some(rank) = path_ids.iter().position(|&x| x == r.id) {
-            rrf_score += 1.0 / (60.0 + rank as f32);
+            rrf_score += 1.0 / (crate::store::RRF_K + rank as f32);
         }
 
         r.distance = 1.0 - rrf_score;
@@ -218,6 +218,15 @@ fn hybrid_score(result: &SearchResult, terms: &[String]) -> f32 {
     semantic + lexical_boost(result, terms)
 }
 
+// Core lexical reranking weights (per query term, summed then capped).
+const STEM_MATCH_BOOST: f32 = 0.55;
+const PATH_MATCH_BOOST: f32 = 0.28;
+const SYMBOL_MATCH_BOOST: f32 = 0.24;
+const CONTENT_MATCH_BOOST: f32 = 0.045;
+const PER_TERM_BONUS: f32 = 0.08;
+const PER_TERM_BONUS_CAP: f32 = 0.5;
+const LEXICAL_BOOST_CAP: f32 = 2.5;
+
 fn lexical_boost(result: &SearchResult, terms: &[String]) -> f32 {
     let path = normalize_text(&result.path);
     let path_stem = result
@@ -235,26 +244,26 @@ fn lexical_boost(result: &SearchResult, terms: &[String]) -> f32 {
     for term in terms {
         let mut matched = false;
         if path_stem == *term {
-            boost += 0.55;
+            boost += STEM_MATCH_BOOST;
             matched = true;
         }
         if path.contains(term) {
-            boost += 0.28;
+            boost += PATH_MATCH_BOOST;
             matched = true;
         }
         if !symbol.is_empty() && symbol.contains(term) {
-            boost += 0.24;
+            boost += SYMBOL_MATCH_BOOST;
             matched = true;
         }
         if content.contains(term) {
-            boost += 0.045;
+            boost += CONTENT_MATCH_BOOST;
             matched = true;
         }
         if matched {
             matched_terms += 1;
         }
     }
-    boost += (matched_terms as f32 * 0.08).min(0.5);
+    boost += (matched_terms as f32 * PER_TERM_BONUS).min(PER_TERM_BONUS_CAP);
     boost += intent_boost(&path, &symbol, &content, terms);
     boost += domain_boost(&path, &symbol, &content, terms);
     boost += language_boost(&path, terms);
@@ -262,7 +271,7 @@ fn lexical_boost(result: &SearchResult, terms: &[String]) -> f32 {
     boost += test_leak_penalty(&symbol, &content, terms);
     boost += markdown_doc_penalty(&path, terms);
     boost += non_code_asset_penalty(&path, terms);
-    boost.min(2.5)
+    boost.min(LEXICAL_BOOST_CAP)
 }
 
 fn intent_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f32 {

@@ -52,6 +52,11 @@ reqwest = { version = "0.13.4", features = ["blocking", "json"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 
+# Debug builds overflow the main thread's stack (clap derive over the 33-variant
+# Commands enum builds a huge unoptimized frame). opt-level 1 keeps frames sane.
+[profile.dev]
+opt-level = 1
+
 [features]
 default = []
 cuda = ["dep:ort", "ort/cuda"]
