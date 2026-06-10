@@ -2,7 +2,7 @@
 name = "tokenix"
 version = "0.33.0"
 edition = "2021"
-description = "Local semantic index CLI for LLM token optimization"
+description = "Semantic search, symbol graphs, secrets scanning, output filters, and CLI hooks that save 60-90% LLM tokens"
 license = "MIT"
 repository = "https://github.com/juninmd/tokenix"
 homepage = "https://github.com/juninmd/tokenix"
