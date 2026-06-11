@@ -7,10 +7,10 @@ pub struct ModelPrice {
     pub reference: bool,
 }
 
-pub const PRICING_COLLECTED_AT: &str = "2026-06-01";
+pub const PRICING_COLLECTED_AT: &str = "2026-06-11";
 
 pub const MODELS: &[ModelPrice] = &[
-    // Anthropic (source: platform.claude.com/docs/about-claude/pricing, collected 2026-06-01)
+    // Anthropic (source: platform.claude.com/docs/about-claude/pricing, collected 2026-06-11)
     ModelPrice {
         name: "claude-haiku-4-5",
         input_per_1m: 1.00,
@@ -26,7 +26,12 @@ pub const MODELS: &[ModelPrice] = &[
         input_per_1m: 5.00,
         reference: false,
     },
-    // OpenAI (source: developers.openai.com/api/docs/pricing, collected 2026-06-01)
+    ModelPrice {
+        name: "claude-fable-5",
+        input_per_1m: 10.00,
+        reference: false,
+    },
+    // OpenAI (source: developers.openai.com/api/docs/pricing, collected 2026-06-11)
     ModelPrice {
         name: "gpt-5.4-mini",
         input_per_1m: 0.75,
@@ -42,7 +47,7 @@ pub const MODELS: &[ModelPrice] = &[
         input_per_1m: 5.00,
         reference: false,
     },
-    // Google (source: ai.google.dev/gemini-api/docs/pricing, collected 2026-06-01)
+    // Google (source: ai.google.dev/gemini-api/docs/pricing, collected 2026-06-11)
     ModelPrice {
         name: "gemini-3.1-flash-lite",
         input_per_1m: 0.25,
@@ -82,6 +87,14 @@ pub struct GainStats {
     pub by_phase: Vec<(String, usize, i64)>,
     /// Top Bash commands compressed by the filter system, sorted by tokens saved.
     pub by_command: Vec<(String, usize, i64)>,
+    /// Tokens saved by semantic-index intercepts (Read/Grep replaced with
+    /// outlines/query results — events with no command), and their call count.
+    pub index_saved: i64,
+    pub index_calls: usize,
+    /// Tokens saved by command output filters (Bash compression — events
+    /// carrying the executed command), and their call count.
+    pub filter_saved: i64,
+    pub filter_calls: usize,
 }
 
 /// Aggregate stats across all projects, with per-project breakdown.
@@ -192,6 +205,23 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         .collect();
     by_command.sort_by_key(|row| std::cmp::Reverse(row.2));
 
+    // Source split: events carrying a command come from the Bash filter
+    // pipeline; everything else is a semantic-index intercept (Read/Grep).
+    // Pre-phase Bash events are rewrite markers (saved is always 0 there —
+    // the compression is logged separately at execution time), so they are
+    // excluded from the filter call count to avoid counting a command twice.
+    let (mut index_saved, mut index_calls) = (0i64, 0usize);
+    let (mut filter_saved, mut filter_calls) = (0i64, 0usize);
+    for e in &intercepted_events {
+        if e.command.is_empty() {
+            index_saved += e.saved_tokens;
+            index_calls += 1;
+        } else if e.phase != "pre" {
+            filter_saved += e.saved_tokens;
+            filter_calls += 1;
+        }
+    }
+
     GainStats {
         total_calls: events.len(),
         intercepted: intercepted_events.len(),
@@ -204,6 +234,10 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         by_tool,
         by_phase,
         by_command,
+        index_saved,
+        index_calls,
+        filter_saved,
+        filter_calls,
     }
 }
 
@@ -312,6 +346,69 @@ mod tests {
         assert_eq!(stats.by_tool[0], ("Bash".to_string(), 1, 100));
         assert_eq!(stats.by_phase.len(), 1);
         assert_eq!(stats.by_phase[0], ("post".to_string(), 1, 100));
+        // ev1 carries no command → counted as a semantic-index intercept.
+        assert_eq!(stats.index_saved, 100);
+        assert_eq!(stats.index_calls, 1);
+        assert_eq!(stats.filter_saved, 0);
+        assert_eq!(stats.filter_calls, 0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_source_split_index_vs_filters() {
+        let temp_dir = create_test_temp_dir("source_split");
+
+        let index_ev = HookEvent {
+            ts: 1.0,
+            tool: "Read".to_string(),
+            action: "intercepted".to_string(),
+            phase: "pre".to_string(),
+            reason: "outline".to_string(),
+            saved_tokens: 300,
+            actual_tokens: 50,
+            original_estimate: 350,
+            input_preview: String::new(),
+            command: String::new(),
+        };
+        let filter_ev = HookEvent {
+            ts: 2.0,
+            tool: "Bash".to_string(),
+            action: "intercepted".to_string(),
+            phase: "ToolOutputCompressed".to_string(),
+            reason: "compressed command output".to_string(),
+            saved_tokens: 200,
+            actual_tokens: 30,
+            original_estimate: 230,
+            input_preview: String::new(),
+            command: "cargo test".to_string(),
+        };
+
+        // Pre-phase rewrite marker for the same command: saved is 0 and the
+        // event must not inflate the filter call count.
+        let rewrite_marker = HookEvent {
+            ts: 1.5,
+            tool: "Bash".to_string(),
+            action: "intercepted".to_string(),
+            phase: "pre".to_string(),
+            reason: "rewrote command to tokenix run".to_string(),
+            saved_tokens: 0,
+            actual_tokens: 0,
+            original_estimate: 0,
+            input_preview: String::new(),
+            command: "cargo test".to_string(),
+        };
+
+        log_hook_event(&temp_dir, &index_ev).unwrap();
+        log_hook_event(&temp_dir, &rewrite_marker).unwrap();
+        log_hook_event(&temp_dir, &filter_ev).unwrap();
+
+        let stats = compute_gain(&temp_dir);
+        assert_eq!(stats.index_saved, 300);
+        assert_eq!(stats.index_calls, 1);
+        assert_eq!(stats.filter_saved, 200);
+        assert_eq!(stats.filter_calls, 1);
+        assert_eq!(stats.tokens_saved, 500);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

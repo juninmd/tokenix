@@ -44,6 +44,11 @@ pub const IGNORED_DIRS: &[&str] = &[
 pub const INDEXED_EXTS: &[&str] = &[
     ".rs", ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".go", ".sh", ".bash", ".toml",
     ".md", ".txt", ".c", ".cpp", ".h", ".hpp", ".cc", ".cxx",
+    // VB6 / VBA text sources (.frx/.ctx are binary form resources — excluded).
+    ".bas", ".cls", ".ctl", ".frm", ".vbp",
+    // SQL scripts + Oracle object files (function/trigger/package/procedure/
+    // table/view DDL).
+    ".sql", ".fnc", ".trg", ".pkg", ".prc", ".tab", ".vw",
 ];
 
 /// Data/config extensions indexed only when `[index] data_files = true`.
@@ -216,6 +221,8 @@ fn detect_custom_lang(path: &Path) -> Option<Lang> {
         "javascript" => Some(Lang::JavaScript),
         "go" => Some(Lang::Go),
         "cpp" | "c" => Some(Lang::Cpp),
+        "vb" | "vb6" | "vba" | "visualbasic" => Some(Lang::Vb),
+        "sql" | "plsql" | "tsql" => Some(Lang::Sql),
         _ => Some(Lang::Generic),
     }
 }
@@ -285,6 +292,8 @@ pub(crate) enum Lang {
     JavaScript,
     Go,
     Cpp,
+    Vb,
+    Sql,
     Generic,
 }
 
@@ -304,6 +313,8 @@ pub(crate) fn detect_lang(path: &Path) -> Lang {
         "js" | "jsx" | "mjs" | "cjs" => Lang::JavaScript,
         "go" => Lang::Go,
         "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" => Lang::Cpp,
+        "bas" | "cls" | "ctl" | "frm" => Lang::Vb,
+        "sql" | "fnc" | "trg" | "pkg" | "prc" | "tab" | "vw" => Lang::Sql,
         _ => Lang::Generic,
     }
 }
@@ -318,6 +329,8 @@ pub fn chunk_file(path: &str, content: &str) -> Vec<Chunk> {
         Lang::TypeScript | Lang::JavaScript => chunk_ts_js(content, path),
         Lang::Go => chunk_go(content, path),
         Lang::Cpp => chunk_cpp(content, path),
+        Lang::Vb => chunk_by_symbol_lines(content, path, vb_symbol_of),
+        Lang::Sql => chunk_by_symbol_lines(content, path, sql_symbol_of),
         Lang::Generic => {
             let lines: Vec<&str> = content.lines().collect();
             chunk_by_lines(&lines, path)
@@ -618,6 +631,99 @@ fn is_cpp_symbol(kind: &str) -> Option<&'static str> {
 
 fn chunk_cpp(content: &str, path: &str) -> Vec<Chunk> {
     chunk_with_parser(tree_sitter_cpp::LANGUAGE, content, path, is_cpp_symbol)
+}
+
+/// Line-scanning symbol chunker for languages without a tree-sitter grammar
+/// (VB6/VBA, SQL). `symbol_of` returns `(name, kind)` when a line opens a new
+/// top-level definition; each segment then runs until the next definition, so
+/// 100% of the file is covered (preamble included). Falls back to plain line
+/// windows when no symbol is found.
+fn chunk_by_symbol_lines(
+    content: &str,
+    path: &str,
+    symbol_of: fn(&str) -> Option<(String, &'static str)>,
+) -> Vec<Chunk> {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let mut marks: Vec<(usize, String, &'static str)> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if let Some((symbol, kind)) = symbol_of(line) {
+            marks.push((i, symbol, kind));
+        }
+    }
+    if marks.is_empty() {
+        return chunk_by_lines(&lines, path);
+    }
+    let mut chunks = Vec::new();
+    if marks[0].0 > 0 {
+        flush_chunk(&lines, path, 0, marks[0].0 - 1, "", "header", &mut chunks);
+    }
+    for (mi, (start, symbol, kind)) in marks.iter().enumerate() {
+        let end = marks
+            .get(mi + 1)
+            .map(|m| m.0 - 1)
+            .unwrap_or(lines.len() - 1);
+        flush_chunk(&lines, path, *start, end, symbol, kind, &mut chunks);
+    }
+    chunks
+}
+
+static VB_SYMBOL_RE: OnceCell<Regex> = OnceCell::new();
+static VB_NAME_RE: OnceCell<Regex> = OnceCell::new();
+
+/// VB6/VBA definition opener: `[Public|Private|Friend] [Static]
+/// Sub|Function|Property Get/Let/Set Name`. `Attribute VB_Name = "X"` names
+/// the module/class itself, so it opens the header segment as a "class" mark.
+fn vb_symbol_of(line: &str) -> Option<(String, &'static str)> {
+    let re = VB_SYMBOL_RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)^\s*(?:public\s+|private\s+|friend\s+)?(?:static\s+)?(sub|function|property\s+(?:get|let|set))\s+([A-Za-z][A-Za-z0-9_]*)",
+        )
+        .unwrap()
+    });
+    if let Some(c) = re.captures(line) {
+        let kind = if c[1].to_lowercase().starts_with("property") {
+            "property"
+        } else {
+            "function"
+        };
+        return Some((c[2].to_string(), kind));
+    }
+    let re_name = VB_NAME_RE
+        .get_or_init(|| Regex::new(r#"(?i)^\s*Attribute\s+VB_Name\s*=\s*"([^"]+)""#).unwrap());
+    re_name.captures(line).map(|c| (c[1].to_string(), "class"))
+}
+
+static SQL_SYMBOL_RE: OnceCell<Regex> = OnceCell::new();
+
+/// SQL/PLSQL object opener: `CREATE [OR REPLACE] PROCEDURE|FUNCTION|PACKAGE
+/// [BODY]|TRIGGER|VIEW|TABLE|… name`, quote- and schema-qualified names kept.
+fn sql_symbol_of(line: &str) -> Option<(String, &'static str)> {
+    let re = SQL_SYMBOL_RE.get_or_init(|| {
+        Regex::new(
+            r#"(?i)^\s*create\s+(?:or\s+replace\s+)?(?:non?editionable\s+)?(?:force\s+)?(?:global\s+temporary\s+)?(package\s+body|package|materialized\s+view|type\s+body|type|procedure|function|trigger|view|table|index|sequence)\s+(?:if\s+not\s+exists\s+)?("?[A-Za-z0-9_$#]+"?(?:\s*\.\s*"?[A-Za-z0-9_$#]+"?)?)"#,
+        )
+        .unwrap()
+    });
+    let c = re.captures(line)?;
+    let obj = c[1].to_lowercase();
+    let kind = match obj.split_whitespace().next().unwrap_or("") {
+        "package" => "package",
+        "materialized" => "view",
+        "type" => "type",
+        "procedure" => "procedure",
+        "function" => "function",
+        "trigger" => "trigger",
+        "view" => "view",
+        "table" => "table",
+        "index" => "index",
+        "sequence" => "sequence",
+        _ => "object",
+    };
+    let name = c[2].replace(['"', ' '], "");
+    Some((name, kind))
 }
 
 fn make_chunk(
@@ -1129,6 +1235,98 @@ mod tests {
         assert!(should_index(std::path::Path::new("lib/auth.py")));
         assert!(should_index(std::path::Path::new("app/index.ts")));
         assert!(should_index(std::path::Path::new("server/handler.go")));
+    }
+
+    #[test]
+    fn should_index_accepts_vb6_and_sql_extensions() {
+        for f in [
+            "legacy/Module1.bas",
+            "legacy/Cliente.cls",
+            "legacy/Grid.ctl",
+            "legacy/Main.frm",
+            "legacy/Projeto.vbp",
+            "db/schema.sql",
+            "db/calc_total.fnc",
+            "db/audit.trg",
+            "db/billing.pkg",
+            "db/process.prc",
+            "db/clientes.tab",
+            "db/saldo.vw",
+        ] {
+            assert!(should_index(std::path::Path::new(f)), "{f} should index");
+        }
+        // Binary VB6 form/control resources stay out of the index.
+        assert!(!should_index(std::path::Path::new("legacy/Main.frx")));
+        assert!(!should_index(std::path::Path::new("legacy/Grid.ctx")));
+    }
+
+    #[test]
+    fn chunk_vb_extracts_subs_functions_properties() {
+        let src = r#"VERSION 1.0 CLASS
+BEGIN
+  MultiUse = -1  'True
+END
+Attribute VB_Name = "Cliente"
+Option Explicit
+Private mNome As String
+
+Public Property Get Nome() As String
+    Nome = mNome
+End Property
+
+Private Sub Class_Initialize()
+    mNome = ""
+End Sub
+
+Public Function SaldoTotal(ByVal conta As Long) As Double
+    SaldoTotal = conta * 2
+End Function
+"#;
+        let chunks = chunk_file("legacy/Cliente.cls", src);
+        let syms: Vec<(&str, &str)> = chunks
+            .iter()
+            .map(|c| (c.symbol.as_str(), c.kind.as_str()))
+            .collect();
+        assert!(syms.contains(&("Cliente", "class")), "{syms:?}");
+        assert!(syms.contains(&("Nome", "property")), "{syms:?}");
+        assert!(syms.contains(&("Class_Initialize", "function")), "{syms:?}");
+        assert!(syms.contains(&("SaldoTotal", "function")), "{syms:?}");
+        // 100% coverage: every source line lands in some chunk range.
+        let total_lines = src.lines().count();
+        let covered: std::collections::HashSet<usize> = chunks
+            .iter()
+            .flat_map(|c| c.start_line..=c.end_line)
+            .collect();
+        assert!((1..=total_lines).all(|l| covered.contains(&l)));
+    }
+
+    #[test]
+    fn chunk_sql_extracts_create_objects() {
+        let src = r#"-- billing objects
+CREATE OR REPLACE PACKAGE BODY billing.faturas AS
+  PROCEDURE interna IS BEGIN NULL; END;
+END faturas;
+/
+
+CREATE OR REPLACE FUNCTION calc_total(p_id NUMBER) RETURN NUMBER IS
+BEGIN
+  RETURN p_id * 2;
+END;
+/
+
+CREATE TABLE clientes (id NUMBER PRIMARY KEY, nome VARCHAR2(100));
+
+create or replace view saldo_vw as select * from clientes;
+"#;
+        let chunks = chunk_file("db/billing.pkg", src);
+        let syms: Vec<(&str, &str)> = chunks
+            .iter()
+            .map(|c| (c.symbol.as_str(), c.kind.as_str()))
+            .collect();
+        assert!(syms.contains(&("billing.faturas", "package")), "{syms:?}");
+        assert!(syms.contains(&("calc_total", "function")), "{syms:?}");
+        assert!(syms.contains(&("clientes", "table")), "{syms:?}");
+        assert!(syms.contains(&("saldo_vw", "view")), "{syms:?}");
     }
 
     #[test]

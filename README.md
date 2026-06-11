@@ -142,6 +142,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Token map** | `tokenix tokenmap` shows a directory tree with token counts per file/folder |
 | **Preference memory** | `tokenix memory add/list` stores global and project preferences in editable Markdown; context/explore include saved preferences |
 | **Dynamic language detection** | Map custom file extensions to any built-in parser via a project `.tokenix.toml` — no recompile needed |
+| **Legacy VB6 + SQL sources** | `.bas`/`.cls`/`.ctl`/`.frm`/`.vbp` and `.sql`/`.fnc`/`.trg`/`.pkg`/`.prc`/`.tab`/`.vw` indexed with symbol-aware heuristic chunking (`Sub`/`Function`/`Property`, `CREATE` objects); UTF-16 SQL files decoded via BOM; binary files (e.g. `.frx`) skipped by a NUL sniff |
 | **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C/C++ |
 | **Multi-agent safe index** | PID-based index lock prevents concurrent reindex; embeddings are committed per batch, so a killed index run resumes from the last completed batch |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
@@ -156,7 +157,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **In-memory daemon** | `tokenix serve` keeps model + index in RAM so repeated hook calls avoid reloading the model each invocation; `tokenix daemon status\|stop\|restart` manages it |
 | **Graceful fallback** | Exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `1200`) |
-| **Savings analytics** | `tokenix gain` — token summary and by-tool histogram; `--cost-estimate` adds a per-model cost table (9 reference models across Anthropic / OpenAI / Google) |
+| **Savings analytics** | `tokenix gain` — token summary, savings split by source (semantic index vs command filters), and by-tool histogram; `--cost-estimate` adds a per-model cost table (10 reference models across Anthropic / OpenAI / Google) |
 | **Slim MCP profile** | `tokenix mcp --profile slim` exposes 3 meta-tools instead of the full tool surface for hosts that support progressive discovery |
 | **MCP/prompt weight audit** | `tokenix prompt-audit --recommend --profile-impact` connects to configured MCP servers, tokenizes tool schemas, and shows full-vs-slim MCP savings |
 | **Session audit** | `tokenix session-audit --cache-hygiene` combines index freshness, hook history, MCP/tool weight, and prompt-cache stability risks |
@@ -275,9 +276,13 @@ tokenix gain --cost-estimate  # add the per-model cost table
 tokenix session-audit         # index + hook + MCP token-economy health
 ```
 
-`tokenix gain --cost-estimate` prices the savings against 9 reference models
-across Anthropic, OpenAI, and Google. Prices are shown with their collection
-date (currently `2026-06-01`) so the numbers stay auditable.
+`tokenix gain` shows a `BY SOURCE` section splitting the savings between the
+semantic index (Read/Grep intercepts answered with outlines and index queries)
+and the command filters (Bash output compression), so you can see which half of
+tokenix is earning its keep. `tokenix gain --cost-estimate` prices the savings
+against 10 reference models across Anthropic, OpenAI, and Google. Prices are
+shown with their collection date (currently `2026-06-11`) so the numbers stay
+auditable.
 
 ### 8. Audit MCP / tool weight
 
@@ -413,16 +418,17 @@ tokenix install-hook --tool all
 
 | Command | Description |
 |---|---|
-| `tokenix` (no args) | Open the interactive TUI dashboard in a terminal: tabs for Stats (wordmark, version, hook status, index summary + Index/Install actions), Filters (with per-filter `X → Y tokens` compression preview), Gain, Doctor, Tokenmap, and Secrets (`v` reveal, `c` copy to clipboard, `x` redact). `←`/`→` switch tabs; piped/non-TTY falls back to help |
+| `tokenix` (no args) | Open the interactive TUI dashboard in a terminal: tabs for Stats (wordmark, version, hook status, index summary + Index / Install hooks / Install binary on PATH actions), Filters (with per-filter `X → Y tokens` compression preview), Gain (tokens-saved headline with ≈USD estimate, savings by source — semantic index vs command filters — and by command / by project tables), Doctor, Tokenmap, and Secrets (`v` reveal, `c` copy to clipboard, `x` redact). `←`/`→` switch tabs; piped/non-TTY falls back to help |
 | `tokenix filter` (no args) | Open the TUI on the Filters tab (groups · filters · live input→output preview with a token counter showing `X → Y tokens · % saved` per filter); piped falls back to `filter list` |
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
+| `tokenix install-binary` | Copy the running executable to a per-user global bin dir (`%LOCALAPPDATA%\tokenix\bin` on Windows, `~/.local/bin` on Linux/macOS) and ensure it is on PATH (Windows: user PATH updated automatically; Linux/macOS: prints the shell-profile line) |
 | `tokenix doctor` | Diagnose embedding backend, GPU availability, model cache, daemon, bundled filter inventory (filter + golden-case counts), active recording session, and user/local filter config (unknown `semantic_filter.model`, bad threshold) |
 | `tokenix serve` | Start the background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
 | `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |
-| `tokenix gain` | Token savings analytics (`--cost-estimate` adds a per-model cost table) |
+| `tokenix gain` | Token savings analytics with a by-source split — semantic index vs command filters (`--cost-estimate` adds a per-model cost table) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix tokenmap` | Directory tree map with token counts, heaviest paths first, plus a top-10 files summary (`--format html` supported) |
 | `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark — vanilla vs tokenix (`--json`) |

@@ -205,6 +205,30 @@ fn plan_files(
     }
 }
 
+/// Decode file bytes for chunking. Handles UTF-16 BOMs (SSMS and other Windows
+/// tools save `.sql` as UTF-16 LE), falls back to lossy UTF-8, and returns
+/// `None` for binary content (a NUL byte in the first 8 KiB, like git's check).
+fn decode_text(raw: &[u8]) -> Option<String> {
+    if raw.starts_with(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = raw[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        return Some(String::from_utf16_lossy(&units));
+    }
+    if raw.starts_with(&[0xFE, 0xFF]) {
+        let units: Vec<u16> = raw[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        return Some(String::from_utf16_lossy(&units));
+    }
+    if raw.iter().take(8192).any(|&b| b == 0) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(raw).into_owned())
+}
+
 fn chunk_only(
     abs_path: &Path,
     rel: &str,
@@ -244,7 +268,19 @@ fn chunk_only(
         }
     }
 
-    let content = String::from_utf8_lossy(&raw).into_owned();
+    let Some(content) = decode_text(&raw) else {
+        // Binary file (e.g. an extension added via `[index] extensions` that
+        // turns out not to be text): chunking the lossy-decoded bytes would
+        // only pollute the index, so yield nothing.
+        return ChunkedFile {
+            rel: rel.to_string(),
+            mtime,
+            hash: chash,
+            chunks: vec![],
+            skipped: false,
+            error: None,
+        };
+    };
     let mut chunks = chunk_file(rel, &content);
     if redact {
         for c in &mut chunks {
@@ -641,6 +677,29 @@ fn read_checkpoint(conn: &rusqlite::Connection) -> Option<(String, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_text_handles_utf8_utf16_and_binary() {
+        // Plain UTF-8 passes through.
+        assert_eq!(decode_text(b"SELECT 1;").as_deref(), Some("SELECT 1;"));
+
+        // UTF-16 LE with BOM (SSMS-style .sql) decodes to the same text.
+        let mut utf16le = vec![0xFF, 0xFE];
+        for u in "CREATE VIEW saldo".encode_utf16() {
+            utf16le.extend_from_slice(&u.to_le_bytes());
+        }
+        assert_eq!(decode_text(&utf16le).as_deref(), Some("CREATE VIEW saldo"));
+
+        // UTF-16 BE with BOM.
+        let mut utf16be = vec![0xFE, 0xFF];
+        for u in "Sub Main()".encode_utf16() {
+            utf16be.extend_from_slice(&u.to_be_bytes());
+        }
+        assert_eq!(decode_text(&utf16be).as_deref(), Some("Sub Main()"));
+
+        // Binary content (VB6 .frx-style, NUL bytes without a BOM) is skipped.
+        assert_eq!(decode_text(&[0x01, 0x00, 0x42, 0x00, 0x00, 0x10]), None);
+    }
 
     #[test]
     fn test_rel_path() {

@@ -427,6 +427,8 @@ enum Commands {
         #[arg(long = "local")]
         local: bool,
     },
+    /// Copy this executable to a per-user bin directory on PATH (global install)
+    InstallBinary,
     /// Show index statistics
     Stats {
         #[arg(short, long, default_value = ".")]
@@ -835,6 +837,7 @@ fn main() -> Result<()> {
             benchmark::run_benchmark(&repo_root, refresh_index, budget, cases.as_deref(), json)
         }
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
+        Commands::InstallBinary => cmd_install_binary(),
         Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),
         Commands::Stats { path } => cmd_stats(&path),
         Commands::Tokenmap {
@@ -1814,6 +1817,40 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
         format!("{:.1}%  {}", stats.pct_saved, bar).green().bold()
     );
 
+    // ── savings by source ─────────────────────────────────────────────────────
+    println!();
+    println!("  {}", "BY SOURCE".bold().underline());
+    for (label, desc, saved, calls) in [
+        (
+            "Semantic index",
+            "Read/Grep → outlines & index queries",
+            stats.index_saved,
+            stats.index_calls,
+        ),
+        (
+            "Command filters",
+            "Bash output compressed by filters",
+            stats.filter_saved,
+            stats.filter_calls,
+        ),
+    ] {
+        let pct = if stats.tokens_saved > 0 {
+            saved as f64 / stats.tokens_saved as f64 * 100.0
+        } else {
+            0.0
+        };
+        let bar = ui::bar(saved as f64 / stats.tokens_saved.max(1) as f64, 20);
+        println!(
+            "  {:<16} {:>5} calls   {} {}  {}  {}",
+            label.bold(),
+            calls,
+            format_num(saved).green(),
+            format!("({:.0}%)", pct).dimmed(),
+            bar.bright_black(),
+            desc.dimmed()
+        );
+    }
+
     // ── cost table ────────────────────────────────────────────────────────────
     if cost_estimate {
         println!();
@@ -2266,6 +2303,105 @@ fn cmd_gain_global(history: bool, cost_estimate: bool) -> Result<()> {
     }
 
     println!();
+    Ok(())
+}
+
+// install-binary
+
+/// Per-user global bin directory where `install-binary` places the executable:
+/// `%LOCALAPPDATA%\tokenix\bin` on Windows, `~/.local/bin` on Linux/macOS.
+pub fn global_bin_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .or_else(|| dirs::home_dir().map(|h| h.join("AppData").join("Local")))
+            .map(|p| p.join("tokenix").join("bin"))
+    } else {
+        dirs::home_dir().map(|h| h.join(".local").join("bin"))
+    }
+}
+
+/// Whether `dir` is already one of the entries on the current PATH.
+pub fn dir_on_path(dir: &Path) -> bool {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d == dir))
+        .unwrap_or(false)
+}
+
+/// Copy the running executable into the per-user bin directory and make sure
+/// that directory is reachable from PATH, so `tokenix` works from any
+/// directory and any agent without a project-relative path.
+fn cmd_install_binary() -> Result<()> {
+    let exe = std::env::current_exe()?;
+    let Some(bin_dir) = global_bin_dir() else {
+        anyhow::bail!("cannot resolve the per-user bin directory (no home dir)");
+    };
+    let target = bin_dir.join(if cfg!(windows) {
+        "tokenix.exe"
+    } else {
+        "tokenix"
+    });
+
+    // Copying the file onto itself fails on Windows (file in use) and is a
+    // no-op anyway, so detect "already running from the install location".
+    let already_there = matches!(
+        (exe.canonicalize(), target.canonicalize()),
+        (Ok(a), Ok(b)) if a == b
+    );
+    if already_there {
+        println!("{} Already installed at {}", "ok".green(), target.display());
+    } else {
+        std::fs::create_dir_all(&bin_dir)?;
+        std::fs::copy(&exe, &target).map_err(|e| {
+            anyhow::anyhow!(
+                "cannot copy to {} ({e}) — close any running tokenix from that location and retry",
+                target.display()
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&target)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&target, perms)?;
+        }
+        println!("{} Installed to {}", "ok".green(), target.display());
+    }
+
+    if dir_on_path(&bin_dir) {
+        println!("  PATH: already configured — run `tokenix` from anywhere.");
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        add_to_windows_user_path(&bin_dir)?;
+        println!("  PATH: added for your user — restart terminals to pick it up.");
+    }
+    #[cfg(not(windows))]
+    {
+        println!("  PATH: add this line to your shell profile (~/.bashrc or ~/.zshrc):");
+        println!("    export PATH=\"$HOME/.local/bin:$PATH\"");
+    }
+    Ok(())
+}
+
+/// Append `dir` to the user-scoped PATH via PowerShell. `setx` truncates PATH
+/// at 1024 chars and downgrades REG_EXPAND_SZ; the .NET Environment API does
+/// neither, so it is the safe way to persist the change.
+#[cfg(windows)]
+fn add_to_windows_user_path(dir: &Path) -> Result<()> {
+    let dir_s = dir.display().to_string().replace('\'', "''");
+    let script = format!(
+        "$p = [Environment]::GetEnvironmentVariable('Path', 'User'); \
+         if ($null -eq $p) {{ $p = '' }}; \
+         if (($p -split ';') -notcontains '{dir_s}') {{ \
+           [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';{dir_s}').TrimStart(';'), 'User') }}"
+    );
+    let status = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .status()?;
+    anyhow::ensure!(status.success(), "PowerShell exited with {status}");
     Ok(())
 }
 

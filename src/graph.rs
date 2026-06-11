@@ -631,7 +631,10 @@ fn extract_references_tree_sitter(content: &str, path: &str) -> Option<Vec<Strin
         }
         crate::chunker::Lang::Go => Some(tree_sitter_go::LANGUAGE.into()),
         crate::chunker::Lang::Cpp => Some(tree_sitter_cpp::LANGUAGE.into()),
-        crate::chunker::Lang::Generic => None,
+        // No tree-sitter grammar bundled for VB6/SQL — heuristic chunking only.
+        crate::chunker::Lang::Vb | crate::chunker::Lang::Sql | crate::chunker::Lang::Generic => {
+            None
+        }
     }?;
 
     let mut parser = tree_sitter::Parser::new();
@@ -982,6 +985,8 @@ fn extract_file_imports(path: &str, content: &str) -> Vec<(String, String, usize
             (r#"^\s*#\s*include\s+"([^"]+)""#, "include"),
             (r"^\s*#\s*include\s+<([^>]+)>", "include"),
         ],
+        // VB6/SQL have no file-level import statements worth graphing.
+        Lang::Vb | Lang::Sql => return Vec::new(),
         Lang::Generic => {
             if path.ends_with(".sh") || path.ends_with(".bash") {
                 &[(r"^\s*(?:source|\.)\s+(\S+)", "source")]

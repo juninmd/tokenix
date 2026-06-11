@@ -122,7 +122,8 @@ struct Shell {
     // Dashboard ------------------------------------------------------------
     agents: Vec<AgentStatus>,
     index_stats: Option<(i64, i64, i64)>,
-    /// Selected action on the Stats dashboard (0 = index, 1 = install hooks).
+    /// Selected action on the Stats dashboard (0 = index, 1 = install hooks,
+    /// 2 = install binary on PATH).
     stats_sel: usize,
     /// Install is armed and awaiting an Enter confirm.
     stats_confirm: bool,
@@ -690,8 +691,9 @@ impl Shell {
 
     // ── Stats dashboard (index + install actions) ────────────────────────
 
-    /// The two dashboard actions: 0 = index this repo, 1 = install hooks.
-    const STATS_ACTIONS: usize = 2;
+    /// The dashboard actions: 0 = index this repo, 1 = install hooks,
+    /// 2 = install the binary on PATH.
+    const STATS_ACTIONS: usize = 3;
 
     fn key_stats(&mut self, code: KeyCode) {
         match code {
@@ -708,10 +710,14 @@ impl Shell {
             KeyCode::Enter => match self.stats_sel {
                 // Index: non-destructive, runs in the foreground (see event_loop).
                 0 => self.request_index = true,
-                // Install: writes config files, so a second Enter confirms.
-                _ => {
+                // Install actions write files, so a second Enter confirms.
+                sel => {
                     if self.stats_confirm {
-                        self.run_install();
+                        if sel == 1 {
+                            self.run_install();
+                        } else {
+                            self.run_install_binary();
+                        }
                         self.stats_confirm = false;
                     } else {
                         self.stats_confirm = true;
@@ -727,6 +733,22 @@ impl Shell {
         self.agents = detect_agents();
         let installed = self.agents.iter().filter(|a| a.installed).count();
         self.stats_msg = Some(format!("Hooks installed · {installed}/4 agents wired."));
+    }
+
+    /// Self-execute `tokenix install-binary` and surface its (short) report.
+    fn run_install_binary(&mut self) {
+        let out = capture(&["install-binary"]);
+        let msg = out
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        self.stats_msg = Some(if msg.is_empty() {
+            "install-binary finished".to_string()
+        } else {
+            msg
+        });
     }
 
     // ── rendering ─────────────────────────────────────────────────────────
@@ -824,6 +846,13 @@ impl Shell {
         } else {
             format!("wire {missing} missing agent(s) · writes config files")
         };
+        let binary_note = match crate::global_bin_dir() {
+            Some(dir) if crate::dir_on_path(&dir) => {
+                format!("already global · {}", dir.display())
+            }
+            Some(dir) => format!("make `tokenix` runnable anywhere · {}", dir.display()),
+            None => "cannot resolve the per-user bin directory".to_string(),
+        };
         lines.push(action_line(
             self.stats_sel == 0,
             "Index repository",
@@ -834,11 +863,21 @@ impl Shell {
             "Install hooks (all)",
             &install_note,
         ));
+        lines.push(action_line(
+            self.stats_sel == 2,
+            "Install binary (PATH)",
+            &binary_note,
+        ));
 
         if self.stats_confirm {
+            let warn = if self.stats_sel == 2 {
+                "⚠ copies the executable and updates your user PATH — press Enter to confirm"
+            } else {
+                "⚠ writes config files — press Enter to confirm"
+            };
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "⚠ writes config files — press Enter to confirm",
+                warn,
                 Style::default().yellow().add_modifier(Modifier::BOLD),
             )));
         } else if let Some(msg) = &self.stats_msg {
@@ -1024,7 +1063,7 @@ impl Shell {
 
         if s.total_calls == 0 {
             lines.push(Line::from(
-                "No hook events yet. Install hooks (Install tab) and use your AI tool."
+                "No hook events yet. Install hooks (Stats tab) and use your AI tool."
                     .to_string()
                     .yellow(),
             ));
@@ -1036,6 +1075,32 @@ impl Shell {
             );
             return;
         }
+
+        // Headline: the one number this tab exists for.
+        lines.push(Line::from(vec![
+            Span::styled(" ✦ TOKENS SAVED  ", green.add_modifier(bold)),
+            Span::styled(
+                crate::ui::format_num(s.tokens_saved),
+                green.add_modifier(bold),
+            ),
+            Span::styled(
+                format!("  ·  {:.1}% less than without tokenix", s.pct_saved),
+                Style::default().dim(),
+            ),
+        ]));
+        let ref_model = crate::gain::MODELS.iter().find(|m| m.reference);
+        if let Some(m) = ref_model {
+            let usd = s.tokens_saved as f64 * m.input_per_1m / 1_000_000.0;
+            lines.push(Line::from(vec![
+                Span::raw("   "),
+                Span::styled(crate::ui::bar(s.pct_saved / 100.0, 28), green),
+                Span::styled(
+                    format!("  ≈ ${usd:.2} saved at {} input rates", m.name),
+                    Style::default().dim(),
+                ),
+            ]));
+        }
+        lines.push(Line::from(""));
 
         lines.push(Line::from("token summary".bold()));
         lines.push(metric(
@@ -1053,11 +1118,6 @@ impl Shell {
             &crate::ui::format_num(s.tokens_saved),
             green.add_modifier(bold),
         ));
-        lines.push(Line::from(vec![
-            Span::raw(format!("  {:<11}", "reduction")),
-            Span::styled(format!("{:>5.1}%  ", s.pct_saved), green.add_modifier(bold)),
-            Span::styled(crate::ui::bar(s.pct_saved / 100.0, 28), green),
-        ]));
         let ipct = s.intercepted as f64 / s.total_calls as f64 * 100.0;
         lines.push(Line::from(
             format!(
@@ -1066,6 +1126,37 @@ impl Shell {
             )
             .dim(),
         ));
+        lines.push(Line::from(""));
+
+        // Where the savings came from: semantic index vs command filters.
+        lines.push(Line::from("savings by source".bold()));
+        let total_saved = s.tokens_saved.max(1);
+        for (label, desc, saved, calls) in [
+            (
+                "semantic index",
+                "Read/Grep → outlines & index queries",
+                s.index_saved,
+                s.index_calls,
+            ),
+            (
+                "command filters",
+                "Bash output compressed by filters",
+                s.filter_saved,
+                s.filter_calls,
+            ),
+        ] {
+            let share = saved as f64 / total_saved as f64;
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {label:<17}")),
+                Span::styled(
+                    format!("{:>9}", crate::ui::format_num(saved)),
+                    green.add_modifier(bold),
+                ),
+                Span::styled(format!("  {:>5.1}%  ", share * 100.0), green),
+                Span::styled(crate::ui::bar(share, 14), Style::default().dim()),
+                Span::styled(format!("  {calls} calls · {desc}"), Style::default().dim()),
+            ]));
+        }
         lines.push(Line::from(""));
 
         if !s.by_tool.is_empty() {
@@ -1084,7 +1175,17 @@ impl Shell {
         }
 
         if !s.by_command.is_empty() {
-            lines.push(Line::from("by command".bold()));
+            lines.push(Line::from(vec![
+                Span::styled("by command", Style::default().add_modifier(bold)),
+                Span::styled("  · filter savings", Style::default().dim()),
+            ]));
+            lines.push(Line::from(
+                format!(
+                    "  {:>2}  {:<18} {:>5} {:>10}  {:>6}",
+                    "#", "command", "calls", "saved", "share"
+                )
+                .dim(),
+            ));
             let max = s
                 .by_command
                 .iter()
@@ -1092,19 +1193,46 @@ impl Shell {
                 .max()
                 .unwrap_or(1)
                 .max(1);
-            for (cmd, count, saved) in s.by_command.iter().take(12) {
-                lines.push(bar_row(cmd, *count, *saved, max));
+            for (i, (cmd, count, saved)) in s.by_command.iter().take(12).enumerate() {
+                let share = *saved as f64 / total_saved as f64;
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {:>2}  ", i + 1), Style::default().dim()),
+                    Span::raw(format!("{:<18} ", trunc(cmd, 18))),
+                    Span::styled(format!("{count:>5} "), Style::default().dim()),
+                    Span::styled(format!("{:>10}  ", crate::ui::format_num(*saved)), green),
+                    Span::styled(format!("{:>5.1}%  ", share * 100.0), Style::default().dim()),
+                    Span::styled(
+                        crate::ui::bar(*saved as f64 / max as f64, 12),
+                        Style::default().dim(),
+                    ),
+                ]));
             }
             if s.by_command.len() > 12 {
                 lines.push(Line::from(
-                    format!("  … +{} more", s.by_command.len() - 12).dim(),
+                    format!("      … +{} more commands", s.by_command.len() - 12).dim(),
                 ));
             }
             lines.push(Line::from(""));
         }
 
         if self.gain_global && !view.projects.is_empty() {
-            lines.push(Line::from("by project".bold()));
+            lines.push(Line::from(vec![
+                Span::styled("by project", Style::default().add_modifier(bold)),
+                Span::styled("  · tokens saved per repo", Style::default().dim()),
+            ]));
+            lines.push(Line::from(
+                format!(
+                    "  {:>2}  {:<22} {:>10}  {:>6}  {:<14} {}",
+                    "#", "project", "saved", "share", "", "intercepted"
+                )
+                .dim(),
+            ));
+            let global_saved: i64 = view
+                .projects
+                .iter()
+                .map(|(_, v, _, _)| *v)
+                .sum::<i64>()
+                .max(1);
             let max = view
                 .projects
                 .iter()
@@ -1112,10 +1240,13 @@ impl Shell {
                 .max()
                 .unwrap_or(1)
                 .max(1);
-            for (label, saved, total, inter) in view.projects.iter().take(15) {
+            for (i, (label, saved, total, inter)) in view.projects.iter().take(15).enumerate() {
+                let share = *saved as f64 / global_saved as f64;
                 lines.push(Line::from(vec![
-                    Span::raw(format!("  {:<22}", trunc(&short_path(label), 22))),
-                    Span::styled(format!("{:>9}  ", crate::ui::format_num(*saved)), green),
+                    Span::styled(format!("  {:>2}  ", i + 1), Style::default().dim()),
+                    Span::raw(format!("{:<22} ", trunc(&short_path(label), 22))),
+                    Span::styled(format!("{:>10}  ", crate::ui::format_num(*saved)), green),
+                    Span::styled(format!("{:>5.1}%  ", share * 100.0), Style::default().dim()),
                     Span::styled(
                         crate::ui::bar(*saved as f64 / max as f64, 12),
                         Style::default().dim(),
@@ -1123,15 +1254,23 @@ impl Shell {
                     Span::styled(format!("  {inter}/{total}"), Style::default().dim()),
                 ]));
             }
+            if view.projects.len() > 15 {
+                lines.push(Line::from(
+                    format!("      … +{} more projects", view.projects.len() - 15).dim(),
+                ));
+            }
             lines.push(Line::from(""));
         }
 
         if self.gain_cost {
-            lines.push(Line::from("cost estimate · USD".bold()));
+            lines.push(Line::from(vec![
+                Span::styled("cost estimate", Style::default().add_modifier(bold)),
+                Span::styled("  · USD per 1M input tokens", Style::default().dim()),
+            ]));
             lines.push(Line::from(
                 format!(
                     "  {:<24}{:>8}{:>11}{:>11}{:>11}",
-                    "model", "$/1M", "without", "with", "saved"
+                    "model", "$/1M in", "without", "with", "saved"
                 )
                 .dim(),
             ));
@@ -1142,17 +1281,39 @@ impl Shell {
                     .map(|m| m.input_per_1m)
                     .unwrap_or(0.0);
                 let marker = if row.reference { " ★" } else { "" };
+                let name_style = if row.reference {
+                    Style::default().cyan().add_modifier(bold)
+                } else {
+                    Style::default()
+                };
+                let saved_style = if row.reference {
+                    green.add_modifier(bold)
+                } else {
+                    green
+                };
                 lines.push(Line::from(vec![
-                    Span::raw(format!("  {:<24}", format!("{}{}", row.model, marker))),
-                    Span::raw(format!("{:>8}", format!("${:.2}", price))),
-                    Span::raw(format!("{:>11}", format!("${:.4}", row.without_usd))),
-                    Span::raw(format!("{:>11}", format!("${:.4}", row.with_usd))),
-                    Span::styled(format!("{:>11}", format!("${:.4}", row.saved_usd)), green),
+                    Span::styled(
+                        format!("  {:<24}", format!("{}{}", row.model, marker)),
+                        name_style,
+                    ),
+                    Span::raw(format!("{:>8}", format!("${price:.2}"))),
+                    Span::styled(
+                        format!("{:>11}", format!("${:.4}", row.without_usd)),
+                        Style::default().yellow(),
+                    ),
+                    Span::styled(
+                        format!("{:>11}", format!("${:.4}", row.with_usd)),
+                        Style::default().cyan(),
+                    ),
+                    Span::styled(
+                        format!("{:>11}", format!("${:.4}", row.saved_usd)),
+                        saved_style,
+                    ),
                 ]));
             }
             lines.push(Line::from(
                 format!(
-                    "  ★ reference · prices {}",
+                    "  ★ reference model · public provider prices collected {}",
                     crate::gain::PRICING_COLLECTED_AT
                 )
                 .dim(),
