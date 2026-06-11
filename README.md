@@ -1,7 +1,5 @@
 <div align="center">
-  <img src="tokenix-logo.png" alt="tokenix logo" width="450" />
-
-  <h1>tokenix</h1>
+  <img src=".github/prints/logo.jpg" alt="tokenix logo" style="max-height: 450px;" />
 
   <p><strong>Local semantic search, symbol graphs, secrets scanning, output filters, and CLI hooks that save 60-90% LLM tokens.</strong></p>
 
@@ -20,6 +18,7 @@
 
   <p>
     <a href="#-quick-install">Install</a> ·
+    <a href="#-interactive-dashboard">Dashboard</a> ·
     <a href="#-how-it-works">How it Works</a> ·
     <a href="#-usage">Usage</a> ·
     <a href="#-setup-by-tool">Setup</a> ·
@@ -38,6 +37,27 @@ With tokenix:     tokenix read src/auth/middleware.rs → symbol outline → ~18
 ```
 
 Savings depend on codebase size, AI behavior, and file sizes. Run `tokenix gain` to see your real numbers.
+
+---
+
+## 🖥 Interactive Dashboard
+
+Run bare `tokenix` to open a terminal dashboard — six tabs, zero flags. `←`/`→` switch tabs, `↑`/`↓` move, `q` quits. Piped or non-TTY falls back to `--help`.
+
+<table>
+<tr>
+<td width="50%"><img src=".github/prints/stats.png" alt="Stats tab" /><br /><sub><b>Stats</b> — wordmark, version, per-agent hook status, index summary, and one-key actions: <i>index repo</i> · <i>install hooks</i> · <i>install binary on PATH</i>.</sub></td>
+<td width="50%"><img src=".github/prints/gain.png" alt="Gain tab" /><br /><sub><b>Gain</b> — tokens saved with a reduction bar, split by source and by command/tool. <code>c</code> adds the ≈USD cost table · <code>a</code> all-projects · <code>r</code> refresh.</sub></td>
+</tr>
+<tr>
+<td><img src=".github/prints/filters.png" alt="Filters tab" /><br /><sub><b>Filters</b> — browse all 231 bundled filters by tool with a live <i>input → output</i> preview and a per-filter <code>X → Y tokens · % saved</code> gauge.</sub></td>
+<td><img src=".github/prints/secrets.png" alt="Secrets tab" /><br /><sub><b>Secrets</b> — credentials leaked across agent transcripts, grouped by rule and attributed to repo + branch. <code>v</code> reveal · <code>c</code> copy · <code>x</code> redact.</sub></td>
+</tr>
+<tr>
+<td><img src=".github/prints/tokenmap.png" alt="Tokenmap tab" /><br /><sub><b>Tokenmap</b> — the repository as a tree weighted by token count, heaviest paths first.</sub></td>
+<td><img src=".github/prints/doctor.png" alt="Doctor tab" /><br /><sub><b>Doctor</b> — build/GPU support, detected GPU + CUDA/cuDNN status, active embedding model & cache, and bundled-filter inventory, all on one screen.</sub></td>
+</tr>
+</table>
 
 ---
 
@@ -149,7 +169,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash commands before execution; thresholds tunable via `[hook]` in `.tokenix.toml` |
 | **Structural output compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, and ANSI/Emoji stripping |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
-| **Output filters** | 230+ TOML output filters embedded in the binary — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
+| **Output filters** | 231 TOML output filters embedded in the binary (each homologated against 500 golden cases) — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
 | **Filter generation** | `tokenix filter generate` writes a TOML filter for a command; `tokenix filter record` captures real output for richer generation |
 | **GPU acceleration (opt-in)** | Build with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU; GPU is used by default at runtime with automatic CPU fallback, or force CPU with `--only-cpu` |
 | **Environment diagnostics** | `tokenix doctor` reports the compiled backend, detected GPU, CUDA/cuDNN status, model cache, and daemon |
@@ -418,8 +438,8 @@ tokenix install-hook --tool all
 
 | Command | Description |
 |---|---|
-| `tokenix` (no args) | Open the interactive TUI dashboard in a terminal: tabs for Stats (wordmark, version, hook status, index summary + Index / Install hooks / Install binary on PATH actions), Filters (with per-filter `X → Y tokens` compression preview), Gain (tokens-saved headline with ≈USD estimate, savings by source — semantic index vs command filters — and by command / by project tables), Doctor, Tokenmap, and Secrets (`v` reveal, `c` copy to clipboard, `x` redact). `←`/`→` switch tabs; piped/non-TTY falls back to help |
-| `tokenix filter` (no args) | Open the TUI on the Filters tab (groups · filters · live input→output preview with a token counter showing `X → Y tokens · % saved` per filter); piped falls back to `filter list` |
+| `tokenix` (no args) | Open the [interactive dashboard](#-interactive-dashboard) — Stats · Filters · Gain · Doctor · Tokenmap · Secrets tabs; piped/non-TTY falls back to help |
+| `tokenix filter` (no args) | Open the dashboard on the Filters tab; piped falls back to `filter list` |
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
@@ -551,7 +571,7 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
-3. **Bundled filters** — 230+ TOML output filters shipped inside the binary, covering `uv`, `cargo build`/`cargo run`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 231 TOML output filters shipped inside the binary (each homologated against 500 embedded golden cases), covering `uv`, `cargo build`/`cargo run`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -618,7 +638,7 @@ src/
 └── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
 assets/
-└── filters/       230+ TOML output filters, embedded in the binary via rust-embed
+└── filters/       231 TOML output filters (+500 golden cases), embedded in the binary via rust-embed
 ```
 
 ### GPU acceleration (opt-in)
