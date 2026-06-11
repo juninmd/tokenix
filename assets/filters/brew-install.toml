@@ -11,7 +11,7 @@ strip_lines_matching = [
   "^==> Fetching",
 ]
 match_output = [
-  { pattern = "already installed", message = "ok (already installed)" },
+  { pattern = "already installed", message = "ok (already installed)", unless = "Error|error:" },
 ]
 max_lines = 20
 
@@ -35,3 +35,13 @@ input = """
 /opt/homebrew/Cellar/jq/1.7.1: 18 files, 1.2MB
 """
 expected = "==> Summary\n/opt/homebrew/Cellar/jq/1.7.1: 18 files, 1.2MB"
+
+[[tests.brew-install]]
+name = "already installed never masks an error"
+input = """
+Warning: wget 1.21.4 is already installed and up-to-date.
+Error: No available formula with the name "nonexistent-pkg".
+"""
+expected = """
+Warning: wget 1.21.4 is already installed and up-to-date.
+Error: No available formula with the name "nonexistent-pkg"."""

@@ -23,3 +23,10 @@ input = """
 expected = """
 /path/to/repo          abc1234 [main]
 /path/to/repo-feature  def5678 [feature/new-ui]"""
+
+[[tests.git-worktree]]
+name = "already checked out error preserved"
+input = """
+fatal: 'feature/new-ui' is already checked out at '/path/to/repo-feature'
+"""
+expected = "fatal: 'feature/new-ui' is already checked out at '/path/to/repo-feature'"

@@ -11,7 +11,8 @@ keep_lines_matching = [
   "deployed",
   "failed",
   "superseded",
-  "uninstalled"
+  "uninstalled",
+  "Error"
 ]
 max_lines = 30
 on_empty = "helm history: none"
@@ -26,3 +27,10 @@ REVISION  UPDATED                         STATUS      CHART           APP VERSIO
 expected = """
 1         Mon Jan 15 10:30:00 2024        superseded  myapp-1.0.0     1.0.0         Install complete
 2         Mon Jan 15 11:00:00 2024        deployed    myapp-1.0.1     1.0.1         Upgrade complete"""
+
+[[tests.helm-history]]
+name = "release not found error preserved"
+input = """
+Error: release: not found
+"""
+expected = "Error: release: not found"

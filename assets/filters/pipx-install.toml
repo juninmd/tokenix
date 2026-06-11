@@ -13,6 +13,9 @@ strip_lines_matching = [
 keep_lines_matching = [
   "Error:",
   "error:",
+  "ERROR",
+  "Fatal error",
+  "Error installing",
   "failed",
   "FAILED",
   "not found"
@@ -29,3 +32,21 @@ input = """
 done! ✨
 """
 expected = "pipx install: ok"
+
+[[tests.pipx-install]]
+name = "pip resolution failure preserved"
+input = """
+Fatal error from pip prevented installation. Full pip output in file:
+    /home/user/.local/state/pipx/log/cmd_2024-01-15_pip_errors.log
+
+Some possibly relevant errors from pip install:
+    ERROR: Could not find a version that satisfies the requirement nonexistent-package-xyz (from versions: none)
+    ERROR: No matching distribution found for nonexistent-package-xyz
+
+Error installing nonexistent-package-xyz.
+"""
+expected = """
+Fatal error from pip prevented installation. Full pip output in file:
+    ERROR: Could not find a version that satisfies the requirement nonexistent-package-xyz (from versions: none)
+    ERROR: No matching distribution found for nonexistent-package-xyz
+Error installing nonexistent-package-xyz."""

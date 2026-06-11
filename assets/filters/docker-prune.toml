@@ -30,3 +30,10 @@ Total reclaimed space: 1.8GB
 expected = """
 Deleted Images:
 Total reclaimed space: 1.8GB"""
+
+[[tests.docker-prune]]
+name = "nothing to prune"
+input = """
+Total reclaimed space: 0B
+"""
+expected = "Total reclaimed space: 0B"

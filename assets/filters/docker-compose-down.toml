@@ -11,6 +11,7 @@ strip_lines_matching = [
 keep_lines_matching = [
   "error:",
   "Error:",
+  "Error response",
   "Failed",
   "not found"
 ]
@@ -26,3 +27,12 @@ input = """
  ✔ Network myapp_default    Removed
 """
 expected = "docker compose down: done"
+
+[[tests.docker-compose-down]]
+name = "network removal failure preserved"
+input = """
+[+] Running 1/2
+ ✔ Container myapp-web-1  Removed
+Error response from daemon: cannot remove network myapp_default: network has active endpoints
+"""
+expected = "Error response from daemon: cannot remove network myapp_default: network has active endpoints"

@@ -286,6 +286,29 @@ pub fn sample_inputs() -> HashMap<String, String> {
     map
 }
 
+/// Bundled-filter inventory for `tokenix doctor`: total embedded golden test
+/// cases across every bundled filter file.
+pub fn bundled_test_case_count() -> usize {
+    #[derive(Deserialize)]
+    struct TestsOnly {
+        #[serde(default)]
+        tests: HashMap<String, Vec<toml::Value>>,
+    }
+    let mut count = 0;
+    for name in BundledFilters::iter() {
+        let Some(file) = BundledFilters::get(&name) else {
+            continue;
+        };
+        let Ok(content) = std::str::from_utf8(file.data.as_ref()) else {
+            continue;
+        };
+        if let Ok(parsed) = toml::from_str::<TestsOnly>(content) {
+            count += parsed.tests.values().map(|v| v.len()).sum::<usize>();
+        }
+    }
+    count
+}
+
 pub fn load_active_filters() -> Vec<ActiveFilter> {
     let mut result: Vec<ActiveFilter> = load_local_filters_named()
         .into_iter()

@@ -27,3 +27,10 @@ expected = """
 abc1234 HEAD@{0}: commit: Add new feature
 def5678 HEAD@{1}: commit: Fix bug
 ghi9012 HEAD@{2}: checkout: moving from main to feature"""
+
+[[tests.git-reflog]]
+name = "no commits error preserved"
+input = """
+fatal: your current branch 'main' does not have any commits yet
+"""
+expected = "fatal: your current branch 'main' does not have any commits yet"

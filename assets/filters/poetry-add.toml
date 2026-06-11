@@ -17,7 +17,8 @@ keep_lines_matching = [
   "error:",
   "Failed",
   "Could not find",
-  "SolverProblemError"
+  "SolverProblemError",
+  "version solving failed"
 ]
 max_lines = 40
 on_empty = "poetry add: ok"
@@ -38,3 +39,13 @@ Package operations: 3 installs, 0 updates, 0 removals
 Generating lock file
 """
 expected = "poetry add: ok"
+[[tests.poetry-add]]
+name = "version solving failure preserved"
+input = """
+Using version ^99.0 for requests
+
+Resolving dependencies... (0.5s)
+
+Because my-project depends on requests (^99.0) which doesn't match any versions, version solving failed.
+"""
+expected = "Because my-project depends on requests (^99.0) which doesn't match any versions, version solving failed."

@@ -1,25 +1,40 @@
 [filters.terraform-console]
-description = "Compact terraform console output"
+description = "Compact terraform console output — drop echoed prompts, keep evaluated values"
 match_command = "^terraform\\s+console\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*>"
 ]
-keep_lines_matching = [
-  "^\\w+",
-  "Error:",
-  "Error:"
-]
 max_lines = 30
 on_empty = "terraform console: ready"
 
 [[tests.terraform-console]]
-name = "console session"
+name = "evaluated values preserved (including quoted strings)"
 input = """
 > var.instance_type
 "t3.micro"
 > length(var.subnet_ids)
 2
 """
-expected = "2"
+expected = """
+"t3.micro"
+2"""
+
+[[tests.terraform-console]]
+name = "undeclared variable error preserved"
+input = """
+╷
+│ Error: Reference to undeclared input variable
+│
+│   on <console-input> line 1:
+│    1: var.missing
+╵
+"""
+expected = """
+╷
+│ Error: Reference to undeclared input variable
+│
+│   on <console-input> line 1:
+│    1: var.missing
+╵"""

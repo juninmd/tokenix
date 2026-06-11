@@ -15,7 +15,10 @@ keep_lines_matching = [
   "Tests:",
   "Error:",
   "TypeError:",
-  "AssertionError"
+  "AssertionError",
+  "●",
+  "Expected:",
+  "Received:"
 ]
 max_lines = 60
 on_empty = "pnpm test: passed"
@@ -33,3 +36,28 @@ expected = """
  PASS  src/utils.test.ts
 Test Suites: 1 passed, 1 total
 Tests:       10 passed, 10 total"""
+
+[[tests.pnpm-test]]
+name = "failing test details preserved"
+input = """
+> myapp@1.0.0 test
+> jest
+
+ FAIL  src/auth.test.ts
+  ● login › rejects invalid password
+
+    expect(received).toBe(expected)
+
+    Expected: 401
+    Received: 200
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 9 passed, 10 total
+"""
+expected = """
+ FAIL  src/auth.test.ts
+  ● login › rejects invalid password
+    Expected: 401
+    Received: 200
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 9 passed, 10 total"""

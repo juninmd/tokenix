@@ -3057,9 +3057,9 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
     }
 
     let mut root = TreeNode::new(root_name, false);
-    for (file_path, tokens) in file_counts {
+    for (file_path, tokens) in &file_counts {
         let parts: Vec<&str> = file_path.split('/').filter(|s| !s.is_empty()).collect();
-        root.insert(&parts, tokens);
+        root.insert(&parts, *tokens);
     }
 
     if format_opt == "html" {
@@ -3122,6 +3122,14 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
         format!("[{}]", colored_bar)
     }
 
+    /// Children ordered by token weight (heaviest first) so the expensive
+    /// paths surface at the top of every level instead of alphabetically.
+    fn children_by_tokens(node: &TreeNode) -> Vec<&TreeNode> {
+        let mut children: Vec<&TreeNode> = node.children.values().collect();
+        children.sort_by_key(|c| std::cmp::Reverse(c.token_count));
+        children
+    }
+
     fn print_node(node: &TreeNode, prefix: &str, is_last: bool, total_tokens: i64) {
         let name_style = if node.is_file {
             node.name.normal()
@@ -3147,14 +3155,15 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
             percentage
         );
 
-        let count = node.children.len();
+        let children = children_by_tokens(node);
+        let count = children.len();
         let new_prefix = if is_last {
             format!("{}    ", prefix)
         } else {
             format!("{}│   ", prefix)
         };
 
-        for (i, child) in node.children.values().enumerate() {
+        for (i, child) in children.into_iter().enumerate() {
             let is_child_last = i == count - 1;
             print_node(child, &new_prefix, is_child_last, total_tokens);
         }
@@ -3165,10 +3174,33 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
         root.name.bold(),
         format_num(root.token_count)
     );
-    let count = root.children.len();
-    for (i, child) in root.children.values().enumerate() {
+    let children = children_by_tokens(&root);
+    let count = children.len();
+    for (i, child) in children.into_iter().enumerate() {
         let is_child_last = i == count - 1;
         print_node(child, "", is_child_last, root.token_count);
+    }
+
+    // Top files: the quickest answer to "where do my tokens go?" without
+    // scanning the whole tree.
+    let mut top: Vec<&(String, i64)> = file_counts.iter().collect();
+    top.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+    if !top.is_empty() {
+        println!("\n{}", "top files by tokens".bold());
+        for (path, tokens) in top.iter().take(10) {
+            let pct = if root.token_count > 0 {
+                *tokens as f64 / root.token_count as f64 * 100.0
+            } else {
+                0.0
+            };
+            println!(
+                "  {} {:>9}  {:>5.1}%  {}",
+                visual_bar(*tokens, root.token_count, 8),
+                format_num(*tokens),
+                pct,
+                path
+            );
+        }
     }
     println!();
 

@@ -413,18 +413,18 @@ tokenix install-hook --tool all
 
 | Command | Description |
 |---|---|
-| `tokenix` (no args) | Open the interactive TUI dashboard in a terminal: tabs for Stats (wordmark, version, hook status, index summary + Index/Install actions), Filters, Gain, Doctor, Tokenmap, and Secrets. `←`/`→` switch tabs; piped/non-TTY falls back to help |
-| `tokenix filter` (no args) | Open the TUI on the Filters tab (groups · filters · live input→output preview); piped falls back to `filter list` |
+| `tokenix` (no args) | Open the interactive TUI dashboard in a terminal: tabs for Stats (wordmark, version, hook status, index summary + Index/Install actions), Filters (with per-filter `X → Y tokens` compression preview), Gain, Doctor, Tokenmap, and Secrets (`v` reveal, `c` copy to clipboard, `x` redact). `←`/`→` switch tabs; piped/non-TTY falls back to help |
+| `tokenix filter` (no args) | Open the TUI on the Filters tab (groups · filters · live input→output preview with a token counter showing `X → Y tokens · % saved` per filter); piped falls back to `filter list` |
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
-| `tokenix doctor` | Diagnose embedding backend, GPU availability, model cache, daemon, and user/local filter config (unknown `semantic_filter.model`, bad threshold) |
+| `tokenix doctor` | Diagnose embedding backend, GPU availability, model cache, daemon, bundled filter inventory (filter + golden-case counts), active recording session, and user/local filter config (unknown `semantic_filter.model`, bad threshold) |
 | `tokenix serve` | Start the background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
 | `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |
 | `tokenix gain` | Token savings analytics (`--cost-estimate` adds a per-model cost table) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
-| `tokenix tokenmap` | Directory tree map with token counts (`--format html` supported) |
+| `tokenix tokenmap` | Directory tree map with token counts, heaviest paths first, plus a top-10 files summary (`--format html` supported) |
 | `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark — vanilla vs tokenix (`--json`) |
 | `tokenix filter list` | Show top Bash commands by tokens wasted (no filter yet) |
 | `tokenix filter active` | Show active user and bundled output filters |

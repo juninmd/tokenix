@@ -19,3 +19,14 @@ go: downloading github.com/gin-gonic/gin v1.9.1
 go: extracting github.com/gin-gonic/gin v1.9.1
 """
 expected = "go mod tidy: ok"
+
+[[tests.go-mod-tidy]]
+name = "missing module error preserved"
+input = """
+go: finding module for package github.com/acme/internal/util
+go: github.com/acme/app imports
+	github.com/acme/internal/util: cannot find module providing package github.com/acme/internal/util
+"""
+expected = """
+go: github.com/acme/app imports
+	github.com/acme/internal/util: cannot find module providing package github.com/acme/internal/util"""

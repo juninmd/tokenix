@@ -1,5 +1,5 @@
 [filters.rails-routes]
-description = "Summarize Rails routes with count"
+description = "Compact rails routes output, keeping every route line"
 match_command = "^(bundle\\s+exec\\s+)?rails\\s+routes\\b"
 strip_ansi = true
 strip_lines_matching = [
@@ -10,14 +10,15 @@ strip_lines_matching = [
   "^\\s*Controller#Action",
 ]
 keep_lines_matching = [
-  "^\\s*[A-Z]+",
-  "^\\s*GET|POST|PUT|PATCH|DELETE|PATCH",
+  "\\b(GET|POST|PUT|PATCH|DELETE)\\b",
+  "Error",
+  "aborted"
 ]
 max_lines = 20
 on_empty = "rails routes: no routes"
 
 [[tests.rails-routes]]
-name = "routes listed"
+name = "all routes preserved"
 input = """
       Prefix Verb   URI Pattern                    Controller#Action
         root GET    /                              home#index
@@ -26,4 +27,19 @@ input = """
   new_user GET    /users/new(.:format)             users#new
  edit_user GET    /users/:id/edit(.:format)        users#edit
 """
-expected = "           POST   /users(.:format)                 users#create"
+expected = """
+        root GET    /                              home#index
+     users GET    /users(.:format)                 users#index
+           POST   /users(.:format)                 users#create
+  new_user GET    /users/new(.:format)             users#new
+ edit_user GET    /users/:id/edit(.:format)        users#edit"""
+
+[[tests.rails-routes]]
+name = "pending migration abort preserved"
+input = """
+rails aborted!
+ActiveRecord::PendingMigrationError: Migrations are pending. To resolve this issue, run: bin/rails db:migrate
+"""
+expected = """
+rails aborted!
+ActiveRecord::PendingMigrationError: Migrations are pending. To resolve this issue, run: bin/rails db:migrate"""

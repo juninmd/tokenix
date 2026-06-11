@@ -462,6 +462,7 @@ impl Shell {
                 self.rebuild_sec_groups();
             }
             KeyCode::Char('v') => self.sec_reveal = !self.sec_reveal,
+            KeyCode::Char('c') if !self.current_occurrences().is_empty() => self.do_copy(),
             KeyCode::Char('x') if !self.current_occurrences().is_empty() => self.sec_confirm = true,
             KeyCode::Char('r') => {
                 self.secrets = None;
@@ -476,6 +477,28 @@ impl Shell {
             KeyCode::End | KeyCode::Char('G') => self.jump_sec(usize::MAX),
             _ => {}
         }
+    }
+
+    /// Copy the highlighted secret value to the system clipboard so it can be
+    /// pasted into the provider console for rotation/revocation without
+    /// re-typing it from the screen.
+    fn do_copy(&mut self) {
+        let occ = self.current_occurrences();
+        let secret = {
+            let Some(findings) = &self.secrets else {
+                return;
+            };
+            let Some(&rep) = occ.first() else {
+                return;
+            };
+            findings[rep].secret.clone()
+        };
+        self.sec_msg = Some(match copy_to_clipboard(&secret) {
+            Ok(()) => {
+                "Secret copied to clipboard — rotate it, then clear the clipboard".to_string()
+            }
+            Err(e) => format!("Copy failed: {e}"),
+        });
     }
 
     /// Write `[REDACTED]` over the highlighted secret across its files, then
@@ -897,8 +920,12 @@ impl Shell {
     }
 
     fn draw_preview_pane(&self, f: &mut Frame, area: Rect) {
-        let rows =
-            Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
+        let rows = Layout::vertical([
+            Constraint::Percentage(50),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .split(area);
 
         let (name, sample, output) = match self.current_filter() {
             Some(af) => {
@@ -911,21 +938,60 @@ impl Shell {
             None => (String::new(), None, None),
         };
 
+        // Token counter: how many tokens the raw sample costs vs the filtered
+        // output, so the X → Y saving is visible at a glance.
+        let tokens_in = sample.as_deref().map(crate::chunker::count_tokens);
+        let tokens_out = output.as_deref().map(crate::chunker::count_tokens);
+
+        let input_title = match tokens_in {
+            Some(t) => format!(" sample input · {name} · {t} tokens "),
+            None => format!(" sample input · {name} "),
+        };
         let input_text = sample.unwrap_or_else(|| "no embedded sample for this filter".to_string());
         let input = Paragraph::new(input_text)
-            .block(Block::bordered().title(format!(" sample input · {name} ")))
+            .block(Block::bordered().title(input_title))
             .wrap(Wrap { trim: false });
         f.render_widget(input, rows[0]);
 
+        // X → Y gauge between the panes.
+        let gauge = match (tokens_in, tokens_out) {
+            (Some(x), Some(y)) => {
+                let saved_frac = if x > 0 {
+                    (x.saturating_sub(y)) as f64 / x as f64
+                } else {
+                    0.0
+                };
+                Line::from(vec![
+                    Span::styled(format!(" {x} "), Style::default().yellow().bold()),
+                    Span::styled("→", Style::default().dim()),
+                    Span::styled(format!(" {y} tokens "), Style::default().cyan().bold()),
+                    Span::styled(
+                        format!("· {:.1}% saved ", saved_frac * 100.0),
+                        Style::default().green().bold(),
+                    ),
+                    Span::styled(crate::ui::bar(saved_frac, 16), Style::default().green()),
+                ])
+            }
+            _ => Line::from(Span::styled(
+                " no sample — no token data ",
+                Style::default().dim(),
+            )),
+        };
+        f.render_widget(Paragraph::new(gauge), rows[1]);
+
+        let output_title = match tokens_out {
+            Some(t) => format!(" filtered output · {t} tokens "),
+            None => " filtered output ".to_string(),
+        };
         let output_text = output.unwrap_or_else(|| "—".to_string());
         let out = Paragraph::new(output_text)
             .block(
                 Block::bordered()
-                    .title(" filtered output ")
+                    .title(output_title)
                     .border_style(Style::default().cyan()),
             )
             .wrap(Wrap { trim: false });
-        f.render_widget(out, rows[1]);
+        f.render_widget(out, rows[2]);
     }
 
     fn draw_gain(&self, f: &mut Frame, area: Rect) {
@@ -1329,10 +1395,17 @@ impl Shell {
                 ));
             } else {
                 lines.push(Line::from(
-                    "v: reveal · x: replace with [REDACTED] · rotate the credential"
+                    "v: reveal · c: copy · x: replace with [REDACTED] · rotate the credential"
                         .to_string()
                         .dim(),
                 ));
+            }
+            if let Some(msg) = &self.sec_msg {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("✓ {msg}"),
+                    Style::default().green(),
+                )));
             }
         }
         f.render_widget(
@@ -1375,7 +1448,7 @@ impl Shell {
                     "x: confirm [REDACTED] write · any other key cancels".to_string()
                 }
                 Cmd::Secrets => {
-                    "←→: tab · Tab: pane · ↑↓: move · s: group · v: reveal · x: redact · r: rescan · q"
+                    "←→: tab · Tab: pane · ↑↓: move · s: group · v: reveal · c: copy · x: redact · r: rescan · q"
                         .to_string()
                 }
                 Cmd::Stats if self.stats_confirm => {
@@ -1427,6 +1500,49 @@ fn other_pane(p: Pane) -> Pane {
         Pane::Groups => Pane::Filters,
         Pane::Filters => Pane::Groups,
     }
+}
+
+/// Copy `text` to the system clipboard via the platform's native utility
+/// (clip.exe / pbcopy / wl-copy / xclip / xsel) — no extra dependencies.
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let candidates: &[(&str, &[&str])] = if cfg!(target_os = "windows") {
+        &[("clip", &[])]
+    } else if cfg!(target_os = "macos") {
+        &[("pbcopy", &[])]
+    } else {
+        &[
+            ("wl-copy", &[]),
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["--input", "--clipboard"]),
+        ]
+    };
+    let mut last_err = "no clipboard utility found".to_string();
+    for (cmd, args) in candidates {
+        match Command::new(cmd)
+            .args(*args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    if let Err(e) = stdin.write_all(text.as_bytes()) {
+                        last_err = e.to_string();
+                        continue;
+                    }
+                }
+                match child.wait() {
+                    Ok(s) if s.success() => return Ok(()),
+                    Ok(s) => last_err = format!("{cmd} exited with {s}"),
+                    Err(e) => last_err = e.to_string(),
+                }
+            }
+            Err(e) => last_err = format!("{cmd}: {e}"),
+        }
+    }
+    Err(last_err)
 }
 
 /// SQLite databases can't be string-redacted in place (the byte edit corrupts

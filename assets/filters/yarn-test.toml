@@ -10,15 +10,22 @@ strip_lines_matching = [
 ]
 keep_lines_matching = [
   "FAIL",
+  "PASS",
+  "Test Suites:",
+  "Tests:",
   "Error:",
   "TypeError:",
-  "AssertionError"
+  "AssertionError",
+  "●",
+  "Expected:",
+  "Received:",
+  "error Command failed"
 ]
 max_lines = 60
 on_empty = "yarn test: passed"
 
 [[tests.yarn-test]]
-name = "tests pass"
+name = "tests pass with counts visible"
 input = """
 yarn run v1.22.19
 $ jest
@@ -27,4 +34,31 @@ Test Suites: 1 passed, 1 total
 Tests:       10 passed, 10 total
 Done in 2.34s.
 """
-expected = "yarn test: passed"
+expected = """
+ PASS  src/utils.test.ts
+Test Suites: 1 passed, 1 total
+Tests:       10 passed, 10 total"""
+
+[[tests.yarn-test]]
+name = "failing test details preserved"
+input = """
+yarn run v1.22.19
+$ jest
+ FAIL  src/auth.test.ts
+  ● login › rejects invalid password
+
+    Expected: 401
+    Received: 200
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 9 passed, 10 total
+error Command failed with exit code 1.
+"""
+expected = """
+ FAIL  src/auth.test.ts
+  ● login › rejects invalid password
+    Expected: 401
+    Received: 200
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 9 passed, 10 total
+error Command failed with exit code 1."""

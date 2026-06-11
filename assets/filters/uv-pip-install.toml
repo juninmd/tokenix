@@ -24,3 +24,13 @@ Installing collected packages: requests
 Successfully installed requests-2.31.0
 """
 expected = "uv pip install: ok"
+
+[[tests.uv-pip-install]]
+name = "no solution error preserved"
+input = """
+  × No solution found when resolving dependencies:
+  ╰─▶ Because nonexistent-package-xyz was not found in the package registry and you require nonexistent-package-xyz, we can conclude that your requirements are unsatisfiable.
+"""
+expected = """
+  × No solution found when resolving dependencies:
+  ╰─▶ Because nonexistent-package-xyz was not found in the package registry and you require nonexistent-package-xyz, we can conclude that your requirements are unsatisfiable."""

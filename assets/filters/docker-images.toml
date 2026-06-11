@@ -25,3 +25,11 @@ expected = """
 nginx         latest    abc123def456   2 days ago     188MB
 postgres      15        def456abc123   3 days ago     372MB
 myapp         latest    ghi789jkl012   1 hour ago     256MB"""
+
+[[tests.docker-images]]
+name = "dangling images kept"
+input = """
+REPOSITORY    TAG       IMAGE ID       CREATED        SIZE
+<none>        <none>    abc123def456   2 days ago     188MB
+"""
+expected = "<none>        <none>    abc123def456   2 days ago     188MB"

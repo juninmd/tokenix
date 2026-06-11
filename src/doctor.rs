@@ -93,6 +93,12 @@ pub fn run_doctor() -> Result<()> {
     println!();
 
     section("Filters");
+    let bundled = crate::filters::load_bundled_filters_named().len();
+    let cases = crate::filters::bundled_test_case_count();
+    kv(
+        "bundled",
+        &format!("{bundled} filters · {cases} embedded golden cases"),
+    );
     let named: Vec<(String, crate::filters::FilterDef)> = crate::filters::load_user_filters_named()
         .into_iter()
         .chain(crate::filters::load_local_filters_named())
@@ -109,6 +115,32 @@ pub fn run_doctor() -> Result<()> {
             "user/local filters",
             &format!("{} loaded, no config issues", named.len()),
         );
+    }
+    println!();
+
+    section("Recordings");
+    match std::env::current_dir() {
+        Ok(cwd) => {
+            let root = crate::store::find_project_root(&cwd);
+            if crate::recordings::is_active(&root) {
+                let summary = crate::recordings::summary(&root);
+                let captures: usize = summary.iter().map(|(_, n, _)| n).sum();
+                let bytes: u64 = summary.iter().map(|(_, _, b)| b).sum();
+                kv(
+                    "session",
+                    &format!(
+                        "● active — {} command(s), {} capture(s), {:.0} KB",
+                        summary.len(),
+                        captures,
+                        bytes as f64 / 1024.0
+                    ),
+                );
+                kv("stop with", "tokenix filter record stop");
+            } else {
+                kv("session", "none — start with `tokenix filter record start`");
+            }
+        }
+        Err(_) => kv("session", "unknown (no working directory)"),
     }
     println!();
 

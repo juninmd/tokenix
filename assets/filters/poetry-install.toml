@@ -29,3 +29,12 @@ Package operations: 45 installs, 0 updates, 0 removals
 Installing the current project: my-project (0.1.0)
 """
 expected = "poetry install: ok"
+
+[[tests.poetry-install]]
+name = "stale lock file error preserved"
+input = """
+Installing dependencies from lock file
+
+pyproject.toml changed significantly since poetry.lock was last generated. Run `poetry lock` to fix the lock file.
+"""
+expected = "pyproject.toml changed significantly since poetry.lock was last generated. Run `poetry lock` to fix the lock file."

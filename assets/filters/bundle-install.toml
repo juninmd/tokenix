@@ -34,3 +34,15 @@ Bundle complete! 15 Gemfile dependencies, 45 gems now installed.
 Use `bundle info [gemname]` to see where a bundled gem is installed.
 """
 expected = "bundle install: ok"
+
+[[tests.bundle-install]]
+name = "missing gem error preserved"
+input = """
+Fetching gem metadata from https://rubygems.org/..........
+Resolving dependencies...
+Could not find gem 'rails (= 9.9.9)' in rubygems repository https://rubygems.org/ or installed locally.
+
+The source contains the following gems matching 'rails':
+  * rails-7.1.3
+"""
+expected = "Could not find gem 'rails (= 9.9.9)' in rubygems repository https://rubygems.org/ or installed locally."

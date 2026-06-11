@@ -9,7 +9,8 @@ strip_lines_matching = [
 keep_lines_matching = [
   "^\\w+",
   "hashicorp/",
-  "registry.terraform.io"
+  "registry.terraform.io",
+  "Error"
 ]
 max_lines = 30
 on_empty = "tofu providers: none"
@@ -27,3 +28,16 @@ expected = """
 ├── provider[registry.terraform.io/hashicorp/aws] ~> 5.0
 ├── provider[registry.terraform.io/hashicorp/random] ~> 3.0
     └── provider[registry.terraform.io/hashicorp/aws] ~> 5.0"""
+
+[[tests.tofu-providers]]
+name = "provider query failure preserved"
+input = """
+╷
+│ Error: Failed to query available provider packages
+│
+│ Could not retrieve the list of available versions for provider hashicorp/aws
+╵
+"""
+expected = """
+│ Error: Failed to query available provider packages
+│ Could not retrieve the list of available versions for provider hashicorp/aws"""

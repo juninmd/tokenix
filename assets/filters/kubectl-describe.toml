@@ -7,6 +7,7 @@ strip_lines_matching = [
 ]
 keep_lines_matching = [
   "Error:",
+  "Error from server",
   "Failed",
   "Events:",
   "Warning",
@@ -40,3 +41,11 @@ Events:
   Normal  Pulled     9m    kubelet            Successfully pulled image "nginx:latest"
   Normal  Created    9m    kubelet            Created container nginx
   Normal  Started    9m    kubelet            Started container nginx"""
+
+[[tests.kubectl-describe]]
+name = "not found error preserved"
+input = """
+Error from server (NotFound): deployments.apps "myapp" not found
+"""
+expected = """
+Error from server (NotFound): deployments.apps "myapp" not found"""

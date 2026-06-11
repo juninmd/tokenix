@@ -17,7 +17,10 @@ keep_lines_matching = [
   "error:",
   "Failed",
   "Could not find",
-  "Installation failed"
+  "Installation failed",
+  "could not be resolved",
+  "^\\s*Problem \\d",
+  "^\\s*- "
 ]
 max_lines = 40
 on_empty = "composer install: ok"
@@ -34,3 +37,21 @@ Generating autoload files
 12 packages installed in 2.3s
 """
 expected = "composer install: ok"
+
+[[tests.composer-install]]
+name = "dependency resolution failure preserved"
+input = """
+Loading composer repositories with package information
+Installing dependencies (including require-dev) from lock file
+Your requirements could not be resolved to an installable set of packages.
+
+  Problem 1
+    - Root composer.json requires php >=8.3 but your php version (8.1.27) does not satisfy that requirement.
+
+Installation failed, reverting ./composer.json and ./composer.lock to their original content.
+"""
+expected = """
+Your requirements could not be resolved to an installable set of packages.
+  Problem 1
+    - Root composer.json requires php >=8.3 but your php version (8.1.27) does not satisfy that requirement.
+Installation failed, reverting ./composer.json and ./composer.lock to their original content."""

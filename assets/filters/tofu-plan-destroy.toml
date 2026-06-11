@@ -29,3 +29,12 @@ Plan: 0 to add, 0 to change, 2 to destroy.
 expected = """
 # aws_instance.web will be destroyed
 # aws_s3_bucket.data will be destroyed"""
+
+[[tests.tofu-plan-destroy]]
+name = "nothing to destroy is honest"
+input = """
+No changes. No objects need to be destroyed.
+
+Plan: 0 to add, 0 to change, 0 to destroy.
+"""
+expected = "tofu plan -destroy: nothing to destroy"

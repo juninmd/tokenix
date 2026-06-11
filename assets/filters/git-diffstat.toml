@@ -23,3 +23,9 @@ input = """
  3 files changed, 15 insertions(+), 3 deletions(-)
 """
 expected = " 3 files changed, 15 insertions(+), 3 deletions(-)"
+
+[[tests.git-diffstat]]
+name = "no changes is honest"
+input = """
+"""
+expected = "git diff --stat: no changes"

@@ -4,6 +4,7 @@ match_command = "^git\\s+status\\s+--short\\b"
 strip_ansi = true
 head_lines = 2
 truncate_lines_at = 90
+on_empty = "git status --short: clean (no changes)"
 
 [[tests.git-status-short]]
 name = "Short status keeps representative changed files"
@@ -18,3 +19,9 @@ input = """
 """
 expected = """ M src/main.rs
  M src/query.rs"""
+
+[[tests.git-status-short]]
+name = "clean tree is honest"
+input = """
+"""
+expected = "git status --short: clean (no changes)"

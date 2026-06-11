@@ -26,3 +26,11 @@ myapp-db   default     1          2024-01-15 10:30:00 +0000 UTC        deployed 
 expected = """
 myapp      default     1          2024-01-15 10:30:00 +0000 UTC        deployed    myapp-1.0.0     1.0.0
 myapp-db   default     1          2024-01-15 10:30:00 +0000 UTC        deployed    postgresql-12.0 15.5"""
+
+[[tests.helm-list]]
+name = "cluster unreachable error preserved"
+input = """
+Error: Kubernetes cluster unreachable: Get "https://127.0.0.1:6443/version": dial tcp 127.0.0.1:6443: connect: connection refused
+"""
+expected = """
+Error: Kubernetes cluster unreachable: Get "https://127.0.0.1:6443/version": dial tcp 127.0.0.1:6443: connect: connection refused"""

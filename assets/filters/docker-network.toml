@@ -28,3 +28,10 @@ expected = """
 abc123def456   bridge          bridge    local
 def456abc123   host            host      local
 ghi789jkl012   myapp_default   bridge    local"""
+
+[[tests.docker-network]]
+name = "daemon error preserved"
+input = """
+Error response from daemon: network with name myapp_default already exists
+"""
+expected = "Error response from daemon: network with name myapp_default already exists"

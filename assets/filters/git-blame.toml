@@ -25,3 +25,10 @@ expected = """
 abc1234 (John Doe  2024-01-15 10:30:00 +0000  1) fn main() {
 def5678 (Jane Smith 2024-01-10 15:45:00 +0000  2)     println!("Hello");
 abc1234 (John Doe  2024-01-15 10:30:00 +0000  3) }"""
+
+[[tests.git-blame]]
+name = "missing path error preserved"
+input = """
+fatal: no such path 'src/missing.rs' in HEAD
+"""
+expected = "fatal: no such path 'src/missing.rs' in HEAD"

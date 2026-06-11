@@ -15,7 +15,8 @@ strip_lines_matching = [
   "warning.*deprecated",
   "^yarn install v",
   "^yarn add v",
-  "^\\[\\d+/\\d+\\]"
+  "^\\[\\d+/\\d+\\]",
+  "^info "
 ]
 max_lines = 40
 on_empty = "yarn install: ok"
@@ -32,3 +33,14 @@ yarn install v1.22.19
 Done in 5.23s.
 """
 expected = "yarn install: ok"
+
+[[tests.yarn-install]]
+name = "missing version error preserved"
+input = """
+yarn install v1.22.19
+[1/5] Validating package.json...
+error Couldn't find any versions for "left-pad" that matches "99.9.9"
+info Visit https://yarnpkg.com/en/docs/cli/install for documentation about this command.
+"""
+expected = """
+error Couldn't find any versions for "left-pad" that matches "99.9.9\""""

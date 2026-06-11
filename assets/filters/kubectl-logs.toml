@@ -11,11 +11,12 @@ keep_lines_matching = [
   "PANIC",
   "Exception",
   "Error:",
+  "Error from server",
   "Failed",
   "WARN"
 ]
 max_lines = 100
-on_empty = "kubectl logs: no output"
+on_empty = "kubectl logs: no errors or warnings in output"
 
 [[tests.kubectl-logs]]
 name = "logs with errors"
@@ -29,3 +30,19 @@ input = """
 expected = """
 2024-01-15 10:30:02 ERROR Failed to connect to redis: connection refused
 2024-01-15 10:30:03 WARN  Retrying in 5s"""
+
+[[tests.kubectl-logs]]
+name = "missing pod error preserved"
+input = """
+Error from server (NotFound): pods "myapp-abc123" not found
+"""
+expected = """
+Error from server (NotFound): pods "myapp-abc123" not found"""
+
+[[tests.kubectl-logs]]
+name = "healthy logs summarized honestly"
+input = """
+2024-01-15 10:30:00 INFO  Starting server on port 8080
+2024-01-15 10:30:01 INFO  Connected to database
+"""
+expected = "kubectl logs: no errors or warnings in output"

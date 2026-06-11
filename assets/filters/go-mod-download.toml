@@ -19,3 +19,11 @@ go: downloading github.com/gin-gonic/gin v1.9.1
 go: extracting github.com/gin-gonic/gin v1.9.1
 """
 expected = "go mod download: done"
+
+[[tests.go-mod-download]]
+name = "unknown revision error preserved"
+input = """
+go: downloading github.com/missing/pkg v1.0.0
+go: github.com/missing/pkg@v1.0.0: reading github.com/missing/pkg/go.mod at revision v1.0.0: unknown revision v1.0.0
+"""
+expected = "go: github.com/missing/pkg@v1.0.0: reading github.com/missing/pkg/go.mod at revision v1.0.0: unknown revision v1.0.0"

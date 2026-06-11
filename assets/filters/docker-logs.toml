@@ -16,7 +16,7 @@ keep_lines_matching = [
   "WARNING"
 ]
 max_lines = 100
-on_empty = "docker logs: no output"
+on_empty = "docker logs: no errors or warnings in output"
 
 [[tests.docker-logs]]
 name = "logs with errors"
@@ -30,3 +30,12 @@ input = """
 expected = """
 2024-01-15 10:30:02 ERROR Failed to connect to redis: connection refused
 2024-01-15 10:30:03 WARN  Retrying in 5s"""
+
+[[tests.docker-logs]]
+name = "healthy logs summarized honestly"
+input = """
+2024-01-15 10:30:00 INFO  Starting server on port 8080
+2024-01-15 10:30:01 INFO  Connected to database
+2024-01-15 10:30:02 INFO  Listening on 0.0.0.0:8080
+"""
+expected = "docker logs: no errors or warnings in output"

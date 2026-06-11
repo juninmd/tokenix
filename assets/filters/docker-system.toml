@@ -3,21 +3,22 @@ description = "Compact docker system output"
 match_command = "^docker\\s+system\\b"
 strip_ansi = true
 strip_lines_matching = [
-  "^\\s*$",
-  "^\\s*Total",
-  "^\\s*Reclaimable"
+  "^\\s*$"
 ]
 keep_lines_matching = [
-  "Images:",
-  "Containers:",
-  "Local Volumes:",
-  "Build Cache:"
+  "^TYPE\\b",
+  "^Images\\b",
+  "^Containers\\b",
+  "^Local Volumes\\b",
+  "^Build Cache\\b",
+  "error",
+  "Error"
 ]
 max_lines = 30
 on_empty = "docker system: ok"
 
 [[tests.docker-system]]
-name = "disk usage"
+name = "disk usage table preserved"
 input = """
 TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
 Images          15        5         2.5GB     1.8GB (72%)
@@ -25,4 +26,16 @@ Containers      10        3         100MB     50MB (50%)
 Local Volumes   8         4         500MB     200MB (40%)
 Build Cache     20        2         1.2GB     1.0GB (83%)
 """
-expected = "docker system: ok"
+expected = """
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          15        5         2.5GB     1.8GB (72%)
+Containers      10        3         100MB     50MB (50%)
+Local Volumes   8         4         500MB     200MB (40%)
+Build Cache     20        2         1.2GB     1.0GB (83%)"""
+
+[[tests.docker-system]]
+name = "daemon error preserved"
+input = """
+Error response from daemon: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+"""
+expected = "Error response from daemon: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"

@@ -39,3 +39,13 @@ Jane Smith (3):
       Fix login issue
       Add tests for auth
       Update dependencies"""
+
+[[tests.git-shortlog]]
+name = "numeric summary (-sn) preserved"
+input = """
+   120  John Doe
+    45  Jane Smith
+"""
+expected = """
+   120  John Doe
+    45  Jane Smith"""

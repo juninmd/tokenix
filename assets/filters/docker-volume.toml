@@ -24,3 +24,10 @@ local     myapp_redis_data
 expected = """
 local     myapp_db_data
 local     myapp_redis_data"""
+
+[[tests.docker-volume]]
+name = "missing volume error preserved"
+input = """
+Error response from daemon: get myvol: no such volume
+"""
+expected = "Error response from daemon: get myvol: no such volume"

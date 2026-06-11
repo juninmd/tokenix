@@ -13,7 +13,7 @@ strip_lines_matching = [
   "^  Resolving",
 ]
 match_output = [
-  { pattern = "Output created:", message = "ok (output created)" },
+  { pattern = "Output created:", message = "ok (output created)", unless = "ERROR|Error:|WARN" },
 ]
 max_lines = 20
 
@@ -39,3 +39,15 @@ caused by:
   syntax error at line 10
 """
 expected = "ERROR: Render failed\ncaused by:\n  syntax error at line 10"
+
+[[tests.quarto-render]]
+name = "output created never masks a warning"
+input = """
+processing file: index.qmd
+pandoc to html5
+Output created: _site/index.html
+WARNING: Unable to resolve link target: missing.qmd
+"""
+expected = """
+Output created: _site/index.html
+WARNING: Unable to resolve link target: missing.qmd"""
