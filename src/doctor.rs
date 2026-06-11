@@ -1,5 +1,7 @@
 use anyhow::Result;
 use colored::Colorize;
+
+use crate::ui::{kv, section, tip, warn};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::Command;
@@ -251,24 +253,6 @@ fn dir_size(dir: &std::path::Path) -> Option<u64> {
         }
     }
     Some(total)
-}
-
-// ---- formatting -------------------------------------------------------------
-
-fn section(name: &str) {
-    println!("{}", name.bold());
-}
-
-fn kv(key: &str, value: &str) {
-    println!("  {:<22} {}", format!("{key}:").dimmed(), value);
-}
-
-fn tip(msg: &str) {
-    println!("  {} {}", "•".green(), msg);
-}
-
-fn warn(msg: &str) {
-    println!("  {} {}", "!".yellow(), msg.yellow());
 }
 
 #[cfg(test)]

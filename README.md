@@ -413,6 +413,8 @@ tokenix install-hook --tool all
 
 | Command | Description |
 |---|---|
+| `tokenix` (no args) | Open the interactive TUI dashboard in a terminal: tabs for Stats (wordmark, version, hook status, index summary + Index/Install actions), Filters, Gain, Doctor, Tokenmap, and Secrets. `←`/`→` switch tabs; piped/non-TTY falls back to help |
+| `tokenix filter` (no args) | Open the TUI on the Filters tab (groups · filters · live input→output preview); piped falls back to `filter list` |
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
 | `tokenix remove-hook` | Remove assistant hook/instructions (default `--tool all`) |
@@ -570,6 +572,7 @@ on_empty = "uv: ok"
 | `max_lines` / `head_lines` / `tail_lines` | Truncate output |
 | `truncate_lines_at` | Truncate individual lines at N characters |
 | `on_empty` | Message to return when filtering produces empty output |
+| `passthrough_when_emptied` | When the filter reduces *non-empty* output to nothing (an unexpected output shape the keep/extract rules don't recognize), show a bounded view of the real output instead of `on_empty` — so format-specific filters never report a false "nothing here" (e.g. `git log --oneline` against the full-log filter) |
 
 ### AI-assisted filter generation
 

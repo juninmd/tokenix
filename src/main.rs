@@ -19,11 +19,14 @@ mod query;
 mod recordings;
 mod secrets_scan;
 mod store;
+mod tui;
+mod ui;
 
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use std::path::{Path, PathBuf};
+use ui::format_num;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -463,7 +466,7 @@ enum Commands {
     /// Generate and manage per-command output filters
     Filter {
         #[command(subcommand)]
-        action: FilterAction,
+        action: Option<FilterAction>,
     },
     /// Run a command and compress its output using tokenix filters (used by PreToolUse rewrite)
     Run {
@@ -662,10 +665,15 @@ fn main() -> Result<()> {
     let only_cpu = cli.only_cpu;
     crate::embed::set_force_cpu(only_cpu);
 
-    // Bare `tokenix` with no subcommand: show the grouped help.
+    // Bare `tokenix`: launch the interactive launcher on a TTY (one cursor menu
+    // over the human commands), else fall back to the grouped help for pipes/CI.
     let command = match cli.command {
         Some(command) => command,
         None => {
+            use std::io::IsTerminal;
+            if std::io::stdout().is_terminal() {
+                return tui::run();
+            }
             cmd.print_help()?;
             println!();
             std::process::exit(0);
@@ -844,6 +852,16 @@ fn main() -> Result<()> {
         Commands::Doctor => doctor::run_doctor(),
         Commands::Filter { action } => {
             let repo_root = find_repo_root(&PathBuf::from("."));
+            let Some(action) = action else {
+                // Bare `tokenix filter`: interactive browser on a TTY, else the
+                // plain list so pipes / CI keep working.
+                use std::io::IsTerminal;
+                return if std::io::stdout().is_terminal() {
+                    tui::run()
+                } else {
+                    cmd_filter::cmd_filter_list(None, &repo_root)
+                };
+            };
             match action {
                 FilterAction::List { index } => cmd_filter::cmd_filter_list(index, &repo_root),
                 FilterAction::Active => cmd_filter::cmd_filter_active(),
@@ -1737,18 +1755,7 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
         .unwrap_or("project");
 
     // ── header ────────────────────────────────────────────────────────────────
-    let inner = format!(" tokenix gain  ·  {} ", project_name);
-    let width = inner.len().max(64);
-    let pad = width - inner.len();
-    println!("\n{}", format!("╭{}╮", "─".repeat(width)).bright_black());
-    println!(
-        "{}{}{}{}",
-        "│".bright_black(),
-        inner.bold(),
-        " ".repeat(pad),
-        "│".bright_black()
-    );
-    println!("{}", format!("╰{}╯", "─".repeat(width)).bright_black());
+    ui::box_header(&format!("tokenix gain  ·  {}", project_name));
 
     if stats.total_calls == 0 {
         println!("{}", "  No hook events found in this project.".yellow());
@@ -1764,7 +1771,7 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
 
     // ── token summary + hook calls (side by side) ─────────────────────────────
     println!();
-    let bar = reduction_bar(stats.pct_saved, 18);
+    let bar = format!("[{}]", ui::bar(stats.pct_saved / 100.0, 18));
     let intercept_pct = if stats.total_calls > 0 {
         (stats.intercepted as f64 / stats.total_calls as f64) * 100.0
     } else {
@@ -1824,71 +1831,30 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
         );
         println!();
 
-        let col_model = 27usize;
-        let col_price = 9usize;
-        let col_val = 12usize;
-
-        let sep = format!(
-            "    {}  {}  {}  {}  {}",
-            "─".repeat(col_model),
-            "─".repeat(col_price),
-            "─".repeat(col_val),
-            "─".repeat(col_val),
-            "─".repeat(col_val)
-        );
-        // table header
-        println!(
-            "  {}",
-            format!(
-                "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
-                "Model",
-                "$/1M in",
-                "Without",
-                "With",
-                "Saved",
-                col_model = col_model,
-                col_price = col_price,
-                col_val = col_val
-            )
-            .bold()
-            .bright_black()
-        );
-        println!("  {}", sep.bright_black());
-
-        for row in &stats.cost_rows {
-            let marker = if row.reference { " ★" } else { "  " };
-            let name = format!("{}{}", row.model, marker);
-            let price_str = {
+        let rows: Vec<Vec<String>> = stats
+            .cost_rows
+            .iter()
+            .map(|row| {
                 let m = gain::MODELS.iter().find(|m| m.name == row.model).unwrap();
-                format!("${:.2}", m.input_per_1m)
-            };
-            let without = format!("${:.4}", row.without_usd);
-            let with_ = format!("${:.4}", row.with_usd);
-            let saved = format!("${:.4}", row.saved_usd);
-
-            let line = format!(
-                "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
-                name,
-                price_str,
-                without,
-                with_,
-                saved,
-                col_model = col_model,
-                col_price = col_price,
-                col_val = col_val
-            );
-            if row.reference {
-                println!("  {}", line.bold());
-            } else {
-                println!("  {}", line);
-            }
-        }
-
-        println!("  {}", sep.bright_black());
+                let marker = if row.reference { " ★" } else { "" };
+                vec![
+                    format!("{}{}", row.model, marker),
+                    format!("${:.2}", m.input_per_1m),
+                    format!("${:.4}", row.without_usd),
+                    format!("${:.4}", row.with_usd),
+                    ui::ok(&format!("${:.4}", row.saved_usd)).to_string(),
+                ]
+            })
+            .collect();
+        ui::print_table(
+            &["Model", "$/1M in", "Without", "With", "Saved"],
+            &rows,
+            &[1, 2, 3, 4],
+        );
         println!(
             "  {}",
             format!(
-                "    ★ reference model · prices collected {}",
+                "  ★ reference model · prices collected {}",
                 gain::PRICING_COLLECTED_AT
             )
             .dimmed()
@@ -1906,7 +1872,7 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
         println!();
         println!("  {}", "BY TOOL".bold().underline());
         for (tool, count, saved) in &stats.by_tool {
-            let bar = mini_bar(*saved, stats.tokens_saved, 20);
+            let bar = ui::bar(*saved as f64 / stats.tokens_saved.max(1) as f64, 20);
             let pct = if stats.tokens_saved > 0 {
                 (*saved as f64 / stats.tokens_saved as f64) * 100.0
             } else {
@@ -2014,7 +1980,7 @@ fn print_by_command(by_command: &[(String, usize, i64)], tokens_saved: i64) {
     println!();
     println!("  {}", "BY COMMAND  (Bash filters)".bold().underline());
     for (cmd, count, saved) in &visible {
-        let bar = mini_bar(*saved, tokens_saved, 20);
+        let bar = ui::bar(*saved as f64 / tokens_saved.max(1) as f64, 20);
         let pct = if tokens_saved > 0 {
             (*saved as f64 / tokens_saved as f64) * 100.0
         } else {
@@ -2047,18 +2013,7 @@ fn cmd_gain_global(history: bool, cost_estimate: bool) -> Result<()> {
     let stats = &global.aggregate;
 
     // ── header ────────────────────────────────────────────────────────────────
-    let inner = " tokenix gain  ·  ALL PROJECTS ";
-    let width = inner.len().max(64);
-    let pad = width - inner.len();
-    println!("\n{}", format!("╭{}╮", "─".repeat(width)).bright_black());
-    println!(
-        "{}{}{}{}",
-        "│".bright_black(),
-        inner.bold(),
-        " ".repeat(pad),
-        "│".bright_black()
-    );
-    println!("{}", format!("╰{}╯", "─".repeat(width)).bright_black());
+    ui::box_header("tokenix gain  ·  ALL PROJECTS");
 
     if stats.total_calls == 0 {
         println!(
@@ -2070,7 +2025,7 @@ fn cmd_gain_global(history: bool, cost_estimate: bool) -> Result<()> {
 
     // ── aggregate token summary ───────────────────────────────────────────────
     println!();
-    let bar = reduction_bar(stats.pct_saved, 18);
+    let bar = format!("[{}]", ui::bar(stats.pct_saved / 100.0, 18));
     let intercept_pct = if stats.total_calls > 0 {
         (stats.intercepted as f64 / stats.total_calls as f64) * 100.0
     } else {
@@ -2120,59 +2075,30 @@ fn cmd_gain_global(history: bool, cost_estimate: bool) -> Result<()> {
             "  {}",
             "COST ESTIMATE  (input tokens · USD)".bold().underline()
         );
-        let col_model = 27usize;
-        let col_price = 9usize;
-        let col_val = 12usize;
-        let sep = format!(
-            "    {}  {}  {}  {}  {}",
-            "─".repeat(col_model),
-            "─".repeat(col_price),
-            "─".repeat(col_val),
-            "─".repeat(col_val),
-            "─".repeat(col_val)
+        let rows: Vec<Vec<String>> = stats
+            .cost_rows
+            .iter()
+            .map(|row| {
+                let m = gain::MODELS.iter().find(|m| m.name == row.model).unwrap();
+                let marker = if row.reference { " ★" } else { "" };
+                vec![
+                    format!("{}{}", row.model, marker),
+                    format!("${:.2}", m.input_per_1m),
+                    format!("${:.4}", row.without_usd),
+                    format!("${:.4}", row.with_usd),
+                    ui::ok(&format!("${:.4}", row.saved_usd)).to_string(),
+                ]
+            })
+            .collect();
+        ui::print_table(
+            &["Model", "$/1M in", "Without", "With", "Saved"],
+            &rows,
+            &[1, 2, 3, 4],
         );
         println!(
             "  {}",
             format!(
-                "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
-                "Model",
-                "$/1M in",
-                "Without",
-                "With",
-                "Saved",
-                col_model = col_model,
-                col_price = col_price,
-                col_val = col_val
-            )
-            .bold()
-            .bright_black()
-        );
-        println!("  {}", sep.bright_black());
-        for row in &stats.cost_rows {
-            let marker = if row.reference { " ★" } else { "  " };
-            let m = gain::MODELS.iter().find(|m| m.name == row.model).unwrap();
-            let line = format!(
-                "    {:<col_model$}  {:>col_price$}  {:>col_val$}  {:>col_val$}  {:>col_val$}",
-                format!("{}{}", row.model, marker),
-                format!("${:.2}", m.input_per_1m),
-                format!("${:.4}", row.without_usd),
-                format!("${:.4}", row.with_usd),
-                format!("${:.4}", row.saved_usd),
-                col_model = col_model,
-                col_price = col_price,
-                col_val = col_val
-            );
-            if row.reference {
-                println!("  {}", line.bold());
-            } else {
-                println!("  {}", line);
-            }
-        }
-        println!("  {}", sep.bright_black());
-        println!(
-            "  {}",
-            format!(
-                "    ★ reference model · prices collected {}",
+                "  ★ reference model · prices collected {}",
                 gain::PRICING_COLLECTED_AT
             )
             .dimmed()
@@ -2190,7 +2116,7 @@ fn cmd_gain_global(history: bool, cost_estimate: bool) -> Result<()> {
         println!();
         println!("  {}", "BY TOOL".bold().underline());
         for (tool, count, saved) in &stats.by_tool {
-            let bar = mini_bar(*saved, stats.tokens_saved, 20);
+            let bar = ui::bar(*saved as f64 / stats.tokens_saved.max(1) as f64, 20);
             let pct = if stats.tokens_saved > 0 {
                 (*saved as f64 / stats.tokens_saved as f64) * 100.0
             } else {
@@ -2229,7 +2155,7 @@ fn cmd_gain_global(history: bool, cost_estimate: bool) -> Result<()> {
             .max(1);
         let visible = global.projects.iter().take(MAX_PROJECTS);
         for (label, saved, total, intercepted) in visible {
-            let bar = mini_bar(*saved, max_saved, 16);
+            let bar = ui::bar(*saved as f64 / max_saved.max(1) as f64, 16);
             let pct = if *total > 0 {
                 (*intercepted as f64 / *total as f64) * 100.0
             } else {
@@ -2341,22 +2267,6 @@ fn cmd_gain_global(history: bool, cost_estimate: bool) -> Result<()> {
 
     println!();
     Ok(())
-}
-
-fn reduction_bar(pct: f64, width: usize) -> String {
-    let filled = ((pct / 100.0) * width as f64).round() as usize;
-    let filled = filled.min(width);
-    let empty = width - filled;
-    format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
-}
-
-fn mini_bar(value: i64, total: i64, width: usize) -> String {
-    if total == 0 {
-        return "─".repeat(width);
-    }
-    let filled = ((value as f64 / total as f64) * width as f64).round() as usize;
-    let filled = filled.min(width);
-    format!("{}{}", "▓".repeat(filled), "░".repeat(width - filled))
 }
 
 // install-hook
@@ -3080,13 +2990,14 @@ fn cmd_stats(path: &Path) -> Result<()> {
 
     let db = store::db_path(&repo_root);
     let id = store::project_id(&repo_root);
-    println!("\n{} {}", "Project:".bold(), repo_root.display());
-    println!("  ID:     {}", id);
-    println!("  Index:  {}", db.display());
-    println!("  Files:  {}", stats.files);
-    println!("  Chunks: {}", stats.chunks);
-    println!("  Tokens: {}", format_num(stats.total_tokens));
-    println!("  Age:    {}", age_str);
+    ui::box_header(&format!("tokenix stats  ·  {}", repo_root.display()));
+    ui::kv("id", &id);
+    ui::kv("index", &db.display().to_string());
+    ui::kv("files", &stats.files.to_string());
+    ui::kv("chunks", &stats.chunks.to_string());
+    ui::kv("tokens", &format_num(stats.total_tokens));
+    ui::kv("age", &age_str);
+    println!();
     Ok(())
 }
 
@@ -3264,25 +3175,26 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
     Ok(())
 }
 
+/// The neon "tokenix" wordmark (shared by `--help`'s banner and the TUI dashboard).
+pub(crate) const WORDMARK: [&str; 5] = [
+    r" _        _              _      ",
+    r"| |_ ___ | | _____ _ __ (_)_  __",
+    r"| __/ _ \| |/ / _ \ '_ \| \ \/ /",
+    r"| || (_) |   <  __/ | | | |>  < ",
+    r" \__\___/|_|\_\___|_| |_|_/_/\_\",
+];
+
+/// The tagline shown under the wordmark.
+pub(crate) const TAGLINE: &str = "minimize LLM context, keep the signal";
+
 /// Logo banner: the neon "tokenix" wordmark + a one-line tagline, inspired by
 /// tokenix-logo.png. Colors auto-disable on non-TTY / NO_COLOR via `colored`.
 fn banner() -> String {
-    // Wordmark — bright cyan, like the neon "tokenix" lettering.
-    let word = [
-        r" _        _              _      ",
-        r"| |_ ___ | | _____ _ __ (_)_  __",
-        r"| __/ _ \| |/ / _ \ '_ \| \ \/ /",
-        r"| || (_) |   <  __/ | | | |>  < ",
-        r" \__\___/|_|\_\___|_| |_|_/_/\_\",
-    ];
     let mut out = String::new();
-    for line in word {
+    for line in WORDMARK {
         out.push_str(&format!("{}\n", line.bright_cyan().bold()));
     }
-    out.push_str(&format!(
-        " {}  minimize LLM context, keep the signal",
-        "($)".yellow()
-    ));
+    out.push_str(&format!(" {}  {}", "($)".yellow(), TAGLINE));
     out
 }
 
@@ -3372,7 +3284,11 @@ fn help_catalog() -> String {
             } else {
                 format!("{cmd} {args}")
             };
-            out.push_str(&format!("  {:<26} {}\n", invocation.cyan(), desc.dimmed()));
+            out.push_str(&format!(
+                "  {:<26} {}\n",
+                ui::accent(&invocation),
+                desc.dimmed()
+            ));
         }
     };
 
@@ -3409,7 +3325,7 @@ fn help_catalog() -> String {
         "tokenix read src/auth.rs --symbol validate_token",
         "tokenix explore TokenStore",
     ] {
-        out.push_str(&format!("  {}\n", ex.cyan()));
+        out.push_str(&format!("  {}\n", ui::accent(ex)));
     }
     out.push_str(&format!("\n  {}\n", "# Humans — setup & insight".dimmed()));
     for (ex, note) in [
@@ -3420,7 +3336,7 @@ fn help_catalog() -> String {
     ] {
         out.push_str(&format!(
             "  {:<36} {}\n",
-            ex.cyan(),
+            ui::accent(ex),
             format!("# {note}").dimmed()
         ));
     }
@@ -3428,26 +3344,11 @@ fn help_catalog() -> String {
     out.push_str(&format!(
         "\n{}  {}   {}  {}\n",
         "Global:".bold(),
-        "--only-cpu".cyan(),
+        ui::accent("--only-cpu"),
         "Details:".bold(),
-        "tokenix <command> --help".cyan()
+        ui::accent("tokenix <command> --help")
     ));
     out
-}
-
-fn format_num(n: i64) -> String {
-    if n < 0 {
-        return format!("-{}", format_num(-n));
-    }
-    let s = n.to_string();
-    let mut result = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-    result.chars().rev().collect()
 }
 
 fn format_ts(ts: f64) -> String {

@@ -31,6 +31,15 @@ pub struct FilterDef {
     pub head_lines: Option<usize>,
     pub tail_lines: Option<usize>,
     pub on_empty: Option<String>,
+    /// When the filter reduces *non-empty* command output to nothing — usually an
+    /// unexpected output shape the keep/extract rules don't recognize (e.g.
+    /// `git log --oneline` against a filter tuned for the full log format) — emit a
+    /// bounded, ANSI-stripped view of the real output instead of `on_empty`.
+    /// Opt-in so summary filters (cargo test all-pass → "ok") keep their behavior;
+    /// only format-specific filters that would otherwise report a *false* "nothing
+    /// here" (git-log, git-diff) set it.
+    #[serde(default)]
+    pub passthrough_when_emptied: bool,
     #[serde(default)]
     pub match_output: Vec<MatchOutput>,
     pub truncate_lines_at: Option<usize>,
@@ -243,6 +252,38 @@ pub fn load_bundled_filters_named() -> Vec<(String, FilterDef)> {
         })
         .flatten()
         .collect()
+}
+
+/// First embedded `[[tests.<name>]].input` for each bundled filter, keyed by
+/// filter name. The TUI uses these as representative sample output to preview how
+/// a filter transforms input (input → apply_filter → output).
+pub fn sample_inputs() -> HashMap<String, String> {
+    #[derive(Deserialize)]
+    struct SampleCase {
+        input: String,
+    }
+    #[derive(Deserialize)]
+    struct TestsOnly {
+        #[serde(default)]
+        tests: HashMap<String, Vec<SampleCase>>,
+    }
+    let mut map = HashMap::new();
+    for name in BundledFilters::iter() {
+        let Some(file) = BundledFilters::get(&name) else {
+            continue;
+        };
+        let Ok(content) = std::str::from_utf8(file.data.as_ref()) else {
+            continue;
+        };
+        if let Ok(parsed) = toml::from_str::<TestsOnly>(content) {
+            for (fname, cases) in parsed.tests {
+                if let Some(first) = cases.into_iter().next() {
+                    map.entry(fname).or_insert(first.input);
+                }
+            }
+        }
+    }
+    map
 }
 
 pub fn load_active_filters() -> Vec<ActiveFilter> {
@@ -853,6 +894,25 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
     }
 
     if result.trim().is_empty() {
+        if f.passthrough_when_emptied && !output.trim().is_empty() {
+            // The command DID produce output, but every line was filtered away.
+            // Reporting `on_empty` ("no commits"/"no changes") here would be a
+            // false negative, so fall back to a bounded view of the real output.
+            let cap = f.max_lines.unwrap_or(40);
+            let fallback: Vec<String> = s
+                .lines()
+                .take(cap)
+                .map(|l| match f.truncate_lines_at {
+                    Some(n) => truncate_at_char_boundary(l, n).to_string(),
+                    None => l.to_string(),
+                })
+                .collect();
+            let fb_text = fallback.join("\n");
+            return match f.token_budget {
+                Some(budget) => apply_token_budget(&fb_text, budget),
+                None => fb_text,
+            };
+        }
         if let Some(msg) = &f.on_empty {
             return msg.clone();
         }
@@ -1504,6 +1564,7 @@ on_empty = "empty filter output"
             head_lines: None,
             tail_lines: None,
             on_empty: None,
+            passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: Some(4),
             filter_stderr: false,
@@ -1531,6 +1592,7 @@ on_empty = "empty filter output"
             head_lines: None,
             tail_lines: None,
             on_empty: None,
+            passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: None,
             filter_stderr: false,
@@ -1603,6 +1665,7 @@ on_empty = "empty filter output"
             head_lines: None,
             tail_lines: None,
             on_empty: None,
+            passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: None,
             filter_stderr: false,
@@ -1634,6 +1697,7 @@ on_empty = "empty filter output"
             head_lines: None,
             tail_lines: None,
             on_empty: None,
+            passthrough_when_emptied: false,
             match_output: vec![MatchOutput {
                 pattern: "total size is".to_string(),
                 message: "ok (synced)".to_string(),

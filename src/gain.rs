@@ -91,6 +91,32 @@ pub struct GlobalGainStats {
     pub projects: Vec<(String, i64, usize, usize)>,
 }
 
+/// Collapse a full Bash command line to a readable base label for the BY COMMAND
+/// rollup. Keeps the leading executable + subcommand words and stops at the first
+/// flag, redirect, shell operator, or argument carrying special characters — so
+/// `pnpm run test --coverage 2>&1 | tail` → `pnpm run test`, and the many
+/// `cargo test … | …` variants collapse into one `cargo test` bucket instead of
+/// cluttering the footer with full argument strings.
+fn command_label(cmd: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for tok in cmd.split_whitespace() {
+        let stop = tok.starts_with('-') || tok.chars().any(|c| "|&;<>=\"'/\\`$()".contains(c));
+        if stop {
+            break;
+        }
+        parts.push(tok);
+        if parts.len() >= 4 {
+            break;
+        }
+    }
+    if parts.is_empty() {
+        // e.g. `VAR=x cmd` — fall back to the first token so the bucket isn't empty.
+        cmd.split_whitespace().next().unwrap_or(cmd).to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
 fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
     let intercepted_events: Vec<_> = events
         .iter()
@@ -155,7 +181,7 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         std::collections::HashMap::new();
     for e in &intercepted_events {
         if !e.command.is_empty() {
-            let entry = by_cmd_map.entry(e.command.clone()).or_default();
+            let entry = by_cmd_map.entry(command_label(&e.command)).or_default();
             entry.0 += 1;
             entry.1 += e.saved_tokens;
         }

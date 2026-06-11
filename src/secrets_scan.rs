@@ -652,6 +652,92 @@ fn group_by(
         .collect()
 }
 
+/// A credential finding for programmatic consumers (the TUI). Carries the raw
+/// `secret` (so the browser can reveal it and redact it in place) alongside the
+/// `redacted` form shown by default. All-owned, so it is `Send` and can cross a
+/// worker-thread boundary.
+pub struct ScanFinding {
+    pub agent: String,
+    pub rule: String,
+    /// `~`-collapsed path, for display.
+    pub file: String,
+    /// Absolute path, for in-place redaction.
+    pub path: PathBuf,
+    pub line: usize,
+    pub secret: String,
+    pub redacted: String,
+    pub length: usize,
+    pub repo: Option<String>,
+    pub branch: Option<String>,
+}
+
+/// Scan every agent's conversations and return redacted findings plus the
+/// per-agent count of files scanned. Reads SQLite DBs and JSON logs, so it can
+/// take a moment — run it off the UI thread.
+pub fn scan_findings() -> (Vec<ScanFinding>, Vec<(String, usize)>) {
+    let Some(home) = dirs::home_dir() else {
+        return (Vec::new(), Vec::new());
+    };
+    let (findings, counts) = scan(&home, "all");
+    let mapped = findings
+        .into_iter()
+        .map(|f| ScanFinding {
+            agent: f.agent.to_string(),
+            rule: f.rule,
+            file: tilde(&home, &f.file),
+            path: f.file,
+            line: f.line,
+            secret: f.secret,
+            redacted: f.redacted,
+            length: f.length,
+            repo: f.repo,
+            branch: f.branch,
+        })
+        .collect();
+    let counts = counts
+        .into_iter()
+        .map(|(a, n)| (a.to_string(), n))
+        .collect();
+    (mapped, counts)
+}
+
+/// Replace every occurrence of `secret` with `[REDACTED]` across the given files,
+/// rewriting text files in place. SQLite databases are skipped — a raw byte edit
+/// would corrupt them — so those must be cleared by the owning tool (or the
+/// credential rotated). Returns `(files_edited, files_skipped)`.
+pub fn redact_in_files(secret: &str, paths: &[PathBuf]) -> (usize, usize) {
+    let mut edited = 0;
+    let mut skipped = 0;
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    for path in paths {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if matches!(ext.as_str(), "db" | "sqlite" | "sqlite3" | "vscdb") {
+            skipped += 1;
+            continue;
+        }
+        match std::fs::read_to_string(path) {
+            Ok(content) if content.contains(secret) => {
+                let replaced = content.replace(secret, "[REDACTED]");
+                if std::fs::write(path, replaced).is_ok() {
+                    edited += 1;
+                } else {
+                    skipped += 1;
+                }
+            }
+            Ok(_) => {}
+            Err(_) => skipped += 1,
+        }
+    }
+    (edited, skipped)
+}
+
 /// Entry point for `tokenix scan-secrets`. Returns the finding count so the
 /// caller can exit non-zero (gitleaks-style) when credentials are present.
 pub fn run(opts: Options) -> Result<usize> {

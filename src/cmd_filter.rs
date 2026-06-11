@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use anyhow::{bail, Result};
 use colored::Colorize;
 
+use crate::ui::{self, box_header, format_num};
 use crate::{filters, recordings, store};
 
 struct CmdStats {
@@ -49,18 +50,6 @@ fn validate_command_name(cmd: &str) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn format_num(n: i64) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-    result.chars().rev().collect()
 }
 
 fn collect_stats(repo_root: &Path) -> Vec<CmdStats> {
@@ -111,27 +100,27 @@ pub fn cmd_filter_list(index: Option<usize>, repo_root: &Path) -> Result<()> {
             );
         }
         let s = &stats[idx - 1];
-        print_box_header(&format!("filter · {}", s.base_cmd));
+        box_header(&format!("filter · {}", s.base_cmd));
         println!(
             "  wasted {}   ·   {} calls",
             format_num(s.total_original - s.total_saved).red().bold(),
             s.count
         );
         println!("\n  {}", "Top unique invocations:".bold());
-        println!("  {:>6} {:>10}  {}", "Calls", "Wasted", "Command".dimmed());
-        println!("  {}", "─".repeat(76).bright_black());
-
         let mut unique: Vec<_> = s.unique_commands.iter().collect();
         unique.sort_by_key(|(_, stats)| -stats.1);
-        for (cmd, (count, wasted)) in unique.iter().take(10) {
-            let cmd: &str = cmd;
-            println!(
-                "  {:>6} {:>10}  {}",
-                count,
-                format_num(*wasted),
-                truncate(cmd, 56).cyan()
-            );
-        }
+        let rows: Vec<Vec<String>> = unique
+            .iter()
+            .take(10)
+            .map(|(cmd, (count, wasted))| {
+                vec![
+                    count.to_string(),
+                    format_num(*wasted),
+                    ui::accent(&truncate(cmd, 56)).to_string(),
+                ]
+            })
+            .collect();
+        ui::print_table(&["Calls", "Wasted", "Command"], &rows, &[0, 1]);
 
         println!(
             "\n  {} build a filter from these:  {}",
@@ -158,23 +147,24 @@ pub fn cmd_filter_active() -> Result<()> {
         return Ok(());
     }
 
-    print_box_header("filter · active output filters");
-    println!(
-        "  {:<28} {:<8} {:<52} Description",
-        "Name", "Source", "Match command"
+    box_header("filter · active output filters");
+    let rows: Vec<Vec<String>> = filters
+        .into_iter()
+        .map(|f| {
+            let desc = f.filter.description.unwrap_or_default();
+            vec![
+                truncate(&f.name, 28),
+                f.source.to_string(),
+                truncate(&f.filter.match_command, 52),
+                truncate(&desc, 42),
+            ]
+        })
+        .collect();
+    ui::print_table(
+        &["Name", "Source", "Match command", "Description"],
+        &rows,
+        &[],
     );
-    println!("  {}", "-".repeat(118).bright_black());
-
-    for f in filters {
-        let desc = f.filter.description.unwrap_or_default();
-        println!(
-            "  {:<28} {:<8} {:<52} {}",
-            truncate(&f.name, 28),
-            f.source,
-            truncate(&f.filter.match_command, 52),
-            truncate(&desc, 42)
-        );
-    }
     println!();
     Ok(())
 }
@@ -184,22 +174,25 @@ fn print_stats_table(stats: &[CmdStats]) {
         println!("No Bash hook events found. Run some commands to populate the log.");
         return;
     }
-    print_box_header("filter · commands by tokens wasted");
-    println!(
-        "{:<4} {:<18} {:>6} {:>15} {:>13}",
-        "#", "Command", "Calls", "Tokens Wasted", "Tokens Saved"
+    box_header("filter · commands by tokens wasted");
+    let rows: Vec<Vec<String>> = stats
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            vec![
+                (i + 1).to_string(),
+                s.base_cmd.clone(),
+                s.count.to_string(),
+                format_num(s.total_original - s.total_saved),
+                format_num(s.total_saved),
+            ]
+        })
+        .collect();
+    ui::print_table(
+        &["#", "Command", "Calls", "Tokens Wasted", "Tokens Saved"],
+        &rows,
+        &[0, 2, 3, 4],
     );
-    println!("{}", "-".repeat(62));
-    for (i, s) in stats.iter().enumerate() {
-        println!(
-            "{:<4} {:<18} {:>6} {:>15} {:>13}",
-            i + 1,
-            s.base_cmd,
-            s.count,
-            format_num(s.total_original - s.total_saved),
-            format_num(s.total_saved),
-        );
-    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -208,22 +201,6 @@ fn truncate(s: &str, max: usize) -> String {
     }
     let keep = max.saturating_sub(1);
     format!("{}~", s.chars().take(keep).collect::<String>())
-}
-
-/// Titled box header in the same visual language as `tokenix gain`.
-fn print_box_header(title: &str) {
-    let inner = format!(" {} ", title);
-    let width = inner.chars().count().max(56);
-    let pad = width - inner.chars().count();
-    println!("\n{}", format!("╭{}╮", "─".repeat(width)).bright_black());
-    println!(
-        "{}{}{}{}",
-        "│".bright_black(),
-        inner.bold(),
-        " ".repeat(pad),
-        "│".bright_black()
-    );
-    println!("{}", format!("╰{}╯", "─".repeat(width)).bright_black());
 }
 
 fn human_bytes(n: u64) -> String {
@@ -270,7 +247,7 @@ pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<
     // Security gate: base_cmd reaches a shell, a filename, and git/PR args.
     validate_command_name(&base_cmd)?;
 
-    print_box_header(&format!("filter generate · {}", base_cmd));
+    box_header(&format!("filter generate · {}", base_cmd));
 
     // Prefer real outputs captured during a `tokenix filter record` session —
     // they give the AI diverse, realistic noise instead of a single re-run.
@@ -695,7 +672,7 @@ pub fn cmd_filter_record_start(command: Option<String>, repo_root: &Path) -> Res
         None => "all commands".bold().to_string(),
     };
 
-    print_box_header("filter record · started");
+    box_header("filter record · started");
     println!("  {} capturing {} output", "●".green(), scope);
     println!("  {} {}", "into".dimmed(), ".tokenix/recordings".cyan());
     println!("\n  Run your commands as usual, then finish with:");
@@ -712,7 +689,7 @@ pub fn cmd_filter_record_stop(repo_root: &Path) -> Result<()> {
     recordings::stop(repo_root)?;
     let summary = recordings::summary(repo_root);
 
-    print_box_header("filter record · stopped");
+    box_header("filter record · stopped");
     if summary.is_empty() {
         println!("  {} No command output was captured.", "⚠".yellow());
         println!(
@@ -755,11 +732,11 @@ pub fn cmd_filter_record_status(repo_root: &Path) -> Result<()> {
                 Some(c) => format!("`{}`", c).bold().to_string(),
                 None => "all commands".bold().to_string(),
             };
-            print_box_header("filter record · active");
+            box_header("filter record · active");
             println!("  {} recording {}", "●".green(), scope);
         }
         None => {
-            print_box_header("filter record · idle");
+            box_header("filter record · idle");
             println!(
                 "  {} no active session — start one with `tokenix filter record start`",
                 "○".yellow()

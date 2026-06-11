@@ -15,6 +15,9 @@ keep_lines_matching = [
 ]
 max_lines = 30
 on_empty = "git log: no commits"
+# Compact variants (`git log --oneline`, `--graph`) don't match the full-log keep
+# rules; show the real output instead of a false "no commits".
+passthrough_when_emptied = true
 replace_patterns = [
   ["[a-f0-9]{40}", "<commit_hash>"],
   ["[a-f0-9]{7,12}(?=\\s)", "<short_hash>"],
@@ -26,6 +29,18 @@ extract_sections = [
 ]
 deduplicate_blocks = { min_block_lines = 2, similarity = 0.6 }
 token_budget = 1500
+
+[[tests.git-log]]
+name = "oneline format is not falsely reported empty"
+input = """
+0852d57 feat: scan-secrets Copilot Chat DB
+9f36421 chore(release): v0.33.2
+44f26a4 fix: robustness pass
+"""
+expected = """
+0852d57 feat: scan-secrets Copilot Chat DB
+9f36421 chore(release): v0.33.2
+44f26a4 fix: robustness pass"""
 
 [[tests.git-log]]
 name = "compact log"
