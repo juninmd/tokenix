@@ -193,7 +193,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `PreToolUse` hooks in `~/.claude/settings.json` or project `.claude/settings.local.json` |
 | [GitHub Copilot](https://docs.github.com/en/copilot) | `.github/copilot-instructions.md` + VS Code-compatible `.github/hooks/hooks.json` |
 | [OpenAI Codex CLI](https://help.openai.com/en/articles/11096431-openai-codex-cli-getting-started) | `~/.codex/hooks.json` for `PreToolUse` Bash rewrites + optional shell helpers |
-| Gemini | `tokenix install-hook --tool gemini` |
+| Antigravity | `tokenix install-hook --tool antigravity` — installs and validates a native `PreToolUse` plugin through `agy plugin` |
 | Any MCP client | `tokenix mcp` — Model Context Protocol server over stdin/stdout (`--tool mcp`) |
 
 ---
@@ -398,6 +398,21 @@ echo '. ~/.codex/tokenix-init.ps1' >> $PROFILE
 
 Then use `tx-read` and `tx-query` as shell helpers. On Windows this also installs `~/.codex/hooks.json` and a PowerShell wrapper that forwards `PreToolUse` intercepts for Bash-like terminal tools (`Bash`, `run_in_terminal`) and normalizes `grep_search` to the same semantic path as `Grep`.
 
+### Antigravity
+
+```bash
+tokenix install-hook --tool antigravity
+# workspace-only:
+tokenix install-hook --tool antigravity --local
+```
+
+Global installation uses `agy plugin install`, validates the result, and stores it under
+`~/.gemini/config/plugins/tokenix/`. Workspace installation writes
+`.agents/plugins/tokenix/` and validates it with `agy plugin validate`.
+The native hook handles Antigravity's `toolCall.name/args` payload and returns
+`decision: allow|deny`; Bash savings use a `PreToolUse` `overwrite`. Antigravity
+`PostToolUse` cannot replace tool output, so tokenix does not install a no-op post hook.
+
 ### All tools at once
 
 ```bash
@@ -501,7 +516,7 @@ tokenix install-hook --tool all
 
 **`tokenix flow`** — `--depth/-d` (3), `--format <text\|mermaid>`, `--output/-o`, `--path/-p`
 
-**`tokenix install-hook` / `remove-hook`** — `--tool <claude-code\|copilot\|codex\|mcp\|gemini\|all>` (default `all`), `--local` (claude-code only)
+**`tokenix install-hook` / `remove-hook`** — `--tool <claude-code\|copilot\|codex\|mcp\|antigravity\|all>` (default `all`), `--local` (Claude Code, Copilot, and Antigravity)
 
 **`tokenix pack`** — `--mode/--profile <plan\|debug\|audit\|security\|review>`, `--budget N` (8000), `--format <markdown\|xml\|json>`, `--changed`, `--since REF`, `--token-map`, `--output/-o`
 

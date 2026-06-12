@@ -1860,7 +1860,16 @@ fn detect_agents() -> Vec<AgentStatus> {
             ],
         ),
         status("Codex", &[(home.join(".codex/hooks.json"), "global")]),
-        status("Gemini", &[(home.join(".gemini/settings.json"), "global")]),
+        status(
+            "Antigravity",
+            &[
+                (
+                    home.join(".gemini/config/plugins/tokenix/plugin.json"),
+                    "global",
+                ),
+                (repo.join(".agents/plugins/tokenix/plugin.json"), "local"),
+            ],
+        ),
     ]
 }
 

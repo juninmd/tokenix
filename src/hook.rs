@@ -42,6 +42,8 @@ pub struct HookInput {
     pub tool_name: String,
     #[serde(default)]
     pub tool_input: serde_json::Value,
+    #[serde(skip)]
+    raw_tool_name: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -52,6 +54,19 @@ struct CopilotHookInput {
     tool_args: serde_json::Value,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AntigravityHookInput {
+    tool_call: AntigravityToolCall,
+}
+
+#[derive(Debug, Deserialize)]
+struct AntigravityToolCall {
+    name: String,
+    #[serde(default)]
+    args: serde_json::Value,
+}
+
 impl HookInput {
     fn from_env() -> Option<Self> {
         // Env vars are a fallback for non-standard tools; Copilot uses stdin.
@@ -60,6 +75,7 @@ impl HookInput {
         let tool_input_raw = std::env::var("TOOL_INPUT").unwrap_or_default();
         let tool_input = serde_json::from_str(&tool_input_raw).unwrap_or(serde_json::Value::Null);
         Some(HookInput {
+            raw_tool_name: tool_name.clone(),
             tool_name,
             tool_input,
         })
@@ -70,6 +86,15 @@ impl HookInput {
         if clean.is_empty() {
             return None;
         }
+        if let Ok(input) = serde_json::from_str::<AntigravityHookInput>(clean) {
+            let tool_name = canonical_tool_name(&input.tool_call.name);
+            let tool_input = normalize_tool_input(&tool_name, input.tool_call.args);
+            return Some(HookInput {
+                raw_tool_name: input.tool_call.name,
+                tool_name,
+                tool_input,
+            });
+        }
         if let Ok(input) = serde_json::from_str::<HookInput>(clean) {
             if !input.tool_name.is_empty() {
                 // Canonicalize here too: newer Copilot/Codex builds send the snake_case
@@ -79,6 +104,7 @@ impl HookInput {
                 let tool_name = canonical_tool_name(&input.tool_name);
                 let tool_input = normalize_tool_input(&tool_name, input.tool_input);
                 return Some(HookInput {
+                    raw_tool_name: input.tool_name,
                     tool_name,
                     tool_input,
                 });
@@ -99,7 +125,7 @@ impl HookInput {
 /// Unrecognized names (Bash variants, Edit, etc.) pass through unchanged.
 fn canonical_tool_name(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
-        "read" | "view" => "Read".to_string(),
+        "read" | "view" | "read_file" | "view_file" => "Read".to_string(),
         "grep" | "grep_search" => "Grep".to_string(),
         _ => name.to_string(),
     }
@@ -115,6 +141,7 @@ fn normalize_copilot_input(tool_name: &str, tool_args: &serde_json::Value) -> Ho
     let tool_name = canonical_tool_name(tool_name);
     let tool_input = normalize_tool_input(&tool_name, args);
     HookInput {
+        raw_tool_name: tool_name.clone(),
         tool_name,
         tool_input,
     }
@@ -486,7 +513,32 @@ fn estimate_original_tokens(
 /// Build the PreToolUse JSON output that rewrites a Bash command's input.
 /// `hookEventName` is required by Claude Code or the whole `hookSpecificOutput`
 /// is ignored and the rewrite silently does not apply.
-fn bash_rewrite_output(rewritten: &str, reason: &str) -> serde_json::Value {
+fn bash_rewrite_output(
+    input: &HookInput,
+    rewritten: &str,
+    reason: &str,
+    antigravity: bool,
+) -> serde_json::Value {
+    if antigravity {
+        let mut args = input.tool_input.clone();
+        if let Some(obj) = args.as_object_mut() {
+            for key in ["command", "CommandLine", "commandLine", "command_line"] {
+                obj.insert(
+                    key.to_string(),
+                    serde_json::Value::String(rewritten.to_string()),
+                );
+            }
+        }
+        return serde_json::json!({
+            "decision": "allow",
+            "reason": reason,
+            "overwrite": {
+                "name": input.raw_tool_name,
+                "args": args
+            }
+        });
+    }
+
     serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -500,6 +552,17 @@ fn bash_rewrite_output(rewritten: &str, reason: &str) -> serde_json::Value {
             }
         }
     })
+}
+
+fn pass_through(antigravity: bool) -> ! {
+    if antigravity {
+        println!(r#"{{"decision":"allow","reason":"tokenix pass-through"}}"#);
+    }
+    std::process::exit(0);
+}
+
+fn exit_success() -> ! {
+    std::process::exit(0);
 }
 
 /// Quote a string for use as a shell argument (bash and PowerShell native-exe calls).
@@ -527,7 +590,7 @@ fn is_bash_tool(name: &str) -> bool {
     )
 }
 
-pub fn run_hook() -> Result<()> {
+pub fn run_hook(antigravity: bool) -> Result<()> {
     // Read input: prefer env vars (Copilot), fall back to stdin (Claude Code / Codex)
     let raw_stdin = std::io::read_to_string(std::io::stdin()).unwrap_or_default();
 
@@ -541,7 +604,7 @@ pub fn run_hook() -> Result<()> {
     let is_supported = input.tool_name == "Read" || input.tool_name == "Grep" || is_bash;
 
     if input.tool_name.is_empty() {
-        std::process::exit(0);
+        pass_through(antigravity);
     }
 
     if !is_supported {
@@ -560,7 +623,7 @@ pub fn run_hook() -> Result<()> {
                 command: String::new(),
             },
         );
-        std::process::exit(0);
+        pass_through(antigravity);
     }
 
     if is_bash {
@@ -573,12 +636,12 @@ pub fn run_hook() -> Result<()> {
             .trim();
 
         if command.is_empty() {
-            std::process::exit(0);
+            pass_through(antigravity);
         }
 
         // Avoid infinite recursion: do not rewrite if it's already a tokenix command execution
         if command.contains("tokenix") {
-            std::process::exit(0);
+            pass_through(antigravity);
         }
 
         // Recording session active: route every in-scope command through
@@ -591,8 +654,10 @@ pub fn run_hook() -> Result<()> {
                 .unwrap_or_else(|_| "tokenix".to_string());
             let rewritten = format!("{} run {}", shell_quote(&exe_path), shell_quote(command));
             let out = bash_rewrite_output(
+                &input,
                 &rewritten,
                 "recording: capturing output for filter generation",
+                antigravity,
             );
 
             let _ = log_hook_event(
@@ -612,7 +677,7 @@ pub fn run_hook() -> Result<()> {
             );
 
             println!("{}", serde_json::to_string(&out).unwrap_or_default());
-            std::process::exit(0);
+            exit_success();
         }
 
         // 1. Optimize git status -> git status --short. Let it pass through natively
@@ -621,7 +686,7 @@ pub fn run_hook() -> Result<()> {
             || command.starts_with("git  status"))
             && (command.contains("-s") || command.contains("--short"));
         if is_short_git_status {
-            std::process::exit(0);
+            pass_through(antigravity);
         }
 
         let status_re = regex::Regex::new(r"^git\s+status(\s+.*)?$").unwrap();
@@ -634,8 +699,10 @@ pub fn run_hook() -> Result<()> {
             };
 
             let out = bash_rewrite_output(
+                &input,
                 &rewritten,
                 "rewrite git status to git status --short for token efficiency",
+                antigravity,
             );
 
             let _ = log_hook_event(
@@ -655,7 +722,7 @@ pub fn run_hook() -> Result<()> {
             );
 
             println!("{}", serde_json::to_string(&out).unwrap_or_default());
-            std::process::exit(0);
+            exit_success();
         }
 
         // 2. Otherwise check for other active filters to wrap in tokenix run
@@ -670,7 +737,12 @@ pub fn run_hook() -> Result<()> {
 
             let rewritten = format!("{} run {}", shell_quote(&exe_path), shell_quote(command));
 
-            let out = bash_rewrite_output(&rewritten, "wrapped in tokenix compression run");
+            let out = bash_rewrite_output(
+                &input,
+                &rewritten,
+                "wrapped in tokenix compression run",
+                antigravity,
+            );
 
             let _ = log_hook_event(
                 &repo_root,
@@ -689,10 +761,10 @@ pub fn run_hook() -> Result<()> {
             );
 
             println!("{}", serde_json::to_string(&out).unwrap_or_default());
-            std::process::exit(0);
+            exit_success();
         }
 
-        std::process::exit(0);
+        pass_through(antigravity);
     }
 
     let staleness = index_staleness(&repo_root);
@@ -713,7 +785,7 @@ pub fn run_hook() -> Result<()> {
                 command: String::new(),
             },
         );
-        std::process::exit(0);
+        pass_through(antigravity);
     }
 
     let (intercepted, output, reason) = match input.tool_name.as_str() {
@@ -738,7 +810,7 @@ pub fn run_hook() -> Result<()> {
                 command: String::new(),
             },
         );
-        std::process::exit(0);
+        pass_through(antigravity);
     }
 
     let original_tokens = estimate_original_tokens(&input.tool_name, &input.tool_input, &repo_root);
@@ -760,6 +832,17 @@ pub fn run_hook() -> Result<()> {
             command: String::new(),
         },
     );
+
+    if antigravity {
+        println!(
+            "{}",
+            serde_json::json!({
+                "decision": "deny",
+                "reason": output
+            })
+        );
+        std::process::exit(0);
+    }
 
     eprintln!("{}", output);
     std::process::exit(2);
@@ -872,6 +955,14 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_tool_call_normalizes_read_file() {
+        let raw = r#"{"toolCall":{"name":"read_file","args":{"path":"src/main.rs"}}}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Read");
+        assert_eq!(input.tool_input["file_path"], "src/main.rs");
+    }
+
+    #[test]
     fn read_intercepts_only_when_outline_saves_tokens() {
         use std::io::Write;
         let dir = std::env::temp_dir().join(format!("tokenix_read_hook_{}", std::process::id()));
@@ -922,7 +1013,12 @@ mod tests {
     fn bash_rewrite_output_has_required_hook_event_name() {
         // Claude Code ignores `hookSpecificOutput` (so the rewrite never applies)
         // unless `hookEventName` is present and set to "PreToolUse".
-        let out = bash_rewrite_output("git status --short", "test reason");
+        let input = HookInput {
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"command": "git status"}),
+            raw_tool_name: "Bash".to_string(),
+        };
+        let out = bash_rewrite_output(&input, "git status --short", "test reason", false);
         let hso = &out["hookSpecificOutput"];
         assert_eq!(hso["hookEventName"], "PreToolUse");
         assert_eq!(hso["permissionDecision"], "allow");
@@ -932,5 +1028,22 @@ mod tests {
         assert_eq!(hso["updatedInput"]["CommandLine"], "git status --short");
         assert_eq!(hso["updatedInput"]["commandLine"], "git status --short");
         assert_eq!(hso["updatedInput"]["command_line"], "git status --short");
+    }
+
+    #[test]
+    fn antigravity_bash_rewrite_uses_native_allow_and_overwrite() {
+        let input = HookInput::from_stdin(
+            r#"{"toolCall":{"name":"run_command","args":{"CommandLine":"git status","Cwd":"."}}}"#,
+        )
+        .unwrap();
+        let out = bash_rewrite_output(&input, "git status --short", "test reason", true);
+        assert_eq!(out["decision"], "allow");
+        assert_eq!(out["reason"], "test reason");
+        assert_eq!(out["overwrite"]["name"], "run_command");
+        assert_eq!(
+            out["overwrite"]["args"]["CommandLine"],
+            "git status --short"
+        );
+        assert_eq!(out["overwrite"]["args"]["Cwd"], ".");
     }
 }

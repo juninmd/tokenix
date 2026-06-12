@@ -21,7 +21,7 @@ tokenix --help
 
 | File | Purpose |
 |---|---|
-| `src/main.rs` | CLI entry (clap), command dispatch, `install-hook`/`remove-hook` helpers, `install-binary` (copies the running exe to `global_bin_dir()` — `%LOCALAPPDATA%\tokenix\bin` / `~/.local/bin` — and persists the Windows user PATH via PowerShell `[Environment]::SetEnvironmentVariable`, never `setx`). `banner()` = neon "tokenix" wordmark + tagline; `help_catalog()` = audience-grouped command list (AI agent vs human) + examples, wired via custom `HELP_TEMPLATE` (`before_help`/`after_help`); bare `tokenix` prints this help |
+| `src/main.rs` | CLI entry (clap), command dispatch, `install-hook`/`remove-hook` helpers (including Antigravity global install/uninstall through `agy plugin` and local `.agents/plugins/tokenix`), `install-binary` (copies the running exe to `global_bin_dir()` — `%LOCALAPPDATA%\tokenix\bin` / `~/.local/bin` — and persists the Windows user PATH via PowerShell `[Environment]::SetEnvironmentVariable`, never `setx`). `banner()` = neon "tokenix" wordmark + tagline; `help_catalog()` = audience-grouped command list (AI agent vs human) + examples, wired via custom `HELP_TEMPLATE` (`before_help`/`after_help`); bare `tokenix` prints this help |
 | `src/chunker.rs` | Symbol-aware heuristic chunking, `generate_outline()`, token counting. Tree-sitter for Rust/Python/TS/JS/Go/C++; `chunk_by_symbol_lines()` line-scanning chunkers for grammar-less languages — VB6/VBA (`Sub`/`Function`/`Property`/`Attribute VB_Name`) and SQL (`CREATE [OR REPLACE] <object>`) |
 | `src/embed.rs` | fastembed ONNX — `embed_documents()`, `embed_query()`. Model **registry** (`MODELS`, `spec_for`) + thread-local active model (`set_active_model`/`active_model_id`) + per-id loaded-model cache. Per-model query/doc prefixes; query cache keyed by model |
 | `src/store.rs` | SQLite schema, CRUD, cosine similarity search (int8-quantized vectors + legacy f32 fallback, `quantize_q8`/`backfill_quantized_embeddings`), import graph (`graph_imports`, `file_imports`), hook log I/O + 5 MB rotation, PID index lock, branch-aware DB paths |
@@ -328,6 +328,12 @@ The daemon auto-starts on first Grep hook call. Run `tokenix serve` manually onl
 
 ### OpenAI Codex CLI
 - Config: `~/.codex/hooks.json` for `PreToolUse` Bash rewrites + optional shell helpers under `~/.codex/`
+
+### Antigravity
+- Global config: `~/.gemini/config/plugins/tokenix/`, installed and registered through `agy plugin install`
+- Local config: `<repo>/.agents/plugins/tokenix/`, validated through `agy plugin validate`
+- Input: `{"toolCall":{"name":"read_file","args":{"path":"src/main.rs"}}}`
+- Output: native `decision: allow|deny`; command rewrites use `overwrite`. Do not install `PostToolUse` for compression because Antigravity cannot replace the original output there.
 
 ## Agent Workflow (when working on this repo)
 

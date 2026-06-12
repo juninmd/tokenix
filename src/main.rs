@@ -75,8 +75,8 @@ enum Tool {
     Codex,
     #[value(name = "mcp")]
     Mcp,
-    #[value(name = "gemini")]
-    Gemini,
+    #[value(name = "antigravity")]
+    Antigravity,
     #[value(name = "all")]
     All,
 }
@@ -411,12 +411,12 @@ enum Commands {
             long,
             value_enum,
             default_value = "all",
-            help = "Target tool: claude-code | copilot | codex | all"
+            help = "Target tool: claude-code | copilot | codex | mcp | antigravity | all"
         )]
         tool: Tool,
         #[arg(
             long = "local",
-            help = "For claude-code: install in .claude/settings.local.json instead of global"
+            help = "Install workspace-local config where supported (Claude Code, Copilot, Antigravity)"
         )]
         local: bool,
     },
@@ -526,6 +526,8 @@ enum Commands {
     Artifacts(ArtifactsAction),
     /// Hook handler called by AI tools (not for direct use)
     Hook,
+    /// Antigravity hook handler (not for direct use)
+    HookAntigravity,
     /// PostToolUse hook handler for output compression (not for direct use)
     HookPost,
     /// Run as a Model Context Protocol (MCP) server over stdin/stdout
@@ -938,8 +940,25 @@ fn main() -> Result<()> {
                 std::env::set_var("OMP_NUM_THREADS", "1");
                 std::env::set_var("RAYON_NUM_THREADS", "1");
             }
-            if let Err(e) = hook::run_hook() {
+            if let Err(e) = hook::run_hook(false) {
                 eprintln!("tokenix hook fail-open: {e:?}");
+            }
+            std::process::exit(0);
+        }
+        Commands::HookAntigravity => {
+            #[allow(unused_unsafe)]
+            unsafe {
+                std::env::set_var("OMP_NUM_THREADS", "1");
+                std::env::set_var("RAYON_NUM_THREADS", "1");
+            }
+            if let Err(e) = hook::run_hook(true) {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "decision": "allow",
+                        "reason": format!("tokenix fail-open: {e}")
+                    })
+                );
             }
             std::process::exit(0);
         }
@@ -2413,12 +2432,13 @@ fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
         Tool::Copilot => install_copilot(local)?,
         Tool::Codex => install_codex()?,
         Tool::Mcp => install_mcp_server()?,
-        Tool::Gemini => install_copilot(local)?,
+        Tool::Antigravity => install_antigravity(local)?,
         Tool::All => {
             install_claude_code(local)?;
             install_copilot(local)?;
             install_codex()?;
             install_mcp_server()?;
+            install_antigravity(local)?;
         }
     }
     Ok(())
@@ -2929,12 +2949,13 @@ fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
         Tool::Copilot => remove_copilot(local)?,
         Tool::Codex => remove_codex()?,
         Tool::Mcp => remove_mcp_server()?,
-        Tool::Gemini => remove_copilot(local)?,
+        Tool::Antigravity => remove_antigravity(local)?,
         Tool::All => {
             remove_claude_code(local)?;
             remove_copilot(local)?;
             remove_codex()?;
             remove_mcp_server()?;
+            remove_antigravity(local)?;
         }
     }
     Ok(())
@@ -3095,6 +3116,132 @@ fn remove_mcp_server() -> Result<()> {
                 config_path.display()
             );
         }
+    }
+    Ok(())
+}
+
+fn antigravity_plugin_dir(home: &Path, repo_root: &Path, local: bool) -> PathBuf {
+    if local {
+        repo_root.join(".agents").join("plugins").join("tokenix")
+    } else {
+        home.join(".gemini")
+            .join("config")
+            .join("plugins")
+            .join("tokenix")
+    }
+}
+
+fn legacy_antigravity_plugin_dir(home: &Path) -> PathBuf {
+    home.join(".gemini")
+        .join("antigravity-cli")
+        .join("plugins")
+        .join("tokenix")
+}
+
+fn write_antigravity_plugin(plugin_dir: &Path, hook_cmd: &str) -> Result<()> {
+    std::fs::create_dir_all(plugin_dir)?;
+    std::fs::write(
+        plugin_dir.join("plugin.json"),
+        serde_json::to_string_pretty(&serde_json::json!({"name": "tokenix"}))?,
+    )?;
+    std::fs::write(
+        plugin_dir.join("hooks.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "tokenix-hooks": {
+                "PreToolUse": [{
+                    "matcher": "^(read_file|view_file|grep_search|run_command|run_in_terminal)$",
+                    "hooks": [{
+                        "type": "command",
+                        "command": hook_cmd,
+                        "timeout": 10
+                    }]
+                }]
+            }
+        }))?,
+    )?;
+    Ok(())
+}
+
+fn run_agy_plugin(args: &[&str]) -> Result<()> {
+    let output = std::process::Command::new("agy")
+        .args(["plugin"])
+        .args(args)
+        .output()
+        .map_err(|e| anyhow::anyhow!("Cannot run Antigravity CLI (`agy`): {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(anyhow::anyhow!(
+        "Antigravity plugin command failed: {}",
+        stderr.trim()
+    ))
+}
+
+fn install_antigravity(local: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let repo_root = store::find_project_root(&cwd);
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+    let plugin_dir = antigravity_plugin_dir(&home, &repo_root, local);
+
+    let tokenix_bin = tokenix_bin_path()?;
+    let hook_cmd = hook_command(&tokenix_bin, "hook-antigravity");
+    if local {
+        write_antigravity_plugin(&plugin_dir, &hook_cmd)?;
+        run_agy_plugin(&["validate", &plugin_dir.to_string_lossy()])?;
+    } else {
+        let staging_dir =
+            std::env::temp_dir().join(format!("tokenix-antigravity-{}", std::process::id()));
+        write_antigravity_plugin(&staging_dir, &hook_cmd)?;
+        let result = run_agy_plugin(&["install", &staging_dir.to_string_lossy()]);
+        if staging_dir.starts_with(std::env::temp_dir()) {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+        }
+        result?;
+        run_agy_plugin(&["validate", &plugin_dir.to_string_lossy()])?;
+        let legacy_dir = legacy_antigravity_plugin_dir(&home);
+        if legacy_dir.exists() {
+            std::fs::remove_dir_all(legacy_dir)?;
+        }
+    }
+
+    println!(
+        "{} Antigravity plugin created    ->  {}",
+        "ok".green(),
+        plugin_dir.display()
+    );
+    println!(
+        "  PreToolUse:  {}      (Read/Grep/Bash interception)",
+        hook_cmd
+    );
+    Ok(())
+}
+
+fn remove_antigravity(local: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let repo_root = store::find_project_root(&cwd);
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+    let plugin_dir = antigravity_plugin_dir(&home, &repo_root, local);
+
+    if !local && plugin_dir.exists() {
+        run_agy_plugin(&["uninstall", "tokenix"])?;
+        let legacy_dir = legacy_antigravity_plugin_dir(&home);
+        if legacy_dir.exists() {
+            std::fs::remove_dir_all(legacy_dir)?;
+        }
+        println!("{} Antigravity plugin uninstalled", "ok".green());
+        return Ok(());
+    }
+
+    if plugin_dir.exists() {
+        std::fs::remove_dir_all(&plugin_dir)?;
+        println!(
+            "{} Antigravity plugin removed from {}",
+            "ok".green(),
+            plugin_dir.display()
+        );
+    } else {
+        println!("{} Antigravity plugin not found.", "~".yellow());
     }
     Ok(())
 }
@@ -3406,7 +3553,7 @@ fn help_catalog() -> String {
         (
             "install-hook",
             "",
-            "Wire tokenix into Claude / Copilot / Codex",
+            "Wire tokenix into Claude / Copilot / Codex / Antigravity",
         ),
         ("remove-hook", "", "Remove tokenix hooks"),
         ("doctor", "", "Diagnose embedding backend, GPU, daemon"),
@@ -3693,5 +3840,34 @@ mod tests {
         assert!(json.to_string().contains("other post"));
         assert!(!json.to_string().contains("tokenix hook"));
         assert!(!json.to_string().contains("tokenix hook-post"));
+    }
+
+    #[test]
+    fn antigravity_plugin_paths_use_current_global_and_workspace_locations() {
+        let home = Path::new("/home/tester");
+        let repo = Path::new("/work/repo");
+        assert_eq!(
+            antigravity_plugin_dir(home, repo, false),
+            home.join(".gemini/config/plugins/tokenix")
+        );
+        assert_eq!(
+            antigravity_plugin_dir(home, repo, true),
+            repo.join(".agents/plugins/tokenix")
+        );
+        assert_eq!(
+            legacy_antigravity_plugin_dir(home),
+            home.join(".gemini/antigravity-cli/plugins/tokenix")
+        );
+    }
+
+    #[test]
+    fn hook_install_targets_exclude_discontinued_gemini_cli() {
+        let targets: Vec<_> = Tool::value_variants()
+            .iter()
+            .filter_map(clap::ValueEnum::to_possible_value)
+            .map(|value| value.get_name().to_string())
+            .collect();
+        assert!(!targets.iter().any(|target| target == "gemini"));
+        assert!(targets.iter().any(|target| target == "antigravity"));
     }
 }
