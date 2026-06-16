@@ -1620,16 +1620,19 @@ pub fn run_hook_post() -> Result<()> {
 /// Pick the PowerShell binary: prefer PowerShell 7+ (`pwsh`, UTF-8 native) and
 /// fall back to Windows PowerShell 5.1 (`powershell`) when pwsh is absent.
 fn powershell_program() -> &'static str {
-    let probe = std::process::Command::new("pwsh")
-        .args(["-NoProfile", "-NonInteractive", "-Command", "$null"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    if probe.is_ok() {
-        "pwsh"
-    } else {
-        "powershell"
-    }
+    static PROGRAM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    PROGRAM.get_or_init(|| {
+        let probe = std::process::Command::new("pwsh")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "$null"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if probe.is_ok() {
+            "pwsh"
+        } else {
+            "powershell"
+        }
+    })
 }
 
 pub fn run_command_and_compress(command_str: &str, shell: &str) -> Result<i32> {

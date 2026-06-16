@@ -891,7 +891,7 @@ fn strip_subcommand_global_opts(argv: &[String]) -> Vec<String> {
                 continue;
             }
             if valued.contains(&a.as_str()) {
-                i += 2; // --opt value
+                i += if i + 1 < argv.len() { 2 } else { 1 }; // --opt value
                 continue;
             }
             if boolean.contains(&a.as_str()) {
@@ -901,7 +901,7 @@ fn strip_subcommand_global_opts(argv: &[String]) -> Vec<String> {
             break;
         } else if a.len() >= 2 && a.starts_with('-') {
             if valued.contains(&a.as_str()) {
-                i += 2; // -C dir
+                i += if i + 1 < argv.len() { 2 } else { 1 }; // -C dir
                 continue;
             }
             if boolean.contains(&a.as_str()) {
@@ -2036,6 +2036,9 @@ on_empty = "empty filter output"
         // Subcommand-less or unknown tools are untouched.
         assert_eq!(eff("git status"), "git status");
         assert_eq!(eff("ls -la"), "ls -la");
+        // Trailing valued options do not panic.
+        assert_eq!(eff("git -C"), "git");
+        assert_eq!(eff("git --git-dir"), "git");
     }
 
     #[test]
