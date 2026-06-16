@@ -372,14 +372,48 @@ pub fn semantic_filter_issues(f: &FilterDef) -> Vec<String> {
 }
 
 pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a FilterDef> {
-    let candidates = derive_command_candidates(cmd);
-    for f in filters {
-        if let Ok(re) = Regex::new(&f.match_command) {
-            for candidate in &candidates {
+    let shell_body = unwrap_shell_runner(cmd);
+    let base = shell_body.as_deref().unwrap_or(cmd);
+    let segments = split_on_operators(base);
+
+    let mut prioritized_candidates = Vec::new();
+
+    // 1. Segment-level candidates: last segment first
+    for segment in segments.iter().rev() {
+        let effective = get_effective_command(segment);
+        push_unique(&mut prioritized_candidates, &effective);
+        push_unique(&mut prioritized_candidates, segment);
+    }
+
+    // 2. Full compound candidates
+    let effective_full = get_effective_command(cmd);
+    push_unique(&mut prioritized_candidates, &effective_full);
+    if let Some(body) = &shell_body {
+        let effective_body = get_effective_command(body);
+        push_unique(&mut prioritized_candidates, &effective_body);
+        push_unique(&mut prioritized_candidates, body);
+    }
+    push_unique(&mut prioritized_candidates, cmd);
+
+    // Find the first filter that matches any prioritized candidate, resolving collisions
+    // by picking the one with the longest (most specific) match_command pattern.
+    for candidate in &prioritized_candidates {
+        let mut best_match: Option<&'a FilterDef> = None;
+        let mut max_len = 0;
+
+        for f in filters {
+            if let Ok(re) = Regex::new(&f.match_command) {
                 if re.is_match(candidate) {
-                    return Some(f);
+                    let pattern_len = f.match_command.len();
+                    if pattern_len > max_len {
+                        max_len = pattern_len;
+                        best_match = Some(f);
+                    }
                 }
             }
+        }
+        if let Some(f) = best_match {
+            return Some(f);
         }
     }
     None
@@ -702,6 +736,7 @@ fn strip_package_runner(argv: &[String]) -> &[String] {
                 | ("bun", "x")
                 | ("deno", "run")
                 | ("deno", "task")
+                | ("bundle", "exec")
         ) {
             return &argv[2..];
         }
@@ -796,6 +831,49 @@ fn strip_subcommand_global_opts(argv: &[String]) -> Vec<String> {
             &["-D", "--debug", "--tls", "--tlsverify"],
         ),
         "cargo" => (&[], &[]),
+        "pnpm" => (
+            &[
+                "-C",
+                "--dir",
+                "--filter",
+                "--reporter",
+                "--store-dir",
+                "--virtual-store-dir",
+                "--loglevel",
+            ],
+            &[
+                "-w",
+                "--workspace",
+                "-r",
+                "--recursive",
+                "--prod",
+                "-D",
+                "--dev",
+                "--no-optional",
+                "--frozen-lockfile",
+                "--silent",
+            ],
+        ),
+        "bun" => (
+            &[
+                "--cwd",
+                "-c",
+                "--config",
+                "--filter",
+                "-p",
+                "--port",
+                "--env-file",
+                "--profile",
+            ],
+            &[
+                "--watch",
+                "--hot",
+                "--smol",
+                "--no-buffer",
+                "-v",
+                "--version",
+            ],
+        ),
         _ => return argv.to_vec(),
     };
 
@@ -975,6 +1053,7 @@ fn push_unique(candidates: &mut Vec<String>, candidate: &str) {
     }
 }
 
+#[cfg(test)]
 pub fn derive_command_candidates(cmd: &str) -> Vec<String> {
     let mut candidates = Vec::new();
 
@@ -1718,6 +1797,15 @@ on_empty = "empty filter output"
             get_effective_command("timeout 30 nice -n 5 pnpm run test"),
             "pnpm run test"
         );
+        // pnpm / bun workspaces filters
+        assert_eq!(
+            get_effective_command("pnpm --filter @mika/desktop test"),
+            "pnpm test"
+        );
+        assert_eq!(
+            get_effective_command("bun --cwd /app run build"),
+            "bun run build"
+        );
     }
 
     #[test]
@@ -1884,6 +1972,53 @@ on_empty = "empty filter output"
         assert!(find_filter("cat x | gitleaks detect", &filters).is_some());
         // A bare argument named gitleaks must NOT match (anchored base command).
         assert!(find_filter("echo gitleaks", &filters).is_none());
+
+        // Test pipeline segment prioritization: B takes priority over A in "A | B"
+        let f_cat = FilterDef {
+            description: None,
+            match_command: "^cat\\b".to_string(),
+            strip_ansi: false,
+            strip_lines_matching: vec![],
+            keep_lines_matching: vec![],
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            on_empty: None,
+            passthrough_when_emptied: false,
+            match_output: vec![],
+            truncate_lines_at: None,
+            filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
+        };
+        let f_gitleaks = FilterDef {
+            description: None,
+            match_command: "^gitleaks\\b".to_string(),
+            strip_ansi: false,
+            strip_lines_matching: vec![],
+            keep_lines_matching: vec![],
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            on_empty: None,
+            passthrough_when_emptied: false,
+            match_output: vec![],
+            truncate_lines_at: None,
+            filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
+        };
+        let filters2 = [f_cat, f_gitleaks];
+        let matched = find_filter("cat x | gitleaks detect", &filters2).unwrap();
+        assert_eq!(matched.match_command, "^gitleaks\\b");
     }
 
     #[test]
@@ -2061,5 +2196,13 @@ on_empty = "empty filter output"
             failures.len(),
             failures.join("\n\n")
         );
+    }
+
+    #[test]
+    fn test_gradlew_match() {
+        let filters = load_bundled_filters();
+        let f = find_filter("./gradlew", &filters);
+        assert!(f.is_some(), "gradlew filter must be found for './gradlew'");
+        assert_eq!(f.unwrap().on_empty.as_deref(), Some("gradlew: success"));
     }
 }

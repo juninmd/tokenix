@@ -1,0 +1,57 @@
+[filters.git-status]
+description = "Compact git status output (both long and short)"
+match_command = "^git\\s+status\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^On branch",
+  "^Your branch is",
+  "^\\s*\\(use ",
+  "^no changes added to commit",
+  "^nothing to commit, working tree clean",
+  "^\\s*$"
+]
+max_lines = 100
+on_empty = "git status: clean"
+
+[[tests.git-status]]
+name = "long status modified and untracked"
+input = """
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   README.md
+	modified:   src/main.rs
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	src/new_file.rs
+
+no changes added to commit (use "git add" and/or "git commit -a")
+"""
+expected = """Changes not staged for commit:
+	modified:   README.md
+	modified:   src/main.rs
+Untracked files:
+	src/new_file.rs"""
+
+[[tests.git-status]]
+name = "short status"
+input = """
+ M src/main.rs
+ M src/query.rs
+?? src/pack.rs
+"""
+expected = """ M src/main.rs
+ M src/query.rs
+?? src/pack.rs"""
+
+[[tests.git-status]]
+name = "clean tree"
+input = """
+On branch main
+nothing to commit, working tree clean
+"""
+expected = "git status: clean"

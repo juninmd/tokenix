@@ -7,15 +7,10 @@ strip_lines_matching = [
   "^\\s*\\d+ files?",
   "^\\s*All checks passed",
   "^\\s*No issues found",
-  "^\\s*Formatted"
+  "^\\s*Formatted",
+  "^\\s*Found \\d+ issues?\\b"
 ]
-keep_lines_matching = [
-  "^[A-Z]:",
-  "error:",
-  "warning:",
-  "note:"
-]
-max_lines = 60
+max_lines = 100
 on_empty = "ruff: no issues"
 
 [[tests.ruff]]
@@ -32,4 +27,5 @@ src/main.py:10:5: F841 Local variable `x` assigned to but never used
 src/main.py:15:1: E501 Line too long (120 > 88)
 Found 2 issues.
 """
-expected = "ruff: no issues"
+expected = """src/main.py:10:5: F841 Local variable `x` assigned to but never used
+src/main.py:15:1: E501 Line too long (120 > 88)"""

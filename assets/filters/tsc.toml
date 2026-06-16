@@ -3,14 +3,10 @@ description = "Compact TypeScript compiler output"
 match_command = "^(npx\\s+)?tsc\\b"
 strip_ansi = true
 strip_lines_matching = [
-  "^\\s*$"
+  "^\\s*$",
+  "^\\s*Found \\d+ errors?\\."
 ]
-keep_lines_matching = [
-  "error TS",
-  "error:",
-  "warning:"
-]
-max_lines = 60
+max_lines = 100
 on_empty = "tsc: no errors"
 
 [[tests.tsc]]
@@ -26,6 +22,5 @@ src/main.ts(10,5): error TS2304: Cannot find name 'foo'.
 src/utils.ts(15,1): error TS2322: Type 'string' is not assignable to type 'number'.
 Found 2 errors.
 """
-expected = """
-src/main.ts(10,5): error TS2304: Cannot find name 'foo'.
+expected = """src/main.ts(10,5): error TS2304: Cannot find name 'foo'.
 src/utils.ts(15,1): error TS2322: Type 'string' is not assignable to type 'number'."""

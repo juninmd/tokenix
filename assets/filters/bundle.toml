@@ -1,6 +1,6 @@
 [filters.bundle]
 description = "Compact Bundler output"
-match_command = "^bundle\\s+(install|update|exec|add|outdated|show)\\b"
+match_command = "^bundle\\s+(add|outdated|show)\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

@@ -1,6 +1,6 @@
 [filters.maven-build]
 description = "Compact Maven build output"
-match_command = "^mvn\\s+(clean\\s+)?(install|package|compile|verify|test)\\b"
+match_command = "^mvn\\s+(clean\\s+)?verify\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -26,6 +26,7 @@ on_empty = "maven build: success"
 
 [[tests.maven-build]]
 name = "clean build"
+command = "mvn verify"
 input = """
 [INFO] Scanning for projects...
 [INFO] 
@@ -49,6 +50,7 @@ expected = "maven build: success"
 
 [[tests.maven-build]]
 name = "build failure shown"
+command = "mvn verify"
 input = """
 [INFO] Scanning for projects...
 [INFO] 

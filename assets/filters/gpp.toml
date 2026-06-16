@@ -1,6 +1,6 @@
 [filters.gpp]
 description = "Compact g++ compiler output — strip notes, keep errors and warnings"
-match_command = "^g\\+\\+\\b"
+match_command = "^g\\+\\+(\\s|$)"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

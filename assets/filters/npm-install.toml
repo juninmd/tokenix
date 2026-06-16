@@ -1,6 +1,6 @@
 [filters.npm-install]
 description = "Compact npm/pnpm/yarn install outputs aggressively"
-match_command = "^(npm|pnpm|yarn|ni)\\s+(install|add|i|in|inst|insta|instal)\\b"
+match_command = "^(npm|ni)\\s+(install|add|i|in|inst|insta|instal)\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
