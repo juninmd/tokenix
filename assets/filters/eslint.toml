@@ -8,13 +8,7 @@ strip_lines_matching = [
   "^\\s*✔",
   "^\\s*No problems"
 ]
-keep_lines_matching = [
-  "error",
-  "warning",
-  "^\\s+\\d+:",
-  "Parsing error"
-]
-max_lines = 60
+max_lines = 100
 on_empty = "eslint: no issues"
 
 [[tests.eslint]]
@@ -33,7 +27,7 @@ input = """
 
 ✖ 2 problems (1 error, 1 warning)
 """
-expected = """
+expected = """/src/main.ts
   10:5  error  'x' is assigned a value but never used  @typescript-eslint/no-unused-vars
   15:1  warning  Line too long  max-len
 ✖ 2 problems (1 error, 1 warning)"""

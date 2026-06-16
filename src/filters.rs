@@ -372,14 +372,48 @@ pub fn semantic_filter_issues(f: &FilterDef) -> Vec<String> {
 }
 
 pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a FilterDef> {
-    let candidates = derive_command_candidates(cmd);
-    for f in filters {
-        if let Ok(re) = Regex::new(&f.match_command) {
-            for candidate in &candidates {
+    let shell_body = unwrap_shell_runner(cmd);
+    let base = shell_body.as_deref().unwrap_or(cmd);
+    let segments = split_on_operators(base);
+
+    let mut prioritized_candidates = Vec::new();
+
+    // 1. Segment-level candidates: last segment first
+    for segment in segments.iter().rev() {
+        let effective = get_effective_command(segment);
+        push_unique(&mut prioritized_candidates, &effective);
+        push_unique(&mut prioritized_candidates, segment);
+    }
+
+    // 2. Full compound candidates
+    let effective_full = get_effective_command(cmd);
+    push_unique(&mut prioritized_candidates, &effective_full);
+    if let Some(body) = &shell_body {
+        let effective_body = get_effective_command(body);
+        push_unique(&mut prioritized_candidates, &effective_body);
+        push_unique(&mut prioritized_candidates, body);
+    }
+    push_unique(&mut prioritized_candidates, cmd);
+
+    // Find the first filter that matches any prioritized candidate, resolving collisions
+    // by picking the one with the longest (most specific) match_command pattern.
+    for candidate in &prioritized_candidates {
+        let mut best_match: Option<&'a FilterDef> = None;
+        let mut max_len = 0;
+
+        for f in filters {
+            if let Ok(re) = Regex::new(&f.match_command) {
                 if re.is_match(candidate) {
-                    return Some(f);
+                    let pattern_len = f.match_command.len();
+                    if pattern_len > max_len {
+                        max_len = pattern_len;
+                        best_match = Some(f);
+                    }
                 }
             }
+        }
+        if let Some(f) = best_match {
+            return Some(f);
         }
     }
     None
@@ -669,6 +703,226 @@ fn strip_leading_wrappers(argv: &[String]) -> Vec<String> {
     argv[index..].to_vec()
 }
 
+/// Drop a leading package-runner prefix so the inner tool's filter matches:
+/// `uv run pytest` -> `pytest`, `python -m ruff check` -> `ruff check`,
+/// `bunx biome check` -> `biome check`, `npx tsc` -> `tsc`,
+/// `pnpm exec eslint` / `pnpm dlx`/`yarn dlx`/`bun x`/`deno run`/`deno task`.
+/// Returns the tail after the runner, or the input unchanged.
+fn strip_package_runner(argv: &[String]) -> &[String] {
+    if argv.is_empty() {
+        return argv;
+    }
+    let t0 = std::path::Path::new(&argv[0])
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or(&argv[0])
+        .to_lowercase();
+    let t0 = t0.strip_suffix(".exe").unwrap_or(&t0);
+
+    // Single-token runners: `npx <tool>`, `bunx <tool>`.
+    if matches!(t0, "npx" | "bunx") && argv.len() > 1 {
+        return &argv[1..];
+    }
+    if argv.len() > 2 {
+        let t1 = argv[1].as_str();
+        let pair = (t0, t1);
+        if matches!(
+            pair,
+            ("uv", "run")
+                | ("uvx", "run")
+                | ("pnpm", "exec")
+                | ("pnpm", "dlx")
+                | ("yarn", "dlx")
+                | ("bun", "x")
+                | ("deno", "run")
+                | ("deno", "task")
+                | ("bundle", "exec")
+        ) {
+            return &argv[2..];
+        }
+        // `python -m <tool>` / `python3 -m` / `py -m`.
+        if matches!(t0, "python" | "python3" | "py") && t1 == "-m" {
+            return &argv[2..];
+        }
+    }
+    argv
+}
+
+/// Drop tool-global options that sit *between* a subcommand tool and its
+/// subcommand, so a filter anchored on `^git\s+add` still matches
+/// `git -C /repo -c user.name=x add .`. Without this, idiomatic invocations
+/// like `git -C dir`, `kubectl -n ns`, `docker -H host` or `cargo +nightly`
+/// bypass every subcommand filter and ship raw output.
+///
+/// Returns the tool name followed by the first non-option token onward, e.g.
+/// `["git", "-C", "dir", "add", "."]` -> `["git", "add", "."]`. Tools not in
+/// the recognized set are returned unchanged.
+fn strip_subcommand_global_opts(argv: &[String]) -> Vec<String> {
+    if argv.is_empty() {
+        return Vec::new();
+    }
+    let tool = std::path::Path::new(&argv[0])
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or(&argv[0])
+        .to_lowercase();
+    let tool = tool.strip_suffix(".exe").unwrap_or(&tool);
+
+    // (flags taking a following value, boolean flags)
+    let (valued, boolean): (&[&str], &[&str]) = match tool {
+        "git" => (
+            &[
+                "-C",
+                "-c",
+                "--git-dir",
+                "--work-tree",
+                "--exec-path",
+                "--namespace",
+                "--super-prefix",
+            ],
+            &[
+                "-p",
+                "-P",
+                "--paginate",
+                "--no-pager",
+                "--bare",
+                "--no-replace-objects",
+                "--literal-pathspecs",
+                "--glob-pathspecs",
+                "--noglob-pathspecs",
+                "--icase-pathspecs",
+                "--no-optional-locks",
+            ],
+        ),
+        "kubectl" => (
+            &[
+                "-n",
+                "--namespace",
+                "--context",
+                "--kubeconfig",
+                "-s",
+                "--server",
+                "--token",
+                "--as",
+                "--as-group",
+                "--cluster",
+                "--user",
+                "--cache-dir",
+                "--request-timeout",
+                "--client-certificate",
+                "--client-key",
+                "--certificate-authority",
+                "--tls-server-name",
+            ],
+            &["--insecure-skip-tls-verify"],
+        ),
+        "docker" => (
+            &[
+                "-H",
+                "--host",
+                "--context",
+                "--config",
+                "-l",
+                "--log-level",
+                "--tlscacert",
+                "--tlscert",
+                "--tlskey",
+            ],
+            &["-D", "--debug", "--tls", "--tlsverify"],
+        ),
+        "cargo" => (&[], &[]),
+        "pnpm" => (
+            &[
+                "-C",
+                "--dir",
+                "--filter",
+                "--reporter",
+                "--store-dir",
+                "--virtual-store-dir",
+                "--loglevel",
+            ],
+            &[
+                "-w",
+                "--workspace",
+                "-r",
+                "--recursive",
+                "--prod",
+                "-D",
+                "--dev",
+                "--no-optional",
+                "--frozen-lockfile",
+                "--silent",
+            ],
+        ),
+        "bun" => (
+            &[
+                "--cwd",
+                "-c",
+                "--config",
+                "--filter",
+                "-p",
+                "--port",
+                "--env-file",
+                "--profile",
+            ],
+            &[
+                "--watch",
+                "--hot",
+                "--smol",
+                "--no-buffer",
+                "-v",
+                "--version",
+            ],
+        ),
+        _ => return argv.to_vec(),
+    };
+
+    let mut i = 1;
+    while i < argv.len() {
+        let a = &argv[i];
+        // `cargo +nightly test`
+        if tool == "cargo" && a.starts_with('+') {
+            i += 1;
+            continue;
+        }
+        if a.starts_with("--") {
+            if a.contains('=') {
+                i += 1; // --opt=value
+                continue;
+            }
+            if valued.contains(&a.as_str()) {
+                i += if i + 1 < argv.len() { 2 } else { 1 }; // --opt value
+                continue;
+            }
+            if boolean.contains(&a.as_str()) {
+                i += 1;
+                continue;
+            }
+            break;
+        } else if a.len() >= 2 && a.starts_with('-') {
+            if valued.contains(&a.as_str()) {
+                i += if i + 1 < argv.len() { 2 } else { 1 }; // -C dir
+                continue;
+            }
+            if boolean.contains(&a.as_str()) {
+                i += 1;
+                continue;
+            }
+            break;
+        } else {
+            break; // subcommand reached
+        }
+    }
+
+    if i == 1 {
+        return argv.to_vec();
+    }
+    let mut out = Vec::with_capacity(1 + argv.len() - i);
+    out.push(argv[0].clone());
+    out.extend_from_slice(&argv[i..]);
+    out
+}
+
 fn strip_cd_and_operators(mut argv: &[String]) -> &[String] {
     for _ in 0..8 {
         if argv.is_empty() {
@@ -708,12 +962,14 @@ pub fn get_effective_command(cmd: &str) -> String {
         let stripped_env = strip_leading_env_assignments(&tokens);
         let stripped_wrappers = strip_leading_wrappers(&stripped_env);
         let stripped_cd = strip_cd_and_operators(&stripped_wrappers);
+        let stripped_runner = strip_package_runner(stripped_cd);
+        let stripped_opts = strip_subcommand_global_opts(stripped_runner);
 
-        if stripped_cd.len() == tokens.len() {
+        if stripped_opts.len() == tokens.len() {
             break;
         }
 
-        current = stripped_cd.join(" ");
+        current = stripped_opts.join(" ");
     }
 
     current
@@ -797,6 +1053,7 @@ fn push_unique(candidates: &mut Vec<String>, candidate: &str) {
     }
 }
 
+#[cfg(test)]
 pub fn derive_command_candidates(cmd: &str) -> Vec<String> {
     let mut candidates = Vec::new();
 
@@ -1540,6 +1797,15 @@ on_empty = "empty filter output"
             get_effective_command("timeout 30 nice -n 5 pnpm run test"),
             "pnpm run test"
         );
+        // pnpm / bun workspaces filters
+        assert_eq!(
+            get_effective_command("pnpm --filter @mika/desktop test"),
+            "pnpm test"
+        );
+        assert_eq!(
+            get_effective_command("bun --cwd /app run build"),
+            "bun run build"
+        );
     }
 
     #[test]
@@ -1706,6 +1972,117 @@ on_empty = "empty filter output"
         assert!(find_filter("cat x | gitleaks detect", &filters).is_some());
         // A bare argument named gitleaks must NOT match (anchored base command).
         assert!(find_filter("echo gitleaks", &filters).is_none());
+
+        // Test pipeline segment prioritization: B takes priority over A in "A | B"
+        let f_cat = FilterDef {
+            description: None,
+            match_command: "^cat\\b".to_string(),
+            strip_ansi: false,
+            strip_lines_matching: vec![],
+            keep_lines_matching: vec![],
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            on_empty: None,
+            passthrough_when_emptied: false,
+            match_output: vec![],
+            truncate_lines_at: None,
+            filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
+        };
+        let f_gitleaks = FilterDef {
+            description: None,
+            match_command: "^gitleaks\\b".to_string(),
+            strip_ansi: false,
+            strip_lines_matching: vec![],
+            keep_lines_matching: vec![],
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            on_empty: None,
+            passthrough_when_emptied: false,
+            match_output: vec![],
+            truncate_lines_at: None,
+            filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
+        };
+        let filters2 = [f_cat, f_gitleaks];
+        let matched = find_filter("cat x | gitleaks detect", &filters2).unwrap();
+        assert_eq!(matched.match_command, "^gitleaks\\b");
+    }
+
+    #[test]
+    fn strip_subcommand_global_opts_normalizes_tool_globals() {
+        let eff = |c: &str| get_effective_command(c);
+        // git global options before the subcommand are peeled away.
+        assert_eq!(eff("git -C /repo add ."), "git add .");
+        assert_eq!(eff("git -c user.name=x commit -m hi"), "git commit -m hi");
+        assert_eq!(eff("git --git-dir=/r/.git -C /r status"), "git status");
+        assert_eq!(eff("git --no-pager log --oneline"), "git log --oneline");
+        // kubectl / docker / cargo share the same global-option bug class.
+        assert_eq!(eff("kubectl -n prod get pods"), "kubectl get pods");
+        assert_eq!(eff("docker -H tcp://h ps -a"), "docker ps -a");
+        assert_eq!(eff("cargo +nightly test"), "cargo test");
+        // Subcommand-less or unknown tools are untouched.
+        assert_eq!(eff("git status"), "git status");
+        assert_eq!(eff("ls -la"), "ls -la");
+        // Trailing valued options do not panic.
+        assert_eq!(eff("git -C"), "git");
+        assert_eq!(eff("git --git-dir"), "git");
+    }
+
+    #[test]
+    fn strip_package_runner_exposes_inner_tool() {
+        let eff = |c: &str| get_effective_command(c);
+        assert_eq!(eff("uv run pytest tests/"), "pytest tests/");
+        assert_eq!(eff("python -m ruff check ."), "ruff check .");
+        assert_eq!(eff("python3 -m pytest"), "pytest");
+        assert_eq!(eff("bunx biome check src"), "biome check src");
+        assert_eq!(eff("npx tsc --noEmit"), "tsc --noEmit");
+        assert_eq!(eff("pnpm exec eslint ."), "eslint .");
+        assert_eq!(eff("pnpm dlx prettier -w ."), "prettier -w .");
+        // Bare `pnpm build` is a script, not a runner — left untouched.
+        assert_eq!(eff("pnpm build"), "pnpm build");
+        // Composes with global-opt stripping: `uv run` then nothing to strip.
+        assert_eq!(eff("npx kubectl -n ns get pods"), "kubectl get pods");
+    }
+
+    #[test]
+    fn find_filter_matches_git_with_global_options() {
+        let f = FilterDef {
+            description: None,
+            match_command: "^git\\s+add\\b".to_string(),
+            strip_ansi: false,
+            strip_lines_matching: vec![],
+            keep_lines_matching: vec![],
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            on_empty: None,
+            passthrough_when_emptied: false,
+            match_output: vec![],
+            truncate_lines_at: None,
+            filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
+        };
+        let filters = [f];
+        assert!(find_filter("git -C /repo add .", &filters).is_some());
+        assert!(find_filter("cd x && git -c k=v add -A", &filters).is_some());
     }
 
     #[test]
@@ -1822,5 +2199,13 @@ on_empty = "empty filter output"
             failures.len(),
             failures.join("\n\n")
         );
+    }
+
+    #[test]
+    fn test_gradlew_match() {
+        let filters = load_bundled_filters();
+        let f = find_filter("./gradlew", &filters);
+        assert!(f.is_some(), "gradlew filter must be found for './gradlew'");
+        assert_eq!(f.unwrap().on_empty.as_deref(), Some("gradlew: success"));
     }
 }

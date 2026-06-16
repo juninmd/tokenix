@@ -1,0 +1,64 @@
+[filters.kubectl-kustomize]
+description = "Compact kubectl kustomize / kustomize build YAML output"
+match_command = "^(kubectl\\s+kustomize|kustomize\\s+build)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*#"
+]
+keep_lines_matching = [
+  "^apiVersion:",
+  "^kind:",
+  "^metadata:",
+  "^  name:",
+  "^  namespace:",
+  "^---",
+  "error",
+  "Error",
+  "failed"
+]
+max_lines = 120
+on_empty = "kustomize: no manifests"
+passthrough_when_emptied = true
+token_budget = 3000
+
+[[tests.kubectl-kustomize]]
+name = "manifest summary kept"
+input = """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: prod
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: prod
+"""
+expected = """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: prod
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: prod"""
+
+[[tests.kubectl-kustomize]]
+name = "build error surfaced"
+input = """
+Error: accumulating resources: accumulation err='merging resources from 'x.yaml': file not found'
+"""
+expected = """
+Error: accumulating resources: accumulation err='merging resources from 'x.yaml': file not found'"""

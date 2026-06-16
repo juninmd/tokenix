@@ -17,6 +17,7 @@ on_empty = "kubectl get: no matching resources"
 
 [[tests.powershell-kubectl-select]]
 name = "keeps headers and matching workload"
+command = "k get"
 input = """
 NAMESPACE            NAME                                                     READY   STATUS      RESTARTS   AGE
 default              unrelated                                                1/1     Running     0          10d

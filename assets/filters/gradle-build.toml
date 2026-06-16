@@ -1,6 +1,6 @@
 [filters.gradle-build]
 description = "Compact Gradle build output"
-match_command = "^(./gradlew|gradle)\\s+(build|assemble|compileJava|test)\\b"
+match_command = "^(./gradlew|gradle)\\s+(build|assemble|compileJava)\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

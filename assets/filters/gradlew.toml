@@ -1,6 +1,6 @@
 [filters.gradlew]
 description = "Compact ./gradlew output"
-match_command = "^\\./gradlew\\b"
+match_command = "^(\\./)?gradlew(\\s|$)"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

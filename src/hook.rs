@@ -571,6 +571,13 @@ fn shell_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\\\""))
 }
 
+/// Quote a string as a PowerShell single-quoted literal: no `$`/backtick
+/// expansion, internal single quotes doubled. Safe for passing an arbitrary
+/// command string as one argument to a native exe via `& 'exe' ... 'arg'`.
+fn ps_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
 fn is_bash_tool(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     matches!(
@@ -600,8 +607,23 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
 
     let repo_root = find_repo_root();
 
-    let is_bash = is_bash_tool(&input.tool_name);
-    let is_supported = input.tool_name == "Read" || input.tool_name == "Grep" || is_bash;
+    // Claude Code's dedicated PowerShell tool (exact "PowerShell") must run the
+    // pwsh-aware path. `is_bash_tool` also lowercase-matches "powershell" for the
+    // generic Copilot/Antigravity runner, so exclude the Claude tool from is_bash.
+    // On Windows, route all command/shell tools (including generic "Bash") via PowerShell's
+    // call operator syntax (& 'exe' run --shell pwsh 'cmd') if they are run inside Antigravity
+    // or standard terminal executors, as Windows runs them under powershell/pwsh.
+    let is_powershell = input.tool_name == "PowerShell"
+        || input.tool_name.eq_ignore_ascii_case("powershell")
+        || (cfg!(windows)
+            && (antigravity
+                || input.tool_name == "run_command"
+                || input.tool_name == "default_api:run_command"
+                || input.tool_name == "run_in_terminal"
+                || input.tool_name == "default_api:run_in_terminal"));
+    let is_bash = is_bash_tool(&input.tool_name) && !is_powershell;
+    let is_supported =
+        input.tool_name == "Read" || input.tool_name == "Grep" || is_bash || is_powershell;
 
     if input.tool_name.is_empty() {
         pass_through(antigravity);
@@ -767,6 +789,67 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
         pass_through(antigravity);
     }
 
+    if is_powershell {
+        let command = input.tool_input["command"]
+            .as_str()
+            .or_else(|| input.tool_input["CommandLine"].as_str())
+            .or_else(|| input.tool_input["commandLine"].as_str())
+            .or_else(|| input.tool_input["command_line"].as_str())
+            .unwrap_or("")
+            .trim();
+
+        if command.is_empty() {
+            pass_through(antigravity);
+        }
+        // Avoid recursion: the rewrite itself invokes tokenix under pwsh.
+        if command.contains("tokenix") {
+            pass_through(antigravity);
+        }
+
+        let filters = crate::filters::load_all_filters();
+        if crate::filters::find_filter(command, &filters).is_some() {
+            let exe_path = std::env::current_exe()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| "tokenix".to_string());
+
+            // Rewrite as a native-exe call in PowerShell syntax; `tokenix run`
+            // re-executes the original command under pwsh and compresses output.
+            let rewritten = format!(
+                "& {} run --shell pwsh {}",
+                ps_quote(&exe_path),
+                ps_quote(command)
+            );
+
+            let out = bash_rewrite_output(
+                &input,
+                &rewritten,
+                "wrapped in tokenix compression run (pwsh)",
+                antigravity,
+            );
+
+            let _ = log_hook_event(
+                &repo_root,
+                &HookEvent {
+                    ts: now_ts(),
+                    tool: "PowerShell".to_string(),
+                    action: "intercepted".to_string(),
+                    phase: "pre".to_string(),
+                    reason: "rewrote command to tokenix run (pwsh)".to_string(),
+                    saved_tokens: 0,
+                    actual_tokens: 0,
+                    original_estimate: 0,
+                    input_preview: command.chars().take(200).collect(),
+                    command: command.to_string(),
+                },
+            );
+
+            println!("{}", serde_json::to_string(&out).unwrap_or_default());
+            exit_success();
+        }
+
+        pass_through(antigravity);
+    }
+
     let staleness = index_staleness(&repo_root);
 
     if staleness.stale {
@@ -851,6 +934,31 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ps_quote_wraps_and_escapes_single_quotes() {
+        assert_eq!(ps_quote("Get-ChildItem"), "'Get-ChildItem'");
+        // Internal single quotes are doubled (PowerShell literal escaping).
+        assert_eq!(
+            ps_quote("Select-String -Pattern 'foo'"),
+            "'Select-String -Pattern ''foo'''"
+        );
+        // $ and backtick stay literal inside a single-quoted PS string.
+        assert_eq!(ps_quote("$env:PATH"), "'$env:PATH'");
+    }
+
+    #[test]
+    fn ps_rewrite_is_valid_powershell_call() {
+        // The rewrite must be a native-exe call (`& 'exe' run --shell pwsh 'cmd'`)
+        // that PowerShell can parse, with the original command as one literal arg.
+        let exe = "C:/tokenix/bin/tokenix.exe";
+        let cmd = "Get-ChildItem | Select-String 'todo'";
+        let rewritten = format!("& {} run --shell pwsh {}", ps_quote(exe), ps_quote(cmd));
+        assert_eq!(
+            rewritten,
+            "& 'C:/tokenix/bin/tokenix.exe' run --shell pwsh 'Get-ChildItem | Select-String ''todo'''"
+        );
+    }
 
     #[test]
     fn parses_claude_input() {

@@ -1,6 +1,6 @@
 [filters.vitest-run]
 description = "Compact vitest run output"
-match_command = "^(npx\\s+)?vitest\\s+run\\b"
+match_command = "^((pnpm\\s+exec|pnpm\\s+dlx|yarn\\s+dlx|deno\\s+task|npx|bunx|pnpm|yarn)\\s+)?vitest\\s+run\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

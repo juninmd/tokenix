@@ -1617,8 +1617,35 @@ pub fn run_hook_post() -> Result<()> {
     std::process::exit(0);
 }
 
-pub fn run_command_and_compress(command_str: &str) -> Result<i32> {
-    let mut cmd = if cfg!(windows) {
+/// Pick the PowerShell binary: prefer PowerShell 7+ (`pwsh`, UTF-8 native) and
+/// fall back to Windows PowerShell 5.1 (`powershell`) when pwsh is absent.
+fn powershell_program() -> &'static str {
+    static PROGRAM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    PROGRAM.get_or_init(|| {
+        let probe = std::process::Command::new("pwsh")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "$null"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if probe.is_ok() {
+            "pwsh"
+        } else {
+            "powershell"
+        }
+    })
+}
+
+pub fn run_command_and_compress(command_str: &str, shell: &str) -> Result<i32> {
+    let is_powershell = matches!(shell, "pwsh" | "powershell");
+    let mut cmd = if is_powershell {
+        // Force UTF-8 so captured bytes decode cleanly (Windows PowerShell 5.1
+        // otherwise emits UTF-16/codepage output that from_utf8_lossy mangles).
+        let wrapped =
+            format!("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; {command_str}");
+        let mut c = std::process::Command::new(powershell_program());
+        c.args(["-NoProfile", "-NonInteractive", "-Command", &wrapped]);
+        c
+    } else if cfg!(windows) {
         let mut c = std::process::Command::new("cmd");
         c.args(["/C", command_str]);
         c
@@ -1662,7 +1689,7 @@ pub fn run_command_and_compress(command_str: &str) -> Result<i32> {
             &repo_root,
             &HookEvent {
                 ts: now_ts(),
-                tool: "Bash".to_string(),
+                tool: if is_powershell { "PowerShell" } else { "Bash" }.to_string(),
                 action: "intercepted".to_string(),
                 phase: "ToolOutputCompressed".to_string(),
                 reason: "compressed command output".to_string(),

@@ -1,0 +1,43 @@
+[filters.find]
+description = "Compact find output: drop permission-denied noise, cap long path listings"
+match_command = "^find\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^find: .*[Pp]ermission denied",
+  "^find: .*No such file or directory",
+  "^find: .*cannot (access|read|open)",
+]
+max_lines = 50
+on_empty = "find: no matches"
+token_budget = 2000
+
+[[tests.find]]
+name = "paths listed"
+input = """
+./src/main.rs
+./src/utils.rs
+./tests/integration.rs
+"""
+expected = """
+./src/main.rs
+./src/utils.rs
+./tests/integration.rs"""
+
+[[tests.find]]
+name = "permission denied noise stripped"
+input = """
+./src/main.rs
+find: './proc/1/root': Permission denied
+find: './sys/kernel': Permission denied
+./src/lib.rs
+"""
+expected = """
+./src/main.rs
+./src/lib.rs"""
+
+[[tests.find]]
+name = "no matches"
+input = """
+"""
+expected = "find: no matches"

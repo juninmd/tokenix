@@ -373,6 +373,13 @@ where
         if file_plan.git_incremental {
             progress_cb("git incremental: no changed files");
         }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let _ = crate::store::write_index_meta(&conn, repo_root, now);
+
         let stats = count_stats(&conn)?;
         return Ok((
             IndexResult {

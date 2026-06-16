@@ -1,6 +1,6 @@
 [filters.pio]
 description = "Compact PlatformIO output"
-match_command = "^pio\\s+(run|test|check|update|lib|pkg|platform|boards|device|debug|remote|home|account|ci|pkg)\\b"
+match_command = "^pio\\s+(test|check|update|lib|pkg|platform|boards|device|debug|remote|home|account|ci|pkg)\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -33,6 +33,7 @@ on_empty = "pio: ok"
 
 [[tests.pio]]
 name = "build error shown"
+command = "pio test"
 input = """
 Verbose mode can be enabled via `-v, --verbose` option
 CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32dev.html
@@ -46,6 +47,7 @@ expected = "src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared in this sc
 
 [[tests.pio]]
 name = "clean build"
+command = "pio test"
 input = """
 Verbose mode can be enabled via `-v, --verbose` option
 Compiling .pio/build/esp32dev/src/main.cpp.o
