@@ -376,8 +376,8 @@ where
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
         let _ = crate::store::write_index_meta(&conn, repo_root, now);
 
         let stats = count_stats(&conn)?;
