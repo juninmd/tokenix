@@ -41,7 +41,7 @@ tokenix --help
 | `src/mcp.rs` | MCP server. `--profile full` exposes all tools; `--profile slim` exposes context/search/call meta-tools for progressive discovery |
 | `src/mcp_audit.rs` | `tokenix prompt-audit` / `session-audit` — per-agent MCP config discovery + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report |
 | `src/secrets_scan.rs` | `tokenix scan-secrets` — gitleaks-style credential scan of Claude/Gemini/Copilot/Antigravity conversation transcripts under `~`; rules loaded from TOML (`assets/secret-rules/` bundled via `rust-embed`, extended by `<repo>/` then `~/.tokenix/secret-rules/*.toml`, later `id` wins), backtracking-free regex + entropy-gated generic rule. Each finding is attributed to its repo + git branch via the transcript line's `cwd`/`gitBranch` (Claude), falling back to the project dir slug. Report supports `--filter` (substring), `--group <value\|rule\|agent\|file\|repo>`, `--reveal` (raw values, default redacted), `--json`; exit 1 on hits. `scan_findings()` returns structured `ScanFinding`s (raw + redacted) for the TUI; `redact_in_files()` rewrites `[REDACTED]` over a value in text files (SQLite DBs skipped) |
-| `assets/filters/` | 241 TOML output filters embedded via `rust-embed`, each homologated with ≥2 golden `[[tests]]` cases (realistic success + failure-path inputs; the failure case must prove errors are never masked). 516 cases run through the real `apply_filter` pipeline in `bundled_filters_pass_embedded_golden_tests`. User filters in `~/.tokenix/filters/` take priority |
+| `assets/filters/` | 244 TOML output filters embedded via `rust-embed`, each homologated with ≥2 golden `[[tests]]` cases (realistic success + failure-path inputs; the failure case must prove errors are never masked). 522 cases run through the real `apply_filter` pipeline in `bundled_filters_pass_embedded_golden_tests`. User filters in `~/.tokenix/filters/` take priority |
 
 ## SQLite Schema
 
@@ -91,6 +91,13 @@ Index missing or >1h old → always exit 0 regardless of tool
 Matcher (installer): `^(Read|Grep|Bash|PowerShell|grep_search|run_in_terminal)$`.
 Claude Code's dedicated `PowerShell` tool (exact name) takes the pwsh path; the
 generic lowercase `powershell` from Copilot/Antigravity stays on the bash path.
+
+`get_effective_command` normalizes a command before matching so filters anchored
+on the bare tool still hit: it strips shell wrappers, `cd`/env prefixes, package
+runners (`uv run`, `python -m`, `npx`, `bunx`, `pnpm exec/dlx`, `yarn dlx`,
+`bun x`, `deno run/task`), and tool-global options (`git -C`, `kubectl -n`,
+`docker -H`, `cargo +tc`). Verified against Codex/Antigravity histories where
+`uv run pytest`, `python -m ruff`, `bunx biome` were bypassing their filters.
 
 Both thresholds are per-project tunable via `.tokenix.toml`:
 

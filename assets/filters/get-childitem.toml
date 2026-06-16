@@ -1,0 +1,34 @@
+[filters.get-childitem]
+description = "Compact PowerShell Get-ChildItem directory listings"
+match_command = "^(Get-ChildItem|gci)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+truncate_lines_at = 200
+max_lines = 60
+on_empty = "Get-ChildItem: no items"
+token_budget = 2000
+
+[[tests.get-childitem]]
+name = "listing preserved"
+input = """
+    Directory: D:\\Solutions\\pessoal\\tokenix\\src
+
+Mode    LastWriteTime    Length Name
+----    -------------    ------ ----
+-a---   2026-06-16          120 main.rs
+-a---   2026-06-16        45000 filters.rs
+"""
+expected = """
+    Directory: D:\\Solutions\\pessoal\\tokenix\\src
+Mode    LastWriteTime    Length Name
+----    -------------    ------ ----
+-a---   2026-06-16          120 main.rs
+-a---   2026-06-16        45000 filters.rs"""
+
+[[tests.get-childitem]]
+name = "empty directory"
+input = """
+"""
+expected = "Get-ChildItem: no items"

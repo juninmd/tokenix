@@ -669,6 +669,50 @@ fn strip_leading_wrappers(argv: &[String]) -> Vec<String> {
     argv[index..].to_vec()
 }
 
+/// Drop a leading package-runner prefix so the inner tool's filter matches:
+/// `uv run pytest` -> `pytest`, `python -m ruff check` -> `ruff check`,
+/// `bunx biome check` -> `biome check`, `npx tsc` -> `tsc`,
+/// `pnpm exec eslint` / `pnpm dlx`/`yarn dlx`/`bun x`/`deno run`/`deno task`.
+/// Returns the tail after the runner, or the input unchanged.
+fn strip_package_runner(argv: &[String]) -> &[String] {
+    if argv.is_empty() {
+        return argv;
+    }
+    let t0 = std::path::Path::new(&argv[0])
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or(&argv[0])
+        .to_lowercase();
+    let t0 = t0.strip_suffix(".exe").unwrap_or(&t0);
+
+    // Single-token runners: `npx <tool>`, `bunx <tool>`.
+    if matches!(t0, "npx" | "bunx") && argv.len() > 1 {
+        return &argv[1..];
+    }
+    if argv.len() > 2 {
+        let t1 = argv[1].as_str();
+        let pair = (t0, t1);
+        if matches!(
+            pair,
+            ("uv", "run")
+                | ("uvx", "run")
+                | ("pnpm", "exec")
+                | ("pnpm", "dlx")
+                | ("yarn", "dlx")
+                | ("bun", "x")
+                | ("deno", "run")
+                | ("deno", "task")
+        ) {
+            return &argv[2..];
+        }
+        // `python -m <tool>` / `python3 -m` / `py -m`.
+        if matches!(t0, "python" | "python3" | "py") && t1 == "-m" {
+            return &argv[2..];
+        }
+    }
+    argv
+}
+
 /// Drop tool-global options that sit *between* a subcommand tool and its
 /// subcommand, so a filter anchored on `^git\s+add` still matches
 /// `git -C /repo -c user.name=x add .`. Without this, idiomatic invocations
@@ -840,7 +884,8 @@ pub fn get_effective_command(cmd: &str) -> String {
         let stripped_env = strip_leading_env_assignments(&tokens);
         let stripped_wrappers = strip_leading_wrappers(&stripped_env);
         let stripped_cd = strip_cd_and_operators(&stripped_wrappers);
-        let stripped_opts = strip_subcommand_global_opts(stripped_cd);
+        let stripped_runner = strip_package_runner(stripped_cd);
+        let stripped_opts = strip_subcommand_global_opts(stripped_runner);
 
         if stripped_opts.len() == tokens.len() {
             break;
@@ -1856,6 +1901,22 @@ on_empty = "empty filter output"
         // Subcommand-less or unknown tools are untouched.
         assert_eq!(eff("git status"), "git status");
         assert_eq!(eff("ls -la"), "ls -la");
+    }
+
+    #[test]
+    fn strip_package_runner_exposes_inner_tool() {
+        let eff = |c: &str| get_effective_command(c);
+        assert_eq!(eff("uv run pytest tests/"), "pytest tests/");
+        assert_eq!(eff("python -m ruff check ."), "ruff check .");
+        assert_eq!(eff("python3 -m pytest"), "pytest");
+        assert_eq!(eff("bunx biome check src"), "biome check src");
+        assert_eq!(eff("npx tsc --noEmit"), "tsc --noEmit");
+        assert_eq!(eff("pnpm exec eslint ."), "eslint .");
+        assert_eq!(eff("pnpm dlx prettier -w ."), "prettier -w .");
+        // Bare `pnpm build` is a script, not a runner — left untouched.
+        assert_eq!(eff("pnpm build"), "pnpm build");
+        // Composes with global-opt stripping: `uv run` then nothing to strip.
+        assert_eq!(eff("npx kubectl -n ns get pods"), "kubectl get pods");
     }
 
     #[test]
