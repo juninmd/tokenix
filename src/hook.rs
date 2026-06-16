@@ -610,7 +610,17 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
     // Claude Code's dedicated PowerShell tool (exact "PowerShell") must run the
     // pwsh-aware path. `is_bash_tool` also lowercase-matches "powershell" for the
     // generic Copilot/Antigravity runner, so exclude the Claude tool from is_bash.
-    let is_powershell = input.tool_name == "PowerShell";
+    // On Windows, route all command/shell tools (including generic "Bash") via PowerShell's
+    // call operator syntax (& 'exe' run --shell pwsh 'cmd') if they are run inside Antigravity
+    // or standard terminal executors, as Windows runs them under powershell/pwsh.
+    let is_powershell = input.tool_name == "PowerShell"
+        || input.tool_name.eq_ignore_ascii_case("powershell")
+        || (cfg!(windows)
+            && (antigravity
+                || input.tool_name == "run_command"
+                || input.tool_name == "default_api:run_command"
+                || input.tool_name == "run_in_terminal"
+                || input.tool_name == "default_api:run_in_terminal"));
     let is_bash = is_bash_tool(&input.tool_name) && !is_powershell;
     let is_supported =
         input.tool_name == "Read" || input.tool_name == "Grep" || is_bash || is_powershell;
