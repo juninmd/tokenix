@@ -669,6 +669,138 @@ fn strip_leading_wrappers(argv: &[String]) -> Vec<String> {
     argv[index..].to_vec()
 }
 
+/// Drop tool-global options that sit *between* a subcommand tool and its
+/// subcommand, so a filter anchored on `^git\s+add` still matches
+/// `git -C /repo -c user.name=x add .`. Without this, idiomatic invocations
+/// like `git -C dir`, `kubectl -n ns`, `docker -H host` or `cargo +nightly`
+/// bypass every subcommand filter and ship raw output.
+///
+/// Returns the tool name followed by the first non-option token onward, e.g.
+/// `["git", "-C", "dir", "add", "."]` -> `["git", "add", "."]`. Tools not in
+/// the recognized set are returned unchanged.
+fn strip_subcommand_global_opts(argv: &[String]) -> Vec<String> {
+    if argv.is_empty() {
+        return Vec::new();
+    }
+    let tool = std::path::Path::new(&argv[0])
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or(&argv[0])
+        .to_lowercase();
+    let tool = tool.strip_suffix(".exe").unwrap_or(&tool);
+
+    // (flags taking a following value, boolean flags)
+    let (valued, boolean): (&[&str], &[&str]) = match tool {
+        "git" => (
+            &[
+                "-C",
+                "-c",
+                "--git-dir",
+                "--work-tree",
+                "--exec-path",
+                "--namespace",
+                "--super-prefix",
+            ],
+            &[
+                "-p",
+                "-P",
+                "--paginate",
+                "--no-pager",
+                "--bare",
+                "--no-replace-objects",
+                "--literal-pathspecs",
+                "--glob-pathspecs",
+                "--noglob-pathspecs",
+                "--icase-pathspecs",
+                "--no-optional-locks",
+            ],
+        ),
+        "kubectl" => (
+            &[
+                "-n",
+                "--namespace",
+                "--context",
+                "--kubeconfig",
+                "-s",
+                "--server",
+                "--token",
+                "--as",
+                "--as-group",
+                "--cluster",
+                "--user",
+                "--cache-dir",
+                "--request-timeout",
+                "--client-certificate",
+                "--client-key",
+                "--certificate-authority",
+                "--tls-server-name",
+            ],
+            &["--insecure-skip-tls-verify"],
+        ),
+        "docker" => (
+            &[
+                "-H",
+                "--host",
+                "--context",
+                "--config",
+                "-l",
+                "--log-level",
+                "--tlscacert",
+                "--tlscert",
+                "--tlskey",
+            ],
+            &["-D", "--debug", "--tls", "--tlsverify"],
+        ),
+        "cargo" => (&[], &[]),
+        _ => return argv.to_vec(),
+    };
+
+    let mut i = 1;
+    while i < argv.len() {
+        let a = &argv[i];
+        // `cargo +nightly test`
+        if tool == "cargo" && a.starts_with('+') {
+            i += 1;
+            continue;
+        }
+        if a.starts_with("--") {
+            if a.contains('=') {
+                i += 1; // --opt=value
+                continue;
+            }
+            if valued.contains(&a.as_str()) {
+                i += 2; // --opt value
+                continue;
+            }
+            if boolean.contains(&a.as_str()) {
+                i += 1;
+                continue;
+            }
+            break;
+        } else if a.len() >= 2 && a.starts_with('-') {
+            if valued.contains(&a.as_str()) {
+                i += 2; // -C dir
+                continue;
+            }
+            if boolean.contains(&a.as_str()) {
+                i += 1;
+                continue;
+            }
+            break;
+        } else {
+            break; // subcommand reached
+        }
+    }
+
+    if i == 1 {
+        return argv.to_vec();
+    }
+    let mut out = Vec::with_capacity(1 + argv.len() - i);
+    out.push(argv[0].clone());
+    out.extend_from_slice(&argv[i..]);
+    out
+}
+
 fn strip_cd_and_operators(mut argv: &[String]) -> &[String] {
     for _ in 0..8 {
         if argv.is_empty() {
@@ -708,12 +840,13 @@ pub fn get_effective_command(cmd: &str) -> String {
         let stripped_env = strip_leading_env_assignments(&tokens);
         let stripped_wrappers = strip_leading_wrappers(&stripped_env);
         let stripped_cd = strip_cd_and_operators(&stripped_wrappers);
+        let stripped_opts = strip_subcommand_global_opts(stripped_cd);
 
-        if stripped_cd.len() == tokens.len() {
+        if stripped_opts.len() == tokens.len() {
             break;
         }
 
-        current = stripped_cd.join(" ");
+        current = stripped_opts.join(" ");
     }
 
     current
@@ -1706,6 +1839,51 @@ on_empty = "empty filter output"
         assert!(find_filter("cat x | gitleaks detect", &filters).is_some());
         // A bare argument named gitleaks must NOT match (anchored base command).
         assert!(find_filter("echo gitleaks", &filters).is_none());
+    }
+
+    #[test]
+    fn strip_subcommand_global_opts_normalizes_tool_globals() {
+        let eff = |c: &str| get_effective_command(c);
+        // git global options before the subcommand are peeled away.
+        assert_eq!(eff("git -C /repo add ."), "git add .");
+        assert_eq!(eff("git -c user.name=x commit -m hi"), "git commit -m hi");
+        assert_eq!(eff("git --git-dir=/r/.git -C /r status"), "git status");
+        assert_eq!(eff("git --no-pager log --oneline"), "git log --oneline");
+        // kubectl / docker / cargo share the same global-option bug class.
+        assert_eq!(eff("kubectl -n prod get pods"), "kubectl get pods");
+        assert_eq!(eff("docker -H tcp://h ps -a"), "docker ps -a");
+        assert_eq!(eff("cargo +nightly test"), "cargo test");
+        // Subcommand-less or unknown tools are untouched.
+        assert_eq!(eff("git status"), "git status");
+        assert_eq!(eff("ls -la"), "ls -la");
+    }
+
+    #[test]
+    fn find_filter_matches_git_with_global_options() {
+        let f = FilterDef {
+            description: None,
+            match_command: "^git\\s+add\\b".to_string(),
+            strip_ansi: false,
+            strip_lines_matching: vec![],
+            keep_lines_matching: vec![],
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            on_empty: None,
+            passthrough_when_emptied: false,
+            match_output: vec![],
+            truncate_lines_at: None,
+            filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
+        };
+        let filters = [f];
+        assert!(find_filter("git -C /repo add .", &filters).is_some());
+        assert!(find_filter("cd x && git -c k=v add -A", &filters).is_some());
     }
 
     #[test]

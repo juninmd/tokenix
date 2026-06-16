@@ -1,0 +1,29 @@
+[filters.git-ls-files]
+description = "Compact git ls-files path listings"
+match_command = "^git\\s+ls-files\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+truncate_lines_at = 140
+max_lines = 60
+on_empty = "git ls-files: no tracked files"
+token_budget = 2000
+
+[[tests.git-ls-files]]
+name = "tracked files listed"
+input = """
+src/main.rs
+src/filters.rs
+tests/integration.rs
+"""
+expected = """
+src/main.rs
+src/filters.rs
+tests/integration.rs"""
+
+[[tests.git-ls-files]]
+name = "no tracked files"
+input = """
+"""
+expected = "git ls-files: no tracked files"

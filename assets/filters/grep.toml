@@ -5,11 +5,9 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
 ]
-keep_lines_matching = [
-  ":",
-  "error:",
-  "warning:"
-]
+# grep output *is* the requested signal — every matched line matters. An earlier
+# `keep_lines_matching = [":"]` masked real matches from single-file greps
+# (`grep pat file` emits bare lines with no `file:line:` prefix) as "no matches".
 replace_patterns = [
   ["^([^:\\n]+):(\\d+):(\\s*)", "$1:$2:"]
 ]
@@ -26,6 +24,16 @@ src/agent/writer.ts:123:        const attempt = await retryDraft();
 expected = """
 src/agent/editorial.ts:65:if (draft.title.trim().length > 100) errors.push("title is too long");
 src/agent/writer.ts:123:const attempt = await retryDraft();"""
+
+[[tests.grep]]
+name = "single-file matches without colon prefix are preserved"
+input = """
+    let total = compute(a, b);
+    return total + 1;
+"""
+expected = """
+    let total = compute(a, b);
+    return total + 1;"""
 
 [[tests.grep]]
 name = "no matches"
