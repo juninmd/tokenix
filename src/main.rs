@@ -2618,7 +2618,7 @@ tokenix read <file> --symbol <name>
 tokenix read <file> --lines N-M
 ```
 
-Only read a full file directly after tokenix shows that the file is small, or after a targeted `--symbol` / `--lines` read is not enough.
+Do not call the native full-file Read tool on large files first. Use `tokenix read` for an outline, then `tokenix read --symbol` or native Read with offset/limit for the exact body you need. Only read a full file directly after tokenix shows that the file is small, or after a targeted `--symbol` / `--lines` read is not enough.
 
 ## High-signal examples
 
@@ -2734,7 +2734,7 @@ tokenix read <file> --symbol <name>
 tokenix read <file> --lines N-M
 ```
 
-Only read full files directly after tokenix shows that the file is small, or after a targeted symbol/line read is insufficient.
+Do not call the native full-file Read tool on large files first. Use `tokenix read` for an outline, then `tokenix read --symbol` or native Read with offset/limit for the exact body you need. Only read a full file directly after tokenix shows that the file is small, or after a targeted symbol/line read is insufficient.
 
 tokenix binary: `{tokenix_bin}`
 {marker}

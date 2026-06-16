@@ -1,0 +1,34 @@
+[filters.grep]
+description = "Compact grep output"
+match_command = "^grep\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  ":",
+  "error:",
+  "warning:"
+]
+replace_patterns = [
+  ["^([^:\\n]+):(\\d+):(\\s*)", "$1:$2:"]
+]
+truncate_lines_at = 180
+max_lines = 50
+on_empty = "grep: no matches"
+
+[[tests.grep]]
+name = "source matches are compacted"
+input = """
+src/agent/editorial.ts:65:  if (draft.title.trim().length > 100) errors.push("title is too long");
+src/agent/writer.ts:123:        const attempt = await retryDraft();
+"""
+expected = """
+src/agent/editorial.ts:65:if (draft.title.trim().length > 100) errors.push("title is too long");
+src/agent/writer.ts:123:const attempt = await retryDraft();"""
+
+[[tests.grep]]
+name = "no matches"
+input = """
+"""
+expected = "grep: no matches"

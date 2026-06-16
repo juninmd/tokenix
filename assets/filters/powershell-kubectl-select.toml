@@ -1,0 +1,33 @@
+[filters.powershell-kubectl-select]
+description = "Compact PowerShell kubectl get piped through Select-String"
+match_command = "^(kubectl|k)\\s+get\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^===.*===$"
+]
+keep_lines_matching = [
+  "^(NAMESPACE|NAME)\\s+",
+  "(?i)evo",
+  "CrashLoopBackOff|BackoffLimitExceeded|Error|Pending|Running|Failed|Completed"
+]
+truncate_lines_at = 180
+max_lines = 60
+on_empty = "kubectl get: no matching resources"
+
+[[tests.powershell-kubectl-select]]
+name = "keeps headers and matching workload"
+input = """
+NAMESPACE            NAME                                                     READY   STATUS      RESTARTS   AGE
+default              unrelated                                                1/1     Running     0          10d
+evo-agent            evo-agent-daily-abc                                       0/1     Error       0          1d
+=== deploy/sts ===
+NAMESPACE            NAME                            READY   UP-TO-DATE   AVAILABLE   AGE
+evo-agent            deployment.apps/evo-agent       1/1     1            1           20d
+"""
+expected = """
+NAMESPACE            NAME                                                     READY   STATUS      RESTARTS   AGE
+default              unrelated                                                1/1     Running     0          10d
+evo-agent            evo-agent-daily-abc                                       0/1     Error       0          1d
+NAMESPACE            NAME                            READY   UP-TO-DATE   AVAILABLE   AGE
+evo-agent            deployment.apps/evo-agent       1/1     1            1           20d"""

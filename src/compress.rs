@@ -45,6 +45,14 @@ pub fn compress_bash_output(cmd: &str, s: &str) -> String {
     // No filter matched — record for later analysis (tokenix filter list).
     log_unfiltered_cmd(cmd);
 
+    let raw_lines: Vec<&str> = s.lines().collect();
+    if is_status_poll_output(&raw_lines) {
+        let out = compress_status_poll(&raw_lines);
+        if out.len() < s.len() {
+            return out;
+        }
+    }
+
     let base = compress_output(s);
     let lines: Vec<&str> = base.lines().collect();
 
@@ -437,6 +445,61 @@ fn compress_git_diff(lines: &[&str]) -> String {
         "git diff: files={files} hunks={hunks} +{additions} -{deletions}\n{}",
         keep.join("\n")
     )
+}
+
+fn is_status_poll_output(lines: &[&str]) -> bool {
+    lines
+        .iter()
+        .take(80)
+        .filter(|line| {
+            let t = line.trim();
+            t.starts_with("phase=") || t.starts_with("status=") || t.starts_with("state=")
+        })
+        .count()
+        >= 3
+}
+
+fn compress_status_poll(lines: &[&str]) -> String {
+    let mut out = Vec::new();
+    let mut last_poll: Option<String> = None;
+    let mut last_count = 0usize;
+
+    let flush = |out: &mut Vec<String>, last: &mut Option<String>, count: &mut usize| {
+        if let Some(value) = last.take() {
+            if *count > 1 {
+                out.push(format!("{value} x{count}"));
+            } else {
+                out.push(value);
+            }
+        }
+        *count = 0;
+    };
+
+    for line in lines {
+        let t = line.trim();
+        let is_poll =
+            t.starts_with("phase=") || t.starts_with("status=") || t.starts_with("state=");
+
+        if is_poll {
+            match &last_poll {
+                Some(last) if last == t => {
+                    last_count += 1;
+                }
+                _ => {
+                    flush(&mut out, &mut last_poll, &mut last_count);
+                    last_poll = Some(t.to_string());
+                    last_count = 1;
+                }
+            }
+            continue;
+        }
+
+        flush(&mut out, &mut last_poll, &mut last_count);
+        out.push(line.to_string());
+    }
+
+    flush(&mut out, &mut last_poll, &mut last_count);
+    out.join("\n")
 }
 
 /// Aggressive truncation for very long output - keeps only errors, head, tail
@@ -1911,6 +1974,30 @@ test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
         }
         let out = compress_bash_output("", &input);
         assert!(out.contains("lines omitted"), "should truncate: {}", out);
+    }
+
+    #[test]
+    fn bash_status_poll_collapses_repeated_states() {
+        let input = "\
+phase=Pending
+phase=Pending
+phase=Pending
+phase=Running
+phase=Running
+=== LOGS ===
+daily job failed validation
+";
+        let out = compress_bash_output(
+            "for i in $(seq 1 40); do phase=$(kubectl get pod); echo phase=$phase; done",
+            input,
+        );
+        assert!(out.contains("phase=Pending x3"), "output: {out}");
+        assert!(out.contains("phase=Running x2"), "output: {out}");
+        assert!(out.contains("daily job failed validation"), "output: {out}");
+        assert!(
+            !out.contains("phase=Pending\nphase=Pending"),
+            "output: {out}"
+        );
     }
 
     #[test]

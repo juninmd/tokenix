@@ -1,0 +1,24 @@
+[filters.git-ls-tree]
+description = "Compact git ls-tree path listings"
+match_command = "^git\\s+ls-tree\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+truncate_lines_at = 140
+tail_lines = 20
+on_empty = "git ls-tree: no paths"
+
+[[tests.git-ls-tree]]
+name = "long path listing keeps tail"
+input = """
+articles/a.md
+reports/bimonthly-2026-06-05-relatorio-bimestral-panorama-tecnico-06-04-2026-a-05-06-2026.md
+reports/daily-2026-06-14-deep-dive.md
+reports/daily-2026-06-15-agent-failure.md
+"""
+expected = """
+articles/a.md
+reports/bimonthly-2026-06-05-relatorio-bimestral-panorama-tecnico-06-04-2026-a-05-06-2026.md
+reports/daily-2026-06-14-deep-dive.md
+reports/daily-2026-06-15-agent-failure.md"""
