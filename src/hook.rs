@@ -597,6 +597,35 @@ fn is_bash_tool(name: &str) -> bool {
     )
 }
 
+/// Decide whether a tool invocation must be handled by the PowerShell-aware path
+/// (`& 'exe' run --shell pwsh 'cmd'`).
+///
+/// Claude Code's dedicated `PowerShell` tool always uses it. On Windows, generic
+/// command/shell tools (Antigravity's `run_command`/`run_in_terminal`, and the same
+/// names from other harnesses) also use it, because Windows executes them under
+/// powershell/pwsh and the cmd-style `"exe" run "cmd"` rewrite causes parse errors.
+///
+/// Crucially this is gated on the tool being a command/shell tool (`is_bash_tool`).
+/// Read/Grep are routed through this same hook under Antigravity (canonicalized from
+/// `read_file`/`grep_search`); they must reach `handle_read`/`handle_grep`, not the
+/// empty-command pass-through of the PowerShell branch.
+fn should_route_powershell(tool_name: &str, antigravity: bool, is_windows: bool) -> bool {
+    if tool_name == "PowerShell" || tool_name.eq_ignore_ascii_case("powershell") {
+        return true;
+    }
+    if !is_windows || !is_bash_tool(tool_name) {
+        return false;
+    }
+    antigravity
+        || matches!(
+            tool_name,
+            "run_command"
+                | "default_api:run_command"
+                | "run_in_terminal"
+                | "default_api:run_in_terminal"
+        )
+}
+
 pub fn run_hook(antigravity: bool) -> Result<()> {
     // Read input: prefer env vars (Copilot), fall back to stdin (Claude Code / Codex)
     let raw_stdin = std::io::read_to_string(std::io::stdin()).unwrap_or_default();
@@ -607,20 +636,7 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
 
     let repo_root = find_repo_root();
 
-    // Claude Code's dedicated PowerShell tool (exact "PowerShell") must run the
-    // pwsh-aware path. `is_bash_tool` also lowercase-matches "powershell" for the
-    // generic Copilot/Antigravity runner, so exclude the Claude tool from is_bash.
-    // On Windows, route all command/shell tools (including generic "Bash") via PowerShell's
-    // call operator syntax (& 'exe' run --shell pwsh 'cmd') if they are run inside Antigravity
-    // or standard terminal executors, as Windows runs them under powershell/pwsh.
-    let is_powershell = input.tool_name == "PowerShell"
-        || input.tool_name.eq_ignore_ascii_case("powershell")
-        || (cfg!(windows)
-            && (antigravity
-                || input.tool_name == "run_command"
-                || input.tool_name == "default_api:run_command"
-                || input.tool_name == "run_in_terminal"
-                || input.tool_name == "default_api:run_in_terminal"));
+    let is_powershell = should_route_powershell(&input.tool_name, antigravity, cfg!(windows));
     let is_bash = is_bash_tool(&input.tool_name) && !is_powershell;
     let is_supported =
         input.tool_name == "Read" || input.tool_name == "Grep" || is_bash || is_powershell;
@@ -934,6 +950,28 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn powershell_routing_targets_command_tools_not_read_grep() {
+        // Claude's dedicated PowerShell tool always routes to pwsh, any platform.
+        assert!(should_route_powershell("PowerShell", false, false));
+        assert!(should_route_powershell("powershell", false, true));
+
+        // On Windows, Antigravity command tools route to pwsh.
+        assert!(should_route_powershell("run_command", true, true));
+        assert!(should_route_powershell("run_in_terminal", true, true));
+
+        // Regression: Read/Grep under Antigravity-on-Windows must NOT route to the
+        // pwsh branch, or they bypass handle_read/handle_grep and pass through.
+        assert!(!should_route_powershell("Read", true, true));
+        assert!(!should_route_powershell("Grep", true, true));
+
+        // Claude's Bash tool on Windows stays on the bash path (runs under cmd/git-bash).
+        assert!(!should_route_powershell("Bash", false, true));
+
+        // Off Windows, generic command tools stay on the bash path.
+        assert!(!should_route_powershell("run_command", true, false));
+    }
 
     #[test]
     fn ps_quote_wraps_and_escapes_single_quotes() {
