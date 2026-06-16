@@ -503,6 +503,9 @@ enum Commands {
         command: String,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
+        /// Shell used to execute the command: auto (cmd/sh), or pwsh/powershell
+        #[arg(long, default_value = "auto")]
+        shell: String,
     },
     /// Audit MCP/tool "weight" of the effective system prompt across AI agents
     PromptAudit {
@@ -924,8 +927,12 @@ fn main() -> Result<()> {
                 },
             }
         }
-        Commands::Run { command, path: _ } => {
-            let code = compress::run_command_and_compress(&command)?;
+        Commands::Run {
+            command,
+            path: _,
+            shell,
+        } => {
+            let code = compress::run_command_and_compress(&command, &shell)?;
             std::process::exit(code);
         }
         Commands::PromptAudit {
@@ -2524,7 +2531,7 @@ fn install_claude_code(local: bool) -> Result<()> {
 
     // Claude Code uses matcher groups. Keep interception on canonical tool names
     // that tokenix can safely rewrite or compress before execution.
-    let matcher = "^(Read|Grep|Bash|grep_search|run_in_terminal)$";
+    let matcher = "^(Read|Grep|Bash|PowerShell|grep_search|run_in_terminal)$";
     let hook = serde_json::json!({
         "matcher": matcher,
         "hooks": [{"type": "command", "command": hook_command(&tokenix_bin, "hook"), "timeout": 10}]
@@ -2545,7 +2552,7 @@ fn install_claude_code(local: bool) -> Result<()> {
         settings_path.display()
     );
     println!(
-        "  PreToolUse:  {} hook (Read/Grep/Bash interception)",
+        "  PreToolUse:  {} hook (Read/Grep/Bash/PowerShell interception)",
         tokenix_bin
     );
     if removed_legacy_auto_index {

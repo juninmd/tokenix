@@ -166,7 +166,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C/C++ |
 | **Multi-agent safe index** | PID-based index lock prevents concurrent reindex; embeddings are committed per batch, so a killed index run resumes from the last completed batch |
 | **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
-| **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash commands before execution; thresholds tunable via `[hook]` in `.tokenix.toml` |
+| **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash **and PowerShell** commands before execution; thresholds tunable via `[hook]` in `.tokenix.toml` |
 | **Structural output compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, and ANSI/Emoji stripping |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
 | **Output filters** | 241 TOML output filters embedded in the binary (each homologated against 516 golden cases) — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
@@ -495,7 +495,7 @@ tokenix install-hook --tool all
 
 | Command | Description |
 |---|---|
-| `tokenix hook` | `PreToolUse` handler — intercepts large reads, semantic grep, and noisy Bash commands (called by AI tools) |
+| `tokenix hook` | `PreToolUse` handler — intercepts large reads, semantic grep, and noisy Bash/PowerShell commands (called by AI tools) |
 | `tokenix hook-post` | Legacy `PostToolUse` compatibility handler |
 | `tokenix run -- CMD` | Run a command and compress its output through tokenix filters |
 | `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools (`--profile slim\|full`) |

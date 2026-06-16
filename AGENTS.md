@@ -80,8 +80,17 @@ Grep tool:
   pattern < 3 words → exit 0 (pass — likely a regex/symbol search)
   pattern ≥ 3 words → return semantic results, exit 2 (intercept)
 
+Bash / PowerShell tools:
+  command matches a bundled/user filter → rewrite to `tokenix run` (PowerShell
+  uses `& 'exe' run --shell pwsh '<cmd>'`, re-executed under pwsh with UTF-8)
+  otherwise → exit 0 (pass)
+
 Index missing or >1h old → always exit 0 regardless of tool
 ```
+
+Matcher (installer): `^(Read|Grep|Bash|PowerShell|grep_search|run_in_terminal)$`.
+Claude Code's dedicated `PowerShell` tool (exact name) takes the pwsh path; the
+generic lowercase `powershell` from Copilot/Antigravity stays on the bash path.
 
 Both thresholds are per-project tunable via `.tokenix.toml`:
 
