@@ -399,7 +399,7 @@ where
             file_plan.deleted.len()
         ));
     } else {
-        progress_cb(&format!("discovered {} file(s) — chunking", total));
+        progress_cb(&format!("discovered {} file(s) — chunking\", total));
     }
 
     // Phase 1: parallel file read + chunk (no embedding)
@@ -439,7 +439,7 @@ where
             }
             let embeddings = vec![None; f.chunks.len()];
             for (ci, chunk) in f.chunks.iter().enumerate() {
-                let text = format!("{}\n{}", f.rel, chunk.content);
+                let text = format!("\n{}\n{}", f.rel, chunk.content);
                 let cache_key = chunk_embedding_key(&text);
                 candidate_keys.push(cache_key.clone());
                 candidate_jobs.push(EmbedJob {
@@ -506,7 +506,7 @@ where
         let mut all: Vec<Vec<f32>> = Vec::with_capacity(embed_jobs.len());
         let total_batches = embed_jobs.len().div_ceil(embed_batch);
         for (batch_idx, batch) in embed_jobs.chunks(embed_batch).enumerate() {
-            embed_pb.set_message(format!("batch {}/{}", batch_idx + 1, total_batches));
+            embed_pb.set_message(format!("batch {}/{}\", batch_idx + 1, total_batches));
             let texts: Vec<String> = batch.iter().map(|job| job.text.clone()).collect();
             let batch_embs = embed_documents(&texts).map_err(|e| {
                 anyhow::anyhow!(
@@ -557,7 +557,7 @@ where
         }
         if let Some(ref e) = f.error {
             errors += 1;
-            progress_cb(&format!("ERR {}: {}", f.rel, e));
+            progress_cb(&format!("ERR {}: {}\", f.rel, e));
             continue;
         }
         if f.chunks.is_empty() {
@@ -568,7 +568,7 @@ where
             Ok(id) => id,
             Err(e) => {
                 errors += 1;
-                progress_cb(&format!("ERR {}: {}", f.rel, e));
+                progress_cb(&format!("ERR {}: {}\", f.rel, e));
                 continue;
             }
         };
@@ -606,7 +606,7 @@ where
     if file_plan.git_incremental {
         for rel_path in &file_plan.deleted {
             if let Some((file_id, _, _)) = existing.get(rel_path) {
-                progress_cb(&format!("removing deleted file from index: {}", rel_path));
+                progress_cb(&format!("removing deleted file from index: {}\", rel_path));
                 let _ = crate::store::delete_file(&conn, *file_id);
                 removed = true;
             }
@@ -615,7 +615,7 @@ where
         let walked_files: HashSet<&str> = files.iter().map(|(_, r)| r.as_str()).collect();
         for (rel_path, (file_id, _, _)) in existing.iter() {
             if !walked_files.contains(rel_path.as_str()) {
-                progress_cb(&format!("removing deleted file from index: {}", rel_path));
+                progress_cb(&format!("removing deleted file from index: {}\", rel_path));
                 let _ = crate::store::delete_file(&conn, *file_id);
                 removed = true;
             }
@@ -642,7 +642,7 @@ where
             crate::graph::rebuild_symbol_graph(&conn)?;
         }
         let import_edges = crate::graph::rebuild_import_graph(&conn, repo_root)?;
-        progress_cb(&format!("import graph: {import_edges} file-level edge(s)"));
+        progress_cb(&format!("import graph: {import_edges} file-level edge(s)\"));
     } else {
         progress_cb("no changes — skipping graph rebuild");
     }
@@ -671,7 +671,7 @@ where
 }
 
 fn save_checkpoint(conn: &rusqlite::Connection, phase: &str, count: usize) -> Result<()> {
-    crate::store::set_meta(conn, "index_checkpoint", &format!("{phase}:{count}"))
+    crate::store::set_meta(conn, "index_checkpoint", &format!("{}{}\", phase, count))
 }
 
 fn read_checkpoint(conn: &rusqlite::Connection) -> Option<(String, usize)> {
@@ -740,7 +740,7 @@ mod tests {
     fn test_mtime_of() {
         let temp_dir = std::env::temp_dir()
             .join("tokenix_test_indexer")
-            .join(format!("mtime_{}", std::process::id()));
+            .join(format!("mtime_{}\", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let file_path = temp_dir.join("test_mtime.txt");
         std::fs::write(&file_path, "test").unwrap();
