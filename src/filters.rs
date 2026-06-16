@@ -1749,6 +1749,8 @@ on_empty = "empty filter output"
     struct GoldenCase {
         #[serde(default)]
         name: Option<String>,
+        #[serde(default)]
+        command: Option<String>,
         input: String,
         expected: String,
     }
@@ -1789,6 +1791,16 @@ on_empty = "empty filter output"
                 };
                 for (i, case) in cases.iter().enumerate() {
                     total += 1;
+                    if let Some(command) = case.command.as_deref() {
+                        let re = Regex::new(&fdef.match_command).unwrap_or_else(|e| {
+                            panic!("{asset} [{fname}] invalid match_command: {e}")
+                        });
+                        assert!(
+                            re.is_match(command),
+                            "{asset} [{fname}] expected match_command to match {:?}",
+                            command
+                        );
+                    }
                     let got = apply_filter(&case.input, fdef);
                     if got.trim_end() != case.expected.trim_end() {
                         let label = case.name.clone().unwrap_or_else(|| format!("#{i}"));

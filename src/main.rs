@@ -3,6 +3,7 @@ mod benchmark;
 mod chunker;
 mod cmd_filter;
 mod compress;
+mod conversation_audit;
 mod daemon;
 mod doctor;
 mod embed;
@@ -93,6 +94,32 @@ enum AuditAgent {
     Antigravity,
     #[value(name = "all")]
     All,
+}
+
+#[derive(Clone, Copy, ValueEnum, Debug)]
+enum ConversationAgent {
+    #[value(name = "claude")]
+    Claude,
+    #[value(name = "codex")]
+    Codex,
+    #[value(name = "copilot")]
+    Copilot,
+    #[value(name = "openai")]
+    OpenAi,
+    #[value(name = "all")]
+    All,
+}
+
+impl ConversationAgent {
+    fn to_audit_agent(self) -> conversation_audit::Agent {
+        match self {
+            ConversationAgent::Claude => conversation_audit::Agent::Claude,
+            ConversationAgent::Codex => conversation_audit::Agent::Codex,
+            ConversationAgent::Copilot => conversation_audit::Agent::Copilot,
+            ConversationAgent::OpenAi => conversation_audit::Agent::OpenAi,
+            ConversationAgent::All => conversation_audit::Agent::All,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
@@ -503,6 +530,21 @@ enum Commands {
         #[arg(long)]
         cache_hygiene: bool,
     },
+    /// Audit local AI conversation histories for token-waste patterns
+    ConversationAudit {
+        /// Which agent's conversation history to audit
+        #[arg(long, value_enum, default_value = "all")]
+        agent: ConversationAgent,
+        /// Minimum assistant-visible string size to classify
+        #[arg(long, default_value_t = 5000)]
+        min_chars: usize,
+        /// Max findings to keep in the report
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
+        /// Emit machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
     /// Scan AI agent conversation transcripts for exposed credentials (gitleaks-style, no git)
     ScanSecrets {
         /// Which agent's conversations to scan
@@ -907,6 +949,17 @@ fn main() -> Result<()> {
             json,
             cache_hygiene,
         } => cmd_session_audit(&path, json, cache_hygiene),
+        Commands::ConversationAudit {
+            agent,
+            min_chars,
+            limit,
+            json,
+        } => conversation_audit::run(conversation_audit::Options {
+            agent: agent.to_audit_agent(),
+            min_chars,
+            limit,
+            json,
+        }),
         Commands::ScanSecrets {
             agent,
             filter,
@@ -3580,6 +3633,11 @@ fn help_catalog() -> String {
             "session-audit",
             "",
             "Token-economy risks for this session/repo",
+        ),
+        (
+            "conversation-audit",
+            "",
+            "Audit AI histories for token-waste patterns",
         ),
         (
             "scan-secrets",

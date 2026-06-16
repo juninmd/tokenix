@@ -1,6 +1,6 @@
 [filters.kubectl-logs]
 description = "Compact kubectl logs output"
-match_command = "^kubectl\\s+logs\\b"
+match_command = "^kubectl(?:\\s+(?:-[A-Za-z][-A-Za-z0-9]*|--[A-Za-z][-A-Za-z0-9]*)(?:[=\\s]+\\S+)?)*\\s+logs\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"

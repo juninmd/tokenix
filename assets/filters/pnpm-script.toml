@@ -1,0 +1,40 @@
+[filters.pnpm-script]
+description = "Compact pnpm direct script output"
+match_command = "^pnpm\\s+(build|check|dev|format|lint|start|typecheck)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^> ",
+  "^\\s*• Packages in scope:",
+  "^\\s*• Running ",
+  "^\\s*Tasks:",
+  "^\\s*Cached:",
+  "^\\s*Time:",
+]
+keep_lines_matching = [
+  "ERROR",
+  "Error:",
+  "error ",
+  "Failed",
+  "ELIFECYCLE",
+  "TS\\d+:",
+  "Type error",
+  "failed",
+]
+max_lines = 80
+on_empty = "pnpm script: ok"
+
+[[tests.pnpm-script]]
+name = "typecheck error"
+command = "pnpm typecheck"
+input = """
+> app@0.1.0 typecheck D:/repo
+> turbo run typecheck
+
+• Packages in scope: web, api
+web:typecheck: src/main.ts(4,7): error TS2322: Type 'string' is not assignable to type 'number'.
+ELIFECYCLE Command failed with exit code 1.
+"""
+expected = """
+web:typecheck: src/main.ts(4,7): error TS2322: Type 'string' is not assignable to type 'number'.
+ELIFECYCLE Command failed with exit code 1."""

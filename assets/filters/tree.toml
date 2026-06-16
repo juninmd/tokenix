@@ -1,0 +1,35 @@
+[filters.tree]
+description = "Compact tree path listings"
+match_command = "^tree\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Listagem de caminhos de pasta",
+  "^Folder PATH listing",
+  "^O número de série do volume",
+  "^Volume serial number",
+]
+truncate_lines_at = 160
+head_lines = 60
+on_empty = "tree: no paths"
+
+[[tests.tree]]
+name = "keeps bounded path map"
+command = "tree /A"
+input = """
+Listagem de caminhos de pasta para o volume Backup
+O número de série do volume é 000000CB 12F4:AED5
+D:.
++---src
+|   +---main.rs
+|   +---lib.rs
++---tests
+|   +---golden.rs
+"""
+expected = """
+D:.
++---src
+|   +---main.rs
+|   +---lib.rs
++---tests
+|   +---golden.rs"""

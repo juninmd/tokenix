@@ -1,11 +1,12 @@
 [filters.kubectl-exec]
 description = "Compact kubectl exec output"
-match_command = "^kubectl\\s+exec\\b"
+match_command = "^kubectl(?:\\s+(?:-[A-Za-z][-A-Za-z0-9]*|--[A-Za-z][-A-Za-z0-9]*)(?:[=\\s]+\\S+)?)*\\s+exec\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
 ]
 keep_lines_matching = [
+  "ERROR",
   "error:",
   "Error:",
   "Failed",
@@ -29,3 +30,13 @@ error: unable to upgrade connection: container not found ("nginx")
 """
 expected = """
 error: unable to upgrade connection: container not found ("nginx")"""
+
+[[tests.kubectl-exec]]
+name = "namespace flag before exec"
+command = "kubectl -n vibe-code exec deploy/api -- grep error /app/log.txt"
+input = """
+INFO booted
+ERROR failed to connect
+"""
+expected = """
+ERROR failed to connect"""

@@ -50,7 +50,7 @@ Run bare `tokenix` to open a terminal dashboard — six tabs, zero flags. `←`/
 <td width="50%"><img src=".github/prints/gain.png" alt="Gain tab" /><br /><sub><b>Gain</b> — tokens saved with a reduction bar, split by source and by command/tool. <code>c</code> adds the ≈USD cost table · <code>a</code> all-projects · <code>r</code> refresh.</sub></td>
 </tr>
 <tr>
-<td><img src=".github/prints/filters.png" alt="Filters tab" /><br /><sub><b>Filters</b> — browse all 231 bundled filters by tool with a live <i>input → output</i> preview and a per-filter <code>X → Y tokens · % saved</code> gauge.</sub></td>
+<td><img src=".github/prints/filters.png" alt="Filters tab" /><br /><sub><b>Filters</b> — browse all 239 bundled filters by tool with a live <i>input → output</i> preview and a per-filter <code>X → Y tokens · % saved</code> gauge.</sub></td>
 <td><img src=".github/prints/secrets.png" alt="Secrets tab" /><br /><sub><b>Secrets</b> — credentials leaked across agent transcripts, grouped by rule and attributed to repo + branch. <code>v</code> reveal · <code>c</code> copy · <code>x</code> redact.</sub></td>
 </tr>
 <tr>
@@ -169,7 +169,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash commands before execution; thresholds tunable via `[hook]` in `.tokenix.toml` |
 | **Structural output compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, and ANSI/Emoji stripping |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
-| **Output filters** | 231 TOML output filters embedded in the binary (each homologated against 500 golden cases) — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
+| **Output filters** | 239 TOML output filters embedded in the binary (each homologated against 510 golden cases) — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
 | **Filter generation** | `tokenix filter generate` writes a TOML filter for a command; `tokenix filter record` captures real output for richer generation |
 | **GPU acceleration (opt-in)** | Build with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU; GPU is used by default at runtime with automatic CPU fallback, or force CPU with `--only-cpu` |
 | **Environment diagnostics** | `tokenix doctor` reports the compiled backend, detected GPU, CUDA/cuDNN status, model cache, and daemon |
@@ -181,6 +181,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Slim MCP profile** | `tokenix mcp --profile slim` exposes 3 meta-tools instead of the full tool surface for hosts that support progressive discovery |
 | **MCP/prompt weight audit** | `tokenix prompt-audit --recommend --profile-impact` connects to configured MCP servers, tokenizes tool schemas, and shows full-vs-slim MCP savings |
 | **Session audit** | `tokenix session-audit --cache-hygiene` combines index freshness, hook history, MCP/tool weight, and prompt-cache stability risks |
+| **Conversation token-waste audit** | `tokenix conversation-audit` scans local Claude / Codex / Copilot / OpenAI histories for large assistant-visible blobs such as full reads, command logs, bootstrap prompts, connector JSON, images, patches, and task artifacts |
 | **Conversation secret scan** | `tokenix scan-secrets` — gitleaks-style credential scan of Claude / Gemini / Copilot / Antigravity conversation transcripts (no git); findings are always redacted, exits non-zero when any are found. Patterns live in TOML (`assets/secret-rules/`), extensible via `~/.tokenix/secret-rules/*.toml` or `<repo>/.tokenix/secret-rules/*.toml` |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
@@ -311,6 +312,8 @@ tokenix prompt-audit                  # every agent that has MCP config
 tokenix prompt-audit --agent claude   # one agent (claude|codex|copilot|antigravity)
 tokenix prompt-audit --json           # machine-readable
 tokenix prompt-audit --recommend      # include practical reduction advice
+tokenix conversation-audit            # scan agent histories for token-waste blobs
+tokenix conversation-audit --agent codex --json
 ```
 
 Discovers the MCP servers configured for each agent, connects to each one live
@@ -325,6 +328,14 @@ For MCP hosts that support progressive discovery, run `tokenix mcp --profile sli
 The slim profile advertises only `tokenix_context`, `tokenix_search_tools`, and
 `tokenix_call`, reducing tool-schema tokens while preserving access to the full
 tokenix capability set through the meta-tool path.
+
+`tokenix conversation-audit` walks local Claude (`~/.claude/projects`), Codex
+(`~/.codex/sessions`), Copilot (`~/.copilot/session-state,logs` plus the VS Code
+Copilot chat store when present), and OpenAI (`~/.openai`) histories. It
+classifies the largest assistant-visible strings by waste scenario and reports
+the matching tokenix mitigation: add an output filter, use indexed file reads,
+trim hook payloads, slim MCP/tool schemas, or avoid replaying image/connector
+payloads into context.
 
 ### 9. Benchmark
 
@@ -473,6 +484,7 @@ tokenix install-hook --tool all
 | `tokenix filter record [CMD]` | Record real command output for richer filter generation |
 | `tokenix prompt-audit` | Audit MCP/tool token weight across agents; warns on bloat (`--agent`, `--json`, `--recommend`, `--profile-impact`) |
 | `tokenix session-audit` | Token-economy health check: index, hook events, MCP/tool weight, cache hygiene |
+| `tokenix conversation-audit` | Scan local AI conversation histories for token-waste patterns (`--agent`, `--min-chars`, `--limit`, `--json`) |
 | `tokenix scan-secrets` | Scan AI agent conversation transcripts for exposed credentials, gitleaks-style; attributes each to its repo + git branch (`--agent`, `--filter`, `--group`, `--reveal`, `--json`) |
 | `tokenix artifacts list` | List context artifacts defined in `.tokenix/artifacts.json` |
 | `tokenix artifacts show NAME` | Show context artifact content |
@@ -525,6 +537,8 @@ tokenix install-hook --tool all
 **`tokenix prompt-audit`** — `--agent <claude\|codex\|copilot\|antigravity\|all>` (default `all`), `--json`, `--recommend`, `--profile-impact`
 
 **`tokenix session-audit`** — `--json`, `--cache-hygiene`, `--path/-p`
+
+**`tokenix conversation-audit`** — `--agent <claude\|codex\|copilot\|openai\|all>` (default `all`), `--min-chars N` (default `5000`), `--limit N` (default `30`), `--json`. Scans local conversation stores for token-waste patterns: full file reads, huge command/log outputs, bootstrap/system prompts, duplicated hook payloads, MCP/tool schemas, diff/test logs, task context blobs, image base64 payloads, connector JSON, build artifacts, provider signatures, documentation blobs, and oversized patches.
 
 **`tokenix scan-secrets`** — `--agent <claude\|gemini\|copilot\|antigravity\|all>` (default `all`), `--filter <substr>` (case-insensitive match over rule/agent/file/value/repo/branch), `--group <none\|value\|rule\|agent\|file\|repo>` (default `none`; `value` collapses each distinct secret into one block with its occurrence count, `repo` groups by the repository the secret was exposed in), `--reveal` (print raw values instead of redacting — warns on stderr), `--json`. Each finding is attributed to its **repository + git branch** when recoverable: Claude transcripts carry an exact `cwd`/`gitBranch` per message; otherwise the project directory is used as a best-effort `~slug:`/`~dir:` label. Scans each agent's conversation transcripts under `~` (Claude `~/.claude/projects`, Gemini `~/.gemini/tmp,history`, Copilot `~/.copilot/session-state,logs`, Antigravity `~/.gemini/antigravity`) for credential patterns; output is redacted by default and exit code is `1` when findings exist. Patterns are TOML `[[rules]]` (`id`, `pattern`, optional `capture`/`min_entropy`): bundled defaults in `assets/secret-rules/`, extended/overridden by `<repo>/.tokenix/secret-rules/*.toml` then `~/.tokenix/secret-rules/*.toml` (later sources win on matching `id`).
 
@@ -586,7 +600,7 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
-3. **Bundled filters** — 231 TOML output filters shipped inside the binary (each homologated against 500 embedded golden cases), covering `uv`, `cargo build`/`cargo run`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 239 TOML output filters shipped inside the binary (each homologated against 510 embedded golden cases), covering `uv`, `cargo build`/`cargo run`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -653,7 +667,7 @@ src/
 └── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
 assets/
-└── filters/       231 TOML output filters (+500 golden cases), embedded in the binary via rust-embed
+└── filters/       239 TOML output filters (+510 golden cases), embedded in the binary via rust-embed
 ```
 
 ### GPU acceleration (opt-in)

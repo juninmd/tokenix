@@ -1,6 +1,6 @@
 [filters.kubectl-get]
 description = "Compact kubectl get output"
-match_command = "^kubectl\\s+get\\b"
+match_command = "^kubectl(?:\\s+(?:-[A-Za-z][-A-Za-z0-9]*|--[A-Za-z][-A-Za-z0-9]*)(?:[=\\s]+\\S+)?)*\\s+get\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

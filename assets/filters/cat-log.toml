@@ -1,0 +1,34 @@
+[filters.cat-log]
+description = "Compact cat/Get-Content log file output"
+match_command = "^(cat|type)\\b.*\\.(log|output|txt)\\b|^Get-Content\\b.*\\.(log|output|txt)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+keep_lines_matching = [
+  "ERROR",
+  "Error:",
+  "error:",
+  "WARN",
+  "Failed",
+  "Exception",
+  "Traceback",
+  "PANIC",
+  "FATAL",
+]
+max_lines = 120
+on_empty = "log: no errors or warnings in output"
+
+[[tests.cat-log]]
+name = "keeps log failures"
+command = "cat /tmp/opencode.log"
+input = """
+INFO boot
+DEBUG polling
+ERROR tool failed
+WARN retrying
+INFO done
+"""
+expected = """
+ERROR tool failed
+WARN retrying"""
