@@ -2,20 +2,15 @@
 description = "Compact kubectl get output"
 match_command = "^kubectl(?:\\s+(?:-[A-Za-z][-A-Za-z0-9]*|--[A-Za-z][-A-Za-z0-9]*)(?:[=\\s]+\\S+)?)*\\s+get\\b"
 strip_ansi = true
+# Strip blank lines and the verbose pod header only. Every resource row is the
+# signal and must survive — a status whitelist would drop nodes/services/jobs/
+# configmaps (no "Running" column) and falsely report "no resources".
 strip_lines_matching = [
   "^\\s*$",
   "^NAME\\s+READY\\s+STATUS\\s+RESTARTS\\s+AGE"
 ]
-keep_lines_matching = [
-  "Running",
-  "Pending",
-  "CrashLoopBackOff",
-  "Error",
-  "Completed",
-  "Terminating",
-  "Evicted"
-]
 max_lines = 40
+passthrough_when_emptied = true
 on_empty = "kubectl get: no resources"
 
 [[tests.kubectl-get]]
@@ -39,3 +34,15 @@ myapp-db-def456         0/1     CrashLoopBackOff   5          10m
 expected = """
 myapp-web-abc123        1/1     Running            0          2h
 myapp-db-def456         0/1     CrashLoopBackOff   5          10m"""
+
+[[tests.kubectl-get]]
+name = "nodes shown not falsely empty"
+input = """
+NAME      STATUS   ROLES           AGE   VERSION
+node-1    Ready    control-plane   90d   v1.30.2
+node-2    Ready    <none>          90d   v1.30.2
+"""
+expected = """
+NAME      STATUS   ROLES           AGE   VERSION
+node-1    Ready    control-plane   90d   v1.30.2
+node-2    Ready    <none>          90d   v1.30.2"""

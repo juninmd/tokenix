@@ -2,6 +2,9 @@
 description = "Compact git push output"
 match_command = "^git\\s+push\\b"
 strip_ansi = true
+# Strip only the progress noise. The push *result* (destination + refspec +
+# new-branch line) is the signal and must survive — never collapse a real push
+# to a bare "ok" that hides what was pushed.
 strip_lines_matching = [
   "^\\s*$",
   "^Enumerating objects:",
@@ -9,21 +12,12 @@ strip_lines_matching = [
   "^Compressing objects:",
   "^Writing objects:",
   "^Total ",
-  "^To ",
-  "^ *\\[new branch\\]",
-  "^ *\\[new tag\\]",
   "^Branch.*set up to track",
   "^Everything up-to-date"
 ]
-keep_lines_matching = [
-  "error:",
-  "fatal:",
-  "rejected",
-  "failed to push",
-  "non-fast-forward",
-  "Updates were rejected"
-]
 max_lines = 20
+# If an unexpected format strips to empty, show the real output instead of on_empty.
+passthrough_when_emptied = true
 on_empty = "git push: ok"
 
 [[tests.git-push]]
@@ -37,7 +31,9 @@ To github.com:user/repo.git
    abc123..def456  main -> main
 Branch 'main' set up to track remote branch 'main' from 'origin'.
 """
-expected = "git push: ok"
+expected = """
+To github.com:user/repo.git
+   abc123..def456  main -> main"""
 
 [[tests.git-push]]
 name = "rejected push shown"
@@ -50,6 +46,9 @@ hint: its remote counterpart. Integrate the remote changes (e.g.
 hint: 'git pull ...') before pushing again.
 """
 expected = """
+To github.com:user/repo.git
  ! [rejected]        main -> main (non-fast-forward)
 error: failed to push some refs to 'github.com:user/repo.git'
-hint: Updates were rejected because the tip of your current branch is behind"""
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart. Integrate the remote changes (e.g.
+hint: 'git pull ...') before pushing again."""
