@@ -2,45 +2,19 @@
 description = "Compact gh pr output"
 match_command = "^gh\\s+pr\\s+(list|view|create|checkout|merge|ready|comment|edit|close|reopen|diff|checks|status)\\b"
 strip_ansi = true
+# Strip blank lines and the passing-check decorations only. Field lines, failing
+# checks, and the PR URL are the signal and must survive.
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*✓",
-  "^\\s*✔",
-  "^Creating",
-  "^Created",
-  "^Updating",
-  "^Merged",
-  "^Closed",
-  "^Reopened",
-]
-keep_lines_matching = [
-  "error:",
-  "Error:",
-  "failed",
-  "FAILED",
-  "not found",
-  "unauthorized",
-  "rate limit",
-  "#",
-  "PR-",
-  "title:",
-  "state:",
-  "author:",
-  "reviewers:",
-  "assignees:",
-  "labels:",
-  "milestone:",
-  "base:",
-  "head:",
-  "checks:",
-  "passing",
-  "failing",
+  "^\\s*✔"
 ]
 max_lines = 40
+passthrough_when_emptied = true
 on_empty = "gh pr: ok"
 
 [[tests.gh-pr]]
-name = "pr view"
+name = "pr view keeps fields and url"
 input = """
 title: Add new feature
 state: OPEN
@@ -70,7 +44,8 @@ milestone: v1.0
 base: main
 head: feature/new-feature
 checks:
-  ✗ Tests (2 failing)"""
+  ✗ Tests (2 failing)
+view this pull request on GitHub: https://github.com/owner/repo/pull/42"""
 
 [[tests.gh-pr]]
 name = "error shown"

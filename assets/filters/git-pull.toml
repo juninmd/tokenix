@@ -2,26 +2,16 @@
 description = "Compact git pull output"
 match_command = "^git\\s+pull\\b"
 strip_ansi = true
+# Strip remote/unpack progress only. The "Updating"/"Fast-forward" range,
+# diffstat, and any conflict lines are the signal and must survive.
 strip_lines_matching = [
   "^\\s*$",
   "^remote:",
   "^Unpacking objects:",
-  "^From ",
-  "^ *\\[new branch\\]",
-  "^ *\\[new tag\\]",
-  "^Already up to date",
-  "^Fast-forward",
-  "^Updating "
-]
-keep_lines_matching = [
-  "error:",
-  "fatal:",
-  "CONFLICT",
-  "Automatic merge failed",
-  "Merge conflict",
-  "Unmerged paths"
+  "^Already up to date"
 ]
 max_lines = 30
+passthrough_when_emptied = true
 on_empty = "git pull: ok"
 
 [[tests.git-pull]]
@@ -38,7 +28,13 @@ Fast-forward
  src/main.rs | 2 ++
  1 file changed, 2 insertions(+)
 """
-expected = "git pull: ok"
+expected = """
+From github.com:user/repo
+   abc123..def456  main     -> origin/main
+Updating abc123..def456
+Fast-forward
+ src/main.rs | 2 ++
+ 1 file changed, 2 insertions(+)"""
 
 [[tests.git-pull]]
 name = "conflict shown"
@@ -51,5 +47,8 @@ CONFLICT (content): Merge conflict in src/main.rs
 Automatic merge failed; fix conflicts and then commit the result.
 """
 expected = """
+From github.com:user/repo
+   abc123..def456  main     -> origin/main
+Auto-merging src/main.rs
 CONFLICT (content): Merge conflict in src/main.rs
 Automatic merge failed; fix conflicts and then commit the result."""

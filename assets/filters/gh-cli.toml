@@ -2,35 +2,28 @@
 description = "Compact GitHub CLI output"
 match_command = "^gh\\s+\\w+\\b"
 strip_ansi = true
+# Strip only blank lines and the success checkmark decorations. Real output
+# (PR/issue URLs, list tables, `gh auth status`, etc.) is the signal and must
+# survive — never collapse it to a bare "ok".
 strip_lines_matching = [
   "^\\s*$",
-  "^✓ ",
-  "^✔ ",
-  "^Creating ",
-  "^Created ",
-  "^Updated ",
-  "^Deleted "
-]
-keep_lines_matching = [
-  "error:",
-  "Error:",
-  "failed",
-  "FAILED",
-  "not found",
-  "unauthorized",
-  "rate limit"
+  "^\\s*✓\\s*$",
+  "^\\s*✔\\s*$"
 ]
 max_lines = 40
+passthrough_when_emptied = true
 on_empty = "gh: ok"
 
 [[tests.gh-cli]]
-name = "clean pr create"
+name = "clean pr create keeps url"
 input = """
 Creating pull request for feature-branch into main in owner/repo
 
 https://github.com/owner/repo/pull/42
 """
-expected = "gh: ok"
+expected = """
+Creating pull request for feature-branch into main in owner/repo
+https://github.com/owner/repo/pull/42"""
 
 [[tests.gh-cli]]
 name = "error shown"
