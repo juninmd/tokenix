@@ -4,7 +4,8 @@ match_command = "^(npx\\s+)?tsc\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^\\s*Found \\d+ errors?\\."
+  "^\\s*Found \\d+ errors?\\.",
+  "^npm warn Unknown project config"
 ]
 max_lines = 100
 on_empty = "tsc: no errors"
@@ -12,6 +13,14 @@ on_empty = "tsc: no errors"
 [[tests.tsc]]
 name = "clean compile"
 input = """
+"""
+expected = "tsc: no errors"
+
+[[tests.tsc]]
+name = "clean compile ignores npm config warnings"
+input = """
+npm warn Unknown project config "package-manager". This will stop working in the next major version of npm.
+npm warn Unknown project config "node-linker". This will stop working in the next major version of npm.
 """
 expected = "tsc: no errors"
 

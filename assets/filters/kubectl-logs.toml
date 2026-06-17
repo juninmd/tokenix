@@ -5,6 +5,10 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
 ]
+# Keep the error/warning lines AND the structured context that follows them in
+# JSON/pino-style logs (the `error:`/`"message"`/`"name"`/`stack`/`at ...` lines).
+# Without these, the headline "ERROR" line is kept but the line that actually
+# says *what* went wrong (e.g. `"message": "require is not defined"`) is dropped.
 keep_lines_matching = [
   "ERROR",
   "FATAL",
@@ -13,9 +17,16 @@ keep_lines_matching = [
   "Error:",
   "Error from server",
   "Failed",
-  "WARN"
+  "WARN",
+  "error",
+  "\"message\"",
+  "\"name\"",
+  "_description",
+  "stack",
+  "^\\s+at\\s"
 ]
-max_lines = 100
+truncate_lines_at = 240
+max_lines = 120
 on_empty = "kubectl logs: no errors or warnings in output"
 
 [[tests.kubectl-logs]]
@@ -46,3 +57,23 @@ input = """
 2024-01-15 10:30:01 INFO  Connected to database
 """
 expected = "kubectl logs: no errors or warnings in output"
+
+[[tests.kubectl-logs]]
+name = "pino error context and stack preserved"
+input = """
+[03:14:05] INFO: Processando upload enfileirado
+[03:14:05] ERROR: Failed to decrypt YouTube refresh token from database
+    error: {
+      "name": "ReferenceError",
+      "message": "require is not defined",
+        at getYouTubeAuth (/app/src/core/youtube.service.ts:158:7)
+    }
+[03:14:05] WARN: YouTube token validation failed
+"""
+expected = """
+[03:14:05] ERROR: Failed to decrypt YouTube refresh token from database
+    error: {
+      "name": "ReferenceError",
+      "message": "require is not defined",
+        at getYouTubeAuth (/app/src/core/youtube.service.ts:158:7)
+[03:14:05] WARN: YouTube token validation failed"""
