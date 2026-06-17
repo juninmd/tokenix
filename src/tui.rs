@@ -1860,6 +1860,7 @@ fn detect_agents() -> Vec<AgentStatus> {
             ],
         ),
         status("Codex", &[(home.join(".codex/hooks.json"), "global")]),
+        status("OpenCode", &[(repo.join("opencode.json"), "local")]),
         status(
             "Antigravity",
             &[

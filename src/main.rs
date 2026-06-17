@@ -76,6 +76,8 @@ enum Tool {
     Codex,
     #[value(name = "mcp")]
     Mcp,
+    #[value(name = "opencode")]
+    OpenCode,
     #[value(name = "antigravity")]
     Antigravity,
     #[value(name = "all")]
@@ -90,6 +92,8 @@ enum AuditAgent {
     Codex,
     #[value(name = "copilot")]
     Copilot,
+    #[value(name = "opencode")]
+    OpenCode,
     #[value(name = "antigravity")]
     Antigravity,
     #[value(name = "all")]
@@ -438,7 +442,7 @@ enum Commands {
             long,
             value_enum,
             default_value = "all",
-            help = "Target tool: claude-code | copilot | codex | mcp | antigravity | all"
+            help = "Target tool: claude-code | copilot | codex | mcp | opencode | antigravity | all"
         )]
         tool: Tool,
         #[arg(
@@ -945,6 +949,7 @@ fn main() -> Result<()> {
                 AuditAgent::Claude => Some(mcp_audit::Agent::ClaudeCode),
                 AuditAgent::Codex => Some(mcp_audit::Agent::Codex),
                 AuditAgent::Copilot => Some(mcp_audit::Agent::Copilot),
+                AuditAgent::OpenCode => Some(mcp_audit::Agent::OpenCode),
                 AuditAgent::Antigravity => Some(mcp_audit::Agent::Antigravity),
                 AuditAgent::All => None,
             };
@@ -2492,6 +2497,7 @@ fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
         Tool::Copilot => install_copilot(local)?,
         Tool::Codex => install_codex()?,
         Tool::Mcp => install_mcp_server()?,
+        Tool::OpenCode => install_opencode()?,
         Tool::Antigravity => install_antigravity(local)?,
         Tool::All => {
             install_claude_code(local)?;
@@ -3009,6 +3015,7 @@ fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
         Tool::Copilot => remove_copilot(local)?,
         Tool::Codex => remove_codex()?,
         Tool::Mcp => remove_mcp_server()?,
+        Tool::OpenCode => remove_opencode()?,
         Tool::Antigravity => remove_antigravity(local)?,
         Tool::All => {
             remove_claude_code(local)?;
@@ -3123,6 +3130,87 @@ fn mcp_config_path() -> Result<PathBuf> {
         .join(".gemini")
         .join("antigravity-cli")
         .join("mcp_config.json"))
+}
+
+fn opencode_config_path() -> Result<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    let repo_root = store::find_project_root(&cwd);
+    Ok(repo_root.join("opencode.json"))
+}
+
+fn opencode_mcp_entry(tokenix_bin: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "local",
+        "command": [tokenix_bin, "mcp"]
+    })
+}
+
+fn upsert_opencode_mcp(config: &mut serde_json::Value, tokenix_bin: &str) {
+    if !config.get("mcp").is_some_and(serde_json::Value::is_object) {
+        config["mcp"] = serde_json::json!({});
+    }
+    config["mcp"]["tokenix"] = opencode_mcp_entry(tokenix_bin);
+}
+
+fn remove_opencode_mcp(config: &mut serde_json::Value) -> bool {
+    let Some(mcp) = config.get_mut("mcp").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    let removed = mcp.remove("tokenix").is_some();
+    let empty = mcp.is_empty();
+    if empty {
+        if let Some(root) = config.as_object_mut() {
+            root.remove("mcp");
+        }
+    }
+    removed
+}
+
+fn install_opencode() -> Result<()> {
+    let config_path = opencode_config_path()?;
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut config: serde_json::Value = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)?;
+        serde_json::from_str(&raw).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    upsert_opencode_mcp(&mut config, "tokenix");
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+    println!(
+        "{} OpenCode MCP registered    ->  {}",
+        "ok".green(),
+        config_path.display()
+    );
+    println!("  MCP:         tokenix mcp (native `opencode.json` registration)");
+    println!(
+        "  Note: OpenCode support is MCP-only; no experimental.hook or PreToolUse/PostToolUse wiring is installed."
+    );
+    println!(
+        "  Note: the generated config uses `tokenix` from PATH. Run `tokenix install-binary` first if needed."
+    );
+    Ok(())
+}
+
+fn remove_opencode() -> Result<()> {
+    let config_path = opencode_config_path()?;
+    if !config_path.exists() {
+        println!("{} OpenCode config not found.", "~".yellow());
+        return Ok(());
+    }
+    let raw = std::fs::read_to_string(&config_path)?;
+    let mut config: serde_json::Value = serde_json::from_str(&raw)?;
+    if remove_opencode_mcp(&mut config) {
+        std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+        println!(
+            "{} OpenCode MCP removed from {}",
+            "ok".green(),
+            config_path.display()
+        );
+    }
+    Ok(())
 }
 
 fn install_mcp_server() -> Result<()> {
@@ -3613,7 +3701,7 @@ fn help_catalog() -> String {
         (
             "install-hook",
             "",
-            "Wire tokenix into Claude / Copilot / Codex / Antigravity",
+            "Wire tokenix into Claude / Copilot / Codex / OpenCode / Antigravity",
         ),
         ("remove-hook", "", "Remove tokenix hooks"),
         ("doctor", "", "Diagnose embedding backend, GPU, daemon"),
@@ -3926,6 +4014,77 @@ mod tests {
     }
 
     #[test]
+    fn upsert_opencode_mcp_preserves_foreign_keys() {
+        let mut config = serde_json::json!({
+            "model": "openai/gpt-5.4",
+            "mcp": {
+                "docs": {
+                    "type": "local",
+                    "command": ["uvx", "mcp-docs"]
+                }
+            },
+            "permission": {"bash": "allow"}
+        });
+
+        upsert_opencode_mcp(&mut config, "tokenix");
+
+        assert_eq!(config["model"], "openai/gpt-5.4");
+        assert_eq!(config["permission"]["bash"], "allow");
+        assert_eq!(config["mcp"]["docs"]["command"][0], "uvx");
+        assert_eq!(config["mcp"]["tokenix"]["type"], "local");
+        assert_eq!(config["mcp"]["tokenix"]["command"][0], "tokenix");
+        assert_eq!(config["mcp"]["tokenix"]["command"][1], "mcp");
+        assert!(
+            config
+                .get("experimental")
+                .and_then(|v| v.get("hook"))
+                .is_none(),
+            "OpenCode native install must not create experimental hooks"
+        );
+    }
+
+    #[test]
+    fn remove_opencode_mcp_preserves_foreign_servers() {
+        let mut config = serde_json::json!({
+            "mcp": {
+                "tokenix": {
+                    "type": "local",
+                    "command": ["tokenix", "mcp"]
+                },
+                "docs": {
+                    "type": "remote",
+                    "url": "https://example.com/mcp"
+                }
+            }
+        });
+
+        let removed = remove_opencode_mcp(&mut config);
+
+        assert!(removed);
+        assert!(config["mcp"].get("tokenix").is_none());
+        assert_eq!(config["mcp"]["docs"]["url"], "https://example.com/mcp");
+    }
+
+    #[test]
+    fn remove_opencode_mcp_drops_empty_mcp_container() {
+        let mut config = serde_json::json!({
+            "mcp": {
+                "tokenix": {
+                    "type": "local",
+                    "command": ["tokenix", "mcp"]
+                }
+            },
+            "model": "openai/gpt-5.4"
+        });
+
+        let removed = remove_opencode_mcp(&mut config);
+
+        assert!(removed);
+        assert!(config.get("mcp").is_none());
+        assert_eq!(config["model"], "openai/gpt-5.4");
+    }
+
+    #[test]
     fn hook_install_targets_exclude_discontinued_gemini_cli() {
         let targets: Vec<_> = Tool::value_variants()
             .iter()
@@ -3934,5 +4093,6 @@ mod tests {
             .collect();
         assert!(!targets.iter().any(|target| target == "gemini"));
         assert!(targets.iter().any(|target| target == "antigravity"));
+        assert!(targets.iter().any(|target| target == "opencode"));
     }
 }
