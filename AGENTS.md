@@ -21,7 +21,7 @@ tokenix --help
 
 | File | Purpose |
 |---|---|
-| `src/main.rs` | CLI entry (clap), command dispatch, `install-hook`/`remove-hook` helpers (including Antigravity global install/uninstall through `agy plugin` and local `.agents/plugins/tokenix`), `install-binary` (copies the running exe to `global_bin_dir()` — `%LOCALAPPDATA%\tokenix\bin` / `~/.local/bin` — and persists the Windows user PATH via PowerShell `[Environment]::SetEnvironmentVariable`, never `setx`). `banner()` = neon "tokenix" wordmark + tagline; `help_catalog()` = audience-grouped command list (AI agent vs human) + examples, wired via custom `HELP_TEMPLATE` (`before_help`/`after_help`); bare `tokenix` prints this help |
+| `src/main.rs` | CLI entry (clap), command dispatch, `install-hook`/`remove-hook` helpers (including Antigravity global install/uninstall through `agy plugin`, repo-local OpenCode native `opencode.json` MCP registration/removal, and local `.agents/plugins/tokenix`), `install-binary` (copies the running exe to `global_bin_dir()` — `%LOCALAPPDATA%\tokenix\bin` / `~/.local/bin` — and persists the Windows user PATH via PowerShell `[Environment]::SetEnvironmentVariable`, never `setx`). `banner()` = neon "tokenix" wordmark + tagline; `help_catalog()` = audience-grouped command list (AI agent vs human) + examples, wired via custom `HELP_TEMPLATE` (`before_help`/`after_help`); bare `tokenix` prints this help |
 | `src/chunker.rs` | Symbol-aware heuristic chunking, `generate_outline()`, token counting. Tree-sitter for Rust/Python/TS/JS/Go/C++; `chunk_by_symbol_lines()` line-scanning chunkers for grammar-less languages — VB6/VBA (`Sub`/`Function`/`Property`/`Attribute VB_Name`) and SQL (`CREATE [OR REPLACE] <object>`) |
 | `src/embed.rs` | fastembed ONNX — `embed_documents()`, `embed_query()`. Model **registry** (`MODELS`, `spec_for`) + thread-local active model (`set_active_model`/`active_model_id`) + per-id loaded-model cache. Per-model query/doc prefixes; query cache keyed by model |
 | `src/store.rs` | SQLite schema, CRUD, cosine similarity search (int8-quantized vectors + legacy f32 fallback, `quantize_q8`/`backfill_quantized_embeddings`), import graph (`graph_imports`, `file_imports`), hook log I/O + 5 MB rotation, PID index lock, branch-aware DB paths |
@@ -39,7 +39,7 @@ tokenix --help
 | `src/ui.rs` | Shared terminal-UI vocabulary for human-facing CLI output (`box_header`, `bar`, `section`/`kv`, `format_num`, `table` via `tabled`); LLM/JSON output deliberately does not route through it |
 | `src/gain.rs` | `compute_gain()`/`compute_global_gain()`, `GainStats` (incl. `index_saved`/`filter_saved` source split: empty `command` = semantic-index intercept, non-empty = command filter; pre-phase Bash rewrite markers are excluded from `filter_calls`), `MODELS` pricing table (Anthropic/OpenAI/Google) |
 | `src/mcp.rs` | MCP server. `--profile full` exposes all tools; `--profile slim` exposes context/search/call meta-tools for progressive discovery |
-| `src/mcp_audit.rs` | `tokenix prompt-audit` / `session-audit` — per-agent MCP config discovery + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report |
+| `src/mcp_audit.rs` | `tokenix prompt-audit` / `session-audit` — per-agent MCP config discovery (Claude, Codex, Copilot, OpenCode, Antigravity) + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report |
 | `src/secrets_scan.rs` | `tokenix scan-secrets` — gitleaks-style credential scan of Claude/Gemini/Copilot/Antigravity conversation transcripts under `~`; rules loaded from TOML (`assets/secret-rules/` bundled via `rust-embed`, extended by `<repo>/` then `~/.tokenix/secret-rules/*.toml`, later `id` wins), backtracking-free regex + entropy-gated generic rule. Each finding is attributed to its repo + git branch via the transcript line's `cwd`/`gitBranch` (Claude), falling back to the project dir slug. Report supports `--filter` (substring), `--group <value\|rule\|agent\|file\|repo>`, `--reveal` (raw values, default redacted), `--json`; exit 1 on hits. `scan_findings()` returns structured `ScanFinding`s (raw + redacted) for the TUI; `redact_in_files()` rewrites `[REDACTED]` over a value in text files (SQLite DBs skipped) |
 | `assets/filters/` | 244 TOML output filters embedded via `rust-embed`, each homologated with ≥2 golden `[[tests]]` cases (realistic success + failure-path inputs; the failure case must prove errors are never masked). 522 cases run through the real `apply_filter` pipeline in `bundled_filters_pass_embedded_golden_tests`. User filters in `~/.tokenix/filters/` take priority |
 
@@ -181,6 +181,7 @@ Per-agent MCP config sources (one `ConfigSource` each, ausente = silently skippe
 |---|---|---|
 | Claude Code | `<repo>/.mcp.json` + `~/.claude.json` (`mcpServers` + `projects[<cwd>]`) | JSON |
 | Codex | `~/.codex/config.toml` → `[mcp_servers.<name>]` | TOML (`toml` dep) |
+| OpenCode | `<repo>/opencode.json` (`mcp`) | JSON |
 | Antigravity | `~/.gemini/antigravity-cli/mcp_config.json` (`mcp_config_path()`) | JSON |
 | Copilot | `.vscode/mcp.json` (`servers`) + VS Code user `mcp.json` | JSON, best-effort |
 
@@ -344,6 +345,11 @@ The daemon auto-starts on first Grep hook call. Run `tokenix serve` manually onl
 
 ### OpenAI Codex CLI
 - Config: `~/.codex/hooks.json` for `PreToolUse` Bash rewrites + optional shell helpers under `~/.codex/`
+
+### OpenCode
+- Config: repo-local `opencode.json` native `mcp` block
+- Shape: `{"mcp":{"tokenix":{"type":"local","command":["tokenix","mcp"]}}}`
+- Note: tokenix does **not** install `experimental.hook`; OpenCode support is native MCP registration only
 
 ### Antigravity
 - Global config: `~/.gemini/config/plugins/tokenix/`, installed and registered through `agy plugin install`
