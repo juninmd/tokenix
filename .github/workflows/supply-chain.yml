@@ -85,15 +85,20 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
       - name: Build release binary
         run: cargo build --release --locked
-      # Run both install commands against a throwaway HOME so the runner is not
-      # polluted. Everything install touches is local; if either command ever
-      # makes an external HTTPS call it surfaces in the egress audit above.
+      # Run the install commands against a throwaway HOME so the runner is not
+      # polluted. Everything install touches is local; if any command ever makes
+      # an external HTTPS call it surfaces in the egress audit above. The
+      # antigravity tool is skipped: its install shells out to the `agy` CLI,
+      # which is absent on the runner — an unrelated external-binary dependency,
+      # not a network call, so it would only add noise to this egress audit.
       - name: Run tokenix install under egress audit
         run: |
           export HOME="$(mktemp -d)"
-          echo "::group::tokenix install-hook --tool all"
-          ./target/release/tokenix install-hook --tool all
-          echo "::endgroup::"
+          for tool in claude-code copilot codex mcp opencode; do
+            echo "::group::tokenix install-hook --tool $tool"
+            ./target/release/tokenix install-hook --tool "$tool"
+            echo "::endgroup::"
+          done
           echo "::group::tokenix install-binary"
           ./target/release/tokenix install-binary
           echo "::endgroup::"
