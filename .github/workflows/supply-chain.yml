@@ -54,6 +54,55 @@ jobs:
           persist-credentials: false
       - uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # v0.5.6
 
+  # Supply-chain guard for the install path: `tokenix install-hook` /
+  # `install-binary` are purely local (filesystem + PATH). The ONLY external
+  # HTTPS endpoint the binary ever contacts is huggingface.co, and that is in the
+  # indexer's model download — never in install. This job builds the binary and
+  # runs both install commands under harden-runner egress AUDIT, so every
+  # outbound HTTPS connection is recorded in the run's "Insights → Network
+  # events" report. Expected egress = build dependencies only (crates.io /
+  # github); install must add zero. Any new endpoint here is a red flag.
+  install-egress-audit:
+    name: install-egress-audit
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Cache cargo
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Build release binary
+        run: cargo build --release --locked
+      # Run the install commands against a throwaway HOME so the runner is not
+      # polluted. Everything install touches is local; if any command ever makes
+      # an external HTTPS call it surfaces in the egress audit above. The
+      # antigravity tool is skipped: its install shells out to the `agy` CLI,
+      # which is absent on the runner — an unrelated external-binary dependency,
+      # not a network call, so it would only add noise to this egress audit.
+      - name: Run tokenix install under egress audit
+        run: |
+          export HOME="$(mktemp -d)"
+          for tool in claude-code copilot codex mcp opencode; do
+            echo "::group::tokenix install-hook --tool $tool"
+            ./target/release/tokenix install-hook --tool "$tool"
+            echo "::endgroup::"
+          done
+          echo "::group::tokenix install-binary"
+          ./target/release/tokenix install-binary
+          echo "::endgroup::"
+
   # On PRs, diff the dependency manifests and block introductions of vulnerable or
   # disallowed-license dependencies before they merge.
   dependency-review:
