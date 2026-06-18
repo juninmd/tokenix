@@ -1,6 +1,6 @@
 [package]
 name = "tokenix"
-version = "0.41.1"
+version = "0.42.0"
 edition = "2021"
 description = "Semantic search, symbol graphs, secrets scanning, output filters, and CLI hooks that save 60-90% LLM tokens"
 license = "MIT"
