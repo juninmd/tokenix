@@ -489,11 +489,11 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     )
 }
 
-fn estimate_original_tokens(
+fn measured_original_tokens(
     tool_name: &str,
     tool_input: &serde_json::Value,
     repo_root: &Path,
-) -> i64 {
+) -> Option<i64> {
     if tool_name == "Read" {
         if let Some(fp) = tool_input["file_path"].as_str() {
             let p = Path::new(fp);
@@ -503,11 +503,22 @@ fn estimate_original_tokens(
                 repo_root.join(fp)
             };
             if let Ok(content) = std::fs::read_to_string(&full) {
-                return count_tokens(&content) as i64;
+                return Some(count_tokens(&content) as i64);
             }
         }
     }
-    800
+    None
+}
+
+fn original_tokens_for_log(
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    repo_root: &Path,
+    actual_tokens: i64,
+) -> i64 {
+    // If we cannot measure the original tool output before interception, keep
+    // gain honest: log the context cost but claim zero saved tokens.
+    measured_original_tokens(tool_name, tool_input, repo_root).unwrap_or(actual_tokens)
 }
 
 /// Build the PreToolUse JSON output that rewrites a Bash command's input.
@@ -912,8 +923,13 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
         pass_through(antigravity);
     }
 
-    let original_tokens = estimate_original_tokens(&input.tool_name, &input.tool_input, &repo_root);
     let actual_tokens = count_tokens(&output) as i64;
+    let original_tokens = original_tokens_for_log(
+        &input.tool_name,
+        &input.tool_input,
+        &repo_root,
+        actual_tokens,
+    );
     let saved = (original_tokens - actual_tokens).max(0);
 
     let _ = log_hook_event(
@@ -1153,6 +1169,28 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grep_intercepts_do_not_claim_measured_savings() {
+        let input = serde_json::json!({ "pattern": "how does auth work" });
+        assert_eq!(
+            original_tokens_for_log("Grep", &input, Path::new("."), 1234),
+            1234
+        );
+    }
+
+    #[test]
+    fn unmeasured_intercepts_are_neutral_not_estimated() {
+        let input = serde_json::json!({ "pattern": "anything" });
+        assert_eq!(
+            measured_original_tokens("Grep", &input, Path::new(".")),
+            None
+        );
+        assert_eq!(
+            original_tokens_for_log("Grep", &input, Path::new("."), 77),
+            77
+        );
     }
 
     #[test]

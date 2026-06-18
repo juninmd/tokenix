@@ -33,6 +33,11 @@ fn extract_base_command(input_preview: &str) -> Option<String> {
     cmd.split_whitespace().next().map(str::to_string)
 }
 
+fn is_filter_savings_event(e: &store::HookEvent) -> bool {
+    matches!(e.tool.as_str(), "Bash" | "PowerShell")
+        && matches!(e.phase.as_str(), "post" | "ToolOutputCompressed")
+}
+
 /// Reject command names that aren't plain executable identifiers. `base_cmd`
 /// reaches `cmd /C <base_cmd> --help` (Windows shell metacharacter injection),
 /// a `<base_cmd>.toml` filename (path traversal), and a git branch / PR head.
@@ -55,10 +60,7 @@ fn validate_command_name(cmd: &str) -> Result<()> {
 fn collect_stats(repo_root: &Path) -> Vec<CmdStats> {
     let events = store::read_hook_log(repo_root);
     let mut map: HashMap<String, CmdStats> = HashMap::new();
-    for ev in events
-        .iter()
-        .filter(|e| e.tool == "Bash" && e.phase == "post")
-    {
+    for ev in events.iter().filter(|e| is_filter_savings_event(e)) {
         if let Some(base) = base_command(ev) {
             let entry = map.entry(base.clone()).or_insert(CmdStats {
                 base_cmd: base,
@@ -809,6 +811,18 @@ mod tests {
     fn base_command_falls_back_to_legacy_preview() {
         let legacy = r#"{"tool_input":{"command":"git status"}}"#;
         assert_eq!(base_command(&ev("", legacy)), Some("git".to_string()));
+    }
+
+    #[test]
+    fn filter_stats_accept_current_power_shell_compression_events() {
+        let mut current = ev("git status", "");
+        current.tool = "PowerShell".to_string();
+        current.phase = "ToolOutputCompressed".to_string();
+        assert!(is_filter_savings_event(&current));
+
+        let mut rewrite_marker = ev("git status", "");
+        rewrite_marker.phase = "pre".to_string();
+        assert!(!is_filter_savings_event(&rewrite_marker));
     }
 
     #[test]

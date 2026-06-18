@@ -32,17 +32,17 @@ tokenix --help
 | `src/artifacts.rs` | Context artifacts — index non-code files (schemas, API specs, docs) via `.tokenix/artifacts.json` |
 | `src/hook.rs` | `run_hook()` — called by PreToolUse hook. Tries daemon first for Grep. Thresholds (Read 200 lines / Grep 3 words) overridable via `[hook]` in `.tokenix.toml` (`read_min_lines`, `grep_min_words`) |
 | `src/daemon.rs` | Background TCP server (port 47392). Holds model + int8-quantized embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads. Protocol: `search`/`health`/`status`; CLI `tokenix daemon status\|stop\|restart` |
-| `src/compress.rs` | Legacy `PostToolUse` compatibility compression: ANSI strip, emoji removal, blank-line collapse, repeat grouping, JSON compaction, cargo/git-log heuristics |
+| `src/compress.rs` | Legacy `PostToolUse` compatibility compression + `tokenix run` command-output compression: ANSI strip, emoji removal, blank-line collapse, repeat grouping, JSON compaction, cargo/git-log heuristics. `tokenix run` only applies command-specific filters to stderr when `filter_stderr=true`; otherwise stderr uses safe generic compression so errors are not turned into success sentinels |
 | `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()`. `find_filter()` matches via `derive_command_candidates()`, which unwraps shell runners, strips `cd`/env prefixes, and `split_on_operators()` splits compound commands quote-aware on `&&`/`\|\|`/`;`/`\|` so anchored `match_command` patterns match a base command in any segment/position |
 | `src/cmd_filter.rs` | `tokenix filter list/active/generate` subcommands |
 | `src/tui.rs` | Interactive ratatui shell shown by a bare `tokenix` / `tokenix filter` in a TTY (else falls back to help / `filter list`). Tab bar (`←`/`→`): **Stats** dashboard (wordmark + version + hook status + index summary, with selectable Index / Install hooks / Install binary actions — Index runs in the foreground with live progress, the two install actions confirm before writing; Install binary self-execs `tokenix install-binary`), **Filters** (3-pane groups · filters · live `apply_filter` input→output preview with a `chunker::count_tokens` gauge line showing `X → Y tokens · % saved` between the panes), **Gain** (native colored render of `gain::compute_gain`: tokens-saved headline with ≈USD at the ★ reference model's input rate, savings-by-source split — semantic index vs command filters — and numbered by command / by project tables with share %, toggles `c`/`a`), **Doctor**/**Tokenmap** (self-exec captured output), **Secrets** (background-threaded `secrets_scan::scan_findings` with spinner; dedup by distinct value + count; `v` reveal, `c` copy raw value to system clipboard via `clip`/`pbcopy`/`wl-copy`/`xclip`/`xsel`, `x` write `[REDACTED]`), **Egress** (background-threaded `egress_scan::scan_findings` with the same 3-pane pattern as Secrets: groups · destinations · occurrence detail; `s` cycles host/rule/agent/file grouping; `r` rescans; host reputation colors: green safe, red dangerous, yellow unknown) |
 | `src/ui.rs` | Shared terminal-UI vocabulary for human-facing CLI output (`box_header`, `bar`, `section`/`kv`, `format_num`, `table` via `tabled`); LLM/JSON output deliberately does not route through it |
-| `src/gain.rs` | `compute_gain()`/`compute_global_gain()`, `GainStats` (incl. `index_saved`/`filter_saved` source split: empty `command` = semantic-index intercept, non-empty = command filter; pre-phase Bash rewrite markers are excluded from `filter_calls`), `MODELS` pricing table (Anthropic/OpenAI/Google) |
+| `src/gain.rs` | `compute_gain()`/`compute_global_gain()`, `GainStats` (incl. `index_saved`/`filter_saved` source split: empty `command` = semantic-index intercept, non-empty = command filter; pre-phase Bash/PowerShell rewrite markers are excluded from `filter_calls`), `MODELS` pricing table (Anthropic/OpenAI/Google). Grep semantic intercepts are logged as neutral usage, not claimed savings, because native grep output is not measured before interception |
 | `src/mcp.rs` | MCP server. `--profile full` exposes all tools; `--profile slim` exposes context/search/call meta-tools for progressive discovery |
 | `src/mcp_audit.rs` | `tokenix prompt-audit` / `session-audit` — per-agent MCP config discovery (Claude, Codex, Copilot, OpenCode, Antigravity) + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report |
 | `src/secrets_scan.rs` | `tokenix scan-secrets` — gitleaks-style credential scan of Claude/Gemini/Copilot/Antigravity conversation transcripts under `~`; rules loaded from TOML (`assets/secret-rules/` bundled via `rust-embed`, extended by `<repo>/` then `~/.tokenix/secret-rules/*.toml`, later `id` wins), backtracking-free regex + entropy-gated generic rule. Each finding is attributed to its repo + git branch via the transcript line's `cwd`/`gitBranch` (Claude), falling back to the project dir slug. Report supports `--filter` (substring), `--group <value\|rule\|agent\|file\|repo>`, `--reveal` (raw values, default redacted), `--json`; exit 1 on hits. `scan_findings()` returns structured `ScanFinding`s (raw + redacted) for the TUI; `redact_in_files()` rewrites `[REDACTED]` over a value in text files (SQLite DBs skipped) |
 | `src/egress_scan.rs` | `tokenix egress-audit` — scans Claude/Gemini/Copilot/Antigravity conversation transcripts for external DNS/IP destinations; bundled TOML rules live under `assets/egress-rules/`, local safe hosts are loaded from `~/.tokenix/safe-hosts.toml`, and local blocklist hosts from `~/.tokenix/dangerous-hosts.toml` (`dangerous`, `blocklist`, or `hosts` arrays); report supports `--filter`, `--group <host\|rule\|agent\|file>`, `--safe`, and `--json`. `scan_findings()` returns structured `EgressFinding`s for the TUI |
-| `assets/filters/` | 244 TOML output filters embedded via `rust-embed`, each homologated with ≥2 golden `[[tests]]` cases (realistic success + failure-path inputs; the failure case must prove errors are never masked). 522 cases run through the real `apply_filter` pipeline in `bundled_filters_pass_embedded_golden_tests`. User filters in `~/.tokenix/filters/` take priority |
+| `assets/filters/` | 244 TOML output filters embedded via `rust-embed`, each homologated with ≥2 golden `[[tests]]` cases (realistic success + failure-path inputs; the failure case must prove errors are never masked). 526 cases run through the real `apply_filter` pipeline in `bundled_filters_pass_embedded_golden_tests`. User filters in `~/.tokenix/filters/` take priority |
 
 ## SQLite Schema
 
@@ -68,7 +68,7 @@ meta(key PK, value)                        -- 'indexed_at', git fingerprint
 
 Query paths open old DBs without running migrations — SELECTs must degrade when the `scale` column is missing (`embeddings_have_scale()` probe selects `NULL` instead).
 
-Hook log: `.tokenix/hook.log` — NDJSON, one `HookEvent` per line. Rotates at 5 MB to `hook.log.1` (one generation kept); `read_hook_log()` reads both.
+Hook log: `~/.tokenix/<project-id>.log` — NDJSON, one `HookEvent` per line. Rotates at 5 MB to `<project-id>.log.1` (one generation kept); `read_hook_log()` reads both. Fallback when the home dir is unavailable is repo-local `.tokenix/hook.log`.
 
 ## Intercept Logic
 
@@ -79,7 +79,7 @@ Read tool:
 
 Grep tool:
   pattern < 3 words → exit 0 (pass — likely a regex/symbol search)
-  pattern ≥ 3 words → return semantic results, exit 2 (intercept)
+  pattern ≥ 3 words → return semantic results, exit 2 (intercept); gain records this as neutral usage, not saved tokens
 
 Bash / PowerShell tools:
   command matches a bundled/user filter → rewrite to `tokenix run` (PowerShell
@@ -122,7 +122,7 @@ grep_min_words = 3     # default 3
 
 **Cross-platform paths:** `tokenix_bin_path()` normalizes to forward slashes for shell/JSON config strings. Preserve for Windows compatibility.
 
-**Hook log format:** Do not change `.tokenix/hook.log` away from NDJSON without updating `gain.rs`.
+**Hook log format:** Do not change `~/.tokenix/<project-id>.log` away from NDJSON without updating `gain.rs`.
 
 **Token count is approximate.** `count_tokens()` = `(len + 3) / 4`. Intentional — no tiktoken dep.
 

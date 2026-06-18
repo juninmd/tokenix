@@ -415,7 +415,7 @@ pub fn run_mcp_server(profile: McpProfile) -> Result<()> {
                                     },
                                     {
                                         "name": "tokenix_gain",
-                                        "description": "Show estimated token savings statistics from tokenix hooks",
+                                        "description": "Show measured token savings statistics from tokenix hooks",
                                         "inputSchema": {
                                             "type": "object",
                                             "properties": {

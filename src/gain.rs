@@ -87,12 +87,13 @@ pub struct GainStats {
     pub by_phase: Vec<(String, usize, i64)>,
     /// Top Bash commands compressed by the filter system, sorted by tokens saved.
     pub by_command: Vec<(String, usize, i64)>,
-    /// Tokens saved by semantic-index intercepts (Read/Grep replaced with
-    /// outlines/query results — events with no command), and their call count.
+    /// Tokens saved by semantic-index intercepts. Large Read events are measured
+    /// against the file body; Grep events are logged as neutral context usage
+    /// because native grep output is not available before interception.
     pub index_saved: i64,
     pub index_calls: usize,
-    /// Tokens saved by command output filters (Bash compression — events
-    /// carrying the executed command), and their call count.
+    /// Tokens saved by command output filters (Bash/PowerShell compression —
+    /// events carrying the executed command), and their call count.
     pub filter_saved: i64,
     pub filter_calls: usize,
 }

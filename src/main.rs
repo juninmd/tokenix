@@ -1989,13 +1989,13 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
     for (label, desc, saved, calls) in [
         (
             "Semantic index",
-            "Read/Grep → outlines & index queries",
+            "Read outlines; Grep neutral context",
             stats.index_saved,
             stats.index_calls,
         ),
         (
             "Command filters",
-            "Bash output compressed by filters",
+            "Bash/PowerShell output compression",
             stats.filter_saved,
             stats.filter_calls,
         ),
@@ -2776,7 +2776,7 @@ tokenix query "where is JWT validated" --budget 2000
 tokenix read src/auth/middleware.rs --symbol validate_token
 ```
 
-Use `tokenix gain --history` to inspect estimated savings from hook events.
+Use `tokenix gain --history` to inspect measured savings from hook events.
 
 tokenix binary: `{tokenix_bin}`
 Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)

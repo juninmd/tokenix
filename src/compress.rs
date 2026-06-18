@@ -36,9 +36,16 @@ fn log_unfiltered_cmd(cmd: &str) {
 }
 
 pub fn compress_bash_output(cmd: &str, s: &str) -> String {
+    compress_bash_output_for_stream(cmd, s, false)
+}
+
+fn compress_bash_output_for_stream(cmd: &str, s: &str, is_stderr: bool) -> String {
     // User-defined TOML filters take priority over built-in heuristics.
     let user_filters = crate::filters::load_all_filters();
     if let Some(f) = crate::filters::find_filter(cmd, &user_filters) {
+        if is_stderr && !f.filter_stderr {
+            return compress_output(s);
+        }
         return crate::filters::apply_filter(s, f);
     }
 
@@ -1226,6 +1233,31 @@ fn compact_json(s: &str) -> String {
     s.to_string()
 }
 
+fn compress_command_streams(
+    command_str: &str,
+    stdout_raw: &str,
+    stderr_raw: &str,
+    success: bool,
+) -> (String, String) {
+    let stdout_compressed = if stdout_raw.trim().is_empty() {
+        if stderr_raw.trim().is_empty() && success {
+            compress_bash_output_for_stream(command_str, stdout_raw, false)
+        } else {
+            String::new()
+        }
+    } else {
+        compress_bash_output_for_stream(command_str, stdout_raw, false)
+    };
+
+    let stderr_compressed = if stderr_raw.trim().is_empty() {
+        String::new()
+    } else {
+        compress_bash_output_for_stream(command_str, stderr_raw, true)
+    };
+
+    (stdout_compressed, stderr_compressed)
+}
+
 /// Remove ANSI/VT100 escape sequences (CSI, OSC, and single-char sequences).
 pub(crate) fn strip_ansi(s: &str) -> String {
     let bytes = s.as_bytes();
@@ -1661,15 +1693,12 @@ pub fn run_command_and_compress(command_str: &str, shell: &str) -> Result<i32> {
     let stdout_raw = String::from_utf8_lossy(&output.stdout);
     let stderr_raw = String::from_utf8_lossy(&output.stderr);
 
-    // Apply tokenix compression to stdout and stderr. Skip an empty stderr: running
-    // the filter on "" would emit its `on_empty` message (e.g. "git status: clean")
-    // to stderr even when stdout has real content — misleading and noisy.
-    let stdout_compressed = compress_bash_output(command_str, &stdout_raw);
-    let stderr_compressed = if stderr_raw.trim().is_empty() {
-        String::new()
-    } else {
-        compress_bash_output(command_str, &stderr_raw)
-    };
+    let (stdout_compressed, stderr_compressed) = compress_command_streams(
+        command_str,
+        &stdout_raw,
+        &stderr_raw,
+        output.status.success(),
+    );
 
     // Print to standard streams
     print!("{}", stdout_compressed);
@@ -1760,6 +1789,33 @@ mod tests {
         assert!(out.contains("serde v1.0.0"));
         // anyhow appears twice in input but once in the unique set.
         assert_eq!(out.matches("anyhow v1.0.0").count(), 1);
+    }
+
+    #[test]
+    fn command_streams_do_not_turn_stderr_errors_into_success() {
+        let (stdout, stderr) = compress_command_streams(
+            "cargo build",
+            "",
+            "error: could not find `Cargo.toml` in this directory\n",
+            false,
+        );
+
+        assert_eq!(stdout, "");
+        assert!(
+            stderr.contains("could not find"),
+            "stderr error must be preserved, got: {stderr:?}"
+        );
+        assert!(
+            !stderr.contains("build succeeded"),
+            "stderr must not emit success sentinel: {stderr:?}"
+        );
+    }
+
+    #[test]
+    fn silent_success_may_use_on_empty_sentinel() {
+        let (stdout, stderr) = compress_command_streams("cargo build", "", "", true);
+        assert_eq!(stdout, "cargo build: build succeeded");
+        assert_eq!(stderr, "");
     }
 
     #[test]

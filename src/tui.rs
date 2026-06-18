@@ -1329,13 +1329,13 @@ impl Shell {
         for (label, desc, saved, calls) in [
             (
                 "semantic index",
-                "Read/Grep → outlines & index queries",
+                "Read outlines; Grep neutral context",
                 s.index_saved,
                 s.index_calls,
             ),
             (
                 "command filters",
-                "Bash output compressed by filters",
+                "Bash/PowerShell output compression",
                 s.filter_saved,
                 s.filter_calls,
             ),

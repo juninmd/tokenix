@@ -36,7 +36,7 @@ Without tokenix:  Read(src/auth/middleware.rs) → 800 lines → ~2,400 tokens  
 With tokenix:     tokenix read src/auth/middleware.rs → symbol outline → ~180 tokens
 ```
 
-Savings depend on codebase size, AI behavior, and file sizes. Run `tokenix gain` to see your real numbers.
+Savings depend on codebase size, AI behavior, and file sizes. Run `tokenix gain` to see measured Read and command-filter savings; semantic Grep context is logged as usage, not counted as saved tokens.
 
 ---
 
@@ -75,7 +75,7 @@ It does four jobs:
 | **Index the repository** | Walks source files, splits them into symbol-aware chunks, and stores local embeddings in SQLite | The agent can search by intent instead of opening files blindly |
 | **Read files compactly** | Returns outlines, symbols, or line ranges instead of full files when possible | Large files stop consuming thousands of unnecessary tokens |
 | **Intercept assistant tools** | Hooks into supported tools before large reads and rewrites noisy command output | Optimization happens automatically during normal AI sessions |
-| **Measure savings** | Logs hook decisions and estimates token/cost reduction with `tokenix gain` | You can see whether it is actually helping on your codebase |
+| **Measure savings** | Logs hook decisions and reports measured token/cost reduction where the original output is known | You can see whether it is actually helping on your codebase |
 
 tokenix is not a cloud service, not a vector database server, and not a replacement for your AI assistant. It is a local repository index plus a set of CLI and hook integrations that make the assistant's context smaller and more targeted.
 
@@ -172,7 +172,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash **and PowerShell** commands before execution; thresholds tunable via `[hook]` in `.tokenix.toml` |
 | **Structural output compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, and ANSI/Emoji stripping |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
-| **Output filters** | 244 TOML output filters embedded in the binary (each homologated against 522 golden cases) — auto-applied to Bash output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
+| **Output filters** | 244 TOML output filters embedded in the binary (each homologated against 526 golden cases) — auto-applied to Bash/PowerShell output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, and more |
 | **Filter generation** | `tokenix filter generate` writes a TOML filter for a command; `tokenix filter record` captures real output for richer generation |
 | **GPU acceleration (opt-in)** | Build with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU; GPU is used by default at runtime with automatic CPU fallback, or force CPU with `--only-cpu` |
 | **Environment diagnostics** | `tokenix doctor` reports the compiled backend, detected GPU, CUDA/cuDNN status, model cache, and daemon |
@@ -302,10 +302,12 @@ tokenix gain --cost-estimate  # add the per-model cost table
 tokenix session-audit         # index + hook + MCP token-economy health
 ```
 
-`tokenix gain` shows a `BY SOURCE` section splitting the savings between the
-semantic index (Read/Grep intercepts answered with outlines and index queries)
-and the command filters (Bash output compression), so you can see which half of
-tokenix is earning its keep. `tokenix gain --cost-estimate` prices the savings
+`tokenix gain` shows a `BY SOURCE` section splitting measured savings between
+large Read intercepts answered with outlines and command filters (Bash/PowerShell
+output compression), so you can see which half of tokenix is earning its keep.
+Semantic Grep intercepts can add useful indexed context, but the native grep
+output is not known before interception, so they are logged as neutral usage
+instead of claimed savings. `tokenix gain --cost-estimate` prices the savings
 against 10 reference models across Anthropic, OpenAI, and Google. Prices are
 shown with their collection date (currently `2026-06-11`) so the numbers stay
 auditable.
@@ -532,7 +534,7 @@ tokenix install-hook --tool all
 | `tokenix serve` | Start the background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
 | `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |
-| `tokenix gain` | Token savings analytics with a by-source split — semantic index vs command filters (`--cost-estimate` adds a per-model cost table) |
+| `tokenix gain` | Token savings analytics with a by-source split — measured Read savings vs command filters; semantic Grep is neutral usage (`--cost-estimate` adds a per-model cost table) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix tokenmap` | Directory tree map with token counts, heaviest paths first, plus a top-10 files summary (`--format html` supported) |
 | `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark — vanilla vs tokenix (`--json`) |
@@ -644,7 +646,7 @@ The same `.tokenix.toml` accepts a `[hook]` section to tune when the
 ```toml
 [hook]
 read_min_lines = 120   # outline files with >= this many lines (default 200)
-grep_min_words = 3     # treat Grep patterns with >= this many words as semantic (default 3)
+grep_min_words = 3     # treat Grep patterns with >= this many words as semantic (default 3; neutral in gain)
 ```
 
 Lower `read_min_lines` to intercept more reads (saving more tokens); raise it
@@ -659,7 +661,7 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
-3. **Bundled filters** — 244 TOML output filters shipped inside the binary (each homologated against 522 embedded golden cases), covering `uv`, `cargo build`/`cargo run`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 244 TOML output filters shipped inside the binary (each homologated against 526 embedded golden cases), covering `uv`, `cargo build`/`cargo run`, `git`, `gradle`, `terraform plan`, `make`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -682,11 +684,12 @@ on_empty = "uv: ok"
 | `strip_ansi` | Remove ANSI colour codes before filtering |
 | `strip_lines_matching` | Drop lines matching any of these regex patterns |
 | `keep_lines_matching` | Keep only lines matching these patterns |
-| `match_output` | Short-circuit: if output matches `pattern`, return `message` immediately |
+| `match_output` | Short-circuit: if output matches `pattern`, return `message` immediately; use `unless` for error/warning guards |
 | `max_lines` / `head_lines` / `tail_lines` | Truncate output |
 | `truncate_lines_at` | Truncate individual lines at N characters |
 | `on_empty` | Message to return when filtering produces empty output |
 | `passthrough_when_emptied` | When the filter reduces *non-empty* output to nothing (an unexpected output shape the keep/extract rules don't recognize), show a bounded view of the real output instead of `on_empty` — so format-specific filters never report a false "nothing here" (e.g. `git log --oneline` against the full-log filter) |
+| `filter_stderr` | Opt in to applying this command-specific filter to stderr. Without it, stderr uses generic safe compression so command errors are not turned into success sentinels |
 
 ### AI-assisted filter generation
 
@@ -726,7 +729,7 @@ src/
 └── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
 assets/
-└── filters/       244 TOML output filters (+522 golden cases), embedded in the binary via rust-embed
+└── filters/       244 TOML output filters (+526 golden cases), embedded in the binary via rust-embed
 ```
 
 ### GPU acceleration (opt-in)
