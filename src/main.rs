@@ -3173,7 +3173,7 @@ fn install_opencode() -> Result<()> {
     }
     let mut config: serde_json::Value = if config_path.exists() {
         let raw = std::fs::read_to_string(&config_path)?;
-        serde_json::from_str(&raw).unwrap_or(serde_json::json!({}))
+        serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("Failed to parse existing opencode.json: {e}"))?
     } else {
         serde_json::json!({})
     };
