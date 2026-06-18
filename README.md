@@ -29,7 +29,7 @@
 
 ---
 
-> **tokenix** is a local-first Rust CLI that helps AI coding agents understand a repository without dumping huge files into the prompt. It indexes your code, finds relevant chunks by meaning, returns compact file outlines, and can hook into AI tools to replace noisy reads and command output with smaller, more useful context. Works with Claude Code, GitHub Copilot, OpenAI Codex CLI, Gemini, and any MCP client. **No Ollama or external server required.**
+> **tokenix** is a local-first Rust CLI that helps AI coding agents understand a repository without dumping huge files into the prompt. It indexes your code, finds relevant chunks by meaning, returns compact file outlines, and can hook into AI tools to replace noisy reads and command output with smaller, more useful context. Works with Claude Code, GitHub Copilot, OpenAI Codex CLI, OpenCode, Gemini, and any MCP client. **No Ollama or external server required.**
 
 ```
 Without tokenix:  Read(src/auth/middleware.rs) → 800 lines → ~2,400 tokens  (illustrative)
@@ -194,6 +194,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `PreToolUse` hooks in `~/.claude/settings.json` or project `.claude/settings.local.json` |
 | [GitHub Copilot](https://docs.github.com/en/copilot) | `.github/copilot-instructions.md` + VS Code-compatible `.github/hooks/hooks.json` |
 | [OpenAI Codex CLI](https://help.openai.com/en/articles/11096431-openai-codex-cli-getting-started) | `~/.codex/hooks.json` for `PreToolUse` Bash rewrites + optional shell helpers |
+| OpenCode | `tokenix install-hook --tool opencode` — registers `tokenix mcp` in a native `opencode.json` `mcp` block |
 | Antigravity | `tokenix install-hook --tool antigravity` — installs and validates a native `PreToolUse` plugin through `agy plugin` |
 | Any MCP client | `tokenix mcp` — Model Context Protocol server over stdin/stdout (`--tool mcp`) |
 
@@ -309,7 +310,7 @@ auditable.
 
 ```bash
 tokenix prompt-audit                  # every agent that has MCP config
-tokenix prompt-audit --agent claude   # one agent (claude|codex|copilot|antigravity)
+tokenix prompt-audit --agent claude   # one agent (claude|codex|copilot|opencode|antigravity)
 tokenix prompt-audit --json           # machine-readable
 tokenix prompt-audit --recommend      # include practical reduction advice
 tokenix conversation-audit            # scan agent histories for token-waste blobs
@@ -409,6 +410,27 @@ echo '. ~/.codex/tokenix-init.ps1' >> $PROFILE
 
 Then use `tx-read` and `tx-query` as shell helpers. On Windows this also installs `~/.codex/hooks.json` and a PowerShell wrapper that forwards `PreToolUse` intercepts for Bash-like terminal tools (`Bash`, `run_in_terminal`) and normalizes `grep_search` to the same semantic path as `Grep`.
 
+### OpenCode
+
+```bash
+tokenix install-hook --tool opencode
+```
+
+Writes a native `opencode.json` entry for `mcp.tokenix` in the current repository root:
+
+```json
+{
+  "mcp": {
+    "tokenix": {
+      "type": "local",
+      "command": ["tokenix", "mcp"]
+    }
+  }
+}
+```
+
+This integration is MCP-only. tokenix does **not** install OpenCode `experimental.hook` entries and does **not** emulate Claude-style `PreToolUse` / `PostToolUse` hooks in OpenCode. The generated config expects `tokenix` to be available on `PATH`; run `tokenix install-binary` first if needed.
+
 ### Antigravity
 
 ```bash
@@ -429,6 +451,8 @@ The native hook handles Antigravity's `toolCall.name/args` payload and returns
 ```bash
 tokenix install-hook --tool all
 ```
+
+`--tool all` intentionally skips OpenCode. Use `tokenix install-hook --tool opencode` explicitly when you want tokenix to write a repo-local `opencode.json` MCP registration.
 
 ---
 
@@ -528,13 +552,13 @@ tokenix install-hook --tool all
 
 **`tokenix flow`** — `--depth/-d` (3), `--format <text\|mermaid>`, `--output/-o`, `--path/-p`
 
-**`tokenix install-hook` / `remove-hook`** — `--tool <claude-code\|copilot\|codex\|mcp\|antigravity\|all>` (default `all`), `--local` (Claude Code, Copilot, and Antigravity)
+**`tokenix install-hook` / `remove-hook`** — `--tool <claude-code\|copilot\|codex\|mcp\|opencode\|antigravity\|all>` (default `all`), `--local` (Claude Code, Copilot, and Antigravity)
 
 **`tokenix pack`** — `--mode/--profile <plan\|debug\|audit\|security\|review>`, `--budget N` (8000), `--format <markdown\|xml\|json>`, `--changed`, `--since REF`, `--token-map`, `--output/-o`
 
 **`tokenix benchmark`** — `--budget N` (1200), `--json`, `--refresh-index`, `--cases FILE`
 
-**`tokenix prompt-audit`** — `--agent <claude\|codex\|copilot\|antigravity\|all>` (default `all`), `--json`, `--recommend`, `--profile-impact`
+**`tokenix prompt-audit`** — `--agent <claude\|codex\|copilot\|opencode\|antigravity\|all>` (default `all`), `--json`, `--recommend`, `--profile-impact`
 
 **`tokenix session-audit`** — `--json`, `--cache-hygiene`, `--path/-p`
 

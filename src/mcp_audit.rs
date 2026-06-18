@@ -34,15 +34,17 @@ pub enum Agent {
     ClaudeCode,
     Codex,
     Copilot,
+    OpenCode,
     Antigravity,
 }
 
 impl Agent {
-    pub fn all() -> [Agent; 4] {
+    pub fn all() -> [Agent; 5] {
         [
             Agent::ClaudeCode,
             Agent::Codex,
             Agent::Copilot,
+            Agent::OpenCode,
             Agent::Antigravity,
         ]
     }
@@ -52,6 +54,7 @@ impl Agent {
             Agent::ClaudeCode => "Claude Code",
             Agent::Codex => "Codex",
             Agent::Copilot => "Copilot",
+            Agent::OpenCode => "OpenCode",
             Agent::Antigravity => "Antigravity",
         }
     }
@@ -61,6 +64,7 @@ impl Agent {
             Agent::ClaudeCode => "claude-code",
             Agent::Codex => "codex",
             Agent::Copilot => "copilot",
+            Agent::OpenCode => "opencode",
             Agent::Antigravity => "antigravity",
         }
     }
@@ -73,6 +77,7 @@ impl Agent {
             Agent::ClaudeCode => 2500,
             Agent::Codex => 1500,
             Agent::Copilot => 1500,
+            Agent::OpenCode => 1500,
             Agent::Antigravity => 1500,
         }
     }
@@ -210,6 +215,7 @@ fn discover(agent: Agent, cwd: &Path) -> Vec<ServerSpec> {
         Agent::ClaudeCode => discover_claude(cwd),
         Agent::Codex => discover_codex(),
         Agent::Copilot => discover_copilot(cwd),
+        Agent::OpenCode => discover_opencode(cwd),
         Agent::Antigravity => discover_antigravity(),
     }
 }
@@ -392,6 +398,77 @@ fn discover_antigravity() -> Vec<ServerSpec> {
     if let Some(v) = read_json(&path) {
         if let Some(map) = v.get("mcpServers").and_then(Value::as_object) {
             parse_json_map(Agent::Antigravity, map, &mut out);
+        }
+    }
+    out
+}
+
+fn discover_opencode(cwd: &Path) -> Vec<ServerSpec> {
+    let repo_root = crate::find_repo_root(cwd);
+    let path = repo_root.join("opencode.json");
+    let Some(v) = read_json(&path) else {
+        return Vec::new();
+    };
+    let Some(map) = v.get("mcp").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    opencode_specs_from_map(map)
+}
+
+fn opencode_specs_from_map(map: &serde_json::Map<String, Value>) -> Vec<ServerSpec> {
+    let mut out = Vec::new();
+    for (name, entry) in map {
+        match entry.get("type").and_then(Value::as_str) {
+            Some("remote") => {
+                if let Some(url) = entry.get("url").and_then(Value::as_str) {
+                    out.push(ServerSpec {
+                        agent: Agent::OpenCode,
+                        name: name.clone(),
+                        transport: Transport::Http {
+                            url: url.to_string(),
+                        },
+                    });
+                }
+            }
+            Some("local") => {
+                let Some(command) = entry
+                    .get("command")
+                    .and_then(Value::as_array)
+                    .and_then(|arr| arr.first())
+                    .and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                let args = entry
+                    .get("command")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .skip(1)
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let env = entry
+                    .get("environment")
+                    .and_then(Value::as_object)
+                    .map(|o| {
+                        o.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                out.push(ServerSpec {
+                    agent: Agent::OpenCode,
+                    name: name.clone(),
+                    transport: Transport::Stdio {
+                        command: command.to_string(),
+                        args,
+                        env,
+                    },
+                });
+            }
+            _ => {}
         }
     }
     out
@@ -923,6 +1000,31 @@ TOKEN = "abc"
                 assert_eq!(command, "uvx");
                 assert_eq!(args, &vec!["mcp-docs".to_string()]);
                 assert_eq!(env, &vec![("TOKEN".to_string(), "abc".to_string())]);
+            }
+            _ => panic!("expected stdio"),
+        }
+    }
+
+    #[test]
+    fn parses_opencode_local_mcp() {
+        let val = json!({
+            "tokenix": {
+                "type": "local",
+                "command": ["tokenix", "mcp"],
+                "environment": {"TOKENIX_PROFILE": "slim"}
+            }
+        });
+        let specs = opencode_specs_from_map(val.as_object().unwrap());
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].name, "tokenix");
+        match &specs[0].transport {
+            Transport::Stdio { command, args, env } => {
+                assert_eq!(command, "tokenix");
+                assert_eq!(args, &vec!["mcp".to_string()]);
+                assert_eq!(
+                    env,
+                    &vec![("TOKENIX_PROFILE".to_string(), "slim".to_string())]
+                );
             }
             _ => panic!("expected stdio"),
         }
