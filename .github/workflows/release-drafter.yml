@@ -1,10 +1,12 @@
 name: Release Drafter
 
+# Drafts the next release from merged PRs. Runs only on push to the default
+# branch: on `pull_request` events release-drafter cannot resolve its config at
+# the PR ref and falls back to the org `.github` repo, which 404s and fails the
+# check. There is no autolabeler config, so the PR run added nothing but noise.
 on:
   push:
     branches: [main, master]
-  pull_request:
-    types: [opened, reopened, synchronize]
 
 permissions:
   contents: read
@@ -13,7 +15,7 @@ jobs:
   update_release_draft:
     permissions:
       contents: write
-      pull-requests: write
+      pull-requests: read
     runs-on: ubuntu-latest
     steps:
       - name: Harden runner
