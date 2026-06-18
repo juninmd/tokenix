@@ -30,16 +30,18 @@ enum Cmd {
     Doctor,
     Tokenmap,
     Secrets,
+    Egress,
 }
 
 impl Cmd {
-    const ALL: [Cmd; 6] = [
+    const ALL: [Cmd; 7] = [
         Cmd::Stats,
         Cmd::Filters,
         Cmd::Gain,
         Cmd::Doctor,
         Cmd::Tokenmap,
         Cmd::Secrets,
+        Cmd::Egress,
     ];
 
     fn index(self) -> usize {
@@ -54,6 +56,7 @@ impl Cmd {
             Cmd::Doctor => "Doctor",
             Cmd::Tokenmap => "Tokenmap",
             Cmd::Secrets => "Secrets",
+            Cmd::Egress => "Egress",
         }
     }
 
@@ -104,6 +107,15 @@ enum SecGroup {
 }
 
 type SecPayload = (Vec<crate::secrets_scan::ScanFinding>, Vec<(String, usize)>);
+type EgrPayload = (Vec<crate::egress_scan::EgressFinding>, Vec<(String, usize)>);
+
+#[derive(Clone, Copy, PartialEq)]
+enum EgrGroup {
+    Host,
+    Rule,
+    Agent,
+    File,
+}
 
 struct Shell {
     cmd: Cmd,
@@ -146,6 +158,17 @@ struct Shell {
     sec_confirm: bool,
     sec_msg: Option<String>,
     spinner: usize,
+    // Egress page ---------------------------------------------------------
+    egress: Option<Vec<crate::egress_scan::EgressFinding>>,
+    egress_counts: Vec<(String, usize)>,
+    egress_rx: Option<Receiver<EgrPayload>>,
+    egr_groups: Vec<(String, Vec<usize>)>,
+    egr_gmode: EgrGroup,
+    egr_pane: Pane,
+    egr_reputation: crate::egress_scan::HostReputation,
+    egr_g: usize,
+    egr_sel_group: usize,
+    egr_i: usize,
     // Report / install pages ----------------------------------------------
     reports: HashMap<usize, String>,
     scroll: u16,
@@ -191,6 +214,16 @@ pub fn run() -> Result<()> {
         sec_confirm: false,
         sec_msg: None,
         spinner: 0,
+        egress: None,
+        egress_counts: Vec::new(),
+        egress_rx: None,
+        egr_groups: Vec::new(),
+        egr_gmode: EgrGroup::Host,
+        egr_pane: Pane::Groups,
+        egr_reputation: crate::egress_scan::HostReputation::load(),
+        egr_g: 0,
+        egr_sel_group: 0,
+        egr_i: 0,
         reports: HashMap::new(),
         scroll: 0,
         request_index: false,
@@ -207,6 +240,7 @@ impl Shell {
             self.ensure_report();
             self.ensure_gain();
             self.ensure_secrets();
+            self.ensure_egress();
 
             // Collect a finished background secret scan, if any.
             let done = self.secrets_rx.as_ref().and_then(|rx| rx.try_recv().ok());
@@ -217,10 +251,19 @@ impl Shell {
                 self.rebuild_sec_groups();
             }
 
+            // Collect a finished background egress scan, if any.
+            let done = self.egress_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+            if let Some((findings, counts)) = done {
+                self.egress = Some(findings);
+                self.egress_counts = counts;
+                self.egress_rx = None;
+                self.rebuild_egr_groups();
+            }
+
             terminal.draw(|f| self.draw(f))?;
 
             // While a scan runs, poll so the spinner animates; otherwise block.
-            let scanning = self.secrets_rx.is_some();
+            let scanning = self.secrets_rx.is_some() || self.egress_rx.is_some();
             let timeout = if scanning {
                 Duration::from_millis(120)
             } else {
@@ -268,6 +311,9 @@ impl Shell {
                 KeyCode::Tab | KeyCode::BackTab if self.cmd == Cmd::Secrets => {
                     self.sec_pane = other_pane(self.sec_pane)
                 }
+                KeyCode::Tab | KeyCode::BackTab if self.cmd == Cmd::Egress => {
+                    self.egr_pane = other_pane(self.egr_pane)
+                }
                 KeyCode::Tab => self.switch_tab(1),
                 KeyCode::BackTab => self.switch_tab(-1),
                 _ => match self.cmd {
@@ -275,6 +321,7 @@ impl Shell {
                     Cmd::Filters => self.key_filters(key.code),
                     Cmd::Gain => self.key_gain(key.code),
                     Cmd::Secrets => self.key_secrets(key.code),
+                    Cmd::Egress => self.key_egress(key.code),
                     _ => self.key_scroll(key.code),
                 },
             }
@@ -571,6 +618,153 @@ impl Shell {
         }
     }
 
+    // ── Egress tab ───────────────────────────────────────────────────────
+
+    fn ensure_egress(&mut self) {
+        if self.cmd != Cmd::Egress || self.egress.is_some() || self.egress_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::egress_scan::scan_findings());
+        });
+        self.egress_rx = Some(rx);
+    }
+
+    fn rebuild_egr_groups(&mut self) {
+        self.egr_g = 0;
+        self.egr_sel_group = 0;
+        self.egr_i = 0;
+        self.egr_groups.clear();
+        let Some(findings) = &self.egress else {
+            return;
+        };
+        let mut order: Vec<String> = Vec::new();
+        let mut map: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, fnd) in findings.iter().enumerate() {
+            let key = match self.egr_gmode {
+                EgrGroup::Host => fnd.host.clone(),
+                EgrGroup::Rule => fnd.rule.clone(),
+                EgrGroup::Agent => fnd.agent.clone(),
+                EgrGroup::File => fnd.file.clone(),
+            };
+            if !map.contains_key(&key) {
+                order.push(key.clone());
+            }
+            map.entry(key).or_default().push(i);
+        }
+        let mut groups: Vec<(String, Vec<usize>)> = order
+            .into_iter()
+            .map(|k| {
+                let v = map.remove(&k).unwrap_or_default();
+                (k, v)
+            })
+            .collect();
+        groups.sort_by_key(|g| std::cmp::Reverse(g.1.len()));
+        self.egr_groups = groups;
+    }
+
+    fn key_egress(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('s') => {
+                self.egr_gmode = match self.egr_gmode {
+                    EgrGroup::Host => EgrGroup::Rule,
+                    EgrGroup::Rule => EgrGroup::Agent,
+                    EgrGroup::Agent => EgrGroup::File,
+                    EgrGroup::File => EgrGroup::Host,
+                };
+                self.rebuild_egr_groups();
+            }
+            KeyCode::Char('r') => {
+                self.egress = None;
+                self.egress_rx = None;
+                self.egr_groups.clear();
+            }
+            KeyCode::Down | KeyCode::Char('j') => self.move_egr(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_egr(-1),
+            KeyCode::PageDown => self.move_egr(10),
+            KeyCode::PageUp => self.move_egr(-10),
+            KeyCode::Home | KeyCode::Char('g') => self.jump_egr(0),
+            KeyCode::End | KeyCode::Char('G') => self.jump_egr(usize::MAX),
+            _ => {}
+        }
+    }
+
+    fn egr_items(&self) -> &[usize] {
+        self.egr_groups
+            .get(self.egr_sel_group)
+            .map(|g| g.1.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn distinct_egress_targets(&self) -> Vec<Vec<usize>> {
+        let Some(findings) = &self.egress else {
+            return Vec::new();
+        };
+        let mut order: Vec<String> = Vec::new();
+        let mut map: HashMap<String, Vec<usize>> = HashMap::new();
+        for &i in self.egr_items() {
+            let key = format!("{}\n{}", findings[i].host, findings[i].target);
+            if !map.contains_key(&key) {
+                order.push(key.clone());
+            }
+            map.entry(key).or_default().push(i);
+        }
+        let mut out: Vec<Vec<usize>> = order
+            .into_iter()
+            .map(|k| map.remove(&k).unwrap_or_default())
+            .collect();
+        out.sort_by_key(|v| std::cmp::Reverse(v.len()));
+        out
+    }
+
+    fn current_egress_occurrences(&self) -> Vec<usize> {
+        self.distinct_egress_targets()
+            .get(self.egr_i)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn move_egr(&mut self, dir: i32) {
+        match self.egr_pane {
+            Pane::Groups => {
+                let len = self.egr_groups.len();
+                if len == 0 {
+                    return;
+                }
+                self.egr_g = (self.egr_g as i32 + dir).rem_euclid(len as i32) as usize;
+                self.egr_sel_group = self.egr_g;
+                self.egr_i = 0;
+            }
+            Pane::Filters => {
+                let len = self.distinct_egress_targets().len();
+                if len == 0 {
+                    return;
+                }
+                self.egr_i = (self.egr_i as i32 + dir).rem_euclid(len as i32) as usize;
+            }
+        }
+    }
+
+    fn jump_egr(&mut self, target: usize) {
+        match self.egr_pane {
+            Pane::Groups => {
+                let len = self.egr_groups.len();
+                if len > 0 {
+                    self.egr_g = target.min(len - 1);
+                    self.egr_sel_group = self.egr_g;
+                    self.egr_i = 0;
+                }
+            }
+            Pane::Filters => {
+                let len = self.distinct_egress_targets().len();
+                if len > 0 {
+                    self.egr_i = target.min(len - 1);
+                }
+            }
+        }
+    }
+
     // ── Filters tab ──────────────────────────────────────────────────────
 
     fn groups(&self) -> &[Group] {
@@ -766,6 +960,7 @@ impl Shell {
             Cmd::Filters => self.draw_filters(f, rows[1]),
             Cmd::Gain => self.draw_gain(f, rows[1]),
             Cmd::Secrets => self.draw_secrets(f, rows[1]),
+            Cmd::Egress => self.draw_egress(f, rows[1]),
             _ => self.draw_report(f, rows[1]),
         }
         self.draw_footer(f, rows[2]);
@@ -1577,6 +1772,218 @@ impl Shell {
         );
     }
 
+    fn draw_egress(&self, f: &mut Frame, area: Rect) {
+        // Still scanning.
+        if self.egress.is_none() {
+            let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let spin = frames[self.spinner % frames.len()];
+            let lines = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(format!("  {spin}  "), Style::default().cyan()),
+                    Span::styled(
+                        "Scanning AI agent conversations for external destinations…",
+                        Style::default().add_modifier(Modifier::BOLD).cyan(),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(
+                    "  reading Claude · Copilot · Codex history, collecting DNS/IPs"
+                        .to_string()
+                        .dim(),
+                ),
+            ];
+            f.render_widget(
+                Paragraph::new(Text::from(lines)).block(Block::bordered().title(" egress ")),
+                area,
+            );
+            return;
+        }
+
+        let findings = self.egress.as_ref().unwrap();
+        let scanned: usize = self.egress_counts.iter().map(|(_, n)| n).sum();
+
+        if findings.is_empty() {
+            let lines = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        "  ✓  ",
+                        Style::default().green().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        "No external destinations found in agent conversations.",
+                        Style::default().green().add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(
+                    format!(
+                        "  scanned {scanned} files across {} agents",
+                        self.egress_counts.len()
+                    )
+                    .dim(),
+                ),
+            ];
+            f.render_widget(
+                Paragraph::new(Text::from(lines)).block(Block::bordered().title(" egress ")),
+                area,
+            );
+            return;
+        }
+
+        let cols = Layout::horizontal([
+            Constraint::Percentage(26),
+            Constraint::Percentage(30),
+            Constraint::Percentage(44),
+        ])
+        .split(area);
+        self.draw_egr_groups(f, cols[0], findings.len(), scanned);
+        self.draw_egr_items(f, cols[1]);
+        self.draw_egr_detail(f, cols[2]);
+    }
+
+    fn draw_egr_groups(&self, f: &mut Frame, area: Rect, total: usize, scanned: usize) {
+        let items: Vec<ListItem> = self
+            .egr_groups
+            .iter()
+            .map(|(label, idxs)| {
+                let label_style = if self.egr_gmode == EgrGroup::Host {
+                    self.egress_host_style(label)
+                } else {
+                    Style::default().cyan()
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{:<18}", trunc(label, 18)), label_style),
+                    Span::styled(format!("{}", idxs.len()), Style::default().dim()),
+                ]))
+            })
+            .collect();
+        let group_label = match self.egr_gmode {
+            EgrGroup::Host => "host",
+            EgrGroup::Rule => "rule",
+            EgrGroup::Agent => "agent",
+            EgrGroup::File => "file",
+        };
+        let title = format!(" {total} egress · by {group_label} · {scanned} files ");
+        let mut state = ListState::default();
+        state.select(Some(
+            self.egr_g.min(self.egr_groups.len().saturating_sub(1)),
+        ));
+        f.render_stateful_widget(
+            list_widget(items, title, self.egr_pane == Pane::Groups),
+            area,
+            &mut state,
+        );
+    }
+
+    fn draw_egr_items(&self, f: &mut Frame, area: Rect) {
+        let findings = match &self.egress {
+            Some(v) => v,
+            None => return,
+        };
+        let distinct = self.distinct_egress_targets();
+        let items: Vec<ListItem> = distinct
+            .iter()
+            .map(|idxs| {
+                let fnd = &findings[idxs[0]];
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{:<16}", trunc(&fnd.host, 16)),
+                        self.egress_host_style(&fnd.host),
+                    ),
+                    Span::styled(format!("  {}", trunc(&fnd.target, 28)), Style::default()),
+                    Span::styled(format!(" ×{}", idxs.len()), Style::default().cyan()),
+                ]))
+            })
+            .collect();
+        let label = self
+            .egr_groups
+            .get(self.egr_sel_group)
+            .map(|g| g.0.clone())
+            .unwrap_or_default();
+        let title = format!(
+            " {}  {}/{} ",
+            trunc(&label, 16),
+            self.egr_i + 1,
+            distinct.len().max(1)
+        );
+        let mut state = ListState::default();
+        if !distinct.is_empty() {
+            state.select(Some(self.egr_i.min(distinct.len() - 1)));
+        }
+        f.render_stateful_widget(
+            list_widget(items, title, self.egr_pane == Pane::Filters),
+            area,
+            &mut state,
+        );
+    }
+
+    fn draw_egr_detail(&self, f: &mut Frame, area: Rect) {
+        let mut lines: Vec<Line> = Vec::new();
+        let occ = self.current_egress_occurrences();
+        if let (Some(findings), Some(&rep)) = (&self.egress, occ.first()) {
+            let fnd = &findings[rep];
+            lines.push(Line::from(Span::styled(
+                fnd.host.clone(),
+                self.egress_host_style(&fnd.host)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(kv("rule", &fnd.rule));
+            lines.push(kv("target", &fnd.target));
+            lines.push(kv("agent", &fnd.agent));
+            if let Some(repo) = &fnd.repo {
+                lines.push(kv("repo", repo));
+            }
+            if let Some(branch) = &fnd.branch {
+                lines.push(kv("branch", branch));
+            }
+            lines.push(Line::from(vec![
+                Span::styled(format!("{:<10}", "hits"), Style::default().dim()),
+                Span::styled(format!("{}", occ.len()), Style::default().cyan()),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from("occurrences".bold()));
+            for &i in occ.iter().take(20) {
+                let o = &findings[i];
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {:<11}", trunc(&o.agent, 11)),
+                        Style::default().cyan(),
+                    ),
+                    Span::styled(
+                        format!("{}:{}", trunc(&o.file, 40), o.line),
+                        Style::default().dim(),
+                    ),
+                ]));
+            }
+            if occ.len() > 20 {
+                lines.push(Line::from(format!("  … +{} more", occ.len() - 20).dim()));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                "s: group by host/rule/agent/file · investigate unexpected outbound traffic"
+                    .to_string()
+                    .dim(),
+            ));
+        }
+        f.render_widget(
+            Paragraph::new(Text::from(lines))
+                .block(Block::bordered().title(" destination "))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+
+    fn egress_host_style(&self, host: &str) -> Style {
+        match self.egr_reputation.verdict(host) {
+            crate::egress_scan::HostVerdict::Safe => Style::default().green(),
+            crate::egress_scan::HostVerdict::Dangerous => Style::default().red(),
+            crate::egress_scan::HostVerdict::Unknown => Style::default().yellow(),
+        }
+    }
+
     fn draw_report(&self, f: &mut Frame, area: Rect) {
         let body = self
             .reports
@@ -1610,6 +2017,13 @@ impl Shell {
                 }
                 Cmd::Secrets => {
                     "←→: tab · Tab: pane · ↑↓: move · s: group · v: reveal · c: copy · x: redact · r: rescan · q"
+                        .to_string()
+                }
+                Cmd::Egress if self.egress.is_none() => {
+                    "scanning… · ←→: tab · q: quit".to_string()
+                }
+                Cmd::Egress => {
+                    "←→: tab · Tab: pane · ↑↓: move · s: group · r: rescan · q: quit"
                         .to_string()
                 }
                 Cmd::Stats if self.stats_confirm => {

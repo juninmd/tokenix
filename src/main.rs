@@ -6,6 +6,7 @@ mod compress;
 mod conversation_audit;
 mod daemon;
 mod doctor;
+mod egress_scan;
 mod embed;
 mod filters;
 mod gain;
@@ -177,6 +178,53 @@ impl GroupBy {
             GroupBy::Agent => secrets_scan::GroupMode::Agent,
             GroupBy::File => secrets_scan::GroupMode::File,
             GroupBy::Repo => secrets_scan::GroupMode::Repo,
+        }
+    }
+}
+
+#[derive(Copy, Clone, ValueEnum)]
+enum EgressAgent {
+    #[value(name = "claude")]
+    Claude,
+    #[value(name = "gemini")]
+    Gemini,
+    #[value(name = "copilot")]
+    Copilot,
+    #[value(name = "antigravity")]
+    Antigravity,
+    #[value(name = "all")]
+    All,
+}
+
+impl EgressAgent {
+    fn as_str(self) -> &'static str {
+        match self {
+            EgressAgent::Claude => "claude",
+            EgressAgent::Gemini => "gemini",
+            EgressAgent::Copilot => "copilot",
+            EgressAgent::Antigravity => "antigravity",
+            EgressAgent::All => "all",
+        }
+    }
+}
+
+#[derive(Copy, Clone, ValueEnum)]
+enum EgressGroupBy {
+    None,
+    Host,
+    Rule,
+    Agent,
+    File,
+}
+
+impl EgressGroupBy {
+    fn to_mode(self) -> egress_scan::GroupMode {
+        match self {
+            EgressGroupBy::None => egress_scan::GroupMode::None,
+            EgressGroupBy::Host => egress_scan::GroupMode::Host,
+            EgressGroupBy::Rule => egress_scan::GroupMode::Rule,
+            EgressGroupBy::Agent => egress_scan::GroupMode::Agent,
+            EgressGroupBy::File => egress_scan::GroupMode::File,
         }
     }
 }
@@ -566,6 +614,24 @@ enum Commands {
         /// Reveal raw secret values instead of redacting them
         #[arg(long)]
         reveal: bool,
+        /// Emit machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+    /// Scan AI agent conversation transcripts for external DNS/IP destinations
+    EgressAudit {
+        /// Which agent's conversations to scan
+        #[arg(long, value_enum, default_value = "all")]
+        agent: EgressAgent,
+        /// Filter findings by a case-insensitive substring (host, rule, agent, or file)
+        #[arg(long)]
+        filter: Option<String>,
+        /// Group the report by host, rule, agent, or file
+        #[arg(long, value_enum, default_value = "host")]
+        group: EgressGroupBy,
+        /// Mark known-safe hosts from ~/.tokenix/safe-hosts.toml with ✓
+        #[arg(long)]
+        safe: bool,
         /// Emit machine-readable JSON instead of a human report
         #[arg(long)]
         json: bool,
@@ -989,6 +1055,22 @@ fn main() -> Result<()> {
             if found > 0 {
                 std::process::exit(1);
             }
+            Ok(())
+        }
+        Commands::EgressAudit {
+            agent,
+            filter,
+            group,
+            safe,
+            json,
+        } => {
+            egress_scan::run(egress_scan::Options {
+                agent: agent.as_str().to_string(),
+                json,
+                search: filter,
+                group: group.to_mode(),
+                safe,
+            })?;
             Ok(())
         }
         Commands::Artifacts(action) => match action {
@@ -3739,6 +3821,11 @@ fn help_catalog() -> String {
             "scan-secrets",
             "",
             "Scan AI agent conversations for exposed credentials",
+        ),
+        (
+            "egress-audit",
+            "",
+            "Audit external DNS/IP targets in agent conversations",
         ),
         ("artifacts", "", "Manage non-code context artifacts"),
         ("cycles", "", "Detect circular dependencies"),

@@ -1,0 +1,101 @@
+# Default egress patterns for `tokenix egress-audit`.
+#
+# Each rule captures a hostname/IP from a network request pattern seen in
+# AI agent conversation transcripts. Patterns use the Rust `regex` crate
+# (backtracking-free, no lookaround).
+#
+# Fields per rule:
+#   id          unique label shown in output (required)
+#   pattern     Rust `regex` crate syntax — capture group 1 must hold the
+#               target hostname, IP, or fully-qualified domain (required)
+#   label       descriptive label for the type of request (optional)
+
+[[rules]]
+id = "https-url"
+label = "HTTPS request"
+pattern = 'https://([A-Za-z0-9.-]+)(?::\d+)?(?:/[^\s"<>|;#]*)?'
+
+[[rules]]
+id = "http-url"
+label = "HTTP request"
+pattern = 'http://([A-Za-z0-9.-]+)(?::\d+)?(?:/[^\s"<>|;#]*)?'
+
+[[rules]]
+id = "ipv4-address"
+label = "IPv4 connection"
+pattern = '\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+\b'
+
+[[rules]]
+id = "ssh-host"
+label = "SSH remote"
+pattern = 'ssh://([A-Za-z0-9.-]+)(?::\d+)?'
+
+[[rules]]
+id = "git-remote-https"
+label = "Git remote (HTTPS)"
+pattern = 'git clone https?://([A-Za-z0-9.-]+)/\S+'
+
+[[rules]]
+id = "git-remote-ssh"
+label = "Git remote (SSH)"
+pattern = 'git@([A-Za-z0-9.-]+):'
+
+[[rules]]
+id = "docker-registry"
+label = "Container registry"
+pattern = '(?:docker\.io|ghcr\.io|gcr\.io|quay\.io|ecr\.[A-Za-z0-9.-]+\.amazonaws\.com|[A-Za-z0-9.-]+\.dkr\.ecr\.[A-Za-z0-9.-]+\.amazonaws\.com|[A-Za-z0-9.-]+\.azurecr\.io|[A-Za-z0-9.-]+\.gcr\.io)'
+
+[[rules]]
+id = "package-registry"
+label = "Package registry"
+pattern = '\b(?:npm\.pkg\.github\.com|nuget\.pkg\.github\.com|rubygems\.pkg\.github\.com|[A-Za-z0-9.-]+\.pkgs\.visualstudio\.com|registry\.npmjs\.org|registry\.yarnpkg\.com|pypi\.org|pypi\.python\.org|rubygems\.org|crates\.io|static\.crates\.io)\b'
+
+[[rules]]
+id = "ai-api-endpoint"
+label = "AI/LLM API endpoint"
+pattern = 'https?://(api\.(?:openai|anthropic|groq|together|perplexity|cohere|mistral|deepseek|replicate)\.(?:com|ai|io|dev))(?::\d+)?(?:/[^\s"<>|;#]*)?'
+
+[[rules]]
+id = "aws-endpoint"
+label = "AWS service endpoint"
+pattern = 'https?://([A-Za-z0-9.-]+\.amazonaws\.com(?:\.cn)?)/?\S*'
+
+[[rules]]
+id = "gcp-endpoint"
+label = "GCP service endpoint"
+pattern = 'https?://([A-Za-z0-9.-]+\.googleapis\.com)/?\S*'
+
+[[rules]]
+id = "azure-endpoint"
+label = "Azure endpoint"
+pattern = 'https?://([A-Za-z0-9.-]+(?:\.azurewebsites|\.azure-api|\.azureedge|\.blob\.core|\.table\.core|\.queue\.core|\.file\.core)\.(?:net|us))/'
+
+[[rules]]
+id = "curl-request"
+label = "cURL request"
+pattern = 'curl\s+\S*https?://([A-Za-z0-9.-]+)(?::\d+)?(?:/\S*)?'
+
+[[rules]]
+id = "wget-request"
+label = "wget download"
+pattern = 'wget\s+\S*https?://([A-Za-z0-9.-]+)(?::\d+)?(?:/\S*)?'
+
+[[rules]]
+id = "pip-install"
+label = "PyPI mirror"
+pattern = 'pip(?:3)?\s+install\s+\S*(?:-i\s+|--index-url\s+)https?://([A-Za-z0-9.-]+)/\S*'
+
+[[rules]]
+id = "npm-install"
+label = "npm registry"
+pattern = 'npm\s+(?:install|publish|add)\s+\S*(?:--registry\s+)?https?://([A-Za-z0-9.-]+)/\S*'
+
+[[rules]]
+id = "cargo-registry"
+label = "Cargo registry"
+pattern = '(?:cargo|rust)\s+\S*(?:--registry\s+)?https?://([A-Za-z0-9.-]+)/\S*'
+
+[[rules]]
+id = "generic-external-domain"
+label = "External domain request"
+pattern = '''["'`](?:https?://)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.[A-Za-z]{2,}(?:\.[A-Za-z]{2,})?)(?::\d+)?(?:/[^\s"<>|;#]*)?["'`]'''

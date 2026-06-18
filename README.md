@@ -42,7 +42,7 @@ Savings depend on codebase size, AI behavior, and file sizes. Run `tokenix gain`
 
 ## 🖥 Interactive Dashboard
 
-Run bare `tokenix` to open a terminal dashboard — six tabs, zero flags. `←`/`→` switch tabs, `↑`/`↓` move, `q` quits. Piped or non-TTY falls back to `--help`.
+Run bare `tokenix` to open a terminal dashboard — seven tabs, zero flags. `←`/`→` switch tabs, `↑`/`↓` move, `q` quits. Piped or non-TTY falls back to `--help`.
 
 <table>
 <tr>
@@ -56,6 +56,9 @@ Run bare `tokenix` to open a terminal dashboard — six tabs, zero flags. `←`/
 <tr>
 <td><img src=".github/prints/tokenmap.png" alt="Tokenmap tab" /><br /><sub><b>Tokenmap</b> — the repository as a tree weighted by token count, heaviest paths first.</sub></td>
 <td><img src=".github/prints/doctor.png" alt="Doctor tab" /><br /><sub><b>Doctor</b> — build/GPU support, detected GPU + CUDA/cuDNN status, active embedding model & cache, and bundled-filter inventory, all on one screen.</sub></td>
+</tr>
+<tr>
+<td colspan="2"><sub><b>Egress</b> — external DNS/IP destinations found in agent transcripts, with local reputation validation: safe hosts green, dangerous hosts red, unknown hosts yellow. Three-pane style like Secrets: group · destination · occurrence detail. <code>s</code> rotates host/rule/agent/file grouping · <code>r</code> rescans.</sub></td>
 </tr>
 </table>
 
@@ -183,6 +186,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Session audit** | `tokenix session-audit --cache-hygiene` combines index freshness, hook history, MCP/tool weight, and prompt-cache stability risks |
 | **Conversation token-waste audit** | `tokenix conversation-audit` scans local Claude / Codex / Copilot / OpenAI histories for large assistant-visible blobs such as full reads, command logs, bootstrap prompts, connector JSON, images, patches, and task artifacts |
 | **Conversation secret scan** | `tokenix scan-secrets` — gitleaks-style credential scan of Claude / Gemini / Copilot / Antigravity conversation transcripts (no git); findings are always redacted, exits non-zero when any are found. Patterns live in TOML (`assets/secret-rules/`), extensible via `~/.tokenix/secret-rules/*.toml` or `<repo>/.tokenix/secret-rules/*.toml` |
+| **Conversation egress audit** | `tokenix egress-audit` — scans AI agent transcripts for external DNS/IP destinations, groups by host/rule/agent/file, validates host reputation from local safe/dangerous lists, and colors safe/dangerous/unknown hosts in the TUI |
 | **Local-first, no dependencies** | fastembed ONNX in-process — no Ollama, no server, no internet after first run |
 
 ---
@@ -375,6 +379,36 @@ credentials. Every finding is **redacted by default** and attributed to the
 TOML `[[rules]]` in `assets/secret-rules/`, extensible without a rebuild via
 `~/.tokenix/secret-rules/*.toml` or `<repo>/.tokenix/secret-rules/*.toml`.
 
+### 11. Audit outbound destinations in conversations
+
+```bash
+tokenix egress-audit                         # all agents, grouped by host
+tokenix egress-audit --group rule            # group by detection rule
+tokenix egress-audit --filter openai         # filter host/rule/agent/file
+tokenix egress-audit --safe                  # mark known-safe hosts
+tokenix egress-audit --agent claude --json   # machine-readable
+```
+
+This scans local AI agent transcripts for external DNS/IP destinations, so
+unexpected outbound domains pasted into sessions are visible without opening raw
+history files. The TUI Egress tab uses the same three-pane pattern as Secrets:
+group list, distinct destination list, and occurrence detail with agent, file,
+repo, and branch when known.
+
+Host reputation is local and explicit. Put trusted domains in
+`~/.tokenix/safe-hosts.toml` and suspicious domains in
+`~/.tokenix/dangerous-hosts.toml`; `www.` is ignored and subdomains inherit the
+parent verdict. The TUI paints safe hosts green, dangerous hosts red, and unknown
+hosts yellow. Example:
+
+```toml
+# ~/.tokenix/safe-hosts.toml
+safe = ["api.openai.com", "github.com"]
+
+# ~/.tokenix/dangerous-hosts.toml
+dangerous = ["example-malware.test"]
+```
+
 ---
 
 ## 🔧 Setup by Tool
@@ -488,7 +522,7 @@ tokenix install-hook --tool all
 
 | Command | Description |
 |---|---|
-| `tokenix` (no args) | Open the [interactive dashboard](#-interactive-dashboard) — Stats · Filters · Gain · Doctor · Tokenmap · Secrets tabs; piped/non-TTY falls back to help |
+| `tokenix` (no args) | Open the [interactive dashboard](#-interactive-dashboard) — Stats · Filters · Gain · Doctor · Tokenmap · Secrets · Egress tabs; piped/non-TTY falls back to help |
 | `tokenix filter` (no args) | Open the dashboard on the Filters tab; piped falls back to `filter list` |
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
@@ -510,6 +544,7 @@ tokenix install-hook --tool all
 | `tokenix session-audit` | Token-economy health check: index, hook events, MCP/tool weight, cache hygiene |
 | `tokenix conversation-audit` | Scan local AI conversation histories for token-waste patterns (`--agent`, `--min-chars`, `--limit`, `--json`) |
 | `tokenix scan-secrets` | Scan AI agent conversation transcripts for exposed credentials, gitleaks-style; attributes each to its repo + git branch (`--agent`, `--filter`, `--group`, `--reveal`, `--json`) |
+| `tokenix egress-audit` | Scan AI agent conversation transcripts for external DNS/IP destinations and validate hosts against local safe/dangerous reputation lists (`--agent`, `--filter`, `--group`, `--safe`, `--json`) |
 | `tokenix artifacts list` | List context artifacts defined in `.tokenix/artifacts.json` |
 | `tokenix artifacts show NAME` | Show context artifact content |
 | `tokenix cycles` | Detect circular dependencies in the symbol graph using Tarjan's SCC algorithm |

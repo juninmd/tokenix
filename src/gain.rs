@@ -282,11 +282,17 @@ mod tests {
     use crate::store::{log_hook_event, HookEvent};
 
     fn create_test_temp_dir(sub: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
         let p = std::env::temp_dir().join("tokenix_test_gain").join(format!(
-            "{}_{}",
+            "{}_{}_{}",
             sub,
-            std::process::id()
+            std::process::id(),
+            unique
         ));
+        let _ = std::fs::remove_dir_all(&p);
         let _ = std::fs::create_dir_all(&p);
         p
     }
