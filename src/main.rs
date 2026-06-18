@@ -3316,7 +3316,15 @@ fn run_agy_plugin(args: &[&str]) -> Result<()> {
         .args(["plugin"])
         .args(args)
         .output()
-        .map_err(|e| anyhow::anyhow!("Cannot run Antigravity CLI (`agy`): {e}"))?;
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                // If `agy` is not installed, fail-open for hook installation
+                // This prevents CI failures due to missing optional dependencies
+                anyhow::anyhow!("Antigravity CLI (`agy`) not installed - skipping plugin installation")
+            } else {
+                anyhow::anyhow!("Cannot run Antigravity CLI (`agy`): {e}")
+            }
+        })?;
     if output.status.success() {
         return Ok(());
     }
@@ -3337,7 +3345,10 @@ fn install_antigravity(local: bool) -> Result<()> {
     let hook_cmd = hook_command(&tokenix_bin, "hook-antigravity");
     if local {
         write_antigravity_plugin(&plugin_dir, &hook_cmd)?;
-        run_agy_plugin(&["validate", &plugin_dir.to_string_lossy()])?;
+        if let Err(e) = run_agy_plugin(&["validate", &plugin_dir.to_string_lossy()]) {
+            // Skip validation error if `agy` is not installed, but log it for visibility
+            eprintln!("{}: {}", "warning".yellow(), e);
+        }
     } else {
         let staging_dir =
             std::env::temp_dir().join(format!("tokenix-antigravity-{}", std::process::id()));
@@ -3346,8 +3357,14 @@ fn install_antigravity(local: bool) -> Result<()> {
         if staging_dir.starts_with(std::env::temp_dir()) {
             let _ = std::fs::remove_dir_all(&staging_dir);
         }
-        result?;
-        run_agy_plugin(&["validate", &plugin_dir.to_string_lossy()])?;
+        if let Err(e) = result {
+            // Skip installation error if `agy` is not installed, but log it for visibility
+            eprintln!("{}: {}", "warning".yellow(), e);
+        }
+        if let Err(e) = run_agy_plugin(&["validate", &plugin_dir.to_string_lossy()]) {
+            // Skip validation error if `agy` is not installed, but log it for visibility
+            eprintln!("{}: {}", "warning".yellow(), e);
+        }
         let legacy_dir = legacy_antigravity_plugin_dir(&home);
         if legacy_dir.exists() {
             std::fs::remove_dir_all(legacy_dir)?;
@@ -3373,7 +3390,10 @@ fn remove_antigravity(local: bool) -> Result<()> {
     let plugin_dir = antigravity_plugin_dir(&home, &repo_root, local);
 
     if !local && plugin_dir.exists() {
-        run_agy_plugin(&["uninstall", "tokenix"])?;
+        if let Err(e) = run_agy_plugin(&["uninstall", "tokenix"]) {
+            // Skip uninstallation if `agy` is not installed, but log it for visibility
+            eprintln!("{}: {}", "warning".yellow(), e);
+        }
         let legacy_dir = legacy_antigravity_plugin_dir(&home);
         if legacy_dir.exists() {
             std::fs::remove_dir_all(legacy_dir)?;
