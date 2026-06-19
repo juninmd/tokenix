@@ -42,7 +42,7 @@ Savings depend on codebase size, AI behavior, and file sizes. Run `tokenix gain`
 
 ## 🖥 Interactive Dashboard
 
-Run bare `tokenix` to open a terminal dashboard — seven tabs, zero flags. `←`/`→` switch tabs, `↑`/`↓` move, `q` quits. Piped or non-TTY falls back to `--help`.
+Run bare `tokenix` to open a terminal dashboard — eight tabs, zero flags. `←`/`→` switch tabs, `↑`/`↓` move, `q` quits. Piped or non-TTY falls back to `--help`.
 
 <table>
 <tr>
@@ -51,14 +51,17 @@ Run bare `tokenix` to open a terminal dashboard — seven tabs, zero flags. `←
 </tr>
 <tr>
 <td><img src=".github/prints/filters.png" alt="Filters tab" /><br /><sub><b>Filters</b> — browse all 244 bundled filters by tool with a live <i>input → output</i> preview and a per-filter <code>X → Y tokens · % saved</code> gauge.</sub></td>
-<td><img src=".github/prints/secrets.png" alt="Secrets tab" /><br /><sub><b>Secrets</b> — credentials leaked across agent transcripts, grouped by rule and attributed to repo + branch. <code>v</code> reveal · <code>c</code> copy · <code>x</code> redact.</sub></td>
+<td><img src=".github/prints/secrets.png" alt="Secrets tab" /><br /><sub><b>Secrets</b> — credentials leaked across agent transcripts, grouped by rule and attributed to repo + branch. Starts scoped to the current repo; <code>g</code> toggles all repos. <code>v</code> reveal · <code>c</code> copy · <code>x</code> redact.</sub></td>
 </tr>
 <tr>
 <td><img src=".github/prints/tokenmap.png" alt="Tokenmap tab" /><br /><sub><b>Tokenmap</b> — the repository as a tree weighted by token count, heaviest paths first.</sub></td>
 <td><img src=".github/prints/doctor.png" alt="Doctor tab" /><br /><sub><b>Doctor</b> — build/GPU support, detected GPU + CUDA/cuDNN status, active embedding model & cache, and bundled-filter inventory, all on one screen.</sub></td>
 </tr>
 <tr>
-<td colspan="2"><sub><b>Egress</b> — external DNS/IP destinations found in agent transcripts, with local reputation validation: safe hosts green, dangerous hosts red, unknown hosts yellow. Three-pane style like Secrets: group · destination · occurrence detail. <code>s</code> rotates host/rule/agent/file grouping · <code>r</code> rescans.</sub></td>
+<td colspan="2"><sub><b>Egress</b> — external DNS/IP destinations found in agent transcripts, with local reputation validation: safe hosts green, dangerous hosts red, unknown hosts yellow. Three-pane style like Secrets: group · destination · occurrence detail. Starts scoped to the current repo; <code>g</code> toggles all repos. <code>s</code> rotates host/rule/agent/file grouping · <code>r</code> rescans.</sub></td>
+</tr>
+<tr>
+<td colspan="2"><sub><b>Studio</b> — record → preview → generate output filters without leaving the dashboard. <code>r</code> arms recording (capture needs the tokenix hook installed; run your commands in your agent, then come back), <code>s</code> stops. The left pane lists captured recordings and your saved filter TOMLs; the right pane previews a recorded sample with a live <i>before → after</i> token delta when a filter matches. <code>g</code> generates a filter from the selected recording (drops to the interactive <code>filter generate</code> flow, then returns) · <code>x</code> deletes a saved filter · <code>Tab</code> switches pane.</sub></td>
 </tr>
 </table>
 
@@ -395,7 +398,8 @@ This scans local AI agent transcripts for external DNS/IP destinations, so
 unexpected outbound domains pasted into sessions are visible without opening raw
 history files. The TUI Egress tab uses the same three-pane pattern as Secrets:
 group list, distinct destination list, and occurrence detail with agent, file,
-repo, and branch when known.
+repo, and branch when known. Both the Secrets and Egress tabs open scoped to the
+current repository (cwd); press `g` to toggle a global view across all repos.
 
 Host reputation is local and explicit. Put trusted domains in
 `~/.tokenix/safe-hosts.toml` and suspicious domains in

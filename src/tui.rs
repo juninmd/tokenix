@@ -7,8 +7,10 @@
 //! progress and returns here; Filters is a three-pane browser (groups · filters ·
 //! live input→output preview) so nothing needs a deeper drill level.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
@@ -26,6 +28,7 @@ use crate::filters::{self, ActiveFilter};
 enum Cmd {
     Stats,
     Filters,
+    Studio,
     Gain,
     Doctor,
     Tokenmap,
@@ -34,9 +37,10 @@ enum Cmd {
 }
 
 impl Cmd {
-    const ALL: [Cmd; 7] = [
+    const ALL: [Cmd; 8] = [
         Cmd::Stats,
         Cmd::Filters,
+        Cmd::Studio,
         Cmd::Gain,
         Cmd::Doctor,
         Cmd::Tokenmap,
@@ -52,6 +56,7 @@ impl Cmd {
         match self {
             Cmd::Stats => "Stats",
             Cmd::Filters => "Filters",
+            Cmd::Studio => "Studio",
             Cmd::Gain => "Gain",
             Cmd::Doctor => "Doctor",
             Cmd::Tokenmap => "Tokenmap",
@@ -100,6 +105,14 @@ enum Pane {
     Filters,
 }
 
+/// Left/right focus on the Studio tab: the recordings list or the saved
+/// filter TOMLs.
+#[derive(Clone, Copy, PartialEq)]
+enum StudioPane {
+    Recordings,
+    Saved,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum SecGroup {
     Rule,
@@ -144,7 +157,14 @@ struct Shell {
     gain_cache: Option<GainView>,
     gain_cost: bool,
     gain_global: bool,
+    // Project scope (cwd vs. all repos) shared by Secrets/Egress tabs --------
+    proj_root_norm: String,
+    proj_slug: String,
+    proj_dir: String,
     // Secrets page ---------------------------------------------------------
+    /// Raw scan (every repo). `secrets` holds the scope-filtered view.
+    secrets_all: Option<Vec<crate::secrets_scan::ScanFinding>>,
+    sec_global: bool,
     secrets: Option<Vec<crate::secrets_scan::ScanFinding>>,
     secrets_counts: Vec<(String, usize)>,
     secrets_rx: Option<Receiver<SecPayload>>,
@@ -159,6 +179,9 @@ struct Shell {
     sec_msg: Option<String>,
     spinner: usize,
     // Egress page ---------------------------------------------------------
+    /// Raw scan (every repo). `egress` holds the scope-filtered view.
+    egress_all: Option<Vec<crate::egress_scan::EgressFinding>>,
+    egr_global: bool,
     egress: Option<Vec<crate::egress_scan::EgressFinding>>,
     egress_counts: Vec<(String, usize)>,
     egress_rx: Option<Receiver<EgrPayload>>,
@@ -169,9 +192,26 @@ struct Shell {
     egr_g: usize,
     egr_sel_group: usize,
     egr_i: usize,
+    // Studio tab (record → preview → generate filters) ---------------------
+    /// Project root, reused by the recordings calls and the foreground
+    /// `filter generate` drop-out.
+    repo_root: PathBuf,
+    studio_pane: StudioPane,
+    studio_rec_sel: usize,
+    studio_saved_sel: usize,
+    studio_msg: Option<String>,
+    /// Arms the `x` delete of the selected saved filter (second press confirms).
+    studio_confirm_delete: bool,
+    /// Set to a base command to run `filter generate` in the foreground (mirrors
+    /// `request_index`); consumed by the event loop after it drops the alt-screen.
+    request_generate: Option<String>,
     // Report / install pages ----------------------------------------------
     reports: HashMap<usize, String>,
     scroll: u16,
+    /// Max scroll offset for the pane drawn last frame (content rows − inner
+    /// height). Set during render, read by the key handlers to bound `scroll`
+    /// so tiny terminals can't scroll past the end into a blank pane.
+    max_scroll: Cell<u16>,
     request_index: bool,
 }
 
@@ -180,6 +220,15 @@ pub fn run() -> Result<()> {
     let filters = filters::load_active_filters();
     let tool_groups = group_by(&filters, |f| tool_of(&f.name).to_string());
     let source_groups = group_by(&filters, |f| f.source.to_string());
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let proj_root = crate::store::find_project_root(&cwd);
+    let proj_root_disp = proj_root.display().to_string();
+    let proj_root_norm = norm_path(&proj_root_disp);
+    let proj_slug = slugify(&proj_root_disp);
+    let proj_dir = proj_root
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| proj_root_disp.clone());
     let mut shell = Shell {
         cmd: Cmd::Stats,
         filters,
@@ -201,6 +250,11 @@ pub fn run() -> Result<()> {
         gain_cache: None,
         gain_cost: false,
         gain_global: false,
+        proj_root_norm,
+        proj_slug,
+        proj_dir,
+        secrets_all: None,
+        sec_global: false,
         secrets: None,
         secrets_counts: Vec::new(),
         secrets_rx: None,
@@ -214,6 +268,8 @@ pub fn run() -> Result<()> {
         sec_confirm: false,
         sec_msg: None,
         spinner: 0,
+        egress_all: None,
+        egr_global: false,
         egress: None,
         egress_counts: Vec::new(),
         egress_rx: None,
@@ -224,8 +280,16 @@ pub fn run() -> Result<()> {
         egr_g: 0,
         egr_sel_group: 0,
         egr_i: 0,
+        repo_root: proj_root,
+        studio_pane: StudioPane::Recordings,
+        studio_rec_sel: 0,
+        studio_saved_sel: 0,
+        studio_msg: None,
+        studio_confirm_delete: false,
+        request_generate: None,
         reports: HashMap::new(),
         scroll: 0,
+        max_scroll: Cell::new(0),
         request_index: false,
     };
     let mut terminal = ratatui::init();
@@ -245,19 +309,19 @@ impl Shell {
             // Collect a finished background secret scan, if any.
             let done = self.secrets_rx.as_ref().and_then(|rx| rx.try_recv().ok());
             if let Some((findings, counts)) = done {
-                self.secrets = Some(findings);
+                self.secrets_all = Some(findings);
                 self.secrets_counts = counts;
                 self.secrets_rx = None;
-                self.rebuild_sec_groups();
+                self.apply_sec_scope();
             }
 
             // Collect a finished background egress scan, if any.
             let done = self.egress_rx.as_ref().and_then(|rx| rx.try_recv().ok());
             if let Some((findings, counts)) = done {
-                self.egress = Some(findings);
+                self.egress_all = Some(findings);
                 self.egress_counts = counts;
                 self.egress_rx = None;
-                self.rebuild_egr_groups();
+                self.apply_egr_scope();
             }
 
             terminal.draw(|f| self.draw(f))?;
@@ -314,11 +378,19 @@ impl Shell {
                 KeyCode::Tab | KeyCode::BackTab if self.cmd == Cmd::Egress => {
                     self.egr_pane = other_pane(self.egr_pane)
                 }
+                KeyCode::Tab | KeyCode::BackTab if self.cmd == Cmd::Studio => {
+                    self.studio_pane = match self.studio_pane {
+                        StudioPane::Recordings => StudioPane::Saved,
+                        StudioPane::Saved => StudioPane::Recordings,
+                    };
+                    self.studio_confirm_delete = false;
+                }
                 KeyCode::Tab => self.switch_tab(1),
                 KeyCode::BackTab => self.switch_tab(-1),
                 _ => match self.cmd {
                     Cmd::Stats => self.key_stats(key.code),
                     Cmd::Filters => self.key_filters(key.code),
+                    Cmd::Studio => self.key_studio(key.code),
                     Cmd::Gain => self.key_gain(key.code),
                     Cmd::Secrets => self.key_secrets(key.code),
                     Cmd::Egress => self.key_egress(key.code),
@@ -335,6 +407,21 @@ impl Shell {
                 *terminal = ratatui::init();
                 self.index_stats = read_index_stats();
                 self.stats_msg = Some("Index updated.".to_string());
+            }
+
+            // `filter generate` is interactive (AI-CLI pick, sample preview, save,
+            // optional PR), so it runs in the foreground like Index: drop the alt
+            // screen, reuse the CLI flow, wait for a keypress, then resume.
+            if let Some(base) = self.request_generate.take() {
+                ratatui::restore();
+                if let Err(e) = crate::cmd_filter::cmd_filter_generate(Some(base), &self.repo_root)
+                {
+                    eprintln!("filter generate failed: {e}");
+                }
+                println!("\nPress Enter to return to the dashboard…");
+                let _ = std::io::stdin().read_line(&mut String::new());
+                *terminal = ratatui::init();
+                self.studio_msg = Some("Filter generation finished.".to_string());
             }
         }
     }
@@ -404,6 +491,110 @@ impl Shell {
         }
     }
 
+    // ── Studio tab (record → preview → generate) ─────────────────────────
+
+    /// Captured recordings for this repo, biggest first: `(base_cmd, captures, bytes)`.
+    fn studio_recordings(&self) -> Vec<(String, usize, u64)> {
+        crate::recordings::summary(&self.repo_root)
+    }
+
+    /// User-saved filter TOMLs (stem names) under `~/.tokenix/filters/`, sorted.
+    fn studio_saved(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(filters::filters_dir())
+            .map(|rd| {
+                rd.filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+                    .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    fn key_studio(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('r') => {
+                self.studio_msg = Some(if crate::recordings::is_active(&self.repo_root) {
+                    "Recording already armed — run your commands, then press s.".to_string()
+                } else {
+                    match crate::recordings::start(&self.repo_root, None) {
+                        Ok(_) => "Recording armed — run your commands in your agent, then \
+                                  press s to stop."
+                            .to_string(),
+                        Err(e) => format!("Could not start recording: {e}"),
+                    }
+                });
+            }
+            KeyCode::Char('s') => {
+                if crate::recordings::is_active(&self.repo_root) {
+                    let _ = crate::recordings::stop(&self.repo_root);
+                    let n = self.studio_recordings().len();
+                    self.studio_msg = Some(format!("Recording stopped — {n} command(s) captured."));
+                } else {
+                    self.studio_msg = Some("No active recording session.".to_string());
+                }
+            }
+            KeyCode::Char('g') if self.studio_pane == StudioPane::Recordings => {
+                if let Some((base, _, _)) = self.studio_recordings().get(self.studio_rec_sel) {
+                    self.request_generate = Some(base.clone());
+                } else {
+                    self.studio_msg = Some("No recording selected to generate from.".to_string());
+                }
+            }
+            KeyCode::Char('x') if self.studio_pane == StudioPane::Saved => {
+                let saved = self.studio_saved();
+                let Some(name) = saved.get(self.studio_saved_sel) else {
+                    return;
+                };
+                if self.studio_confirm_delete {
+                    let path = filters::filters_dir().join(format!("{name}.toml"));
+                    self.studio_msg = Some(match std::fs::remove_file(&path) {
+                        Ok(_) => format!("Deleted filter {name}."),
+                        Err(e) => format!("Could not delete {name}: {e}"),
+                    });
+                    self.studio_confirm_delete = false;
+                    let len = self.studio_saved().len();
+                    if self.studio_saved_sel >= len {
+                        self.studio_saved_sel = len.saturating_sub(1);
+                    }
+                } else {
+                    self.studio_confirm_delete = true;
+                    self.studio_msg = Some(format!("Press x again to delete {name}."));
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.studio_confirm_delete = false;
+                match self.studio_pane {
+                    StudioPane::Recordings => {
+                        let len = self.studio_recordings().len();
+                        if self.studio_rec_sel + 1 < len {
+                            self.studio_rec_sel += 1;
+                        }
+                    }
+                    StudioPane::Saved => {
+                        let len = self.studio_saved().len();
+                        if self.studio_saved_sel + 1 < len {
+                            self.studio_saved_sel += 1;
+                        }
+                    }
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.studio_confirm_delete = false;
+                match self.studio_pane {
+                    StudioPane::Recordings => {
+                        self.studio_rec_sel = self.studio_rec_sel.saturating_sub(1)
+                    }
+                    StudioPane::Saved => {
+                        self.studio_saved_sel = self.studio_saved_sel.saturating_sub(1)
+                    }
+                }
+            }
+            _ => self.key_scroll(code),
+        }
+    }
+
     // ── Secrets tab ──────────────────────────────────────────────────────
 
     /// Kick off a background scan the first time the Secrets tab is shown (or
@@ -418,6 +609,49 @@ impl Shell {
             let _ = tx.send(crate::secrets_scan::scan_findings());
         });
         self.secrets_rx = Some(rx);
+    }
+
+    /// True when a finding's recorded `repo` (the `cwd` captured in the
+    /// transcript, or a `~slug:`/`~dir:` fallback marker) belongs to the current
+    /// project root — used to scope Secrets/Egress to the local repo by default.
+    fn is_local(&self, repo: &Option<String>) -> bool {
+        let Some(repo) = repo else {
+            return false;
+        };
+        if let Some(slug) = repo.strip_prefix("~slug:") {
+            return slug.eq_ignore_ascii_case(&self.proj_slug);
+        }
+        if let Some(dir) = repo.strip_prefix("~dir:") {
+            return dir.eq_ignore_ascii_case(&self.proj_dir);
+        }
+        let r = norm_path(repo);
+        let root = &self.proj_root_norm;
+        r == *root || r.starts_with(&format!("{root}/"))
+    }
+
+    /// Rebuild the scoped `secrets` view from the raw scan, then regroup. Global
+    /// shows every repo; local keeps only findings attributed to the cwd project.
+    fn apply_sec_scope(&mut self) {
+        self.secrets = self.secrets_all.as_ref().map(|all| {
+            if self.sec_global {
+                all.clone()
+            } else {
+                all.iter()
+                    .filter(|f| self.is_local(&f.repo))
+                    .cloned()
+                    .collect()
+            }
+        });
+        self.rebuild_sec_groups();
+    }
+
+    /// Short label for the active scope, shown in the tab title and footer.
+    fn scope_label(&self, global: bool) -> String {
+        if global {
+            "all repos".to_string()
+        } else {
+            self.proj_dir.clone()
+        }
     }
 
     /// Bucket findings by the active grouping (credential rule or agent), sorted
@@ -512,7 +746,12 @@ impl Shell {
             KeyCode::Char('v') => self.sec_reveal = !self.sec_reveal,
             KeyCode::Char('c') if !self.current_occurrences().is_empty() => self.do_copy(),
             KeyCode::Char('x') if !self.current_occurrences().is_empty() => self.sec_confirm = true,
+            KeyCode::Char('g') => {
+                self.sec_global = !self.sec_global;
+                self.apply_sec_scope();
+            }
             KeyCode::Char('r') => {
+                self.secrets_all = None;
                 self.secrets = None;
                 self.secrets_rx = None;
                 self.sec_groups.clear();
@@ -521,7 +760,7 @@ impl Shell {
             KeyCode::Up | KeyCode::Char('k') => self.move_sec(-1),
             KeyCode::PageDown => self.move_sec(10),
             KeyCode::PageUp => self.move_sec(-10),
-            KeyCode::Home | KeyCode::Char('g') => self.jump_sec(0),
+            KeyCode::Home => self.jump_sec(0),
             KeyCode::End | KeyCode::Char('G') => self.jump_sec(usize::MAX),
             _ => {}
         }
@@ -573,6 +812,7 @@ impl Shell {
             ));
         }
         self.sec_msg = Some(msg);
+        self.secrets_all = None;
         self.secrets = None;
         self.secrets_rx = None;
         self.sec_groups.clear();
@@ -631,6 +871,21 @@ impl Shell {
         self.egress_rx = Some(rx);
     }
 
+    /// Rebuild the scoped `egress` view from the raw scan, then regroup.
+    fn apply_egr_scope(&mut self) {
+        self.egress = self.egress_all.as_ref().map(|all| {
+            if self.egr_global {
+                all.clone()
+            } else {
+                all.iter()
+                    .filter(|f| self.is_local(&f.repo))
+                    .cloned()
+                    .collect()
+            }
+        });
+        self.rebuild_egr_groups();
+    }
+
     fn rebuild_egr_groups(&mut self) {
         self.egr_g = 0;
         self.egr_sel_group = 0;
@@ -675,7 +930,12 @@ impl Shell {
                 };
                 self.rebuild_egr_groups();
             }
+            KeyCode::Char('g') => {
+                self.egr_global = !self.egr_global;
+                self.apply_egr_scope();
+            }
             KeyCode::Char('r') => {
+                self.egress_all = None;
                 self.egress = None;
                 self.egress_rx = None;
                 self.egr_groups.clear();
@@ -684,7 +944,7 @@ impl Shell {
             KeyCode::Up | KeyCode::Char('k') => self.move_egr(-1),
             KeyCode::PageDown => self.move_egr(10),
             KeyCode::PageUp => self.move_egr(-10),
-            KeyCode::Home | KeyCode::Char('g') => self.jump_egr(0),
+            KeyCode::Home => self.jump_egr(0),
             KeyCode::End | KeyCode::Char('G') => self.jump_egr(usize::MAX),
             _ => {}
         }
@@ -869,25 +1129,37 @@ impl Shell {
 
     // ── scroll / action tabs ─────────────────────────────────────────────
 
+    /// Bound `scroll` to the content drawn last frame and return the clamped
+    /// offset to render with, so a bordered pane shorter than its content never
+    /// scrolls past the final row into emptiness on a small terminal.
+    fn scroll_for(&self, content_lines: usize, area: Rect) -> u16 {
+        let inner = area.height.saturating_sub(2); // top/bottom border
+        let max = (content_lines as u16).saturating_sub(inner);
+        self.max_scroll.set(max);
+        self.scroll.min(max)
+    }
+
     fn key_scroll(&mut self, code: KeyCode) {
         match code {
             KeyCode::Down | KeyCode::Char('j') => self.scroll = self.scroll.saturating_add(1),
             KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
             KeyCode::PageDown => self.scroll = self.scroll.saturating_add(15),
             KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(15),
+            KeyCode::End => self.scroll = self.max_scroll.get(),
             KeyCode::Home | KeyCode::Char('g') => self.scroll = 0,
             KeyCode::Char('r') => {
                 self.reports.remove(&self.cmd.index());
             }
             _ => {}
         }
+        self.scroll = self.scroll.min(self.max_scroll.get());
     }
 
     // ── Stats dashboard (index + install actions) ────────────────────────
 
     /// The dashboard actions: 0 = index this repo, 1 = install hooks,
-    /// 2 = install the binary on PATH.
-    const STATS_ACTIONS: usize = 3;
+    /// 2 = install the binary on PATH, 3 = generate agent ignore files.
+    const STATS_ACTIONS: usize = 4;
 
     fn key_stats(&mut self, code: KeyCode) {
         match code {
@@ -901,16 +1173,21 @@ impl Shell {
                 self.stats_msg = None;
                 self.stats_sel = (self.stats_sel + Self::STATS_ACTIONS - 1) % Self::STATS_ACTIONS;
             }
+            KeyCode::PageDown => self.scroll = self.scroll.saturating_add(10),
+            KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(10),
+            KeyCode::End => self.scroll = self.max_scroll.get(),
+            KeyCode::Home => self.scroll = 0,
             KeyCode::Enter => match self.stats_sel {
                 // Index: non-destructive, runs in the foreground (see event_loop).
                 0 => self.request_index = true,
-                // Install actions write files, so a second Enter confirms.
+                // Install / generate actions write files, so a second Enter confirms.
                 sel => {
                     if self.stats_confirm {
-                        if sel == 1 {
-                            self.run_install();
-                        } else {
-                            self.run_install_binary();
+                        match sel {
+                            1 => self.run_install(),
+                            2 => self.run_install_binary(),
+                            3 => self.run_generate_ignores(),
+                            _ => {}
                         }
                         self.stats_confirm = false;
                     } else {
@@ -920,6 +1197,7 @@ impl Shell {
             },
             _ => self.stats_confirm = false,
         }
+        self.scroll = self.scroll.min(self.max_scroll.get());
     }
 
     fn run_install(&mut self) {
@@ -945,6 +1223,22 @@ impl Shell {
         });
     }
 
+    /// Generate all known agent ignore files from the repo's .gitignore.
+    fn run_generate_ignores(&mut self) {
+        let out = capture(&["generate-ignores"]);
+        let msg = out
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        self.stats_msg = Some(if msg.is_empty() {
+            "generate-ignores finished".to_string()
+        } else {
+            msg
+        });
+    }
+
     // ── rendering ─────────────────────────────────────────────────────────
 
     fn draw(&self, f: &mut Frame) {
@@ -958,6 +1252,7 @@ impl Shell {
         match self.cmd {
             Cmd::Stats => self.draw_stats(f, rows[1]),
             Cmd::Filters => self.draw_filters(f, rows[1]),
+            Cmd::Studio => self.draw_studio(f, rows[1]),
             Cmd::Gain => self.draw_gain(f, rows[1]),
             Cmd::Secrets => self.draw_secrets(f, rows[1]),
             Cmd::Egress => self.draw_egress(f, rows[1]),
@@ -1063,10 +1358,21 @@ impl Shell {
             "Install binary (PATH)",
             &binary_note,
         ));
+        let ignore_note = format!(
+            "copy .gitignore to {} agent ignore files",
+            crate::AGENT_IGNORE_FILES.len()
+        );
+        lines.push(action_line(
+            self.stats_sel == 3,
+            "Generate ignore files",
+            &ignore_note,
+        ));
 
         if self.stats_confirm {
             let warn = if self.stats_sel == 2 {
                 "⚠ copies the executable and updates your user PATH — press Enter to confirm"
+            } else if self.stats_sel == 3 {
+                "⚠ creates agent ignore files from .gitignore (if absent) — press Enter to confirm"
             } else {
                 "⚠ writes config files — press Enter to confirm"
             };
@@ -1083,9 +1389,10 @@ impl Shell {
             )));
         }
 
+        let scroll = self.scroll_for(lines.len(), area);
         let p = Paragraph::new(Text::from(lines))
             .block(Block::bordered().title(" stats "))
-            .scroll((self.scroll, 0));
+            .scroll((scroll, 0));
         f.render_widget(p, area);
     }
 
@@ -1323,33 +1630,39 @@ impl Shell {
         ));
         lines.push(Line::from(""));
 
-        // Where the savings came from: semantic index vs command filters.
-        lines.push(Line::from("savings by source".bold()));
-        let total_saved = s.tokens_saved.max(1);
-        for (label, desc, saved, calls) in [
-            (
-                "semantic index",
-                "Read outlines; Grep neutral context",
-                s.index_saved,
-                s.index_calls,
-            ),
-            (
-                "command filters",
-                "Bash/PowerShell output compression",
-                s.filter_saved,
-                s.filter_calls,
-            ),
-        ] {
-            let share = saved as f64 / total_saved as f64;
+        // Index capability: how many tokens are indexed for semantic search.
+        lines.push(Line::from("index".bold()));
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let root = crate::store::find_project_root(&cwd);
+        let index_info = crate::store::open_db(&root, false)
+            .ok()
+            .flatten()
+            .and_then(|conn| crate::store::count_stats(&conn).ok());
+        if let Some(idx) = &index_info {
             lines.push(Line::from(vec![
-                Span::raw(format!("  {label:<17}")),
                 Span::styled(
-                    format!("{:>9}", crate::ui::format_num(saved)),
+                    format!("  {:>12}  ", crate::ui::format_num(idx.total_tokens)),
+                    Style::default().cyan().add_modifier(bold),
+                ),
+                Span::styled("tokens indexed", Style::default().dim()),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {:>12}  ", idx.files), Style::default().cyan()),
+                Span::styled("files", Style::default().dim()),
+                Span::raw("  ·  "),
+                Span::styled(format!("{}", idx.chunks), Style::default().cyan()),
+                Span::styled(" chunks", Style::default().dim()),
+            ]));
+        } else {
+            lines.push(Line::from("  not indexed".dim()));
+        }
+        if s.indexed_queries > 0 {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {:>12}  ", s.indexed_queries),
                     green.add_modifier(bold),
                 ),
-                Span::styled(format!("  {:>5.1}%  ", share * 100.0), green),
-                Span::styled(crate::ui::bar(share, 14), Style::default().dim()),
-                Span::styled(format!("  {calls} calls · {desc}"), Style::default().dim()),
+                Span::styled("semantic queries answered", Style::default().dim()),
             ]));
         }
         lines.push(Line::from(""));
@@ -1388,8 +1701,9 @@ impl Shell {
                 .max()
                 .unwrap_or(1)
                 .max(1);
+            let comp_total = s.tokens_saved.max(1);
             for (i, (cmd, count, saved)) in s.by_command.iter().take(12).enumerate() {
-                let share = *saved as f64 / total_saved as f64;
+                let share = *saved as f64 / comp_total as f64;
                 lines.push(Line::from(vec![
                     Span::styled(format!("  {:>2}  ", i + 1), Style::default().dim()),
                     Span::raw(format!("{:<18} ", trunc(cmd, 18))),
@@ -1519,12 +1833,217 @@ impl Shell {
             ));
         }
 
+        let scroll = self.scroll_for(lines.len(), area);
         f.render_widget(
             Paragraph::new(Text::from(lines))
                 .block(Block::bordered().title(" gain "))
-                .scroll((self.scroll, 0)),
+                .scroll((scroll, 0)),
             area,
         );
+    }
+
+    fn draw_studio(&self, f: &mut Frame, area: Rect) {
+        let cols = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
+            .split(area);
+        let left = Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .split(cols[0]);
+
+        // ── Left top: recordings list ───────────────────────────────────
+        let recs = self.studio_recordings();
+        let active = crate::recordings::active_session(&self.repo_root);
+        let status = match &active {
+            Some(s) => match &s.command {
+                Some(c) => format!("● rec {c}"),
+                None => "● rec all".to_string(),
+            },
+            None => "○ idle".to_string(),
+        };
+        let rec_items: Vec<ListItem> = recs
+            .iter()
+            .map(|(cmd, count, bytes)| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{:<14}", trunc(cmd, 14)), Style::default().cyan()),
+                    Span::styled(format!("{count}× "), Style::default().dim()),
+                    Span::styled(human_size(*bytes), Style::default().dim()),
+                ]))
+            })
+            .collect();
+        let mut rec_state = ListState::default();
+        if !recs.is_empty() {
+            rec_state.select(Some(self.studio_rec_sel.min(recs.len() - 1)));
+        }
+        f.render_stateful_widget(
+            list_widget(
+                rec_items,
+                format!(" recordings · {status} "),
+                self.studio_pane == StudioPane::Recordings,
+            ),
+            left[0],
+            &mut rec_state,
+        );
+
+        // ── Left bottom: saved filters ──────────────────────────────────
+        let saved = self.studio_saved();
+        let saved_items: Vec<ListItem> = saved
+            .iter()
+            .map(|n| ListItem::new(Span::styled(trunc(n, 22), Style::default().green())))
+            .collect();
+        let mut saved_state = ListState::default();
+        if !saved.is_empty() {
+            saved_state.select(Some(self.studio_saved_sel.min(saved.len() - 1)));
+        }
+        f.render_stateful_widget(
+            list_widget(
+                saved_items,
+                format!(" saved filters ({}) ", saved.len()),
+                self.studio_pane == StudioPane::Saved,
+            ),
+            left[1],
+            &mut saved_state,
+        );
+
+        // ── Right: preview pane ─────────────────────────────────────────
+        let mut lines: Vec<Line> = Vec::new();
+        if let Some(msg) = &self.studio_msg {
+            lines.push(Line::from(Span::styled(
+                format!("  {msg}"),
+                Style::default().yellow(),
+            )));
+            lines.push(Line::from(""));
+        }
+
+        match self.studio_pane {
+            StudioPane::Saved => match saved.get(self.studio_saved_sel) {
+                Some(name) => {
+                    let path = filters::filters_dir().join(format!("{name}.toml"));
+                    let body = std::fs::read_to_string(&path)
+                        .unwrap_or_else(|e| format!("(could not read {name}.toml: {e})"));
+                    lines.push(Line::from(Span::styled(
+                        format!("  {name}.toml"),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )));
+                    lines.push(Line::from(""));
+                    for l in body.lines() {
+                        lines.push(Line::from(format!("  {l}")));
+                    }
+                }
+                None => lines.push(Line::from(
+                    "  No saved filters yet. Generate one from a recording with g."
+                        .to_string()
+                        .dim(),
+                )),
+            },
+            StudioPane::Recordings => match recs.get(self.studio_rec_sel) {
+                None => {
+                    lines.push(Line::from(Span::styled(
+                        "  No recordings yet.",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )));
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(
+                        "  Press r to arm recording, run your commands in your agent,"
+                            .to_string()
+                            .dim(),
+                    ));
+                    lines.push(Line::from(
+                        "  then press s to stop. Capture needs the tokenix hook installed."
+                            .to_string()
+                            .dim(),
+                    ));
+                }
+                Some((base, count, _)) => {
+                    self.studio_preview_lines(base, *count, &mut lines);
+                }
+            },
+        }
+
+        let scroll = self.scroll_for(lines.len(), cols[1]);
+        f.render_widget(
+            Paragraph::new(Text::from(lines))
+                .block(Block::bordered().title(" preview "))
+                .scroll((scroll, 0)),
+            cols[1],
+        );
+    }
+
+    /// Build the before/after preview for a recorded command: raw sample head,
+    /// and — when an active filter matches — the filtered output plus a token
+    /// delta. Falls back to a "press g to generate" hint when no filter exists.
+    fn studio_preview_lines(&self, base: &str, count: usize, lines: &mut Vec<Line>) {
+        let Some((sample, used)) =
+            crate::recordings::read_samples(&self.repo_root, base, 16 * 1024)
+        else {
+            lines.push(Line::from(
+                format!("  no readable samples for `{base}`").dim(),
+            ));
+            return;
+        };
+
+        // Find an active filter that targets this base command.
+        let matched = self.filters.iter().find(|f| {
+            f.name == base
+                || f.filter.match_command.contains(base)
+                || base.starts_with(f.name.as_str())
+        });
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {base}"),
+                Style::default().add_modifier(Modifier::BOLD).cyan(),
+            ),
+            Span::styled(
+                format!("  · {count} capture(s), {used} sample(s) read"),
+                Style::default().dim(),
+            ),
+        ]));
+        lines.push(Line::from(""));
+
+        match matched {
+            Some(active) => {
+                let filtered = filters::apply_filter(&sample, &active.filter);
+                let before = crate::chunker::count_tokens(&sample);
+                let after = crate::chunker::count_tokens(&filtered);
+                let pct = if before > 0 {
+                    100.0 * (before.saturating_sub(after)) as f64 / before as f64
+                } else {
+                    0.0
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("  filter ", Style::default().dim()),
+                    Span::styled(active.name.clone(), Style::default().green()),
+                    Span::styled(
+                        format!("  {before} → {after} tokens · {pct:.0}% saved"),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  ── after ──",
+                    Style::default().green(),
+                )));
+                for l in filtered.lines().take(40) {
+                    lines.push(Line::from(format!("  {l}")));
+                }
+            }
+            None => {
+                lines.push(Line::from(Span::styled(
+                    "  No filter targets this command yet — press g to generate one.",
+                    Style::default().yellow(),
+                )));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  ── recorded sample (raw) ──",
+            Style::default().dim(),
+        )));
+        for l in sample.lines().take(40) {
+            lines.push(Line::from(Span::styled(
+                format!("  {l}"),
+                Style::default().dim(),
+            )));
+        }
     }
 
     fn draw_secrets(&self, f: &mut Frame, area: Rect) {
@@ -1563,9 +2082,24 @@ impl Shell {
         let findings = self.secrets.as_ref().unwrap();
         let scanned: usize = self.secrets_counts.iter().map(|(_, n)| n).sum();
 
-        // Clean — no findings.
+        // Clean — no findings in the active scope.
         if findings.is_empty() {
-            let lines = vec![
+            // Distinguish "nothing anywhere" from "nothing in this repo, but
+            // other repos have findings — press g".
+            let global_has = !self.sec_global
+                && self
+                    .secrets_all
+                    .as_ref()
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
+            let headline = if global_has {
+                format!("No credentials found in this repo ({}).", self.proj_dir)
+            } else if self.sec_global {
+                "No credentials found in agent conversations.".to_string()
+            } else {
+                format!("No credentials found in this repo ({}).", self.proj_dir)
+            };
+            let mut lines = vec![
                 Line::from(""),
                 Line::from(vec![
                     Span::styled(
@@ -1573,7 +2107,7 @@ impl Shell {
                         Style::default().green().add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        "No credentials found in agent conversations.",
+                        headline,
                         Style::default().green().add_modifier(Modifier::BOLD),
                     ),
                 ]),
@@ -1586,6 +2120,9 @@ impl Shell {
                     .dim(),
                 ),
             ];
+            if global_has {
+                lines.push(Line::from("  press g to scan all repos".to_string().dim()));
+            }
             f.render_widget(
                 Paragraph::new(Text::from(lines)).block(Block::bordered().title(" secrets ")),
                 area,
@@ -1619,7 +2156,10 @@ impl Shell {
             SecGroup::Rule => "rule",
             SecGroup::Agent => "agent",
         };
-        let title = format!(" {total} secrets · by {kind} ");
+        let title = format!(
+            " {total} secrets · by {kind} · {} ",
+            self.scope_label(self.sec_global)
+        );
         let mut state = ListState::default();
         state.select(Some(
             self.sec_g.min(self.sec_groups.len().saturating_sub(1)),
@@ -1804,7 +2344,21 @@ impl Shell {
         let scanned: usize = self.egress_counts.iter().map(|(_, n)| n).sum();
 
         if findings.is_empty() {
-            let lines = vec![
+            let global_has = !self.egr_global
+                && self
+                    .egress_all
+                    .as_ref()
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
+            let headline = if self.egr_global {
+                "No external destinations found in agent conversations.".to_string()
+            } else {
+                format!(
+                    "No external destinations found in this repo ({}).",
+                    self.proj_dir
+                )
+            };
+            let mut lines = vec![
                 Line::from(""),
                 Line::from(vec![
                     Span::styled(
@@ -1812,7 +2366,7 @@ impl Shell {
                         Style::default().green().add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        "No external destinations found in agent conversations.",
+                        headline,
                         Style::default().green().add_modifier(Modifier::BOLD),
                     ),
                 ]),
@@ -1825,6 +2379,9 @@ impl Shell {
                     .dim(),
                 ),
             ];
+            if global_has {
+                lines.push(Line::from("  press g to scan all repos".to_string().dim()));
+            }
             f.render_widget(
                 Paragraph::new(Text::from(lines)).block(Block::bordered().title(" egress ")),
                 area,
@@ -1865,7 +2422,10 @@ impl Shell {
             EgrGroup::Agent => "agent",
             EgrGroup::File => "file",
         };
-        let title = format!(" {total} egress · by {group_label} · {scanned} files ");
+        let title = format!(
+            " {total} egress · by {group_label} · {} · {scanned} files ",
+            self.scope_label(self.egr_global)
+        );
         let mut state = ListState::default();
         state.select(Some(
             self.egr_g.min(self.egr_groups.len().saturating_sub(1)),
@@ -1990,9 +2550,10 @@ impl Shell {
             .get(&self.cmd.index())
             .cloned()
             .unwrap_or_else(|| "loading…".to_string());
+        let scroll = self.scroll_for(body.lines().count(), area);
         let p = Paragraph::new(body)
             .block(Block::bordered().title(format!(" {} ", self.cmd.title().to_lowercase())))
-            .scroll((self.scroll, 0));
+            .scroll((scroll, 0));
         f.render_widget(p, area);
     }
 
@@ -2016,20 +2577,35 @@ impl Shell {
                     "x: confirm [REDACTED] write · any other key cancels".to_string()
                 }
                 Cmd::Secrets => {
-                    "←→: tab · Tab: pane · ↑↓: move · s: group · v: reveal · c: copy · x: redact · r: rescan · q"
-                        .to_string()
+                    format!(
+                        "←→: tab · Tab: pane · ↑↓: move · s: group · g: {} · v: reveal · c: copy · x: redact · r: rescan · q",
+                        if self.sec_global { "local" } else { "all repos" }
+                    )
                 }
-                Cmd::Egress if self.egress.is_none() => {
-                    "scanning… · ←→: tab · q: quit".to_string()
-                }
+                Cmd::Egress if self.egress.is_none() => "scanning… · ←→: tab · q: quit".to_string(),
                 Cmd::Egress => {
-                    "←→: tab · Tab: pane · ↑↓: move · s: group · r: rescan · q: quit"
+                    format!(
+                        "←→: tab · Tab: pane · ↑↓: move · s: group · g: {} · r: rescan · q: quit",
+                        if self.egr_global {
+                            "local"
+                        } else {
+                            "all repos"
+                        }
+                    )
+                }
+                Cmd::Studio if self.studio_confirm_delete => {
+                    "x: confirm delete filter · any other key cancels".to_string()
+                }
+                Cmd::Studio => {
+                    "←→: tab · Tab: pane · ↑↓: move · r: record · s: stop · g: generate · x: delete · q"
                         .to_string()
                 }
                 Cmd::Stats if self.stats_confirm => {
                     "Enter: confirm install (writes files) · any other key cancels".to_string()
                 }
-                Cmd::Stats => "←→: tab · ↑↓: action · Enter: run · q: quit".to_string(),
+                Cmd::Stats => {
+                    "←→: tab · ↑↓: action · PgUp/PgDn: scroll · Enter: run · q: quit".to_string()
+                }
                 _ => "←→: tab · ↑↓/PgUp/PgDn: scroll · r: refresh · q: quit".to_string(),
             }
         };
@@ -2074,6 +2650,19 @@ fn other_pane(p: Pane) -> Pane {
     match p {
         Pane::Groups => Pane::Filters,
         Pane::Filters => Pane::Groups,
+    }
+}
+
+/// Compact byte count for the Studio recordings list.
+fn human_size(n: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    if n >= MB {
+        format!("{:.1}MB", n as f64 / MB as f64)
+    } else if n >= KB {
+        format!("{:.1}KB", n as f64 / KB as f64)
+    } else {
+        format!("{n}B")
     }
 }
 
@@ -2172,6 +2761,22 @@ fn trunc(s: &str, max: usize) -> String {
             s.chars().take(max.saturating_sub(1)).collect::<String>()
         )
     }
+}
+
+/// Normalize a path for repo-scope comparison: drop the Windows `\\?\` extended
+/// prefix, unify separators, trim trailing slash, and lowercase.
+fn norm_path(s: &str) -> String {
+    let s = s.strip_prefix(r"\\?\").unwrap_or(s);
+    s.replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+/// Slugify a path the way Claude names its `projects/<slug>` directories: every
+/// non-alphanumeric character becomes `-` (e.g. `D:\a\b` -> `D--a-b`).
+fn slugify(s: &str) -> String {
+    let s = s.strip_prefix(r"\\?\").unwrap_or(s);
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// Last two path components, to keep project labels compact.
