@@ -90,6 +90,48 @@ fn collect_stats(repo_root: &Path) -> Vec<CmdStats> {
     stats
 }
 
+/// A command-by-command hint for the Studio tab: how many tokens it wasted, and
+/// whether it already has a filter / any recorded samples. Used to surface the
+/// biggest *unfiltered* sinks as filter candidates.
+pub struct FilterSuggestion {
+    pub base_cmd: String,
+    pub wasted: i64,
+    pub has_recording: bool,
+}
+
+/// True when `active` already contains a filter targeting `base`. Mirrors the
+/// loose match used by the Studio preview: an exact name, a `match_command` that
+/// mentions the base, or a base that extends the filter name (e.g. `cargo-nextest`).
+fn base_has_filter(base: &str, active: &[filters::ActiveFilter]) -> bool {
+    active.iter().any(|f| {
+        f.name == base || f.filter.match_command.contains(base) || base.starts_with(f.name.as_str())
+    })
+}
+
+/// Cross the tokens-wasted ranking with the active filters and recordings to
+/// surface unfiltered token sinks, biggest waste first. Filtered commands are
+/// dropped — they are already handled.
+pub fn suggest_filters(
+    repo_root: &Path,
+    active: &[filters::ActiveFilter],
+) -> Vec<FilterSuggestion> {
+    collect_stats(repo_root)
+        .into_iter()
+        .filter_map(|s| {
+            let wasted = s.total_original - s.total_saved;
+            if wasted <= 0 || base_has_filter(&s.base_cmd, active) {
+                return None;
+            }
+            let has_recording = recordings::read_samples(repo_root, &s.base_cmd, 1).is_some();
+            Some(FilterSuggestion {
+                base_cmd: s.base_cmd,
+                wasted,
+                has_recording,
+            })
+        })
+        .collect()
+}
+
 pub fn cmd_filter_list(index: Option<usize>, repo_root: &Path) -> Result<()> {
     let stats = collect_stats(repo_root);
 
@@ -843,5 +885,28 @@ mod tests {
                 "{bad:?} should be rejected"
             );
         }
+    }
+
+    fn active(name: &str, match_command: &str) -> filters::ActiveFilter {
+        let filter: filters::FilterDef =
+            toml::from_str(&format!("match_command = {match_command:?}")).unwrap();
+        filters::ActiveFilter {
+            name: name.to_string(),
+            source: "test",
+            filter,
+        }
+    }
+
+    #[test]
+    fn base_has_filter_matches_name_or_command_but_not_strangers() {
+        let active = vec![active("cargo", "^cargo"), active("x", "^npm test")];
+        // exact filter name
+        assert!(base_has_filter("cargo", &active));
+        // base mentioned in another filter's match_command
+        assert!(base_has_filter("npm", &active));
+        // base that extends a filter name (e.g. cargo-nextest)
+        assert!(base_has_filter("cargo-nextest", &active));
+        // unrelated command — no filter
+        assert!(!base_has_filter("pytest", &active));
     }
 }

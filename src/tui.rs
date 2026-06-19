@@ -113,6 +113,18 @@ enum StudioPane {
     Saved,
 }
 
+/// One row in the Studio candidate list: a command that was recorded and/or is a
+/// token sink, with the data the UI badges read (`✓` filtered, `⚠` unfiltered
+/// waste, `●` recorded only).
+struct StudioRow {
+    base: String,
+    captures: usize,
+    bytes: u64,
+    wasted: i64,
+    has_filter: bool,
+    has_recording: bool,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum SecGroup {
     Rule,
@@ -498,6 +510,59 @@ impl Shell {
         crate::recordings::summary(&self.repo_root)
     }
 
+    /// True when an active filter already targets `base` (loose match: exact
+    /// name, a `match_command` mentioning the base, or a base extending the name).
+    fn base_filtered(&self, base: &str) -> bool {
+        self.filters.iter().any(|f| {
+            f.name == base
+                || f.filter.match_command.contains(base)
+                || base.starts_with(f.name.as_str())
+        })
+    }
+
+    /// The Studio candidate list: recordings unioned with unfiltered token sinks
+    /// (`cmd_filter::suggest_filters`). Sorted so the biggest *unfiltered waste*
+    /// floats to the top, then heaviest recordings — both render and the key
+    /// handler iterate this so selection stays in sync.
+    fn studio_candidates(&self) -> Vec<StudioRow> {
+        let mut rows: HashMap<String, StudioRow> = HashMap::new();
+        for (base, captures, bytes) in self.studio_recordings() {
+            rows.insert(
+                base.clone(),
+                StudioRow {
+                    base,
+                    captures,
+                    bytes,
+                    wasted: 0,
+                    has_filter: false,
+                    has_recording: true,
+                },
+            );
+        }
+        for s in crate::cmd_filter::suggest_filters(&self.repo_root, &self.filters) {
+            let row = rows.entry(s.base_cmd.clone()).or_insert_with(|| StudioRow {
+                base: s.base_cmd.clone(),
+                captures: 0,
+                bytes: 0,
+                wasted: 0,
+                has_filter: false,
+                has_recording: s.has_recording,
+            });
+            row.wasted = s.wasted;
+        }
+        let mut rows: Vec<StudioRow> = rows.into_values().collect();
+        for r in &mut rows {
+            r.has_filter = self.base_filtered(&r.base);
+        }
+        rows.sort_by(|a, b| {
+            b.wasted
+                .cmp(&a.wasted)
+                .then(b.bytes.cmp(&a.bytes))
+                .then(a.base.cmp(&b.base))
+        });
+        rows
+    }
+
     /// User-saved filter TOMLs (stem names) under `~/.tokenix/filters/`, sorted.
     fn studio_saved(&self) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(filters::filters_dir())
@@ -536,10 +601,10 @@ impl Shell {
                 }
             }
             KeyCode::Char('g') if self.studio_pane == StudioPane::Recordings => {
-                if let Some((base, _, _)) = self.studio_recordings().get(self.studio_rec_sel) {
-                    self.request_generate = Some(base.clone());
+                if let Some(row) = self.studio_candidates().get(self.studio_rec_sel) {
+                    self.request_generate = Some(row.base.clone());
                 } else {
-                    self.studio_msg = Some("No recording selected to generate from.".to_string());
+                    self.studio_msg = Some("No command selected to generate from.".to_string());
                 }
             }
             KeyCode::Char('x') if self.studio_pane == StudioPane::Saved => {
@@ -567,7 +632,7 @@ impl Shell {
                 self.studio_confirm_delete = false;
                 match self.studio_pane {
                     StudioPane::Recordings => {
-                        let len = self.studio_recordings().len();
+                        let len = self.studio_candidates().len();
                         if self.studio_rec_sel + 1 < len {
                             self.studio_rec_sel += 1;
                         }
@@ -1848,8 +1913,8 @@ impl Shell {
         let left = Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)])
             .split(cols[0]);
 
-        // ── Left top: recordings list ───────────────────────────────────
-        let recs = self.studio_recordings();
+        // ── Left top: candidate commands (recordings + unfiltered sinks) ─
+        let cands = self.studio_candidates();
         let active = crate::recordings::active_session(&self.repo_root);
         let status = match &active {
             Some(s) => match &s.command {
@@ -1858,28 +1923,44 @@ impl Shell {
             },
             None => "○ idle".to_string(),
         };
-        let rec_items: Vec<ListItem> = recs
+        let cand_items: Vec<ListItem> = cands
             .iter()
-            .map(|(cmd, count, bytes)| {
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!("{:<14}", trunc(cmd, 14)), Style::default().cyan()),
-                    Span::styled(format!("{count}× "), Style::default().dim()),
-                    Span::styled(human_size(*bytes), Style::default().dim()),
-                ]))
+            .map(|row| {
+                let mut spans = vec![Span::styled(
+                    format!("{:<12}", trunc(&row.base, 12)),
+                    Style::default().cyan(),
+                )];
+                if row.has_filter {
+                    spans.push(Span::styled(" ✓", Style::default().green()));
+                } else if row.wasted > 0 {
+                    spans.push(Span::styled(
+                        format!(" ⚠ {}", crate::ui::format_num(row.wasted)),
+                        Style::default().yellow(),
+                    ));
+                } else {
+                    spans.push(Span::styled(" ●", Style::default().dim()));
+                }
+                if row.has_recording {
+                    spans.push(Span::styled(
+                        format!("  {}× {}", row.captures, human_size(row.bytes)),
+                        Style::default().dim(),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
             })
             .collect();
-        let mut rec_state = ListState::default();
-        if !recs.is_empty() {
-            rec_state.select(Some(self.studio_rec_sel.min(recs.len() - 1)));
+        let mut cand_state = ListState::default();
+        if !cands.is_empty() {
+            cand_state.select(Some(self.studio_rec_sel.min(cands.len() - 1)));
         }
         f.render_stateful_widget(
             list_widget(
-                rec_items,
-                format!(" recordings · {status} "),
+                cand_items,
+                format!(" commands · {status} "),
                 self.studio_pane == StudioPane::Recordings,
             ),
             left[0],
-            &mut rec_state,
+            &mut cand_state,
         );
 
         // ── Left bottom: saved filters ──────────────────────────────────
@@ -1933,10 +2014,10 @@ impl Shell {
                         .dim(),
                 )),
             },
-            StudioPane::Recordings => match recs.get(self.studio_rec_sel) {
+            StudioPane::Recordings => match cands.get(self.studio_rec_sel) {
                 None => {
                     lines.push(Line::from(Span::styled(
-                        "  No recordings yet.",
+                        "  No commands yet.",
                         Style::default().add_modifier(Modifier::BOLD),
                     )));
                     lines.push(Line::from(""));
@@ -1951,8 +2032,33 @@ impl Shell {
                             .dim(),
                     ));
                 }
-                Some((base, count, _)) => {
-                    self.studio_preview_lines(base, *count, &mut lines);
+                Some(row) => {
+                    if row.wasted > 0 && !row.has_filter {
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "  ⚠ {} tokens wasted — no filter yet.",
+                                crate::ui::format_num(row.wasted)
+                            ),
+                            Style::default().yellow(),
+                        )));
+                        lines.push(Line::from(
+                            "  Press g to generate a filter for this command."
+                                .to_string()
+                                .dim(),
+                        ));
+                        lines.push(Line::from(""));
+                    }
+                    if row.has_recording {
+                        self.studio_preview_lines(&row.base, row.captures, &mut lines);
+                    } else {
+                        lines.push(Line::from(
+                            format!(
+                                "  No recorded sample for `{}` — g will re-run it to learn from.",
+                                row.base
+                            )
+                            .dim(),
+                        ));
+                    }
                 }
             },
         }
