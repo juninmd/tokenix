@@ -650,6 +650,11 @@ enum Commands {
         #[arg(long, value_enum, default_value = "full")]
         profile: McpProfile,
     },
+    /// Generate agent ignore files (.claudeignore, .geminiignore, etc.) from .gitignore
+    GenerateIgnores {
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1131,6 +1136,7 @@ fn main() -> Result<()> {
             };
             mcp::run_mcp_server(profile)
         }
+        Commands::GenerateIgnores { path } => cmd_generate_ignores(&path),
     };
 
     if let Err(ref e) = res {
@@ -1914,6 +1920,40 @@ fn cmd_read(
     Ok(())
 }
 
+fn cmd_generate_ignores(path: &Path) -> Result<()> {
+    let repo_root = find_repo_root(path);
+    let gitignore = repo_root.join(".gitignore");
+    if !gitignore.exists() {
+        anyhow::bail!("no .gitignore found at {}", repo_root.display());
+    }
+    let content = std::fs::read_to_string(&gitignore)?;
+    let mut created = Vec::new();
+    let mut skipped = Vec::new();
+    for name in AGENT_IGNORE_FILES {
+        let target = repo_root.join(name);
+        if target.exists() {
+            skipped.push(*name);
+            continue;
+        }
+        std::fs::write(&target, &content)?;
+        created.push(*name);
+    }
+    if !created.is_empty() {
+        println!("{} created: {}", "ok".green(), created.join(", ").bold());
+    }
+    if !skipped.is_empty() {
+        println!(
+            "{} skipped (already exist): {}",
+            "·".dimmed(),
+            skipped.join(", ").dimmed()
+        );
+    }
+    if created.is_empty() && !skipped.is_empty() {
+        println!("{} all agent ignore files already exist", "·".dimmed());
+    }
+    Ok(())
+}
+
 fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
     let repo_root = find_repo_root(path);
     let stats = gain::compute_gain(&repo_root);
@@ -1983,38 +2023,26 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
         format!("{:.1}%  {}", stats.pct_saved, bar).green().bold()
     );
 
-    // ── savings by source ─────────────────────────────────────────────────────
-    println!();
-    println!("  {}", "BY SOURCE".bold().underline());
-    for (label, desc, saved, calls) in [
-        (
-            "Semantic index",
-            "Read outlines; Grep neutral context",
-            stats.index_saved,
-            stats.index_calls,
-        ),
-        (
-            "Command filters",
-            "Bash/PowerShell output compression",
-            stats.filter_saved,
-            stats.filter_calls,
-        ),
-    ] {
-        let pct = if stats.tokens_saved > 0 {
-            saved as f64 / stats.tokens_saved as f64 * 100.0
-        } else {
-            0.0
-        };
-        let bar = ui::bar(saved as f64 / stats.tokens_saved.max(1) as f64, 20);
-        println!(
-            "  {:<16} {:>5} calls   {} {}  {}  {}",
-            label.bold(),
-            calls,
-            format_num(saved).green(),
-            format!("({:.0}%)", pct).dimmed(),
-            bar.bright_black(),
-            desc.dimmed()
-        );
+    // ── index capability ──────────────────────────────────────────────────────
+    if let Ok(Some(conn)) = store::open_db(&repo_root, false) {
+        if let Ok(stats_i) = store::count_stats(&conn) {
+            println!();
+            println!("  {}", "INDEX".bold().underline());
+            println!(
+                "  {:<16} {:>12}",
+                "indexed tokens",
+                format_num(stats_i.total_tokens).cyan()
+            );
+            println!("  {:<16} {:>12}", "files", stats_i.files);
+            println!("  {:<16} {:>12}", "chunks", stats_i.chunks);
+            if stats.indexed_queries > 0 {
+                println!(
+                    "  {:<16} {:>12}",
+                    "queries answered",
+                    format_num(stats.indexed_queries as i64).green()
+                );
+            }
+        }
     }
 
     // ── cost table ────────────────────────────────────────────────────────────
@@ -3515,6 +3543,54 @@ fn cmd_stats(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// All known AI-agent ignore files (gitignore-format).
+pub(crate) const AGENT_IGNORE_FILES: &[&str] = &[
+    ".claudeignore",
+    ".geminiignore",
+    ".aiexclude",
+    ".cursorignore",
+    ".codeiumignore",
+    ".aiignore",
+    ".aiderignore",
+    ".clineignore",
+    ".rooignore",
+    ".augmentignore",
+    ".copilotignore",
+    ".repomixignore",
+    ".llmignore",
+    ".agentignore",
+];
+
+/// Load agent ignore files from the repo root.
+fn load_agent_ignores(repo_root: &Path) -> Vec<(String, ignore::gitignore::Gitignore)> {
+    let mut result = Vec::new();
+    for name in AGENT_IGNORE_FILES {
+        let path = repo_root.join(name);
+        if path.exists() {
+            let mut builder = ignore::gitignore::GitignoreBuilder::new(repo_root);
+            builder.add(path);
+            if let Ok(gi) = builder.build() {
+                result.push((name.to_string(), gi));
+            }
+        }
+    }
+    result
+}
+
+/// Check if a relative file path is matched by any agent ignore pattern.
+/// Returns the source ignore filename if matched.
+fn is_agent_ignored(
+    rel_path: &str,
+    ignores: &[(String, ignore::gitignore::Gitignore)],
+) -> Option<String> {
+    for (name, gi) in ignores {
+        if gi.matched(rel_path, false).is_ignore() {
+            return Some(name.clone());
+        }
+    }
+    None
+}
+
 fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> {
     if format_opt != "html" && format_opt != "text" {
         anyhow::bail!("Invalid format '{format_opt}'. Use: text | html");
@@ -3529,6 +3605,17 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
         return Ok(());
     }
 
+    // Load agent ignore files (.claudeignore, .geminiignore) to detect
+    // files that are hidden from AI tools but still indexed by tokenix.
+    let agent_ignores = load_agent_ignores(&repo_root);
+    let mut ignored_map: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for (file_path, _) in &file_counts {
+        if let Some(src) = is_agent_ignored(file_path, &agent_ignores) {
+            ignored_map.insert(file_path.clone(), src);
+        }
+    }
+
     let root_name = repo_root
         .file_name()
         .and_then(|n| n.to_str())
@@ -3539,6 +3626,8 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
         name: String,
         token_count: i64,
         is_file: bool,
+        is_ignored: bool,
+        ignore_source: Option<String>,
         children: std::collections::BTreeMap<String, TreeNode>,
     }
 
@@ -3548,6 +3637,8 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
                 name,
                 token_count: 0,
                 is_file,
+                is_ignored: false,
+                ignore_source: None,
                 children: std::collections::BTreeMap::new(),
             }
         }
@@ -3557,16 +3648,25 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
             if path_parts.is_empty() {
                 return;
             }
-
             let name = path_parts[0];
             let is_last = path_parts.len() == 1;
-
             let child = self
                 .children
                 .entry(name.to_string())
                 .or_insert_with(|| TreeNode::new(name.to_string(), is_last));
-
             child.insert(&path_parts[1..], tokens);
+        }
+
+        fn mark_ignored(&mut self, path_parts: &[&str], source: &str) {
+            if path_parts.is_empty() {
+                self.is_ignored = true;
+                self.ignore_source = Some(source.to_string());
+                return;
+            }
+            let name = path_parts[0];
+            if let Some(child) = self.children.get_mut(name) {
+                child.mark_ignored(&path_parts[1..], source);
+            }
         }
     }
 
@@ -3574,6 +3674,10 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
     for (file_path, tokens) in &file_counts {
         let parts: Vec<&str> = file_path.split('/').filter(|s| !s.is_empty()).collect();
         root.insert(&parts, *tokens);
+    }
+    for (file_path, ignore_src) in &ignored_map {
+        let parts: Vec<&str> = file_path.split('/').filter(|s| !s.is_empty()).collect();
+        root.mark_ignored(&parts, ignore_src);
     }
 
     if format_opt == "html" {
@@ -3645,7 +3749,9 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
     }
 
     fn print_node(node: &TreeNode, prefix: &str, is_last: bool, total_tokens: i64) {
-        let name_style = if node.is_file {
+        let name_style = if node.is_ignored {
+            node.name.dimmed()
+        } else if node.is_file {
             node.name.normal()
         } else {
             node.name.bold().blue()
@@ -3659,14 +3765,20 @@ fn cmd_tokenmap(path: &Path, format_opt: &str, output_path: &str) -> Result<()> 
 
         let bar = visual_bar(node.token_count, total_tokens, 8);
         let connector = if is_last { "└── " } else { "├── " };
+        let suffix = node
+            .ignore_source
+            .as_ref()
+            .map(|src| format!(" [{}]", src).dimmed().to_string())
+            .unwrap_or_default();
         println!(
-            "{}{} {} {} ({} tokens, {:.1}%)",
+            "{}{} {} {} ({} tokens, {:.1}%){}",
             prefix,
             connector,
             bar,
             name_style,
             format_num(node.token_count),
-            percentage
+            percentage,
+            suffix
         );
 
         let children = children_by_tokens(node);

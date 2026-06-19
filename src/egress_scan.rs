@@ -475,6 +475,7 @@ pub struct Options {
 /// An egress finding for programmatic consumers (the TUI). Carries the host so
 /// the browser can show it. All-owned, so it is `Send`.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct EgressFinding {
     pub agent: String,
     pub rule: String,

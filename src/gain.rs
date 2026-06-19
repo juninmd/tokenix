@@ -87,15 +87,8 @@ pub struct GainStats {
     pub by_phase: Vec<(String, usize, i64)>,
     /// Top Bash commands compressed by the filter system, sorted by tokens saved.
     pub by_command: Vec<(String, usize, i64)>,
-    /// Tokens saved by semantic-index intercepts. Large Read events are measured
-    /// against the file body; Grep events are logged as neutral context usage
-    /// because native grep output is not available before interception.
-    pub index_saved: i64,
-    pub index_calls: usize,
-    /// Tokens saved by command output filters (Bash/PowerShell compression —
-    /// events carrying the executed command), and their call count.
-    pub filter_saved: i64,
-    pub filter_calls: usize,
+    /// Total semantic-search queries answered by the index (Read outlines + Grep).
+    pub indexed_queries: usize,
 }
 
 /// Aggregate stats across all projects, with per-project breakdown.
@@ -206,22 +199,11 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         .collect();
     by_command.sort_by_key(|row| std::cmp::Reverse(row.2));
 
-    // Source split: events carrying a command come from the Bash filter
-    // pipeline; everything else is a semantic-index intercept (Read/Grep).
-    // Pre-phase Bash events are rewrite markers (saved is always 0 there —
-    // the compression is logged separately at execution time), so they are
-    // excluded from the filter call count to avoid counting a command twice.
-    let (mut index_saved, mut index_calls) = (0i64, 0usize);
-    let (mut filter_saved, mut filter_calls) = (0i64, 0usize);
-    for e in &intercepted_events {
-        if e.command.is_empty() {
-            index_saved += e.saved_tokens;
-            index_calls += 1;
-        } else if e.phase != "pre" {
-            filter_saved += e.saved_tokens;
-            filter_calls += 1;
-        }
-    }
+    // Count semantic-index intercepts (Read/Grep — events without a command).
+    let indexed_queries = intercepted_events
+        .iter()
+        .filter(|e| e.command.is_empty())
+        .count();
 
     GainStats {
         total_calls: events.len(),
@@ -235,10 +217,7 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         by_tool,
         by_phase,
         by_command,
-        index_saved,
-        index_calls,
-        filter_saved,
-        filter_calls,
+        indexed_queries,
     }
 }
 
@@ -353,11 +332,8 @@ mod tests {
         assert_eq!(stats.by_tool[0], ("Bash".to_string(), 1, 100));
         assert_eq!(stats.by_phase.len(), 1);
         assert_eq!(stats.by_phase[0], ("post".to_string(), 1, 100));
-        // ev1 carries no command → counted as a semantic-index intercept.
-        assert_eq!(stats.index_saved, 100);
-        assert_eq!(stats.index_calls, 1);
-        assert_eq!(stats.filter_saved, 0);
-        assert_eq!(stats.filter_calls, 0);
+        // ev1 carries no command → counted as an indexed query.
+        assert_eq!(stats.indexed_queries, 1);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -411,10 +387,7 @@ mod tests {
         log_hook_event(&temp_dir, &filter_ev).unwrap();
 
         let stats = compute_gain(&temp_dir);
-        assert_eq!(stats.index_saved, 300);
-        assert_eq!(stats.index_calls, 1);
-        assert_eq!(stats.filter_saved, 200);
-        assert_eq!(stats.filter_calls, 1);
+        assert_eq!(stats.indexed_queries, 1);
         assert_eq!(stats.tokens_saved, 500);
 
         let _ = std::fs::remove_dir_all(&temp_dir);

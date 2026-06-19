@@ -656,6 +656,7 @@ fn group_by(
 /// `secret` (so the browser can reveal it and redact it in place) alongside the
 /// `redacted` form shown by default. All-owned, so it is `Send` and can cross a
 /// worker-thread boundary.
+#[derive(Clone)]
 pub struct ScanFinding {
     pub agent: String,
     pub rule: String,
