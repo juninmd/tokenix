@@ -1,9 +1,8 @@
 name: Security Scan
 on:
+  workflow_dispatch:
   push:
     branches: [main, master]
-  schedule:
-    - cron: '0 0 * * 1'
 
 # The reusable workflow declares no permissions of its own, so it inherits these.
 # Secret scans need read-only repo and PR metadata access.

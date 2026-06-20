@@ -4,11 +4,10 @@ name: Supply Chain
 # scanning) and rust.yml (build/test). Runs on every PR and push, plus weekly so
 # newly-published advisories are caught even without a code change.
 on:
+  workflow_dispatch:
   push:
     branches: [main, master]
   pull_request:
-  schedule:
-    - cron: '0 6 * * 1' # Mondays, offset from the security.yml gitleaks cron
 
 concurrency:
   group: supply-chain-${{ github.ref }}

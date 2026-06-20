@@ -4,9 +4,8 @@ name: OpenSSF Scorecard
 # deps, token permissions, dangerous workflow patterns, etc.) and surfaces results
 # in the Security tab.
 on:
+  workflow_dispatch:
   branch_protection_rule:
-  schedule:
-    - cron: '30 5 * * 1' # weekly
   push:
     branches: [main]
 
