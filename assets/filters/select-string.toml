@@ -26,3 +26,10 @@ No linha:1 caractere:1
 expected = """
 Select-String : O objeto de entrada não pode ser associado a quaisquer parâmetros do comando
 No linha:1 caractere:1"""
+
+[[tests.select-string]]
+name = "no matches"
+command = "Get-Content log.txt | Select-String -Pattern ERROR"
+input = ""
+expected = "Select-String: no matches"
+

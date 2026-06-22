@@ -897,6 +897,59 @@ mod tests {
         }
     }
 
+    fn temp_repo(sub: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let p = std::env::temp_dir()
+            .join("tokenix_test_cmdfilter")
+            .join(format!("{}_{}_{}", sub, std::process::id(), unique));
+        let _ = std::fs::remove_dir_all(&p);
+        let _ = std::fs::create_dir_all(&p);
+        p
+    }
+
+    fn savings_event(command: &str, original: i64, saved: i64) -> store::HookEvent {
+        store::HookEvent {
+            ts: 0.0,
+            tool: "Bash".to_string(),
+            action: "intercepted".to_string(),
+            phase: "post".to_string(),
+            reason: String::new(),
+            saved_tokens: saved,
+            actual_tokens: original - saved,
+            original_estimate: original,
+            input_preview: String::new(),
+            command: command.to_string(),
+        }
+    }
+
+    #[test]
+    fn suggest_filters_ranks_unfiltered_sinks_by_waste() {
+        let repo = temp_repo("suggest");
+        // cargo wastes more than npm; both currently unfiltered.
+        store::log_hook_event(&repo, &savings_event("cargo build --release", 1000, 200)).unwrap();
+        store::log_hook_event(&repo, &savings_event("npm install --no-audit", 400, 100)).unwrap();
+
+        // No active filters → both surface, biggest waste first.
+        let none: Vec<filters::ActiveFilter> = vec![];
+        let ranked = suggest_filters(&repo, &none);
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].base_cmd, "cargo");
+        assert_eq!(ranked[0].wasted, 800);
+        assert_eq!(ranked[1].base_cmd, "npm");
+        assert_eq!(ranked[1].wasted, 300);
+
+        // A cargo filter already exists → cargo is dropped, only npm remains.
+        let active = vec![active("cargo", "^cargo")];
+        let ranked = suggest_filters(&repo, &active);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].base_cmd, "npm");
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     #[test]
     fn base_has_filter_matches_name_or_command_but_not_strangers() {
         let active = vec![active("cargo", "^cargo"), active("x", "^npm test")];

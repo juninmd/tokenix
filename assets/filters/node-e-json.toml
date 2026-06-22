@@ -26,3 +26,19 @@ expected = """
 --- cycle_runs ---
 {"id":1,"type":"crawl","status":"running","metrics_json":{},"error":null,"started_at":"2026-06-16T00:00:00Z"}
 {"id":2,"title":"x","summary":"<omitted>"}"""
+
+[[tests.node-e-json]]
+name = "node error"
+input = """
+/app/index.js:12
+throw new Error("connection failed");
+^
+Error: connection failed
+    at Object.<anonymous> (/app/index.js:12:7)
+"""
+expected = """/app/index.js:12
+throw new Error("connection failed");
+^
+Error: connection failed
+    at Object.<anonymous> (/app/index.js:12:7)"""
+

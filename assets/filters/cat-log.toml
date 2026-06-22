@@ -32,3 +32,14 @@ INFO done
 expected = """
 ERROR tool failed
 WARN retrying"""
+
+[[tests.cat-log]]
+name = "clean log"
+command = "cat /tmp/clean.log"
+input = """
+INFO boot
+DEBUG polling
+INFO done
+"""
+expected = "log: no errors or warnings in output"
+

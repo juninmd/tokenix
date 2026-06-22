@@ -1,0 +1,56 @@
+[filters.npm-ci]
+description = "Compact `npm ci` output — strip progress/audit noise, keep errors and the install summary."
+match_command = "^npm\\s+ci\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]",
+  "Progress:",
+  "Fetched",
+  "Resolving",
+  "Extracting",
+  "Checking",
+  "^\\s*audited \\d+ packages",
+  "^\\s*found 0 vulnerabilities",
+  "npm WARN deprecated",
+  "npm WARN ",
+  "reify:",
+]
+keep_lines_matching = [
+  "error",
+  "ERROR",
+  "fail",
+  "FAIL",
+  "npm ERR!",
+  "added \\d+ package",
+]
+max_lines = 40
+on_empty = "npm ci: ok"
+
+[[tests.npm-ci]]
+name = "clean install collapses to summary"
+input = """
+npm WARN deprecated har-validator@5.1.5: this library is no longer supported
+reify:lodash: timing reifyNode:node_modules/lodash
+added 540 packages, and audited 541 packages in 8s
+found 0 vulnerabilities
+"""
+expected = "added 540 packages, and audited 541 packages in 8s"
+
+[[tests.npm-ci]]
+name = "lockfile mismatch error preserved"
+input = """
+npm ERR! code EUSAGE
+npm ERR! `npm ci` can only install with an existing package-lock.json
+"""
+expected = """npm ERR! code EUSAGE
+npm ERR! `npm ci` can only install with an existing package-lock.json"""
+
+[[tests.npm-ci]]
+name = "fully clean (no summary) falls back to on_empty"
+input = """
+npm WARN deprecated foo@1.0.0: deprecated
+audited 12 packages in 1s
+found 0 vulnerabilities
+"""
+expected = "npm ci: ok"

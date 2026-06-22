@@ -372,6 +372,118 @@ pub fn semantic_filter_issues(f: &FilterDef) -> Vec<String> {
 }
 
 pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a FilterDef> {
+    let effective = get_effective_command(cmd);
+    let tokens = tokenize_command(&effective);
+
+    // 1. Help flags bypass: let raw help outputs pass through unfiltered
+    let has_help = tokens.iter().any(|t| {
+        let t_lower = t.to_lowercase();
+        t == "-h"
+            || t == "-help"
+            || t_lower == "--help"
+            || t == "/h"
+            || t == "/?"
+            || t_lower == "help"
+            || t_lower.starts_with("--help-")
+            || t_lower.starts_with("-help-")
+    });
+    if has_help {
+        return None;
+    }
+
+    // 2. Version flags bypass: version output is short and shouldn't be masked as success.
+    // Lowercase `-v` is treated as a version flag only for tools where it actually queries version
+    // (e.g. git, node, docker, npm), to avoid falsely bypassing verbose runs (e.g. cargo, pytest, python).
+    let mut has_version = false;
+    for (i, t) in tokens.iter().enumerate() {
+        let t_lower = t.to_lowercase();
+        if t_lower == "--version" || t_lower == "version" {
+            has_version = true;
+            break;
+        }
+        if t == "-V" {
+            has_version = true;
+            break;
+        }
+        if t == "-v" && i > 0 {
+            let prev_tool = std::path::Path::new(&tokens[i - 1])
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or(&tokens[i - 1])
+                .to_lowercase();
+            let prev_tool = prev_tool.strip_suffix(".exe").unwrap_or(&prev_tool);
+            if matches!(
+                prev_tool,
+                "git" | "node" | "docker" | "npm" | "npx" | "pnpm" | "yarn" | "bun"
+            ) {
+                has_version = true;
+                break;
+            }
+        }
+    }
+    if !has_version && !tokens.is_empty() && (tokens[0] == "version" || tokens[0] == "--version") {
+        has_version = true;
+    }
+
+    if has_version && tokens.len() <= 3 {
+        return None;
+    }
+
+    // 3. Debug/verbose flags bypass: keep troubleshooting logs intact
+    let has_debug_or_verbose = tokens.iter().any(|t| {
+        let t_lower = t.to_lowercase();
+        t == "-vv"
+            || t == "-vvv"
+            || t_lower == "--debug"
+            || t_lower == "--verbose"
+            || t_lower == "--trace"
+            || t_lower.starts_with("--log-level=debug")
+            || t_lower.starts_with("--log-level=trace")
+    });
+    if has_debug_or_verbose {
+        return None;
+    }
+
+    // 4. YAML check to prevent breaking YAML outputs
+    let has_yaml = tokens.iter().any(|t| {
+        let t_lower = t.to_lowercase();
+        t_lower == "--yaml" || t_lower == "-o=yaml" || t_lower == "yaml"
+    }) || effective.contains("-o yaml")
+        || effective.contains("--format yaml")
+        || effective.contains("--format=yaml");
+    if has_yaml {
+        return None;
+    }
+
+    // 5. JSON check to prevent breaking JSON outputs unless explicitly handled by the filter
+    let has_json = tokens.iter().enumerate().any(|(i, t)| {
+        let t_lower = t.to_lowercase();
+        if t_lower == "--json" || t_lower == "-o=json" || t_lower == "json" {
+            true
+        } else if t == "-j" {
+            if i > 0 {
+                let prev_tool = std::path::Path::new(&tokens[i - 1])
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or(&tokens[i - 1])
+                    .to_lowercase();
+                let prev_tool = prev_tool.strip_suffix(".exe").unwrap_or(&prev_tool);
+                !matches!(
+                    prev_tool,
+                    "cargo" | "make" | "ninja" | "cmake" | "mvn" | "gradle" | "build"
+                )
+            } else {
+                true
+            }
+        } else {
+            false
+        }
+    }) || effective.contains("-o json")
+        || effective.contains("--format json")
+        || effective.contains("--format=json")
+        || effective.contains("--message-format=json")
+        || effective.contains("--message-format json");
+
     let shell_body = unwrap_shell_runner(cmd);
     let base = shell_body.as_deref().unwrap_or(cmd);
     let segments = split_on_operators(base);
@@ -404,6 +516,10 @@ pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a Filter
         for f in filters {
             if let Ok(re) = Regex::new(&f.match_command) {
                 if re.is_match(candidate) {
+                    // JSON bypass: if command asks for JSON output, but filter does not support summarizing JSON, bypass
+                    if has_json && f.summarize_json.is_none() {
+                        continue;
+                    }
                     let pattern_len = f.match_command.len();
                     if pattern_len > max_len {
                         max_len = pattern_len;
@@ -562,7 +678,7 @@ fn strip_leading_env_assignments(argv: &[String]) -> Vec<String> {
             .file_name()
             .and_then(|f| f.to_str())
             .unwrap_or(&argv[index]);
-        if cmd_name == "env" {
+        if cmd_name == "env" || cmd_name == "cross-env" {
             index += 1;
             while index < argv.len() {
                 let arg = &argv[index];
@@ -628,6 +744,10 @@ fn strip_leading_wrappers(argv: &[String]) -> Vec<String> {
         let name = name_raw.strip_suffix(".exe").unwrap_or(&name_raw);
 
         match name {
+            // `& CMD` — PowerShell call operator
+            "&" => {
+                index += 1;
+            }
             // `time CMD` — single token prefix
             "time" => {
                 index += 1;
@@ -719,17 +839,17 @@ fn strip_package_runner(argv: &[String]) -> &[String] {
         .to_lowercase();
     let t0 = t0.strip_suffix(".exe").unwrap_or(&t0);
 
-    // Single-token runners: `npx <tool>`, `bunx <tool>`.
-    if matches!(t0, "npx" | "bunx") && argv.len() > 1 {
-        return &argv[1..];
-    }
-    if argv.len() > 2 {
+    let mut start_idx = 0;
+
+    // 1. Detect the runner and set the start index after the runner tokens
+    if matches!(t0, "npx" | "bunx" | "uvx") && argv.len() > 1 {
+        start_idx = 1;
+    } else if argv.len() > 2 {
         let t1 = argv[1].as_str();
         let pair = (t0, t1);
         if matches!(
             pair,
             ("uv", "run")
-                | ("uvx", "run")
                 | ("pnpm", "exec")
                 | ("pnpm", "dlx")
                 | ("yarn", "dlx")
@@ -737,15 +857,42 @@ fn strip_package_runner(argv: &[String]) -> &[String] {
                 | ("deno", "run")
                 | ("deno", "task")
                 | ("bundle", "exec")
-        ) {
-            return &argv[2..];
-        }
-        // `python -m <tool>` / `python3 -m` / `py -m`.
-        if matches!(t0, "python" | "python3" | "py") && t1 == "-m" {
-            return &argv[2..];
+        ) || (matches!(t0, "python" | "python3" | "py") && t1 == "-m")
+        {
+            start_idx = 2;
         }
     }
-    argv
+
+    if start_idx == 0 {
+        return argv;
+    }
+
+    // 2. Skip any options/flags belonging to the runner itself (e.g. npx --no-install, uv run --with requests)
+    let mut idx = start_idx;
+    while idx < argv.len() {
+        let arg = &argv[idx];
+        if arg.starts_with('-') {
+            if arg == "--" {
+                idx += 1;
+                break; // double dash indicates end of runner options
+            }
+            if (arg == "-p" || arg == "--package" || arg == "--with" || arg == "--import")
+                && idx + 1 < argv.len()
+            {
+                idx += 2;
+            } else {
+                idx += 1;
+            }
+        } else {
+            break;
+        }
+    }
+
+    if idx < argv.len() {
+        &argv[idx..]
+    } else {
+        &argv[start_idx..] // fallback
+    }
 }
 
 /// Drop tool-global options that sit *between* a subcommand tool and its
@@ -1174,10 +1321,17 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
     }
 
     if result.trim().is_empty() {
-        if f.passthrough_when_emptied && !output.trim().is_empty() {
-            // The command DID produce output, but every line was filtered away.
-            // Reporting `on_empty` ("no commits"/"no changes") here would be a
-            // false negative, so fall back to a bounded view of the real output.
+        // Fall back to a bounded view of the real output (instead of `on_empty`)
+        // when filtering emptied a non-empty output AND either:
+        //  - the filter opted in via `passthrough_when_emptied`, or
+        //  - the original output carries a generic failure signal that the
+        //    per-tool keep/strip rules didn't recognize. Without this guard a
+        //    failed build/test/deploy whose error text doesn't match the
+        //    tool's native error format would be masked as the success
+        //    `on_empty` message — the same "never mask errors" rule the
+        //    `match_output.unless` guard enforces.
+        let masks_failure = f.on_empty.is_some() && output_has_failure_signal(output);
+        if !output.trim().is_empty() && (f.passthrough_when_emptied || masks_failure) {
             let cap = f.max_lines.unwrap_or(40);
             let fallback: Vec<String> = s
                 .lines()
@@ -1198,6 +1352,23 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
         }
     }
     result
+}
+
+/// Strict detection of an unambiguous command-failure signal in raw output.
+/// Used as a safety net so a filter never reports its success `on_empty`
+/// message for output that actually describes a failure. Patterns are
+/// deliberately anchored/cased to avoid tripping on benign mentions like
+/// "0 errors", "no failures", or "error: 0".
+fn output_has_failure_signal(output: &str) -> bool {
+    use std::sync::OnceLock;
+    static FAILURE: OnceLock<Regex> = OnceLock::new();
+    let re = FAILURE.get_or_init(|| {
+        Regex::new(
+            r"(?m)^\s*(?:(?i:error|fatal|panic|panicked|exception|stderr|err)\b|FAILED\b|FAIL\b|---\s*FAIL\b|Traceback \(most recent call last\)|Unhandled exception|Exception in thread\b)|\b(?i:failed with exit code|exited with status|exited with code|exit status|exit code|exit)\b\s*[:=]?\s*[1-9]\d*|\b(?:SIGSEGV|SIGABRT|SIGILL|SIGBUS|AssertionError|NullPointerException|Segmentation fault|(?i:Command failed|command not found|failed to compile))\b|\[(?i:error|fatal|panic|failed|fail)\]|level=(?i:error|fatal|panic)|\b(?i:err)(?:!|:)"
+        )
+        .expect("failure-signal regex compiles")
+    });
+    re.is_match(output)
 }
 
 fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Vec<String> {
@@ -2119,6 +2290,234 @@ on_empty = "empty filter output"
         assert!(out.contains("error"), "error must not be masked: {out:?}");
     }
 
+    /// Minimal `FilterDef` with everything off — scenario tests flip only the
+    /// one field under test instead of repeating the full struct literal.
+    fn base_filter() -> FilterDef {
+        FilterDef {
+            description: None,
+            match_command: ".*".to_string(),
+            strip_ansi: false,
+            strip_lines_matching: vec![],
+            keep_lines_matching: vec![],
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            on_empty: None,
+            passthrough_when_emptied: false,
+            match_output: vec![],
+            truncate_lines_at: None,
+            filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
+        }
+    }
+
+    #[test]
+    fn apply_filter_strip_ansi_removes_color_codes() {
+        let mut f = base_filter();
+        f.strip_ansi = true;
+        assert_eq!(
+            apply_filter("\x1b[31merror\x1b[0m here\n", &f),
+            "error here"
+        );
+    }
+
+    #[test]
+    fn apply_filter_strip_lines_matching_drops_noise() {
+        let mut f = base_filter();
+        f.strip_lines_matching = vec!["^DEBUG".to_string(), "^\\s*$".to_string()];
+        let out = apply_filter("DEBUG init\nreal line\n\nDEBUG done\nkeep me\n", &f);
+        assert_eq!(out, "real line\nkeep me");
+    }
+
+    #[test]
+    fn apply_filter_keep_lines_matching_keeps_signal() {
+        let mut f = base_filter();
+        f.keep_lines_matching = vec!["warn|error".to_string()];
+        let out = apply_filter("info: starting\nwarn: low disk\nok\nerror: boom\n", &f);
+        assert_eq!(out, "warn: low disk\nerror: boom");
+    }
+
+    #[test]
+    fn apply_filter_sizing_head_tail_max() {
+        let input = "l1\nl2\nl3\nl4\nl5\n";
+        let mut head = base_filter();
+        head.head_lines = Some(2);
+        assert_eq!(apply_filter(input, &head), "l1\nl2");
+
+        let mut tail = base_filter();
+        tail.tail_lines = Some(2);
+        assert_eq!(apply_filter(input, &tail), "l4\nl5");
+
+        let mut max = base_filter();
+        max.max_lines = Some(3);
+        assert_eq!(apply_filter(input, &max), "l1\nl2\nl3");
+
+        // head_lines takes precedence over tail/max when both set.
+        let mut both = base_filter();
+        both.head_lines = Some(1);
+        both.tail_lines = Some(2);
+        assert_eq!(apply_filter(input, &both), "l1");
+    }
+
+    #[test]
+    fn apply_filter_replace_patterns_rewrites_lines() {
+        let mut f = base_filter();
+        f.replace_patterns = vec![
+            ["\\d+\\.\\d+s".to_string(), "<dur>".to_string()],
+            ["/home/[^/]+/".to_string(), "~/".to_string()],
+        ];
+        let out = apply_filter("built in 1.23s at /home/bob/app\n", &f);
+        assert_eq!(out, "built in <dur> at ~/app");
+    }
+
+    #[test]
+    fn apply_filter_extract_sections_between_markers() {
+        let mut f = base_filter();
+        f.extract_sections = vec![ExtractSection {
+            start_pattern: "^START".to_string(),
+            end_pattern: "^END".to_string(),
+            include_markers: false,
+            max_matches: None,
+        }];
+        let out = apply_filter("noise\nSTART\na\nb\nEND\ntrailing\n", &f);
+        assert_eq!(out, "a\nb");
+
+        // include_markers keeps the boundary lines.
+        f.extract_sections[0].include_markers = true;
+        let out2 = apply_filter("noise\nSTART\na\nEND\n", &f);
+        assert_eq!(out2, "START\na\nEND");
+    }
+
+    #[test]
+    fn apply_filter_extract_sections_no_match_returns_original() {
+        let mut f = base_filter();
+        f.extract_sections = vec![ExtractSection {
+            start_pattern: "^NEVER".to_string(),
+            end_pattern: "^NOPE".to_string(),
+            include_markers: false,
+            max_matches: None,
+        }];
+        // No marker present → falls back to the unmodified content.
+        assert_eq!(apply_filter("just\ntwo lines\n", &f), "just\ntwo lines");
+    }
+
+    #[test]
+    fn apply_filter_deduplicate_blocks_collapses_repeats() {
+        let mut f = base_filter();
+        f.deduplicate_blocks = Some(DeduplicateBlocksDef {
+            min_block_lines: 3,
+            similarity: 0.8,
+            block_delimiter: None,
+        });
+        let block = "x\ny\nz";
+        let input = format!("{block}\n\n{block}\n\n{block}\n");
+        let out = apply_filter(&input, &f);
+        assert!(out.starts_with("x\ny\nz"), "first block kept: {out:?}");
+        assert!(
+            out.contains("2 similar block(s) omitted"),
+            "duplicates collapsed: {out:?}"
+        );
+    }
+
+    #[test]
+    fn apply_filter_token_budget_truncates_with_marker() {
+        let mut f = base_filter();
+        f.token_budget = Some(10);
+        let mut input = String::from("error: critical failure\n");
+        for i in 0..60 {
+            input.push_str(&format!("filler line number {i} with words\n"));
+        }
+        let out = apply_filter(&input, &f);
+        assert!(
+            out.contains("omitted to fit token budget"),
+            "expected truncation marker: {out:?}"
+        );
+        assert!(
+            out.len() < input.len(),
+            "budgeted output must be smaller than input"
+        );
+    }
+
+    #[test]
+    fn apply_filter_on_empty_for_genuinely_empty_output() {
+        let mut f = base_filter();
+        f.on_empty = Some("cmd: ok".to_string());
+        // Truly empty / whitespace-only command output → success sentinel.
+        assert_eq!(apply_filter("", &f), "cmd: ok");
+        assert_eq!(apply_filter("   \n\t\n", &f), "cmd: ok");
+    }
+
+    #[test]
+    fn apply_filter_benign_emptied_output_keeps_on_empty() {
+        // keep rules strip everything, output is benign (no failure signal):
+        // the success `on_empty` must still fire — guard must not over-trigger.
+        let mut f = base_filter();
+        f.keep_lines_matching = vec!["^KEEP".to_string()];
+        f.on_empty = Some("cmd: ok".to_string());
+        assert_eq!(
+            apply_filter("benign output line\nnothing notable here\n", &f),
+            "cmd: ok"
+        );
+    }
+
+    #[test]
+    fn apply_filter_failure_signal_overrides_on_empty() {
+        // Same filter, but the output is a failure whose format the keep rule
+        // doesn't recognize → must passthrough the error, never "cmd: ok".
+        let mut f = base_filter();
+        f.keep_lines_matching = vec!["^KEEP".to_string()];
+        f.on_empty = Some("cmd: ok".to_string());
+        let out = apply_filter("ERROR: boom\nprocess exited with exit code 1\n", &f);
+        assert_ne!(out, "cmd: ok", "failure must not be masked");
+        assert!(out.contains("ERROR: boom"), "real error surfaced: {out:?}");
+    }
+
+    #[test]
+    fn apply_filter_passthrough_when_emptied_opt_in() {
+        // Opt-in passthrough surfaces real output even without a failure signal.
+        let mut f = base_filter();
+        f.keep_lines_matching = vec!["^KEEP".to_string()];
+        f.on_empty = Some("no changes".to_string());
+        f.passthrough_when_emptied = true;
+        let out = apply_filter("abc123 some commit subject\n", &f);
+        assert_ne!(out, "no changes");
+        assert!(out.contains("abc123"), "real output shown: {out:?}");
+    }
+
+    #[test]
+    fn apply_filter_match_output_short_circuits_without_unless() {
+        let mut f = base_filter();
+        f.match_output = vec![MatchOutput {
+            pattern: "BUILD SUCCESSFUL".to_string(),
+            message: "ok".to_string(),
+            unless: None,
+        }];
+        // Short-circuits before any line filtering / sizing.
+        assert_eq!(
+            apply_filter("noise\nBUILD SUCCESSFUL in 2s\nmore noise\n", &f),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn find_filter_picks_longest_matching_pattern() {
+        let mut broad = base_filter();
+        broad.match_command = "^git\\b".to_string();
+        let mut specific = base_filter();
+        specific.match_command = "^git\\s+status\\b".to_string();
+        let filters = [broad, specific];
+        let hit = find_filter("git status -s", &filters).unwrap();
+        assert_eq!(
+            hit.match_command, "^git\\s+status\\b",
+            "most specific (longest) pattern wins"
+        );
+    }
+
     // --- Golden self-test: run every bundled filter's embedded [[tests.<name>]]
     // cases through the real apply_filter pipeline. Homologation guard so the
     // ~150 declared input→expected pairs can never silently drift.
@@ -2138,6 +2537,255 @@ on_empty = "empty filter output"
         filters: HashMap<String, FilterDef>,
         #[serde(default)]
         tests: HashMap<String, Vec<GoldenCase>>,
+    }
+
+    #[test]
+    fn verbose_real_output_compresses_at_least_70pct() {
+        // The corpus golden inputs are tiny fixtures; the headline 55% figure is
+        // diluted by them. On the real use case — verbose, noisy command output —
+        // the bundled filters must deliver heavy compression. Each pair is routed
+        // through the real `find_filter` + `apply_filter` path, exactly like the
+        // hook. Uses many command VARIANTS to also exercise filter resolution.
+        use crate::chunker::count_tokens;
+        let bundled = load_bundled_filters();
+
+        // Realistic, verbose success output for common noisy commands. A clean
+        // run is mostly progress/compile noise that collapses to a sentinel.
+        let compiling = (0..30)
+            .map(|i| format!("   Compiling crate_{i} v0.{i}.0"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cargo_build_out = format!(
+            "    Updating crates.io index\n{compiling}\n    Finished dev [unoptimized + debuginfo] target(s) in 18.4s\n"
+        );
+        let cargo_test_out = format!(
+            "{compiling}\n     Running unittests src/lib.rs\nrunning 42 tests\n{dots}\ntest result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s\n",
+            dots = (0..42)
+                .map(|i| format!("test module::case_{i} ... ok"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let npm_out = {
+            let mut s = String::new();
+            for i in 0..25 {
+                s.push_str(&format!(
+                    "npm WARN deprecated pkg_{i}@1.0.0: use pkg_{i}@2\n"
+                ));
+            }
+            s.push_str("added 642 packages, and audited 643 packages in 12s\n");
+            s.push_str("found 0 vulnerabilities\n");
+            s
+        };
+        let pip_out = {
+            let mut s = String::new();
+            for i in 0..20 {
+                s.push_str(&format!(
+                    "Requirement already satisfied: dep_{i} in ./venv\n"
+                ));
+            }
+            s.push_str("Successfully installed app-1.0.0\n");
+            s
+        };
+        let pytest_out = format!(
+            "============================= test session starts ==============================\nplatform linux -- Python 3.12.0, pytest-8.0.0\ncollected 88 items\n\n{}\n\n============================== 88 passed in 4.21s ==============================\n",
+            (0..6).map(|_| "tests/test_x.py ................................").collect::<Vec<_>>().join("\n")
+        );
+        let docker_out = {
+            let mut s = String::new();
+            for i in 1..25 {
+                s.push_str(&format!(
+                    "#{i} [stage {i}/24] RUN build step {i}\n#{i} DONE 0.{i}s\n"
+                ));
+            }
+            s.push_str("#25 exporting to image\n#25 naming to docker.io/library/app:latest DONE\n");
+            s
+        };
+        let eslint_out = "No problems found in 240 files.\n".to_string();
+        let git_pull_out = "remote: Enumerating objects: 1200, done.\nremote: Counting objects: 100% (1200/1200), done.\nremote: Compressing objects: 100% (600/600), done.\nremote: Total 1200 (delta 800), reused 1100 (delta 700)\nUnpacking objects: 100% (1200/1200), 2.40 MiB | 4.80 MiB/s, done.\nFrom github.com:org/repo\n   abc1234..def5678  main       -> origin/main\nUpdating abc1234..def5678\nFast-forward\n".to_string();
+
+        let cases: Vec<(&str, &str)> = vec![
+            ("cargo build --release", &cargo_build_out),
+            ("timeout 600 cargo test --all", &cargo_test_out),
+            ("env CI=1 npm install --no-fund", &npm_out),
+            ("pip install -r requirements.txt", &pip_out),
+            ("python -m pytest -q", &pytest_out),
+            ("docker build -t app:latest .", &docker_out),
+            ("npx eslint src/", &eslint_out),
+            ("git pull --rebase origin main", &git_pull_out),
+        ];
+
+        let mut in_total = 0usize;
+        let mut out_total = 0usize;
+        let mut report: Vec<String> = Vec::new();
+        for (cmd, sample) in &cases {
+            let f = find_filter(cmd, &bundled)
+                .unwrap_or_else(|| panic!("no bundled filter resolved for {cmd:?}"));
+            let got = apply_filter(sample, f);
+            let it = count_tokens(sample);
+            let ot = count_tokens(&got);
+            let pct = (it.saturating_sub(ot) as f64 / it as f64) * 100.0;
+            report.push(format!("{cmd}: {it}->{ot} ({pct:.0}%)"));
+            in_total += it;
+            out_total += ot;
+        }
+        let agg = (in_total.saturating_sub(out_total) as f64 / in_total as f64) * 100.0;
+        eprintln!(
+            "verbose-economy: {in_total}->{out_total} tokens, {agg:.1}% saved\n  {}",
+            report.join("\n  ")
+        );
+        assert!(
+            agg >= 70.0,
+            "verbose real output must compress >=70%, got {agg:.1}%\n{}",
+            report.join("\n")
+        );
+    }
+
+    #[test]
+    fn match_command_resolves_many_invocation_variants() {
+        // Homologation: a filter must survive the many shapes a command arrives
+        // in — wrappers (timeout/env/nice), launchers (npx/uv run/python -m),
+        // shell `-c`, tool global options, cd-prefixes, pipes and `&&` chains.
+        let bundled = load_bundled_filters();
+        let variants: &[(&str, &[&str])] = &[
+            (
+                "cargo build",
+                &[
+                    "cargo build",
+                    "cargo build --release",
+                    "timeout 300 cargo build",
+                    "env RUSTFLAGS=-W cargo build -j 8",
+                    "cargo +nightly build",
+                    "cd crates/app && cargo build",
+                    "bash -c 'cargo build --workspace'",
+                    "nice -n 10 cargo build",
+                ],
+            ),
+            (
+                "pytest",
+                &[
+                    "pytest",
+                    "pytest -q tests/",
+                    "python -m pytest",
+                    "python3 -m pytest tests/unit",
+                    "uv run pytest -x",
+                    "cd backend && pytest",
+                ],
+            ),
+            (
+                "eslint",
+                &[
+                    "eslint .",
+                    "npx eslint src/ --fix",
+                    "cd web && npx eslint .",
+                ],
+            ),
+            (
+                "kubectl get",
+                &[
+                    "kubectl get pods",
+                    "kubectl -n prod get pods -o wide",
+                    "kubectl --context staging get deploy",
+                ],
+            ),
+            (
+                "git status",
+                &[
+                    "git status",
+                    "git status -s",
+                    "git -C /repo status",
+                    "git -c color.ui=always status",
+                    "cd repo && git status",
+                ],
+            ),
+            (
+                "docker build",
+                &[
+                    "docker build -t x .",
+                    "docker buildx build --platform linux/amd64 .",
+                    "timeout 900 docker build .",
+                ],
+            ),
+            (
+                "npm install",
+                &[
+                    "npm install",
+                    "npm i",
+                    "npm install --save-dev typescript",
+                    "cat .npmrc && npm install",
+                ],
+            ),
+            // Newly added filters — verify their variants resolve too.
+            (
+                "npm ci",
+                &["npm ci", "timeout 300 npm ci", "cd web && npm ci"],
+            ),
+            (
+                "cargo bench",
+                &[
+                    "cargo bench",
+                    "cargo bench --bench parse",
+                    "cargo +nightly bench",
+                ],
+            ),
+            ("cargo update", &["cargo update", "cargo update -p serde"]),
+            (
+                "pip list",
+                &[
+                    "pip list",
+                    "pip freeze",
+                    "python -m pip list",
+                    "pip3 freeze",
+                ],
+            ),
+            (
+                "git cherry-pick",
+                &[
+                    "git cherry-pick abc123",
+                    "git -C /repo cherry-pick --continue",
+                ],
+            ),
+            (
+                "dotnet run",
+                &[
+                    "dotnet run",
+                    "dotnet run --project app",
+                    "cd svc && dotnet run",
+                ],
+            ),
+            (
+                "prisma",
+                &[
+                    "prisma generate",
+                    "npx prisma migrate dev",
+                    "pnpm prisma db push",
+                    "yarn prisma studio",
+                    "bunx prisma generate",
+                ],
+            ),
+            (
+                "wrangler",
+                &[
+                    "wrangler deploy",
+                    "npx wrangler deploy",
+                    "pnpm wrangler pages deploy dist",
+                    "yarn wrangler tail",
+                ],
+            ),
+        ];
+        let mut misses: Vec<String> = Vec::new();
+        for (label, cmds) in variants {
+            for cmd in *cmds {
+                if find_filter(cmd, &bundled).is_none() {
+                    misses.push(format!("[{label}] no filter for variant: {cmd:?}"));
+                }
+            }
+        }
+        assert!(
+            misses.is_empty(),
+            "{} command variant(s) failed to resolve a filter:\n{}",
+            misses.len(),
+            misses.join("\n")
+        );
     }
 
     #[test]
@@ -2202,10 +2850,774 @@ on_empty = "empty filter output"
     }
 
     #[test]
+    fn bundled_filters_require_minimum_tests() {
+        let mut failures = Vec::new();
+        for asset in BundledFilters::iter() {
+            let file = BundledFilters::get(&asset).expect("bundled asset readable");
+            let content = std::str::from_utf8(file.data.as_ref()).expect("filter is utf8");
+            let parsed: FilterTestFile = match toml::from_str(content) {
+                Ok(p) => p,
+                Err(e) => {
+                    failures.push(format!("{asset}: TOML parse error: {e}"));
+                    continue;
+                }
+            };
+            for fname in parsed.filters.keys() {
+                match parsed.tests.get(fname) {
+                    Some(cases) => {
+                        if cases.len() < 2 {
+                            failures.push(format!(
+                                "{asset}: [filters.{fname}] has only {} test case(s), expected at least 2",
+                                cases.len()
+                            ));
+                        }
+                    }
+                    None => {
+                        failures.push(format!(
+                            "{asset}: [filters.{fname}] has NO test cases defined"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "The following bundled filter(s) do not meet the minimum test requirement (>=2 golden cases):\n\n{}",
+            failures.join("\n")
+        );
+    }
+
+    /// Iterate every bundled filter's embedded golden cases, applying the real
+    /// pipeline. Yields `(asset, filter_name, input, filtered_output)`.
+    fn for_each_golden_case<F: FnMut(&str, &str, &str, &str)>(mut visit: F) {
+        for asset in BundledFilters::iter() {
+            let file = BundledFilters::get(&asset).expect("bundled asset readable");
+            let content = std::str::from_utf8(file.data.as_ref()).expect("utf8");
+            let parsed: FilterTestFile = match toml::from_str(content) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            for (fname, cases) in &parsed.tests {
+                let Some(fdef) = parsed.filters.get(fname) else {
+                    continue;
+                };
+                for case in cases {
+                    let got = apply_filter(&case.input, fdef);
+                    visit(&asset, fname, &case.input, &got);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn diag_per_filter_compression() {
+        let mut rows: Vec<(String, usize, usize, f64)> = Vec::new();
+        for_each_golden_case_grouped(|fname, it, ot| {
+            let pct = if it > 0 {
+                (it.saturating_sub(ot) as f64 / it as f64) * 100.0
+            } else {
+                0.0
+            };
+            rows.push((fname.to_string(), it, ot, pct));
+        });
+        // Lowest %-saved first; ties broken by biggest input (most waste left).
+        rows.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap().then(b.1.cmp(&a.1)));
+        let mut out = String::from("FILTER,IN_TOK,OUT_TOK,PCT_SAVED\n");
+        for (n, it, ot, pct) in &rows {
+            out.push_str(&format!("{n},{it},{ot},{pct:.0}\n"));
+        }
+        let path = std::env::temp_dir().join("tokenix_diag_compression.csv");
+        std::fs::write(&path, out).unwrap();
+        eprintln!("wrote {}", path.display());
+    }
+
+    /// Like `for_each_golden_case` but aggregates per filter: `(name, in_tok, out_tok)`.
+    fn for_each_golden_case_grouped<F: FnMut(&str, usize, usize)>(mut visit: F) {
+        use crate::chunker::count_tokens;
+        for asset in BundledFilters::iter() {
+            let file = BundledFilters::get(&asset).unwrap();
+            let content = std::str::from_utf8(file.data.as_ref()).unwrap();
+            let parsed: FilterTestFile = match toml::from_str(content) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            for (fname, cases) in &parsed.tests {
+                let Some(fdef) = parsed.filters.get(fname) else {
+                    continue;
+                };
+                let mut it = 0usize;
+                let mut ot = 0usize;
+                for case in cases {
+                    it += count_tokens(&case.input);
+                    ot += count_tokens(&apply_filter(&case.input, fdef));
+                }
+                visit(fname, it, ot);
+            }
+        }
+    }
+
+    #[test]
+    fn filters_never_inflate_output_tokens() {
+        // Economy invariant: a filter must never produce MORE tokens than it was
+        // given (a tiny slack covers short inputs replaced by a sentinel message
+        // like "cmd: ok"). A filter that inflates output is a net token loss.
+        use crate::chunker::count_tokens;
+        const SLACK_TOKENS: usize = 8;
+        let mut offenders: Vec<String> = Vec::new();
+        for_each_golden_case(|asset, fname, input, got| {
+            let in_tok = count_tokens(input);
+            let out_tok = count_tokens(got);
+            if out_tok > in_tok + SLACK_TOKENS {
+                offenders.push(format!(
+                    "{asset} [{fname}]: {in_tok} -> {out_tok} tokens (inflated)"
+                ));
+            }
+        });
+        assert!(
+            offenders.is_empty(),
+            "{} filter case(s) inflated output beyond slack:\n{}",
+            offenders.len(),
+            offenders.join("\n")
+        );
+    }
+
+    #[test]
+    fn filters_deliver_aggregate_token_savings() {
+        // The whole point of the tool: across the bundled corpus' realistic
+        // sample inputs, filtering must cut a large share of tokens. Guards
+        // against a regression that quietly neuters compression (e.g. a broken
+        // strip/keep stage) while individual golden equality still passes.
+        use crate::chunker::count_tokens;
+        let mut in_total = 0usize;
+        let mut out_total = 0usize;
+        let mut cases = 0usize;
+        for_each_golden_case(|_, _, input, got| {
+            in_total += count_tokens(input);
+            out_total += count_tokens(got);
+            cases += 1;
+        });
+        assert!(cases > 100, "expected the full corpus, saw {cases} cases");
+        let saved = in_total.saturating_sub(out_total);
+        let pct = (saved as f64 / in_total as f64) * 100.0;
+        eprintln!("economy: {cases} cases, {in_total} -> {out_total} tokens, {pct:.1}% saved");
+        assert!(out_total < in_total, "corpus must shrink, not grow");
+        assert!(
+            pct >= 40.0,
+            "expected >=40% aggregate token savings across the corpus, got {pct:.1}%"
+        );
+    }
+
+    #[test]
+    fn output_has_failure_signal_strict() {
+        // Positives: real failure output.
+        assert!(output_has_failure_signal(
+            "fatal: something went wrong\nERROR: build failed with exit code 1"
+        ));
+        assert!(output_has_failure_signal(
+            "panic: runtime error: index out of range"
+        ));
+        assert!(output_has_failure_signal(
+            "FAILED tests/test_foo.py::test_bar - AssertionError"
+        ));
+        assert!(output_has_failure_signal(
+            "Traceback (most recent call last):\n  File \"x.py\""
+        ));
+        assert!(output_has_failure_signal("error: aborting due to 1 error"));
+
+        // New Positives:
+        assert!(output_has_failure_signal(
+            "[ERROR] database connection failed"
+        ));
+        assert!(output_has_failure_signal(
+            "2026-06-22T12:00:00Z [error] database down"
+        ));
+        assert!(output_has_failure_signal("npm ERR! code ELIFECYCLE"));
+        assert!(output_has_failure_signal("yarn ERR: error Command failed"));
+        assert!(output_has_failure_signal(
+            "--- FAIL: TestExploreCodebase (0.05s)"
+        ));
+        assert!(output_has_failure_signal(
+            "Segmentation fault (core dumped)"
+        ));
+        assert!(output_has_failure_signal("Process received signal SIGSEGV"));
+        assert!(output_has_failure_signal(
+            "java.lang.NullPointerException: object is null"
+        ));
+        assert!(output_has_failure_signal("exited with status: 1"));
+        assert!(output_has_failure_signal("exit status 127"));
+        assert!(output_has_failure_signal("Command failed with exit code 2"));
+        assert!(output_has_failure_signal(
+            "time=\"xxx\" level=error msg=\"db lost\""
+        ));
+
+        // Negatives: benign success summaries that merely mention error/fail.
+        assert!(!output_has_failure_signal("test result: ok. 0 failed"));
+        assert!(!output_has_failure_signal("0 errors, 0 warnings"));
+        assert!(!output_has_failure_signal("no errors found"));
+        assert!(!output_has_failure_signal("Compiling: 0 failures"));
+        assert!(!output_has_failure_signal("exit status 0"));
+        assert!(!output_has_failure_signal("exited with status: 0"));
+        assert!(!output_has_failure_signal("warnings: 12"));
+    }
+
+    #[test]
+    fn bundled_filters_never_mask_generic_failure() {
+        // Homologation guard: a generic command failure must never be reduced
+        // to a filter's success `on_empty` message. Feeds each bundled filter
+        // an unambiguous failure payload and asserts a failure marker survives.
+        let payload = "fatal: the operation failed\nERROR: process exited with exit code 1\nFAILED";
+        let survives = Regex::new(r"(?i)error|fail|fatal").unwrap();
+        let mut masked: Vec<String> = Vec::new();
+        for asset in BundledFilters::iter() {
+            let file = BundledFilters::get(&asset).unwrap();
+            let content = std::str::from_utf8(file.data.as_ref()).unwrap();
+            let parsed: FilterFile = match toml::from_str(content) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            for (name, fdef) in &parsed.filters {
+                let got = apply_filter(payload, fdef);
+                if !survives.is_match(&got) {
+                    masked.push(format!("{asset} [{name}] -> {:?}", got));
+                }
+            }
+        }
+        assert!(
+            masked.is_empty(),
+            "{} bundled filter(s) masked a generic failure as success:\n{}",
+            masked.len(),
+            masked.join("\n")
+        );
+    }
+
+    #[test]
     fn test_gradlew_match() {
         let filters = load_bundled_filters();
         let f = find_filter("./gradlew", &filters);
         assert!(f.is_some(), "gradlew filter must be found for './gradlew'");
         assert_eq!(f.unwrap().on_empty.as_deref(), Some("gradlew: success"));
+    }
+
+    #[test]
+    fn find_filter_parameter_scenarios() {
+        let filters = [
+            FilterDef {
+                description: None,
+                match_command: "^cargo\\s+test\\b".to_string(),
+                strip_ansi: false,
+                strip_lines_matching: vec![],
+                keep_lines_matching: vec![],
+                max_lines: None,
+                head_lines: None,
+                tail_lines: None,
+                on_empty: Some("cargo-test".to_string()),
+                passthrough_when_emptied: false,
+                match_output: vec![],
+                truncate_lines_at: None,
+                filter_stderr: false,
+                replace_patterns: vec![],
+                extract_sections: vec![],
+                semantic_filter: None,
+                deduplicate_blocks: None,
+                summarize_json: None,
+                token_budget: None,
+            },
+            FilterDef {
+                description: None,
+                match_command: "^docker\\s+build\\b".to_string(),
+                strip_ansi: false,
+                strip_lines_matching: vec![],
+                keep_lines_matching: vec![],
+                max_lines: None,
+                head_lines: None,
+                tail_lines: None,
+                on_empty: Some("docker-build".to_string()),
+                passthrough_when_emptied: false,
+                match_output: vec![],
+                truncate_lines_at: None,
+                filter_stderr: false,
+                replace_patterns: vec![],
+                extract_sections: vec![],
+                semantic_filter: None,
+                deduplicate_blocks: None,
+                summarize_json: None,
+                token_budget: None,
+            },
+            FilterDef {
+                description: None,
+                match_command: "^git\\s+diff\\b".to_string(),
+                strip_ansi: false,
+                strip_lines_matching: vec![],
+                keep_lines_matching: vec![],
+                max_lines: None,
+                head_lines: None,
+                tail_lines: None,
+                on_empty: Some("git-diff".to_string()),
+                passthrough_when_emptied: false,
+                match_output: vec![],
+                truncate_lines_at: None,
+                filter_stderr: false,
+                replace_patterns: vec![],
+                extract_sections: vec![],
+                semantic_filter: None,
+                deduplicate_blocks: None,
+                summarize_json: None,
+                token_budget: None,
+            },
+            FilterDef {
+                description: None,
+                match_command: "^git\\s+log\\b".to_string(),
+                strip_ansi: false,
+                strip_lines_matching: vec![],
+                keep_lines_matching: vec![],
+                max_lines: None,
+                head_lines: None,
+                tail_lines: None,
+                on_empty: Some("git-log".to_string()),
+                passthrough_when_emptied: false,
+                match_output: vec![],
+                truncate_lines_at: None,
+                filter_stderr: false,
+                replace_patterns: vec![],
+                extract_sections: vec![],
+                semantic_filter: None,
+                deduplicate_blocks: None,
+                summarize_json: None,
+                token_budget: None,
+            },
+            FilterDef {
+                description: None,
+                match_command: "^kubectl\\s+get\\b".to_string(),
+                strip_ansi: false,
+                strip_lines_matching: vec![],
+                keep_lines_matching: vec![],
+                max_lines: None,
+                head_lines: None,
+                tail_lines: None,
+                on_empty: Some("kubectl-get".to_string()),
+                passthrough_when_emptied: false,
+                match_output: vec![],
+                truncate_lines_at: None,
+                filter_stderr: false,
+                replace_patterns: vec![],
+                extract_sections: vec![],
+                semantic_filter: None,
+                deduplicate_blocks: None,
+                summarize_json: Some(SummarizeJsonDef {
+                    max_array_items: 10,
+                    max_depth: 3,
+                    always_include: vec![],
+                    exclude: vec![],
+                }),
+                token_budget: None,
+            },
+            FilterDef {
+                description: None,
+                match_command: "^pytest\\b".to_string(),
+                strip_ansi: false,
+                strip_lines_matching: vec![],
+                keep_lines_matching: vec![],
+                max_lines: None,
+                head_lines: None,
+                tail_lines: None,
+                on_empty: Some("pytest".to_string()),
+                passthrough_when_emptied: false,
+                match_output: vec![],
+                truncate_lines_at: None,
+                filter_stderr: false,
+                replace_patterns: vec![],
+                extract_sections: vec![],
+                semantic_filter: None,
+                deduplicate_blocks: None,
+                summarize_json: None,
+                token_budget: None,
+            },
+            FilterDef {
+                description: None,
+                match_command: "^git\\b".to_string(),
+                strip_ansi: false,
+                strip_lines_matching: vec![],
+                keep_lines_matching: vec![],
+                max_lines: None,
+                head_lines: None,
+                tail_lines: None,
+                on_empty: Some("git-broad".to_string()),
+                passthrough_when_emptied: false,
+                match_output: vec![],
+                truncate_lines_at: None,
+                filter_stderr: false,
+                replace_patterns: vec![],
+                extract_sections: vec![],
+                semantic_filter: None,
+                deduplicate_blocks: None,
+                summarize_json: None,
+                token_budget: None,
+            },
+            FilterDef {
+                description: None,
+                match_command: "^git\\s+branch\\b".to_string(),
+                strip_ansi: false,
+                strip_lines_matching: vec![],
+                keep_lines_matching: vec![],
+                max_lines: None,
+                head_lines: None,
+                tail_lines: None,
+                on_empty: Some("git-branch".to_string()),
+                passthrough_when_emptied: false,
+                match_output: vec![],
+                truncate_lines_at: None,
+                filter_stderr: false,
+                replace_patterns: vec![],
+                extract_sections: vec![],
+                semantic_filter: None,
+                deduplicate_blocks: None,
+                summarize_json: None,
+                token_budget: None,
+            },
+            FilterDef {
+                description: None,
+                match_command: "^eslint\\b".to_string(),
+                strip_ansi: false,
+                strip_lines_matching: vec![],
+                keep_lines_matching: vec![],
+                max_lines: None,
+                head_lines: None,
+                tail_lines: None,
+                on_empty: Some("eslint".to_string()),
+                passthrough_when_emptied: false,
+                match_output: vec![],
+                truncate_lines_at: None,
+                filter_stderr: false,
+                replace_patterns: vec![],
+                extract_sections: vec![],
+                semantic_filter: None,
+                deduplicate_blocks: None,
+                summarize_json: None,
+                token_budget: None,
+            },
+        ];
+
+        let run =
+            |cmd: &str| find_filter(cmd, &filters).map(|f| f.on_empty.as_ref().unwrap().as_str());
+
+        // 120+ data-driven test cases validating parameters, wrappers, shell features, and bypass flags
+        let static_cases = vec![
+            // 1. Tool-specific basic matches
+            ("cargo test", Some("cargo-test")),
+            ("docker build", Some("docker-build")),
+            ("git diff", Some("git-diff")),
+            ("git log", Some("git-log")),
+            ("kubectl get", Some("kubectl-get")),
+            ("pytest", Some("pytest")),
+            ("eslint", Some("eslint")),
+            ("git branch", Some("git-branch")),
+            // 2. Standard parameters & flags
+            (
+                "cargo test --workspace --all-features --jobs 4",
+                Some("cargo-test"),
+            ),
+            ("cargo test -p my-package --lib", Some("cargo-test")),
+            (
+                "docker build -t image:latest -f Dockerfile .",
+                Some("docker-build"),
+            ),
+            (
+                "docker build --build-arg KEY=VAL --no-cache .",
+                Some("docker-build"),
+            ),
+            (
+                "git diff HEAD~1 HEAD --stat --compact-summary",
+                Some("git-diff"),
+            ),
+            ("git diff main..feature --name-status", Some("git-diff")),
+            (
+                "git log -n 50 --oneline --graph --decorate",
+                Some("git-log"),
+            ),
+            (
+                "git log --author=\"Bob\" --since=\"1 week ago\"",
+                Some("git-log"),
+            ),
+            (
+                "kubectl get pods -n kube-system -o wide",
+                Some("kubectl-get"),
+            ),
+            (
+                "kubectl get services,deployments -l app=nginx",
+                Some("kubectl-get"),
+            ),
+            (
+                "pytest tests/test_auth.py -k \"login_successful\"",
+                Some("pytest"),
+            ),
+            (
+                "pytest -v --tb=short --cov=src --cov-report=html",
+                Some("pytest"),
+            ),
+            ("eslint src/ --ext .ts,.tsx --fix", Some("eslint")),
+            (
+                "eslint --cache --resolve-plugins-relative-to .",
+                Some("eslint"),
+            ),
+            // 3. Env vars & wrappers
+            ("CI=true cargo test", Some("cargo-test")),
+            ("NODE_ENV=test PORT=3000 pytest", Some("pytest")),
+            ("cross-env CI=true pnpm exec eslint", Some("eslint")),
+            ("time cargo test", Some("cargo-test")),
+            ("nice cargo test", Some("cargo-test")),
+            ("nice -n 10 cargo test", Some("cargo-test")),
+            ("timeout 30s pytest", Some("pytest")),
+            ("timeout --foreground 60s pytest", Some("pytest")),
+            ("timeout -k 5 10 nice -n 19 pytest", Some("pytest")),
+            (
+                "CI=true timeout 30 nice -n 5 cargo test --quiet",
+                Some("cargo-test"),
+            ),
+            // 4. Directory prefixes (cd / pushd)
+            ("cd app && cargo test", Some("cargo-test")),
+            ("cd app; cargo test", Some("cargo-test")),
+            ("cd app || exit 1; cargo test", Some("cargo-test")),
+            ("pushd app && pytest", Some("pytest")),
+            ("cd /d C:\\Project && docker build .", Some("docker-build")),
+            ("cd src && ENV=1 timeout 10 pytest -v", Some("pytest")),
+            // 5. Global tool options with subcommand parameters
+            ("git -C /src diff", Some("git-diff")),
+            ("git --git-dir=/src/.git diff", Some("git-diff")),
+            ("git -c core.autocrlf=input diff", Some("git-diff")),
+            ("git --no-pager diff", Some("git-diff")),
+            (
+                "git -C /src -c k=v --no-pager diff --stat",
+                Some("git-diff"),
+            ),
+            ("docker -H tcp://1.2.3.4:2376 build .", Some("docker-build")),
+            ("docker --context default build .", Some("docker-build")),
+            (
+                "kubectl --kubeconfig=~/.kube/config get pods",
+                Some("kubectl-get"),
+            ),
+            (
+                "kubectl -n default --context=dev get pods",
+                Some("kubectl-get"),
+            ),
+            // 6. Package runners
+            ("npx eslint", Some("eslint")),
+            ("npx --no-install eslint .", Some("eslint")),
+            ("pnpm exec eslint", Some("eslint")),
+            ("pnpm dlx eslint", Some("eslint")),
+            ("bunx eslint", Some("eslint")),
+            ("bun x eslint", Some("eslint")),
+            ("yarn dlx eslint", Some("eslint")),
+            ("uv run pytest", Some("pytest")),
+            ("uvx pytest", Some("pytest")),
+            ("python -m pytest", Some("pytest")),
+            ("python3 -m pytest", Some("pytest")),
+            ("python -m ruff check", None), // no ruff filter registered
+            // 7. Shell runners
+            ("bash -c \"cargo test\"", Some("cargo-test")),
+            ("sh -c \"pytest\"", Some("pytest")),
+            ("cmd.exe /c \"cargo test\"", Some("cargo-test")),
+            ("powershell -Command \"cargo test\"", Some("cargo-test")),
+            ("pwsh -Command \"pytest\"", Some("pytest")),
+            ("& 'cargo test'", Some("cargo-test")),
+            // 8. Help flag bypass variants
+            ("cargo test --help", None),
+            ("cargo test -h", None),
+            ("cargo test help", None),
+            ("cargo test /h", None),
+            ("cargo test /?", None),
+            ("cargo test --help-all", None),
+            ("cargo test -help", None),
+            ("git diff --help", None),
+            ("git diff -h", None),
+            ("git help diff", None),
+            ("kubectl get --help", None),
+            ("pytest -h", None),
+            ("eslint --help", None),
+            // 9. Version flag bypass variants
+            ("node --version", None),
+            ("node -v", None),
+            ("python -V", None),
+            ("python3 --version", None),
+            ("git --version", None),
+            ("git -v", None),
+            ("docker --version", None),
+            ("docker -v", None),
+            ("kubectl version", None),
+            // 10. Debug / Verbose bypass variants
+            ("cargo test --debug", None),
+            ("cargo test --verbose", None),
+            ("cargo test --trace", None),
+            ("cargo test -vv", None),
+            ("cargo test -vvv", None),
+            ("cargo test --log-level=debug", None),
+            ("cargo test --log-level=trace", None),
+            ("pytest --verbose", None),
+            ("pytest -vv", None),
+            ("git diff --verbose", None),
+            ("docker build --debug", None),
+            ("kubectl get pods --log-level=debug", None),
+            // 11. YAML format bypass variants
+            ("kubectl get pods --yaml", None),
+            ("kubectl get pods -o yaml", None),
+            ("kubectl get pods -o=yaml", None),
+            ("kubectl get pods --format yaml", None),
+            ("kubectl get pods --format=yaml", None),
+            ("docker inspect --format yaml", None),
+            // 12. JSON format bypass vs match
+            ("cargo test --json", None),                // no JSON support
+            ("cargo test -o json", None),               // no JSON support
+            ("cargo test -o=json", None),               // no JSON support
+            ("cargo test --message-format=json", None), // no JSON support
+            ("pytest --json", None),                    // no JSON support
+            ("kubectl get pods -o json", Some("kubectl-get")), // supported!
+            ("kubectl get pods -o=json", Some("kubectl-get")), // supported!
+            ("kubectl get pods --format=json", Some("kubectl-get")), // supported!
+            // 13. Collision & specificity
+            ("git branch", Some("git-branch")),
+            ("git branch -a", Some("git-branch")),
+            ("git checkout -b branch", Some("git-broad")), // git-checkout falls back to git-broad
+            ("git status", Some("git-broad")),             // git-status falls back to git-broad
+            ("git status -s", Some("git-broad")),
+            // 14. Complex combined expressions
+            (
+                "NODE_ENV=production PORT=8080 timeout 30s npx eslint --fix --ext .ts .",
+                Some("eslint"),
+            ),
+            (
+                "cd /app && time nice -n 5 pnpm exec eslint --cache",
+                Some("eslint"),
+            ),
+            ("git -C /repo -c k=v diff --stat --verbose", None), // verbose bypasses
+            ("kubectl --kubeconfig=config get pods -o yaml", None), // yaml bypasses
+            (
+                "cd /app && npm install --no-audit | git log --oneline --help",
+                None,
+            ), // help bypasses
+            // 15. More combined and edge cases
+            ("git", Some("git-broad")),
+            ("git -v diff", None), // version flag bypasses
+            ("nice nice nice cargo test", Some("cargo-test")), // nested wrappers
+            ("cd app && pushd src && time cargo test", Some("cargo-test")),
+            ("npx npx eslint", Some("eslint")),
+            ("npx pnpm exec eslint", Some("eslint")),
+            ("bunx bunx eslint", Some("eslint")),
+            ("timeout 10 timeout 10 pytest", Some("pytest")),
+            ("pytest -v --tb=short --json", None),
+            ("kubectl get pods -o json -n kube-system --help", None), // help takes priority over JSON support
+            ("kubectl get pods -o yaml -n default", None),            // YAML bypass
+            ("kubectl get pods -o=yaml --log-level=debug", None),     // debug and YAML bypass
+            ("git log --oneline --json", None),                       // no JSON support
+            ("eslint --fix --format json", None),                     // no JSON support
+        ];
+
+        let mut test_cases: Vec<(String, Option<&str>)> = static_cases
+            .into_iter()
+            .map(|(cmd, expected)| (cmd.to_string(), expected))
+            .collect();
+
+        // 16. Dynamic generated matrix of combinatorial match and bypass variations (4000+ cases)
+        let prefixes = [
+            "",
+            "CI=true",
+            "timeout 30s",
+            "cd src &&",
+            "CI=true nice -n 10 timeout 5",
+        ];
+
+        let runners = ["", "npx", "pnpm exec", "uv run"];
+
+        let tools = [
+            ("cargo test", vec!["", " --workspace"], "cargo-test"),
+            ("git diff", vec!["", " --stat --cached"], "git-diff"),
+            ("docker build", vec!["", " -t tag ."], "docker-build"),
+            ("pytest", vec!["", " tests/test_auth.py"], "pytest"),
+            ("eslint", vec!["", " --fix"], "eslint"),
+            ("kubectl get", vec!["", " pods"], "kubectl-get"),
+        ];
+
+        let shell_wrappers = ["", "bash -c", "powershell -Command"];
+
+        for prefix in &prefixes {
+            for runner in &runners {
+                for (tool, args_list, expected) in &tools {
+                    for arg in args_list {
+                        let mut cmd_parts = Vec::new();
+                        if !prefix.is_empty() {
+                            cmd_parts.push(*prefix);
+                        }
+                        if !runner.is_empty() {
+                            cmd_parts.push(*runner);
+                        }
+                        cmd_parts.push(*tool);
+                        if !arg.is_empty() {
+                            cmd_parts.push(arg.trim());
+                        }
+                        let base_cmd = cmd_parts.join(" ");
+
+                        // Base match
+                        test_cases.push((base_cmd.clone(), Some(*expected)));
+
+                        // Wrapped match
+                        for wrapper in &shell_wrappers {
+                            if !wrapper.is_empty() {
+                                test_cases.push((
+                                    format!("{} \"{}\"", wrapper, base_cmd),
+                                    Some(*expected),
+                                ));
+                            }
+                        }
+
+                        // Bypass variations
+                        let bypass_flags = [
+                            "--help",
+                            "-h",
+                            "--verbose",
+                            "--debug",
+                            "-vv",
+                            "--yaml",
+                            "-o yaml",
+                        ];
+
+                        for flag in &bypass_flags {
+                            let bypass_cmd = format!("{} {}", base_cmd, flag);
+                            test_cases.push((bypass_cmd.clone(), None));
+
+                            for wrapper in &shell_wrappers {
+                                if !wrapper.is_empty() {
+                                    test_cases
+                                        .push((format!("{} \"{}\"", wrapper, bypass_cmd), None));
+                                }
+                            }
+                        }
+
+                        // JSON bypass test
+                        let json_cmd = format!("{} --json", base_cmd);
+                        let json_expected = if *expected == "kubectl-get" {
+                            Some("kubectl-get")
+                        } else {
+                            None
+                        };
+                        test_cases.push((json_cmd.clone(), json_expected));
+
+                        for wrapper in &shell_wrappers {
+                            if !wrapper.is_empty() {
+                                test_cases
+                                    .push((format!("{} \"{}\"", wrapper, json_cmd), json_expected));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (cmd, expected) in &test_cases {
+            assert_eq!(
+                run(cmd),
+                *expected,
+                "command resolution failed for: {:?}",
+                cmd
+            );
+        }
     }
 }

@@ -1,0 +1,64 @@
+[filters.wrangler]
+description = "Compact Cloudflare Wrangler worker/pages deploy outputs. Tolerates the npx/pnpm/yarn/bunx runner prefixes Wrangler is usually invoked with."
+match_command = "^(npx\\s+|pnpm\\s+(?:exec\\s+|dlx\\s+)?|yarn\\s+(?:dlx\\s+)?|bunx\\s+)?wrangler\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Total Upload:",
+  "^Uploading",
+  "^Verifying",
+  "^\\s*Your worker has access to",
+  "^Current Version ID:"
+]
+keep_lines_matching = [
+  "error",
+  "ERROR",
+  "Error:",
+  "Failed",
+  "failed",
+  "✘",
+  "Published",
+  "Uploaded",
+  "Success",
+  "https://",
+  "Deployment complete"
+]
+max_lines = 40
+on_empty = "wrangler: ok"
+
+[[tests.wrangler]]
+name = "wrangler deploy success"
+command = "wrangler deploy"
+input = """
+Total Upload: 45.20 KiB / 0.00 KiB
+Uploaded my-worker (1.23s)
+Published my-worker (0.54s)
+  https://my-worker.my-subdomain.workers.dev
+Current Version ID: abc1234-abcd-1234-abcd-123456789abc
+"""
+expected = """Uploaded my-worker (1.23s)
+Published my-worker (0.54s)
+  https://my-worker.my-subdomain.workers.dev"""
+
+[[tests.wrangler]]
+name = "wrangler pages deploy success"
+command = "wrangler pages deploy dist"
+input = """
+Uploading... (10/10)
+✨ Success! Uploaded 10 files (2.1s)
+
+Deployment complete! Take a look at: https://my-pages.pages.dev
+"""
+expected = """✨ Success! Uploaded 10 files (2.1s)
+Deployment complete! Take a look at: https://my-pages.pages.dev"""
+
+[[tests.wrangler]]
+name = "npx wrangler deploy auth failure preserved"
+command = "npx wrangler deploy"
+input = """
+Total Upload: 45.20 KiB / 0.00 KiB
+✘ [ERROR] A request to the Cloudflare API (/accounts/xxx/workers/scripts/my-worker) failed.
+Authentication error [code: 10000]
+"""
+expected = """✘ [ERROR] A request to the Cloudflare API (/accounts/xxx/workers/scripts/my-worker) failed.
+Authentication error [code: 10000]"""

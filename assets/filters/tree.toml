@@ -33,3 +33,10 @@ D:.
 |   +---lib.rs
 +---tests
 |   +---golden.rs"""
+
+[[tests.tree]]
+name = "empty tree"
+command = "tree"
+input = ""
+expected = "tree: no paths"
+

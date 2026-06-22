@@ -1,0 +1,51 @@
+[filters.cargo-bench]
+description = "Compact `cargo bench` output — strip compile/runner noise, keep benchmark results and errors."
+match_command = "^cargo\\s+bench\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Compiling",
+  "^\\s*Fresh",
+  "^\\s*Finished",
+  "^\\s*Running ",
+  "^\\s*running \\d+ test",
+  "^\\s*test result: ok\\.",
+]
+keep_lines_matching = [
+  "bench:",
+  "time:",
+  "error\\[",
+  "error:",
+  "warning:",
+  "thread.*panicked",
+  "FAILED",
+  "^\\s*-->",
+  "^\\s*\\d+ \\|",
+  "^\\s*\\| ",
+]
+max_lines = 60
+on_empty = "cargo bench: ok"
+
+[[tests.cargo-bench]]
+name = "benchmark results kept, compile noise stripped"
+input = """
+   Compiling my-crate v0.1.0
+    Finished bench [optimized] target(s) in 12.0s
+     Running unittests src/lib.rs
+running 2 tests
+test bench_parse  ... bench:       1,234 ns/iter (+/- 56)
+test bench_encode ... bench:       2,345 ns/iter (+/- 78)
+test result: ok. 0 passed; 0 failed; 2 measured
+"""
+expected = """test bench_parse  ... bench:       1,234 ns/iter (+/- 56)
+test bench_encode ... bench:       2,345 ns/iter (+/- 78)"""
+
+[[tests.cargo-bench]]
+name = "compile error preserved"
+input = """
+   Compiling my-crate v0.1.0
+error[E0425]: cannot find value `foo` in this scope
+ --> benches/b.rs:3:5
+"""
+expected = """error[E0425]: cannot find value `foo` in this scope
+ --> benches/b.rs:3:5"""

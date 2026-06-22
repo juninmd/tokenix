@@ -392,4 +392,93 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    fn intercepted(tool: &str, command: &str, original: i64, actual: i64) -> HookEvent {
+        HookEvent {
+            ts: 0.0,
+            tool: tool.to_string(),
+            action: "intercepted".to_string(),
+            phase: "post".to_string(),
+            reason: String::new(),
+            saved_tokens: (original - actual).max(0),
+            actual_tokens: actual,
+            original_estimate: original,
+            input_preview: String::new(),
+            command: command.to_string(),
+        }
+    }
+
+    #[test]
+    fn cost_rows_price_savings_per_model() {
+        let temp_dir = create_test_temp_dir("cost");
+        // 1M original tokens compressed to 200k used → 800k saved.
+        log_hook_event(
+            &temp_dir,
+            &intercepted("Bash", "cargo build", 1_000_000, 200_000),
+        )
+        .unwrap();
+
+        let stats = compute_gain(&temp_dir);
+        assert_eq!(stats.cost_rows.len(), MODELS.len());
+        // Exactly one reference model (sonnet) drives the headline figure.
+        assert_eq!(stats.cost_rows.iter().filter(|r| r.reference).count(), 1);
+
+        let sonnet = stats
+            .cost_rows
+            .iter()
+            .find(|r| r.model == "claude-sonnet-4-6")
+            .expect("sonnet present");
+        // $3 / 1M input tokens.
+        assert!((sonnet.without_usd - 3.0).abs() < 1e-9);
+        assert!((sonnet.with_usd - 0.6).abs() < 1e-9);
+        assert!((sonnet.saved_usd - 2.4).abs() < 1e-9);
+        // saved is always without - with, for every model.
+        for r in &stats.cost_rows {
+            assert!((r.saved_usd - (r.without_usd - r.with_usd)).abs() < 1e-9);
+            assert!(r.saved_usd >= 0.0, "{} saved negative", r.model);
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn by_command_rollup_aggregates_same_base() {
+        let temp_dir = create_test_temp_dir("rollup");
+        // Two cargo-test variants collapse into one bucket; git status separate.
+        log_hook_event(
+            &temp_dir,
+            &intercepted("Bash", "cargo test --all", 500, 100),
+        )
+        .unwrap();
+        log_hook_event(
+            &temp_dir,
+            &intercepted("Bash", "cargo test -p core", 300, 50),
+        )
+        .unwrap();
+        log_hook_event(&temp_dir, &intercepted("Bash", "git status -s", 80, 20)).unwrap();
+
+        let stats = compute_gain(&temp_dir);
+        let cargo = stats
+            .by_command
+            .iter()
+            .find(|(c, _, _)| c == "cargo test")
+            .expect("cargo test bucket");
+        assert_eq!(cargo.1, 2, "two cargo invocations rolled up");
+        assert_eq!(cargo.2, 400 + 250, "saved tokens summed");
+        // Sorted by tokens saved desc → cargo (650) before git status (60).
+        assert_eq!(stats.by_command[0].0, "cargo test");
+        assert_eq!(stats.tokens_saved, 400 + 250 + 60);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn pct_saved_zero_without_original_tokens() {
+        let temp_dir = create_test_temp_dir("pctzero");
+        // An intercept that recorded no original estimate must not divide by zero.
+        log_hook_event(&temp_dir, &intercepted("Bash", "noisy", 0, 0)).unwrap();
+        let stats = compute_gain(&temp_dir);
+        assert_eq!(stats.pct_saved, 0.0);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }

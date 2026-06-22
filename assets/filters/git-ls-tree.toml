@@ -22,3 +22,9 @@ articles/a.md
 reports/bimonthly-2026-06-05-relatorio-bimestral-panorama-tecnico-06-04-2026-a-05-06-2026.md
 reports/daily-2026-06-14-deep-dive.md
 reports/daily-2026-06-15-agent-failure.md"""
+
+[[tests.git-ls-tree]]
+name = "empty tree"
+input = ""
+expected = "git ls-tree: no paths"
+

@@ -1,0 +1,41 @@
+[filters.pip-list]
+description = "Compact `pip list` / `pip freeze` output — drop the upgrade-notice/warning noise, keep the package table."
+match_command = "^(python\\d?\\s+-m\\s+)?pip\\d?\\s+(list|freeze)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[notice\\]",
+  "^WARNING: ",
+  "^\\s*\\[notice\\]",
+]
+max_lines = 80
+truncate_lines_at = 120
+on_empty = "pip list: no packages"
+
+[[tests.pip-list]]
+name = "package table kept, upgrade notice stripped"
+input = """
+Package    Version
+---------- -------
+pip        24.0
+requests   2.31.0
+urllib3    2.2.1
+
+[notice] A new release of pip is available: 24.0 -> 24.1
+[notice] To update, run: pip install --upgrade pip
+"""
+expected = """Package    Version
+---------- -------
+pip        24.0
+requests   2.31.0
+urllib3    2.2.1"""
+
+[[tests.pip-list]]
+name = "freeze format preserved"
+input = """
+requests==2.31.0
+urllib3==2.2.1
+WARNING: Ignoring invalid distribution
+"""
+expected = """requests==2.31.0
+urllib3==2.2.1"""

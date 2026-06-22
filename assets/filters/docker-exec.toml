@@ -29,4 +29,4 @@ name = "error shown"
 input = """
 Error response from daemon: Container abc123456 is not running
 """
-expected = "docker exec: done"
+expected = "Error response from daemon: Container abc123456 is not running"

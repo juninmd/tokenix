@@ -1,0 +1,82 @@
+[filters.prisma]
+description = "Compact Prisma CLI migrate/generate/studio outputs. Tolerates the npx/pnpm/yarn/bunx runner prefixes Prisma is usually invoked with."
+match_command = "^(npx\\s+|pnpm\\s+(?:exec\\s+|dlx\\s+)?|yarn\\s+(?:dlx\\s+)?|bunx\\s+)?prisma\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Prisma schema loaded from",
+  "^Datasource",
+  "^Database",
+  "^Running generate",
+  "^Start using Prisma Client",
+  "^import \\{ PrismaClient",
+  "^const prisma = ",
+  "^\\s*• "
+]
+keep_lines_matching = [
+  "error",
+  "ERROR",
+  "Error:",
+  "Failed",
+  "failed",
+  "panic",
+  "Exception",
+  "Generated Prisma Client",
+  "database is now in sync",
+  "Applying migration",
+  "migration\\(s\\) have been applied",
+  "Already in sync",
+  "migrate"
+]
+max_lines = 40
+on_empty = "prisma: ok"
+
+[[tests.prisma]]
+name = "prisma generate success"
+command = "prisma generate"
+input = """
+Prisma schema loaded from prisma/schema.prisma
+
+✔ Generated Prisma Client (v5.1.1) to ./node_modules/@prisma/client in 54ms
+Start using Prisma Client in your code:
+import { PrismaClient } from '@prisma/client'
+const prisma = new PrismaClient()
+"""
+expected = "✔ Generated Prisma Client (v5.1.1) to ./node_modules/@prisma/client in 54ms"
+
+[[tests.prisma]]
+name = "prisma db push success"
+command = "prisma db push"
+input = """
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": PostgreSQL database "mydb", schema "public" at "localhost:5432"
+
+🚀  Your database is now in sync with your Prisma schema.
+"""
+expected = "🚀  Your database is now in sync with your Prisma schema."
+
+[[tests.prisma]]
+name = "npx prisma migrate dev keeps applied migration"
+command = "npx prisma migrate dev"
+input = """
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": PostgreSQL database "mydb"
+
+Applying migration `20260101000000_init`
+The following migration(s) have been applied:
+
+migrations/
+  └─ 20260101000000_init/
+    └─ migration.sql
+"""
+expected = """Applying migration `20260101000000_init`
+The following migration(s) have been applied:"""
+
+[[tests.prisma]]
+name = "migration error preserved"
+command = "pnpm prisma migrate deploy"
+input = """
+Prisma schema loaded from prisma/schema.prisma
+Error: P3009 migrate found failed migrations in the target database
+"""
+expected = "Error: P3009 migrate found failed migrations in the target database"

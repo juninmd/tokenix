@@ -32,3 +32,12 @@ default              unrelated                                                1/
 evo-agent            evo-agent-daily-abc                                       0/1     Error       0          1d
 NAMESPACE            NAME                            READY   UP-TO-DATE   AVAILABLE   AGE
 evo-agent            deployment.apps/evo-agent       1/1     1            1           20d"""
+
+[[tests.powershell-kubectl-select]]
+name = "no matching workloads"
+command = "k get pods"
+input = """
+NAMESPACE            NAME                                                     READY   STATUS      RESTARTS   AGE
+"""
+expected = "NAMESPACE            NAME                                                     READY   STATUS      RESTARTS   AGE"
+
