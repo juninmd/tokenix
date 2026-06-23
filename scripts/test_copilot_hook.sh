@@ -84,7 +84,7 @@ else
   pass "git status filter stripped help-hint line"
 fi
 
-# git diff → git-diff filter strips diff headers (diff --git, index, ---, +++).
+# git diff → git-diff filter keeps diff --git header but strips index, ---, +++.
 GIT_DIFF='diff --git a/src/a.rs b/src/a.rs\nindex 1234567..89abcde 100644\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,3 +1,3 @@\n-old line\n+new line\n context\n'
 PAYLOAD="{\"toolName\":\"bash\",\"toolArgs\":{\"command\":\"git diff\"},\"toolResult\":{\"textResultForLlm\":\"$GIT_DIFF\"}}"
 OUT=$(printf '%s' "$PAYLOAD" | "$TOKENIX" hook-post 2>/dev/null); CODE=$?
@@ -94,9 +94,14 @@ else
   fail "git diff post-hook (code=$CODE)" "out: $OUT"
 fi
 if echo "$OUT" | grep -q "diff --git"; then
-  fail "git diff filter did not strip 'diff --git' header" "out: $OUT"
+  pass "git diff filter kept 'diff --git' header"
 else
-  pass "git diff filter stripped 'diff --git' header"
+  fail "git diff filter stripped 'diff --git' header" "out: $OUT"
+fi
+if echo "$OUT" | grep -E -q "index |--- |\+\+\+ "; then
+  fail "git diff filter did not strip internal diff headers" "out: $OUT"
+else
+  pass "git diff filter stripped internal diff headers (index, ---, +++)"
 fi
 
 # toolArgs as a JSON-encoded string (Copilot sometimes does this).
