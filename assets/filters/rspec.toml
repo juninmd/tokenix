@@ -1,6 +1,7 @@
 [filters.rspec]
 description = "Compact RSpec output — keep failures and summary"
 match_command = "^(bundle\\s+exec\\s+)?rspec\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -30,17 +31,7 @@ keep_lines_matching = [
   "pending"
 ]
 max_lines = 50
-on_empty = "rspec: all tests passed"
 
-[[tests.rspec]]
-name = "all tests pass"
-input = """
-.....
-
-Finished in 0.5 seconds (files took 0.2 seconds to load)
-5 examples, 0 failures
-"""
-expected = "rspec: all tests passed"
 
 [[tests.rspec]]
 name = "failures shown"

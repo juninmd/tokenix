@@ -1,12 +1,12 @@
 [filters.bat]
 description = "Compact bat (cat) output"
 match_command = "^bat\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
 ]
 max_lines = 100
-on_empty = "bat: empty file"
 
 [[tests.bat]]
 name = "file content"

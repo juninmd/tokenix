@@ -1,6 +1,7 @@
 [filters.yq]
 description = "Compact yq output"
 match_command = "^yq\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,7 +12,6 @@ keep_lines_matching = [
   "cannot"
 ]
 max_lines = 50
-on_empty = "yq: ok"
 
 [[tests.yq]]
 name = "clean yaml output"

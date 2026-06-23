@@ -1,6 +1,7 @@
 [filters.tofu-providers]
 description = "Compact OpenTofu providers output"
 match_command = "^tofu\\s+providers\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,7 +14,6 @@ keep_lines_matching = [
   "Error"
 ]
 max_lines = 30
-on_empty = "tofu providers: none"
 
 [[tests.tofu-providers]]
 name = "providers tree"

@@ -1,6 +1,7 @@
 [filters.prettier]
 description = "Compact Prettier output"
 match_command = "^(npx\\s+)?prettier\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -12,16 +13,7 @@ keep_lines_matching = [
   "Could not parse"
 ]
 max_lines = 40
-on_empty = "prettier: formatted"
 
-[[tests.prettier]]
-name = "formatted files"
-input = """
-src/main.ts
-src/utils.ts
-src/components/Button.tsx
-"""
-expected = "prettier: formatted"
 
 [[tests.prettier]]
 name = "parse error shown"

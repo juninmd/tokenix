@@ -1,6 +1,7 @@
 [filters.docker-volume]
 description = "Compact docker volume output"
 match_command = "^docker\\s+volume\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -12,7 +13,6 @@ keep_lines_matching = [
   "nfs"
 ]
 max_lines = 30
-on_empty = "docker volume: none"
 
 [[tests.docker-volume]]
 name = "list volumes"

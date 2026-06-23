@@ -1,6 +1,7 @@
 [filters.bundle]
 description = "Compact Bundler output"
 match_command = "^bundle\\s+(add|outdated|show)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -29,20 +30,7 @@ keep_lines_matching = [
   "Removed",
 ]
 max_lines = 40
-on_empty = "bundle: ok"
 
-[[tests.bundle]]
-name = "install complete"
-input = """
-Fetching gem metadata from https://rubygems.org/..........
-Resolving dependencies.......
-Using rake 13.0.6
-Using concurrent-ruby 1.1.10
-Installing rails 7.1.0
-Bundle complete! 45 Gemfile dependencies, 120 gems now installed.
-Use `bundle info [gemname]` to see where a bundled gem is installed.
-"""
-expected = "bundle: ok"
 
 [[tests.bundle]]
 name = "error shown"

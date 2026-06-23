@@ -1,6 +1,7 @@
 [filters.git-reflog]
 description = "Compact git reflog output"
 match_command = "^git\\s+reflog\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -14,7 +15,6 @@ keep_lines_matching = [
   "rebase:"
 ]
 max_lines = 30
-on_empty = "git reflog: empty"
 
 [[tests.git-reflog]]
 name = "reflog output"

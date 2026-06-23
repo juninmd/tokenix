@@ -1,6 +1,7 @@
 [filters.pre-commit]
 description = "Compact pre-commit output aggressively"
 match_command = "^pre-commit\\s+(run|install|autoupdate)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -26,7 +27,6 @@ keep_lines_matching = [
   "WARNING",
 ]
 max_lines = 30
-on_empty = "pre-commit: passed"
 replace_patterns = [
   ["https://github\\.com/[^\\s]+", "github.com/<repo>"],
   ["\\.\\.\\.\\.\\.\\.+Passed", "Passed"],
@@ -41,17 +41,6 @@ extract_sections = [
 deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
 token_budget = 1500
 
-[[tests.pre-commit]]
-name = "hooks pass"
-input = """
-[INFO] Installing environment for https://github.com/pre-commit/pre-commit-hooks.
-[INFO] Once installed this environment will be reused.
-[INFO] This may take a few minutes...
-Trim Trailing Whitespace...............................................Passed
-Fix End of Files......................................................Passed
-Check Yaml............................................................Passed
-"""
-expected = "pre-commit: passed"
 
 [[tests.pre-commit]]
 name = "hook failure shown"

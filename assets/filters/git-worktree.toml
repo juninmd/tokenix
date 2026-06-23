@@ -1,6 +1,7 @@
 [filters.git-worktree]
 description = "Compact git worktree output"
 match_command = "^git\\s+worktree\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -12,7 +13,6 @@ keep_lines_matching = [
   "detached"
 ]
 max_lines = 30
-on_empty = "git worktree: none"
 
 [[tests.git-worktree]]
 name = "list worktrees"

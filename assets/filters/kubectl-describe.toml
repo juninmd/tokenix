@@ -1,6 +1,7 @@
 [filters.kubectl-describe]
 description = "Compact kubectl describe output"
 match_command = "^kubectl\\s+describe\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -14,7 +15,6 @@ keep_lines_matching = [
   "Normal"
 ]
 max_lines = 60
-on_empty = "kubectl describe: no details"
 
 [[tests.kubectl-describe]]
 name = "describe output"

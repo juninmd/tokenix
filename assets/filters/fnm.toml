@@ -1,6 +1,7 @@
 [filters.fnm]
 description = "Compact fnm (Fast Node Manager) output — strip download/extract progress, keep version lines and errors. Excludes `fnm env` and `fnm exec` so shell evals and wrapped child commands stay untouched."
 match_command = "^fnm\\s+(list-remote|use|install|uninstall|list|ls|current|default)(\\s|$)"
+passthrough_when_emptied = true
 strip_ansi = true
 filter_stderr = true
 strip_lines_matching = [
@@ -10,7 +11,6 @@ strip_lines_matching = [
 ]
 truncate_lines_at = 200
 max_lines = 50
-on_empty = "fnm: ok"
 
 [[tests.fnm]]
 name = "use success line passes through"
@@ -42,10 +42,6 @@ name = "install with download progress strips noise"
 input = "Downloading https://nodejs.org/dist/v22.22.3/node-v22.22.3-darwin-arm64.tar.xz\nExtracting node-v22.22.3-darwin-arm64.tar.xz\nInstalling Node v22.22.3 (arm64)"
 expected = "Installing Node v22.22.3 (arm64)"
 
-[[tests.fnm]]
-name = "empty after stripping falls back to on_empty"
-input = "\nDownloading foo\nExtracting foo\n"
-expected = "fnm: ok"
 
 [[tests.fnm]]
 name = "uninstall error preserved"

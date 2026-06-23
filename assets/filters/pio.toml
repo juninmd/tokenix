@@ -1,6 +1,7 @@
 [filters.pio]
 description = "Compact PlatformIO output"
 match_command = "^pio\\s+(test|check|update|lib|pkg|platform|boards|device|debug|remote|home|account|ci|pkg)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -29,7 +30,6 @@ keep_lines_matching = [
   "multiple definition",
 ]
 max_lines = 40
-on_empty = "pio: ok"
 
 [[tests.pio]]
 name = "build error shown"
@@ -45,13 +45,3 @@ src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared in this scope
 """
 expected = "src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared in this scope"
 
-[[tests.pio]]
-name = "clean build"
-command = "pio test"
-input = """
-Verbose mode can be enabled via `-v, --verbose` option
-Compiling .pio/build/esp32dev/src/main.cpp.o
-Linking .pio/build/esp32dev/firmware.elf
-Checking size .pio/build/esp32dev/firmware.elf
-"""
-expected = "pio: ok"

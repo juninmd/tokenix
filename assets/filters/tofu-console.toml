@@ -1,13 +1,13 @@
 [filters.tofu-console]
 description = "Compact OpenTofu console output — drop echoed prompts, keep evaluated values"
 match_command = "^tofu\\s+console\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*>"
 ]
 max_lines = 30
-on_empty = "tofu console: ready"
 
 [[tests.tofu-console]]
 name = "evaluated values preserved (including quoted strings)"

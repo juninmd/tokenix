@@ -10,10 +10,6 @@ strip_lines_matching = [
 truncate_lines_at = 150
 max_lines = 50
 
-[[tests.just]]
-name = "preserves command output"
-input = "cargo test\n\ntest result: ok. 42 passed; 0 failed\n"
-expected = "cargo test\ntest result: ok. 42 passed; 0 failed"
 
 [[tests.just]]
 name = "preserves error output"

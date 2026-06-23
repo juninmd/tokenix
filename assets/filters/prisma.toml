@@ -1,6 +1,7 @@
 [filters.prisma]
 description = "Compact Prisma CLI migrate/generate/studio outputs. Tolerates the npx/pnpm/yarn/bunx runner prefixes Prisma is usually invoked with."
 match_command = "^(npx\\s+|pnpm\\s+(?:exec\\s+|dlx\\s+)?|yarn\\s+(?:dlx\\s+)?|bunx\\s+)?prisma\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -29,7 +30,6 @@ keep_lines_matching = [
   "migrate"
 ]
 max_lines = 40
-on_empty = "prisma: ok"
 
 [[tests.prisma]]
 name = "prisma generate success"

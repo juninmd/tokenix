@@ -1,6 +1,7 @@
 [filters.git-shortlog]
 description = "Compact git shortlog output"
 match_command = "^git\\s+shortlog\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,7 +12,6 @@ keep_lines_matching = [
   "\\)"
 ]
 max_lines = 40
-on_empty = "git shortlog: no commits"
 
 [[tests.git-shortlog]]
 name = "shortlog output"

@@ -1,6 +1,7 @@
 [filters.gradle-test]
 description = "Compact gradle test output"
 match_command = "^(./gradlew|gradle)\\s+test\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -16,23 +17,7 @@ keep_lines_matching = [
   "Exception"
 ]
 max_lines = 60
-on_empty = "gradle test: passed"
 
-[[tests.gradle-test]]
-name = "tests pass"
-input = """
-> Task :compileJava
-> Task :processResources
-> Task :classes
-> Task :compileTestJava
-> Task :processTestResources
-> Task :testClasses
-> Task :test
-
-BUILD SUCCESSFUL in 12s
-12 actionable tasks: 12 executed
-"""
-expected = "gradle test: passed"
 
 [[tests.gradle-test]]
 name = "failure shown"

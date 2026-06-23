@@ -1,6 +1,7 @@
 [filters.golangci-lint]
 description = "Compact golangci-lint output"
 match_command = "^golangci-lint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,14 +14,7 @@ keep_lines_matching = [
   "warning:"
 ]
 max_lines = 60
-on_empty = "golangci-lint: no issues"
 
-[[tests.golangci-lint]]
-name = "clean"
-input = """
-Found 0 issues
-"""
-expected = "golangci-lint: no issues"
 
 [[tests.golangci-lint]]
 name = "issues shown"

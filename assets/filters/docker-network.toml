@@ -1,6 +1,7 @@
 [filters.docker-network]
 description = "Compact docker network output"
 match_command = "^docker\\s+network\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -14,7 +15,6 @@ keep_lines_matching = [
   "none"
 ]
 max_lines = 30
-on_empty = "docker network: none"
 
 [[tests.docker-network]]
 name = "list networks"

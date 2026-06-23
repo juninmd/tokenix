@@ -1,6 +1,7 @@
 [filters.tofu-validate]
 description = "Compact OpenTofu validate output"
 match_command = "^tofu\\s+validate\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,7 +16,6 @@ keep_lines_matching = [
   "│ Warning"
 ]
 max_lines = 30
-on_empty = "tofu validate: valid"
 
 [[tests.tofu-validate]]
 name = "valid config"

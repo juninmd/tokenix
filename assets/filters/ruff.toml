@@ -1,6 +1,7 @@
 [filters.ruff]
 description = "Compact ruff lint/check output"
 match_command = "^ruff\\s+(check|lint|format)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -11,14 +12,7 @@ strip_lines_matching = [
   "^\\s*Found \\d+ issues?\\b"
 ]
 max_lines = 100
-on_empty = "ruff: no issues"
 
-[[tests.ruff]]
-name = "clean check"
-input = """
-All checks passed!
-"""
-expected = "ruff: no issues"
 
 [[tests.ruff]]
 name = "issues shown"

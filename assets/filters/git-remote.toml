@@ -1,6 +1,7 @@
 [filters.git-remote]
 description = "Compact git remote output"
 match_command = "^git\\s+remote\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,7 +12,6 @@ keep_lines_matching = [
   "^\\w+"
 ]
 max_lines = 20
-on_empty = "git remote: no remotes"
 
 [[tests.git-remote]]
 name = "list remotes"

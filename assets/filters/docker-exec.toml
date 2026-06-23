@@ -1,6 +1,7 @@
 [filters.docker-exec]
 description = "Compact docker exec output"
 match_command = "^docker\\s+exec\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -15,14 +16,7 @@ keep_lines_matching = [
   "container not found"
 ]
 max_lines = 30
-on_empty = "docker exec: done"
 
-[[tests.docker-exec]]
-name = "clean exec"
-input = """
-root@container:/app# 
-"""
-expected = "docker exec: done"
 
 [[tests.docker-exec]]
 name = "error shown"

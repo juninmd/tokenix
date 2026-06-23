@@ -1,6 +1,7 @@
 [filters.staticcheck]
 description = "Compact staticcheck output"
 match_command = "^staticcheck\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,13 +12,7 @@ keep_lines_matching = [
   "warning:"
 ]
 max_lines = 50
-on_empty = "staticcheck: no issues"
 
-[[tests.staticcheck]]
-name = "clean"
-input = """
-"""
-expected = "staticcheck: no issues"
 
 [[tests.staticcheck]]
 name = "issues shown"

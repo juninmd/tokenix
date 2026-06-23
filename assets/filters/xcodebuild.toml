@@ -1,6 +1,7 @@
 [filters.xcodebuild]
 description = "Compact xcodebuild output"
 match_command = "^xcodebuild\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -18,15 +19,7 @@ keep_lines_matching = [
   "Build failed"
 ]
 max_lines = 60
-on_empty = "xcodebuild: success"
 
-[[tests.xcodebuild]]
-name = "clean build"
-input = """
-=== BUILD TARGET MyApp OF PROJECT MyApp WITH CONFIGURATION Debug ===
-Build succeeded.
-"""
-expected = "xcodebuild: success"
 
 [[tests.xcodebuild]]
 name = "failure shown"

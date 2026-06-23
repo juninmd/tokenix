@@ -1,6 +1,7 @@
 [filters.terraform-plan-destroy]
 description = "Compact terraform plan -destroy output"
 match_command = "^terraform\\s+plan\\s+.*-destroy\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -16,7 +17,6 @@ keep_lines_matching = [
   "-/"
 ]
 max_lines = 60
-on_empty = "terraform plan -destroy: nothing to destroy"
 
 [[tests.terraform-plan-destroy]]
 name = "destroy plan"

@@ -1,6 +1,7 @@
 [filters.cargo-clippy]
 description = "Compact cargo clippy output"
 match_command = "^cargo\\s+clippy\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -14,7 +15,6 @@ keep_lines_matching = [
   "note:"
 ]
 max_lines = 80
-on_empty = "cargo clippy: no warnings"
 
 [[tests.cargo-clippy]]
 name = "clean"

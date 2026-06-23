@@ -1,6 +1,7 @@
 [filters.docker-system]
 description = "Compact docker system output"
 match_command = "^docker\\s+system\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -15,7 +16,6 @@ keep_lines_matching = [
   "Error"
 ]
 max_lines = 30
-on_empty = "docker system: ok"
 
 [[tests.docker-system]]
 name = "disk usage table preserved"

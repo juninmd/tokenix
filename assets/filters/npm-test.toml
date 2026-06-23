@@ -1,6 +1,7 @@
 [filters.npm-test]
 description = "Compact npm test output"
 match_command = "^npm\\s+test\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -18,7 +19,6 @@ keep_lines_matching = [
   "AssertionError"
 ]
 max_lines = 60
-on_empty = "npm test: passed"
 
 [[tests.npm-test]]
 name = "tests pass"

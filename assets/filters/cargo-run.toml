@@ -1,6 +1,7 @@
 [filters.cargo-run]
 description = "Strip cargo compile noise from cargo run, keep program output"
 match_command = "^cargo\\s+run\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,7 +16,6 @@ strip_lines_matching = [
   "^\\s*Blocking",
 ]
 max_lines = 80
-on_empty = "cargo run: finished (no output)"
 
 [[tests.cargo-run]]
 name = "program output kept, build noise stripped"

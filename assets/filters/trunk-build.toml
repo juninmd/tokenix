@@ -1,6 +1,7 @@
 [filters.trunk-build]
 description = "Compact trunk build output"
 match_command = "^trunk\\s+build"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -12,7 +13,6 @@ strip_lines_matching = [
 ]
 tail_lines = 10
 max_lines = 30
-on_empty = "trunk build: ok"
 
 [[tests.trunk-build]]
 name = "strips compile noise, keeps tail summary"
@@ -28,12 +28,3 @@ input = """
 """
 expected = "   Finished release [optimized] target(s) in 45.23s\n   Binary: target/release/my-crate (5.2MB)"
 
-[[tests.trunk-build]]
-name = "on_empty when all noise stripped"
-input = """
-   Compiling my-crate v0.1.0
-   Fresh serde v1.0
-   Checking tokio v1.35.0
-
-"""
-expected = "trunk build: ok"

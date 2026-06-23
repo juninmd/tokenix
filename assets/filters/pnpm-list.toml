@@ -1,6 +1,7 @@
 [filters.pnpm-list]
 description = "Compact pnpm list output"
 match_command = "^pnpm\\s+(list|ls|ll|la)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -19,19 +20,7 @@ keep_lines_matching = [
   "UNMET",
 ]
 max_lines = 50
-on_empty = "pnpm list: ok"
 
-[[tests.pnpm-list]]
-name = "list dependencies"
-input = """
-my-project@1.0.0 /home/user/my-project
-├─┬ @babel/core@7.23.0
-│ └── @babel/helper-compilation-targets@7.22.15
-├─┬ eslint@8.50.0
-│ └── @eslint-community/eslint-utils@4.4.0
-└── typescript@5.2.2
-"""
-expected = "pnpm list: ok"
 
 [[tests.pnpm-list]]
 name = "unmet dependency"

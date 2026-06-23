@@ -1,6 +1,7 @@
 [filters.helm-uninstall]
 description = "Compact helm uninstall output"
 match_command = "^helm\\s+uninstall\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,14 +14,7 @@ keep_lines_matching = [
   "failed"
 ]
 max_lines = 20
-on_empty = "helm uninstall: done"
 
-[[tests.helm-uninstall]]
-name = "clean uninstall"
-input = """
-release "myapp" uninstalled
-"""
-expected = "helm uninstall: done"
 
 [[tests.helm-uninstall]]
 name = "error shown"

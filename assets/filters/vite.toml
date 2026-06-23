@@ -1,6 +1,7 @@
 [filters.vite]
 description = "Compact vite build output — drop transform/asset noise, keep errors"
 match_command = "^vite\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -12,7 +13,6 @@ strip_lines_matching = [
   "built in [\\d.]+m?s",
 ]
 max_lines = 40
-on_empty = "vite: build succeeded"
 
 [[tests.vite]]
 name = "clean build"

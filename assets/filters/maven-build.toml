@@ -1,6 +1,7 @@
 [filters.maven-build]
 description = "Compact Maven build output"
 match_command = "^mvn\\s+(clean\\s+)?verify\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,31 +23,7 @@ keep_lines_matching = [
   "There are test failures"
 ]
 max_lines = 60
-on_empty = "maven build: success"
 
-[[tests.maven-build]]
-name = "clean build"
-command = "mvn verify"
-input = """
-[INFO] Scanning for projects...
-[INFO] 
-[INFO] --- maven-resources-plugin:3.2.0:resources (default-resources) @ my-project ---
-[INFO] Copying 2 resources
-[INFO] 
-[INFO] --- maven-compiler-plugin:3.8.1:compile (default-compile) @ my-project ---
-[INFO] Changes detected - recompiling the module!
-[INFO] Compiling 15 source files to /project/target/classes
-[INFO] 
-[INFO] --- maven-jar-plugin:3.2.0:jar (default-jar) @ my-project ---
-[INFO] Building jar: /project/target/my-project-1.0.jar
-[INFO] ------------------------------------------------------------------------
-[INFO] BUILD SUCCESS
-[INFO] ------------------------------------------------------------------------
-[INFO] Total time:  4.521 s
-[INFO] Finished at: 2024-01-15T10:30:00Z
-[INFO] ------------------------------------------------------------------------
-"""
-expected = "maven build: success"
 
 [[tests.maven-build]]
 name = "build failure shown"

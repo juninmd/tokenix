@@ -1,6 +1,7 @@
 [filters.cargo-nextest]
 description = "Compact cargo nextest output"
 match_command = "^cargo\\s+nextest\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -25,7 +26,6 @@ keep_lines_matching = [
   "Leaked tests:",
 ]
 max_lines = 60
-on_empty = "cargo nextest: all tests passed"
 
 [[tests.cargo-nextest]]
 name = "all tests pass"

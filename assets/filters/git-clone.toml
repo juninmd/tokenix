@@ -1,6 +1,7 @@
 [filters.git-clone]
 description = "Compact git clone output"
 match_command = "^git\\s+clone\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -18,19 +19,7 @@ keep_lines_matching = [
   "Repository not found"
 ]
 max_lines = 20
-on_empty = "git clone: done"
 
-[[tests.git-clone]]
-name = "clean clone"
-input = """
-Cloning into 'my-repo'...
-remote: Enumerating objects: 100, done.
-remote: Counting objects: 100% (100/100), done.
-remote: Compressing objects: 100% (50/50), done.
-Receiving objects: 100% (100/100), 1.23 MiB | 2.34 MiB/s, done.
-Resolving deltas: 100% (50/50), done.
-"""
-expected = "git clone: done"
 
 [[tests.git-clone]]
 name = "error shown"

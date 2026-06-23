@@ -1,6 +1,7 @@
 [filters.terraform-output]
 description = "Compact terraform output output"
 match_command = "^terraform\\s+output\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,7 +12,6 @@ keep_lines_matching = [
   "Error:"
 ]
 max_lines = 30
-on_empty = "terraform output: no outputs"
 
 [[tests.terraform-output]]
 name = "outputs shown"
@@ -22,15 +22,3 @@ vpc_id = "vpc-12345678"
 """
 expected = "instance_ip = \"54.123.45.67\"\ninstance_id = \"i-1234567890abcdef0\"\nvpc_id = \"vpc-12345678\""
 
-[[tests.terraform-output]]
-name = "json output"
-input = """
-{
-  "instance_ip": {
-    "sensitive": false,
-    "type": "string",
-    "value": "54.123.45.67"
-  }
-}
-"""
-expected = "terraform output: no outputs"

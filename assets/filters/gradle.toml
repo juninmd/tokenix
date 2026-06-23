@@ -1,6 +1,7 @@
 [filters.gradle]
 description = "Compact Gradle build output — strip progress, keep tasks and errors"
 match_command = "^gradle\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -17,7 +18,6 @@ strip_lines_matching = [
 ]
 truncate_lines_at = 150
 max_lines = 50
-on_empty = "gradle: ok"
 
 [[tests.gradle]]
 name = "strips UP-TO-DATE tasks, keeps build result"
@@ -29,7 +29,3 @@ name = "clean build preserved"
 input = "BUILD SUCCESSFUL in 8s\n7 actionable tasks: 7 executed"
 expected = "BUILD SUCCESSFUL in 8s\n7 actionable tasks: 7 executed"
 
-[[tests.gradle]]
-name = "empty after stripping"
-input = "> Configuring project :app\n"
-expected = "gradle: ok"

@@ -1,6 +1,7 @@
 [filters.go-vet]
 description = "Compact go vet output"
 match_command = "^go\\s+vet\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,13 +12,7 @@ keep_lines_matching = [
   "warning:"
 ]
 max_lines = 50
-on_empty = "go vet: no issues"
 
-[[tests.go-vet]]
-name = "clean"
-input = """
-"""
-expected = "go vet: no issues"
 
 [[tests.go-vet]]
 name = "issues shown"

@@ -1,6 +1,7 @@
 [filters.terraform-import]
 description = "Compact terraform import output"
 match_command = "^terraform\\s+import\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -16,16 +17,7 @@ keep_lines_matching = [
   "│ Warning"
 ]
 max_lines = 30
-on_empty = "terraform import: done"
 
-[[tests.terraform-import]]
-name = "clean import"
-input = """
-aws_instance.web: Importing from ID "i-1234567890abcdef0"...
-aws_instance.web: Import complete!
-Import successful!
-"""
-expected = "terraform import: done"
 
 [[tests.terraform-import]]
 name = "error shown"

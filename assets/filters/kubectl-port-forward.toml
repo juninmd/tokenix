@@ -1,6 +1,7 @@
 [filters.kubectl-port-forward]
 description = "Compact kubectl port-forward output"
 match_command = "^kubectl\\s+port-forward\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,7 +16,6 @@ keep_lines_matching = [
   "connection refused"
 ]
 max_lines = 20
-on_empty = "kubectl port-forward: running"
 
 [[tests.kubectl-port-forward]]
 name = "clean port-forward"

@@ -1,6 +1,7 @@
 [filters.docker-prune]
 description = "Compact docker prune output"
 match_command = "^docker\\s+(system|container|image|volume|network)\\s+prune\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -16,7 +17,6 @@ keep_lines_matching = [
   "Error:"
 ]
 max_lines = 30
-on_empty = "docker prune: done"
 
 [[tests.docker-prune]]
 name = "prune output"

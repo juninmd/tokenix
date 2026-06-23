@@ -1,6 +1,7 @@
 [filters.bundle-install]
 description = "Compact bundle install output"
 match_command = "^bundle\\s+install\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -19,21 +20,7 @@ keep_lines_matching = [
   "Bundler::GemNotFound"
 ]
 max_lines = 40
-on_empty = "bundle install: ok"
 
-[[tests.bundle-install]]
-name = "clean install"
-input = """
-Fetching gem metadata from https://rubygems.org/..........
-Fetching gem metadata from https://rubygems.org/.
-Resolving dependencies...
-Using rake 13.0.6
-Using concurrent-ruby 1.1.10
-Using minitest 5.16.3
-Bundle complete! 15 Gemfile dependencies, 45 gems now installed.
-Use `bundle info [gemname]` to see where a bundled gem is installed.
-"""
-expected = "bundle install: ok"
 
 [[tests.bundle-install]]
 name = "missing gem error preserved"

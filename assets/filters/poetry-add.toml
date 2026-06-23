@@ -1,6 +1,7 @@
 [filters.poetry-add]
 description = "Compact poetry add output"
 match_command = "^poetry\\s+add\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -21,24 +22,8 @@ keep_lines_matching = [
   "version solving failed"
 ]
 max_lines = 40
-on_empty = "poetry add: ok"
 
-[[tests.poetry-add]]
-name = "clean add"
-input = """
-Using version ^2.31.0 for requests
 
-Resolving dependencies... (1.2s)
-
-Package operations: 3 installs, 0 updates, 0 removals
-
-  • Installing certifi (2024.1.1)
-  • Installing idna (3.6)
-  • Installing requests (2.31.0)
-
-Generating lock file
-"""
-expected = "poetry add: ok"
 [[tests.poetry-add]]
 name = "version solving failure preserved"
 input = """

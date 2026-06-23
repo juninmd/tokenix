@@ -1,6 +1,7 @@
 [filters.select-string]
 description = "Compact PowerShell Select-String output"
 match_command = "^Select-String\\b|\\|\\s*Select-String\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -14,7 +15,6 @@ keep_lines_matching = [
   "Exception",
 ]
 max_lines = 80
-on_empty = "Select-String: no matches"
 
 [[tests.select-string]]
 name = "powershell binding error"
@@ -26,10 +26,4 @@ No linha:1 caractere:1
 expected = """
 Select-String : O objeto de entrada não pode ser associado a quaisquer parâmetros do comando
 No linha:1 caractere:1"""
-
-[[tests.select-string]]
-name = "no matches"
-command = "Get-Content log.txt | Select-String -Pattern ERROR"
-input = ""
-expected = "Select-String: no matches"
 

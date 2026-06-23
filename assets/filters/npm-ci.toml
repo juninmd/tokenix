@@ -1,6 +1,7 @@
 [filters.npm-ci]
 description = "Compact `npm ci` output — strip progress/audit noise, keep errors and the install summary."
 match_command = "^npm\\s+ci\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -25,7 +26,6 @@ keep_lines_matching = [
   "added \\d+ package",
 ]
 max_lines = 40
-on_empty = "npm ci: ok"
 
 [[tests.npm-ci]]
 name = "clean install collapses to summary"
@@ -46,11 +46,3 @@ npm ERR! `npm ci` can only install with an existing package-lock.json
 expected = """npm ERR! code EUSAGE
 npm ERR! `npm ci` can only install with an existing package-lock.json"""
 
-[[tests.npm-ci]]
-name = "fully clean (no summary) falls back to on_empty"
-input = """
-npm WARN deprecated foo@1.0.0: deprecated
-audited 12 packages in 1s
-found 0 vulnerabilities
-"""
-expected = "npm ci: ok"

@@ -1,6 +1,7 @@
 [filters.tree]
 description = "Compact tree path listings"
 match_command = "^tree\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -11,7 +12,6 @@ strip_lines_matching = [
 ]
 truncate_lines_at = 160
 head_lines = 60
-on_empty = "tree: no paths"
 
 [[tests.tree]]
 name = "keeps bounded path map"

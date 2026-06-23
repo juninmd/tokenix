@@ -1,6 +1,7 @@
 [filters.vitest-run]
 description = "Compact vitest run output"
 match_command = "^((pnpm\\s+exec|pnpm\\s+dlx|yarn\\s+dlx|deno\\s+task|npx|bunx|pnpm|yarn)\\s+)?vitest\\s+run\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -19,19 +20,7 @@ keep_lines_matching = [
   "SyntaxError:"
 ]
 max_lines = 80
-on_empty = "vitest run: all tests passed"
 
-[[tests.vitest-run]]
-name = "all pass"
-input = """
- PASS  src/utils.test.ts (2 tests)
- PASS  src/components.test.tsx (3 tests)
-
- Test Files  2 passed (2)
- Tests  5 passed (5)
- Time  1.23s
-"""
-expected = "vitest run: all tests passed"
 
 [[tests.vitest-run]]
 name = "failure shown"

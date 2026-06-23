@@ -1,6 +1,7 @@
 [filters.pipx-install]
 description = "Compact pipx install output"
 match_command = "^pipx\\s+install\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -21,17 +22,7 @@ keep_lines_matching = [
   "not found"
 ]
 max_lines = 20
-on_empty = "pipx install: ok"
 
-[[tests.pipx-install]]
-name = "clean install"
-input = """
-  installing package 'black'...
-  installed package 'black' 24.1.1, Python 3.12.0
-  The following global commands are now available: black
-done! ✨
-"""
-expected = "pipx install: ok"
 
 [[tests.pipx-install]]
 name = "pip resolution failure preserved"

@@ -1,6 +1,7 @@
 [filters.git-grep]
 description = "Compact git grep output"
 match_command = "^git\\s+grep\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,7 +12,6 @@ keep_lines_matching = [
   "fatal:"
 ]
 max_lines = 50
-on_empty = "git grep: no matches"
 
 [[tests.git-grep]]
 name = "matches found"
@@ -23,8 +23,3 @@ expected = """
 src/main.rs:    let foo = "bar";
 src/utils.rs:   println!("{}", foo);"""
 
-[[tests.git-grep]]
-name = "no matches"
-input = """
-"""
-expected = "git grep: no matches"

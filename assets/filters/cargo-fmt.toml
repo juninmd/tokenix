@@ -1,6 +1,7 @@
 [filters.cargo-fmt]
 description = "Compact cargo fmt output"
 match_command = "^cargo\\s+fmt\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -12,15 +13,7 @@ keep_lines_matching = [
   "Diff at"
 ]
 max_lines = 30
-on_empty = "cargo fmt: formatted"
 
-[[tests.cargo-fmt]]
-name = "clean"
-input = """
-Checking fmt (0.12.0)
-Formatted 5 files
-"""
-expected = "cargo fmt: formatted"
 
 [[tests.cargo-fmt]]
 name = "check mode with diff"

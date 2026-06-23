@@ -1,12 +1,12 @@
 [filters.fzf]
 description = "Compact fzf output"
 match_command = "^fzf\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
 ]
 max_lines = 30
-on_empty = "fzf: no selection"
 
 [[tests.fzf]]
 name = "selection made"

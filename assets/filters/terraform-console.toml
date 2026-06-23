@@ -1,13 +1,13 @@
 [filters.terraform-console]
 description = "Compact terraform console output — drop echoed prompts, keep evaluated values"
 match_command = "^terraform\\s+console\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*>"
 ]
 max_lines = 30
-on_empty = "terraform console: ready"
 
 [[tests.terraform-console]]
 name = "evaluated values preserved (including quoted strings)"

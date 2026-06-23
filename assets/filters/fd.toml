@@ -1,12 +1,12 @@
 [filters.fd]
 description = "Compact fd (find) output"
 match_command = "^fd\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
 ]
 max_lines = 50
-on_empty = "fd: no files found"
 
 [[tests.fd]]
 name = "files found"

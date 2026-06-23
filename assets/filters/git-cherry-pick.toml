@@ -1,6 +1,7 @@
 [filters.git-cherry-pick]
 description = "Compact `git cherry-pick` output — keep conflict/error/hint lines, summarize a clean pick."
 match_command = "^git\\s+cherry-pick\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,16 +16,7 @@ keep_lines_matching = [
   "after resolving the conflicts",
 ]
 max_lines = 30
-on_empty = "git cherry-pick: ok"
 
-[[tests.git-cherry-pick]]
-name = "clean pick collapses to ok"
-input = """
-[main 1a2b3c4] Fix typo in README
- Date: Mon Jun 22 10:00:00 2026 +0000
- 1 file changed, 1 insertion(+), 1 deletion(-)
-"""
-expected = "git cherry-pick: ok"
 
 [[tests.git-cherry-pick]]
 name = "conflict preserved"

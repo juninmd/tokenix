@@ -1,6 +1,7 @@
 [filters.git-diffstat]
 description = "Compact git diff --stat output"
 match_command = "^git\\s+diff\\s+.*--stat\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -12,7 +13,6 @@ keep_lines_matching = [
   "deletion"
 ]
 max_lines = 30
-on_empty = "git diff --stat: no changes"
 
 [[tests.git-diffstat]]
 name = "diffstat output"
@@ -24,8 +24,3 @@ input = """
 """
 expected = " 3 files changed, 15 insertions(+), 3 deletions(-)"
 
-[[tests.git-diffstat]]
-name = "no changes is honest"
-input = """
-"""
-expected = "git diff --stat: no changes"

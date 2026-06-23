@@ -1,6 +1,7 @@
 [filters.mysql]
 description = "Compact mysql output"
 match_command = "^mysql\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -18,20 +19,7 @@ keep_lines_matching = [
   "Access denied"
 ]
 max_lines = 50
-on_empty = "mysql: ok"
 
-[[tests.mysql]]
-name = "clean connection"
-input = """
-Welcome to the MySQL monitor.  Commands end with ; or \\g.
-Your MySQL connection id is 123
-Server version: 8.0.36 MySQL Community Server - GPL
-
-Type 'help;' or '\\h' for help. Type '\\c' to clear the current input statement.
-
-mysql> 
-"""
-expected = "mysql: ok"
 
 [[tests.mysql]]
 name = "error shown"

@@ -1,6 +1,7 @@
 [filters.wget]
 description = "Compact wget output"
 match_command = "^wget\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -23,23 +24,7 @@ keep_lines_matching = [
   "403 Forbidden"
 ]
 max_lines = 20
-on_empty = "wget: ok"
 
-[[tests.wget]]
-name = "clean download"
-input = """
---2024-01-15 10:30:00--  https://example.com/file.zip
-Resolving example.com (example.com)... 93.184.216.34
-Connecting to example.com (example.com)|93.184.216.34|:443... connected.
-HTTP request sent, awaiting response... 200 OK
-Length: 123456 (120K) [application/zip]
-Saving to: 'file.zip'
-
-file.zip          100%[===================>] 120.56K  --.-KB/s    in 0.1s
-
-2024-01-15 10:30:01 (1.2 MB/s) - 'file.zip' saved [123456/123456]
-"""
-expected = "wget: ok"
 
 [[tests.wget]]
 name = "error shown"

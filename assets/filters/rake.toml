@@ -1,6 +1,7 @@
 [filters.rake]
 description = "Compact Rake task output"
 match_command = "^(bundle\\s+exec\\s+)?rake\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -21,7 +22,6 @@ keep_lines_matching = [
   "Done"
 ]
 max_lines = 40
-on_empty = "rake: done"
 
 [[tests.rake]]
 name = "task runs"

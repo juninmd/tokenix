@@ -1,6 +1,7 @@
 [filters.cargo-deny]
 description = "Compact cargo-deny output: keep advisories/bans/license failures"
 match_command = "^cargo\\s+deny\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -18,18 +19,8 @@ keep_lines_matching = [
   "unmaintained"
 ]
 max_lines = 80
-on_empty = "cargo deny: ok"
 token_budget = 2500
 
-[[tests.cargo-deny]]
-name = "all checks pass"
-input = """
-2026-06-16 advisories ok
-2026-06-16 bans ok
-2026-06-16 licenses ok
-2026-06-16 sources ok
-"""
-expected = "cargo deny: ok"
 
 [[tests.cargo-deny]]
 name = "advisory failure preserved"

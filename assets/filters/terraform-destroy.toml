@@ -1,6 +1,7 @@
 [filters.terraform-destroy]
 description = "Compact terraform destroy output"
 match_command = "^terraform\\s+destroy\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -17,17 +18,7 @@ keep_lines_matching = [
   "still destroying"
 ]
 max_lines = 50
-on_empty = "terraform destroy: complete"
 
-[[tests.terraform-destroy]]
-name = "clean destroy"
-input = """
-aws_instance.web: Destroying... [id=i-1234567890abcdef0]
-aws_instance.web: Destruction complete after 5s
-
-Destroy complete! Resources: 1 destroyed.
-"""
-expected = "terraform destroy: complete"
 
 [[tests.terraform-destroy]]
 name = "error shown"

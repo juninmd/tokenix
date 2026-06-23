@@ -1,13 +1,9 @@
 [filters.mix-format]
 description = "Compact mix format output"
 match_command = "^mix\\s+format(\\s|$)"
-on_empty = "mix format: ok"
+passthrough_when_emptied = true
 max_lines = 20
 
-[[tests.mix-format]]
-name = "empty output returns ok"
-input = ""
-expected = "mix format: ok"
 
 [[tests.mix-format]]
 name = "changed files pass through"

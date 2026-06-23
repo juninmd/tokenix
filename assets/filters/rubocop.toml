@@ -1,6 +1,7 @@
 [filters.rubocop]
 description = "Compact RuboCop output — offenses by file"
 match_command = "^rubocop\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -19,7 +20,6 @@ keep_lines_matching = [
   "style"
 ]
 max_lines = 50
-on_empty = "rubocop: no offenses"
 
 [[tests.rubocop]]
 name = "offenses detected"

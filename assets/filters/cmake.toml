@@ -1,6 +1,7 @@
 [filters.cmake]
 description = "Compact cmake output"
 match_command = "^cmake\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -16,7 +17,6 @@ keep_lines_matching = [
   "FAILED"
 ]
 max_lines = 50
-on_empty = "cmake: configured"
 
 [[tests.cmake]]
 name = "clean configure"

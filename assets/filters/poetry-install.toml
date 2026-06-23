@@ -1,6 +1,7 @@
 [filters.poetry-install]
 description = "Compact poetry install output"
 match_command = "^poetry\\s+install\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -14,21 +15,7 @@ strip_lines_matching = [
   "^\\s*Lock file up to date"
 ]
 max_lines = 50
-on_empty = "poetry install: ok"
 
-[[tests.poetry-install]]
-name = "poetry install clean"
-input = """
-Installing dependencies from lock file
-
-Package operations: 45 installs, 0 updates, 0 removals
-
-  • Installing requests (2.31.0)
-  • Installing urllib3 (2.0.7)
-
-Installing the current project: my-project (0.1.0)
-"""
-expected = "poetry install: ok"
 
 [[tests.poetry-install]]
 name = "stale lock file error preserved"

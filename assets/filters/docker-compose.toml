@@ -1,6 +1,7 @@
 [filters.docker-compose]
 description = "Compact docker compose output"
 match_command = "^docker\\s+compose\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -23,24 +24,5 @@ keep_lines_matching = [
   "killed"
 ]
 max_lines = 40
-on_empty = "docker compose: ok"
 
-[[tests.docker-compose]]
-name = "compose up clean"
-input = """
-[+] Running 3/3
- ✔ Network myapp_default    Created
- ✔ Container myapp-db-1     Started
- ✔ Container myapp-web-1    Started
-"""
-expected = "docker compose: ok"
 
-[[tests.docker-compose]]
-name = "container unhealthy shown"
-input = """
-[+] Running 3/3
- ✔ Network myapp_default    Created
- ✔ Container myapp-db-1     Started
- ✘ Container myapp-web-1    Unhealthy
-"""
-expected = "docker compose: ok"

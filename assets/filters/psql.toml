@@ -1,6 +1,7 @@
 [filters.psql]
 description = "Compact psql output"
 match_command = "^psql\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -18,17 +19,7 @@ keep_lines_matching = [
   "NOTICE:"
 ]
 max_lines = 50
-on_empty = "psql: ok"
 
-[[tests.psql]]
-name = "clean connection"
-input = """
-psql (16.2, server 15.5)
-Type "help" for help.
-
-postgres=# 
-"""
-expected = "psql: ok"
 
 [[tests.psql]]
 name = "error shown"

@@ -1,6 +1,7 @@
 [filters.mypy]
 description = "Compact mypy type checker output"
 match_command = "^mypy\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -16,14 +17,7 @@ keep_lines_matching = [
   "note:",
 ]
 max_lines = 60
-on_empty = "mypy: no issues"
 
-[[tests.mypy]]
-name = "clean"
-input = """
-Success: no issues found in 15 source files
-"""
-expected = "mypy: no issues"
 
 [[tests.mypy]]
 name = "errors shown"

@@ -1,6 +1,7 @@
 [filters.revive]
 description = "Compact revive output"
 match_command = "^revive\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,13 +12,7 @@ keep_lines_matching = [
   "warning:"
 ]
 max_lines = 50
-on_empty = "revive: no issues"
 
-[[tests.revive]]
-name = "clean"
-input = """
-"""
-expected = "revive: no issues"
 
 [[tests.revive]]
 name = "issues shown"

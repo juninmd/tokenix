@@ -1,6 +1,7 @@
 [filters.playwright]
 description = "Compact Playwright test output — keep results and failures"
 match_command = "^(npx\\s+)?playwright\\s+test\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -23,7 +24,6 @@ keep_lines_matching = [
   "AssertionError"
 ]
 max_lines = 50
-on_empty = "playwright test: all passed"
 
 [[tests.playwright]]
 name = "all tests pass"

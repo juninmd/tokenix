@@ -1,6 +1,7 @@
 [filters.go-lint]
 description = "Compact go lint output (golint)"
 match_command = "^golint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,13 +12,7 @@ keep_lines_matching = [
   "warning:"
 ]
 max_lines = 50
-on_empty = "golint: no issues"
 
-[[tests.go-lint]]
-name = "clean"
-input = """
-"""
-expected = "golint: no issues"
 
 [[tests.go-lint]]
 name = "issues shown"

@@ -1,6 +1,7 @@
 [filters.helm-list]
 description = "Compact helm list output"
 match_command = "^helm\\s+list\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -14,7 +15,6 @@ keep_lines_matching = [
   "superseded"
 ]
 max_lines = 30
-on_empty = "helm list: no releases"
 
 [[tests.helm-list]]
 name = "list releases"

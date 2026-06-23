@@ -1,6 +1,7 @@
 [filters.cargo-test]
 description = "Compact cargo test output aggressively"
 match_command = "^cargo\\s+test\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -25,7 +26,6 @@ keep_lines_matching = [
   "left / right",
 ]
 max_lines = 60
-on_empty = "cargo test: all tests passed"
 replace_patterns = [
   ["target/debug/deps/[a-z0-9_-]+-[a-f0-9]+", "target/debug/deps/<test_binary>"],
   ["\\d+\\.\\d+s", "<duration>"],
@@ -38,23 +38,6 @@ extract_sections = [
 deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
 token_budget = 3000
 
-[[tests.cargo-test]]
-name = "all tests pass"
-input = """
-   Compiling my-crate v0.1.0
-    Finished test [unoptimized + debuginfo] target(s) in 2.3s
-     Running unittests src/lib.rs (target/debug/deps/my_crate-abc123)
-
-running 5 tests
-test test_add ... ok
-test test_sub ... ok
-test test_mul ... ok
-test test_div ... ok
-test test_mod ... ok
-
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
-"""
-expected = "cargo test: all tests passed"
 
 [[tests.cargo-test]]
 name = "test failure shown"
@@ -76,24 +59,3 @@ expected = """
 test test_fail ... FAILED
 test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"""
 
-[[tests.cargo-test]]
-name = "multiple test binaries deduplicated"
-input = """
-   Compiling my-crate v0.1.0
-    Finished test [unoptimized + debuginfo] target(s) in 2.3s
-     Running unittests src/lib.rs (target/debug/deps/my_crate-abc123)
-
-running 5 tests
-test test_add ... ok
-test test_sub ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
-     Running unittests src/integration.rs (target/debug/deps/integration-def456)
-
-running 3 tests
-test test_integration_add ... ok
-test test_integration_sub ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
-"""
-expected = "cargo test: all tests passed"

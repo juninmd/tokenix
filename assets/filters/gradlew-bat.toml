@@ -1,6 +1,7 @@
 [filters.gradlew-bat]
 description = "Compact gradlew.bat output (Windows)"
 match_command = "^gradlew\\.bat\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,27 +23,7 @@ keep_lines_matching = [
   "Caused by:",
 ]
 max_lines = 60
-on_empty = "gradlew.bat: success"
 
-[[tests.gradlew-bat]]
-name = "clean build"
-input = """
-> Task :compileJava
-> Task :processResources
-> Task :classes
-> Task :jar
-> Task :assemble
-> Task :compileTestJava
-> Task :processTestResources
-> Task :testClasses
-> Task :test
-> Task :check
-> Task :build
-
-BUILD SUCCESSFUL in 12s
-12 actionable tasks: 12 executed
-"""
-expected = "gradlew.bat: success"
 
 [[tests.gradlew-bat]]
 name = "build failure shown"

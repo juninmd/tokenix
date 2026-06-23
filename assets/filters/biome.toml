@@ -1,6 +1,7 @@
 [filters.biome]
 description = "Compact biome check/format output"
 match_command = "^biome\\s+(check|lint|format)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -11,14 +12,7 @@ strip_lines_matching = [
   "^\\s*Checked \\d+ files?"
 ]
 max_lines = 100
-on_empty = "biome: no issues"
 
-[[tests.biome]]
-name = "clean check"
-input = """
-Checked 50 files in 200ms. No issues found.
-"""
-expected = "biome: no issues"
 
 [[tests.biome]]
 name = "issues shown"

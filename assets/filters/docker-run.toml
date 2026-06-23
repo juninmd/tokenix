@@ -1,6 +1,7 @@
 [filters.docker-run]
 description = "Compact docker run output"
 match_command = "^docker\\s+run\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -19,7 +20,6 @@ keep_lines_matching = [
   "executable file not found"
 ]
 max_lines = 30
-on_empty = "docker run: started"
 
 [[tests.docker-run]]
 name = "clean run"

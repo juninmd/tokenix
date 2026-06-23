@@ -1,6 +1,7 @@
 [filters.cargo-update]
 description = "Compact `cargo update` output — keep the Updating/Adding/Removing lines and errors, drop index chatter."
 match_command = "^cargo\\s+update\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -16,7 +17,6 @@ keep_lines_matching = [
   "warning:",
 ]
 max_lines = 50
-on_empty = "cargo update: no changes"
 
 [[tests.cargo-update]]
 name = "dependency bumps kept, index chatter dropped"
@@ -30,12 +30,6 @@ expected = """    Updating serde v1.0.200 -> v1.0.210
     Updating tokio v1.36.0 -> v1.38.0
      Adding once_cell v1.19.0"""
 
-[[tests.cargo-update]]
-name = "nothing to update falls back to on_empty"
-input = """
-    Updating crates.io index
-"""
-expected = "cargo update: no changes"
 
 [[tests.cargo-update]]
 name = "resolution error preserved"

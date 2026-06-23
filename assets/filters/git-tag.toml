@@ -1,6 +1,7 @@
 [filters.git-tag]
 description = "Compact git tag output"
 match_command = "^git\\s+tag\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -9,7 +10,6 @@ keep_lines_matching = [
   "^v?\\d+\\.\\d+\\.\\d+"
 ]
 max_lines = 30
-on_empty = "git tag: no tags"
 
 [[tests.git-tag]]
 name = "list tags"

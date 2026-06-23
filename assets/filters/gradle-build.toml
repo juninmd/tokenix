@@ -1,6 +1,7 @@
 [filters.gradle-build]
 description = "Compact Gradle build output"
 match_command = "^(./gradlew|gradle)\\s+(build|assemble|compileJava)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -19,27 +20,7 @@ keep_lines_matching = [
   "> Task .* FAILED"
 ]
 max_lines = 60
-on_empty = "gradle build: success"
 
-[[tests.gradle-build]]
-name = "clean build"
-input = """
-> Task :compileJava
-> Task :processResources
-> Task :classes
-> Task :jar
-> Task :assemble
-> Task :compileTestJava
-> Task :processTestResources
-> Task :testClasses
-> Task :test
-> Task :check
-> Task :build
-
-BUILD SUCCESSFUL in 12s
-12 actionable tasks: 12 executed
-"""
-expected = "gradle build: success"
 
 [[tests.gradle-build]]
 name = "build failure shown"

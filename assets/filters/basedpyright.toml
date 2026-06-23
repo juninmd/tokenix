@@ -1,6 +1,7 @@
 [filters.basedpyright]
 description = "Compact basedpyright output"
 match_command = "^basedpyright\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -17,14 +18,7 @@ keep_lines_matching = [
   "hint:"
 ]
 max_lines = 60
-on_empty = "basedpyright: no issues"
 
-[[tests.basedpyright]]
-name = "clean"
-input = """
-No errors found.
-"""
-expected = "basedpyright: no issues"
 
 [[tests.basedpyright]]
 name = "errors shown"

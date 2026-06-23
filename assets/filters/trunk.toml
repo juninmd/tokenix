@@ -1,6 +1,7 @@
 [filters.trunk]
 description = "Compact trunk check output"
 match_command = "^trunk\\s+(check|fmt|upgrade|init|cache|download)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,14 +23,7 @@ keep_lines_matching = [
   "hint:",
 ]
 max_lines = 60
-on_empty = "trunk: ok"
 
-[[tests.trunk]]
-name = "clean"
-input = """
-All checks passed!
-"""
-expected = "trunk: ok"
 
 [[tests.trunk]]
 name = "issues shown"

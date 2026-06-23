@@ -1,13 +1,13 @@
 [filters.git-ls-tree]
 description = "Compact git ls-tree path listings"
 match_command = "^git\\s+ls-tree\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
 ]
 truncate_lines_at = 140
 tail_lines = 20
-on_empty = "git ls-tree: no paths"
 
 [[tests.git-ls-tree]]
 name = "long path listing keeps tail"

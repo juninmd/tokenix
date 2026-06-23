@@ -1,6 +1,7 @@
 [filters.mvn-build]
 description = "Compact Maven build output"
 match_command = "^mvn\\s+(compile|package|clean|install)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\[INFO\\] ---",
@@ -14,7 +15,6 @@ strip_lines_matching = [
   "^Progress",
 ]
 max_lines = 50
-on_empty = "mvn: ok"
 
 [[tests.mvn-build]]
 name = "strips INFO noise, preserves errors and summary"

@@ -1,6 +1,7 @@
 [filters.gcc]
 description = "Compact gcc/g++ compiler output — strip notes, keep errors and warnings"
 match_command = "^gcc\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -11,7 +12,6 @@ strip_lines_matching = [
   "^\\d+ errors? generated",
 ]
 max_lines = 50
-on_empty = "gcc: ok"
 
 [[tests.gcc]]
 name = "strips include chain, keeps errors and warnings"
@@ -29,10 +29,6 @@ main.c:15:12: warning: unused variable 'x' [-Wunused-variable]
 """
 expected = "main.c:10:5: error: use of undeclared identifier 'foo'\n    foo();\n    ^\nmain.c:15:12: warning: unused variable 'x' [-Wunused-variable]\n    int x = 42;\n        ^"
 
-[[tests.gcc]]
-name = "clean compilation"
-input = ""
-expected = "gcc: ok"
 
 [[tests.gcc]]
 name = "linker error kept"
@@ -42,7 +38,3 @@ collect2: error: ld returned 1 exit status
 """
 expected = "/usr/bin/ld: /tmp/main.o: undefined reference to 'missing_func'\ncollect2: error: ld returned 1 exit status"
 
-[[tests.gcc]]
-name = "empty input returns on_empty message"
-input = ""
-expected = "gcc: ok"

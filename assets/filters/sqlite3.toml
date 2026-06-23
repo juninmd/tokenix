@@ -1,6 +1,7 @@
 [filters.sqlite3]
 description = "Compact sqlite3 output"
 match_command = "^sqlite3\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,18 +16,7 @@ keep_lines_matching = [
   "syntax error"
 ]
 max_lines = 30
-on_empty = "sqlite3: ok"
 
-[[tests.sqlite3]]
-name = "clean connection"
-input = """
-SQLite version 3.45.0 2024-01-15 10:30:00
-Enter ".help" for usage hints.
-Connected to a transient in-memory database.
-Use ".open FILENAME" to reopen on a persistent database.
-sqlite> 
-"""
-expected = "sqlite3: ok"
 
 [[tests.sqlite3]]
 name = "error shown"

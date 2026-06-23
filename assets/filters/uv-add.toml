@@ -1,6 +1,7 @@
 [filters.uv-add]
 description = "Compact uv add/remove/lock/venv/tool output"
 match_command = "^uv\\s+(add|remove|lock|venv|tool|python)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -18,7 +19,6 @@ strip_lines_matching = [
   "^\\s*[+~-]\\s\\S+==",
 ]
 max_lines = 40
-on_empty = "uv: done"
 
 [[tests.uv-add]]
 name = "clean add"

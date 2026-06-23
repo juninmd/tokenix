@@ -12,7 +12,6 @@ strip_lines_matching = [
 ]
 max_lines = 40
 passthrough_when_emptied = true
-on_empty = "gh: ok"
 
 [[tests.gh-cli]]
 name = "clean pr create keeps url"

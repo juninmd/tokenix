@@ -1,6 +1,7 @@
 [filters.helm-history]
 description = "Compact helm history output"
 match_command = "^helm\\s+history\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,7 +16,6 @@ keep_lines_matching = [
   "Error"
 ]
 max_lines = 30
-on_empty = "helm history: none"
 
 [[tests.helm-history]]
 name = "release history"

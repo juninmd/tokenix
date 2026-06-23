@@ -1,6 +1,7 @@
 [filters.scp]
 description = "Compact scp output"
 match_command = "^scp\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -17,14 +18,7 @@ keep_lines_matching = [
   "lost connection"
 ]
 max_lines = 20
-on_empty = "scp: done"
 
-[[tests.scp]]
-name = "clean copy"
-input = """
-main.rs                                    100%  1234   1.2MB/s   00:00
-"""
-expected = "scp: done"
 
 [[tests.scp]]
 name = "error shown"

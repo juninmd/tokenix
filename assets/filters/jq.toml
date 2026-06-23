@@ -1,6 +1,7 @@
 [filters.jq]
 description = "Compact jq output"
 match_command = "^jq\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,7 +12,6 @@ keep_lines_matching = [
   "Invalid"
 ]
 max_lines = 50
-on_empty = "jq: ok"
 
 [[tests.jq]]
 name = "clean json output"

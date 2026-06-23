@@ -1,6 +1,7 @@
 [filters.terraform-plan]
 description = "Compact terraform plan output aggressively"
 match_command = "^terraform\\s+plan\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -34,7 +35,6 @@ keep_lines_matching = [
   "No changes",
 ]
 max_lines = 50
-on_empty = "terraform plan: no changes"
 replace_patterns = [
   ["\\(ID: [a-f0-9-]+\\)", "(ID: <uuid>)"],
   ["[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", "<resource_id>"],
@@ -56,30 +56,4 @@ No changes. Infrastructure is up-to-date.
 """
 expected = "No changes. Infrastructure is up-to-date."
 
-[[tests.terraform-plan]]
-name = "plan with changes shown"
-input = """
-Terraform used the selected providers to generate the following execution plan.
-Resource actions are indicated with the following symbols:
-  + create
-  ~ update in-place
-  - destroy
 
-Plan: 2 to add, 1 to change, 1 to destroy.
-"""
-expected = "terraform plan: no changes"
-
-[[tests.terraform-plan]]
-name = "many similar resources deduplicated"
-input = """
-  + create aws_instance.web[0]
-  + create aws_instance.web[1]
-  + create aws_instance.web[2]
-  + create aws_instance.web[3]
-  + create aws_instance.web[4]
-  ~ update in-place aws_security_group.sg[0]
-  ~ update in-place aws_security_group.sg[1]
-
-Plan: 7 to add, 2 to change, 0 to destroy.
-"""
-expected = "terraform plan: no changes"

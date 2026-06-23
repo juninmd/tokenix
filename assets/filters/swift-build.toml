@@ -1,6 +1,7 @@
 [filters.swift-build]
 description = "Compact swift build output"
 match_command = "^swift\\s+build\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -14,16 +15,7 @@ keep_lines_matching = [
   "note:"
 ]
 max_lines = 60
-on_empty = "swift build: success"
 
-[[tests.swift-build]]
-name = "clean build"
-input = """
-Compile MyPackage main.swift
-Linking .build/debug/MyPackage
-Build complete! (2.3s)
-"""
-expected = "swift build: success"
 
 [[tests.swift-build]]
 name = "error shown"

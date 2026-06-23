@@ -1,6 +1,7 @@
 [filters.git-rebase]
 description = "Compact git rebase output"
 match_command = "^git\\s+rebase\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -17,17 +18,7 @@ keep_lines_matching = [
   "When you have resolved"
 ]
 max_lines = 30
-on_empty = "git rebase: done"
 
-[[tests.git-rebase]]
-name = "clean rebase"
-input = """
-First, rewinding head to replay your work on top of it...
-Applying: Add new feature
-Applying: Fix bug
-Successfully rebased and updated refs/heads/feature.
-"""
-expected = "git rebase: done"
 
 [[tests.git-rebase]]
 name = "conflict shown"

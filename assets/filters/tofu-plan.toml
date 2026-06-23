@@ -1,6 +1,7 @@
 [filters.tofu-plan]
 description = "Compact OpenTofu plan output"
 match_command = "^tofu\\s+plan\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,24 +23,5 @@ keep_lines_matching = [
   "│ Warning"
 ]
 max_lines = 60
-on_empty = "tofu plan: no changes"
 
-[[tests.tofu-plan]]
-name = "no changes"
-input = """
-No changes. Infrastructure is up-to-date.
-"""
-expected = "tofu plan: no changes"
 
-[[tests.tofu-plan]]
-name = "plan with changes"
-input = """
-OpenTofu used the selected providers to generate the following execution plan.
-Resource actions are indicated with the following symbols:
-  + create
-  ~ update in-place
-  - destroy
-
-Plan: 2 to add, 1 to change, 1 to destroy.
-"""
-expected = "tofu plan: no changes"

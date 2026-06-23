@@ -1,6 +1,7 @@
 [filters.eslint]
 description = "Compact ESLint output"
 match_command = "^(npx\\s+)?eslint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -9,14 +10,7 @@ strip_lines_matching = [
   "^\\s*No problems"
 ]
 max_lines = 100
-on_empty = "eslint: no issues"
 
-[[tests.eslint]]
-name = "clean"
-input = """
-No problems found in 50 files.
-"""
-expected = "eslint: no issues"
 
 [[tests.eslint]]
 name = "issues shown"

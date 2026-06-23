@@ -1,6 +1,7 @@
 [filters.kubectl-rollout]
 description = "Compact kubectl rollout output"
 match_command = "^kubectl\\s+rollout\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,14 +16,7 @@ keep_lines_matching = [
   "progress deadline exceeded"
 ]
 max_lines = 30
-on_empty = "kubectl rollout: done"
 
-[[tests.kubectl-rollout]]
-name = "clean rollout"
-input = """
-deployment.apps/myapp rolled out
-"""
-expected = "kubectl rollout: done"
 
 [[tests.kubectl-rollout]]
 name = "timeout shown"

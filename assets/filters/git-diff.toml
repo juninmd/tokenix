@@ -16,7 +16,6 @@ keep_lines_matching = [
   "^\\\\ "
 ]
 max_lines = 100
-on_empty = "git diff: no changes"
 # `git diff --stat` / `--name-only` have no +/- hunk lines; show the real summary
 # instead of a false "no changes".
 passthrough_when_emptied = true

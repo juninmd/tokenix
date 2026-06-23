@@ -1,6 +1,7 @@
 [filters.tofu-plan-destroy]
 description = "Compact OpenTofu plan -destroy output"
 match_command = "^tofu\\s+plan\\s+.*-destroy\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -16,7 +17,6 @@ keep_lines_matching = [
   "-/"
 ]
 max_lines = 60
-on_empty = "tofu plan -destroy: nothing to destroy"
 
 [[tests.tofu-plan-destroy]]
 name = "destroy plan"

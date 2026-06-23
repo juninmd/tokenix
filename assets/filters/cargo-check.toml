@@ -1,6 +1,7 @@
 [filters.cargo-check]
 description = "Compact cargo check output"
 match_command = "^cargo\\s+check\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -14,15 +15,7 @@ keep_lines_matching = [
   "note:"
 ]
 max_lines = 60
-on_empty = "cargo check: ok"
 
-[[tests.cargo-check]]
-name = "clean check"
-input = """
-Checking my-crate v0.1.0
-Finished dev [unoptimized + debuginfo] target(s) in 0.5s
-"""
-expected = "cargo check: ok"
 
 [[tests.cargo-check]]
 name = "warnings shown"

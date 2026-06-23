@@ -1,6 +1,7 @@
 [filters.cargo-build]
 description = "Compact cargo build output"
 match_command = "^cargo\\s+build\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -14,7 +15,6 @@ keep_lines_matching = [
   "note:"
 ]
 max_lines = 80
-on_empty = "cargo build: build succeeded"
 
 [[tests.cargo-build]]
 name = "clean build"

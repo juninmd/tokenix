@@ -1,6 +1,7 @@
 [filters.pip-list]
 description = "Compact `pip list` / `pip freeze` output — drop the upgrade-notice/warning noise, keep the package table."
 match_command = "^(python\\d?\\s+-m\\s+)?pip\\d?\\s+(list|freeze)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -10,7 +11,6 @@ strip_lines_matching = [
 ]
 max_lines = 80
 truncate_lines_at = 120
-on_empty = "pip list: no packages"
 
 [[tests.pip-list]]
 name = "package table kept, upgrade notice stripped"

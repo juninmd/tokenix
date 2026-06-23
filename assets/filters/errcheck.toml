@@ -1,6 +1,7 @@
 [filters.errcheck]
 description = "Compact errcheck output"
 match_command = "^errcheck\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,13 +12,7 @@ keep_lines_matching = [
   "warning:"
 ]
 max_lines = 50
-on_empty = "errcheck: no issues"
 
-[[tests.errcheck]]
-name = "clean"
-input = """
-"""
-expected = "errcheck: no issues"
 
 [[tests.errcheck]]
 name = "issues shown"

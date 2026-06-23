@@ -1,13 +1,13 @@
 [filters.get-childitem]
 description = "Compact PowerShell Get-ChildItem directory listings"
 match_command = "^(Get-ChildItem|gci)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
 ]
 truncate_lines_at = 200
 max_lines = 60
-on_empty = "Get-ChildItem: no items"
 token_budget = 2000
 
 [[tests.get-childitem]]

@@ -1,6 +1,7 @@
 [filters.terraform-apply]
 description = "Compact terraform apply output"
 match_command = "^terraform\\s+apply\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,17 +23,7 @@ keep_lines_matching = [
   "still destroying"
 ]
 max_lines = 60
-on_empty = "terraform apply: complete"
 
-[[tests.terraform-apply]]
-name = "apply complete"
-input = """
-aws_instance.web: Creating...
-aws_instance.web: Creation complete after 10s [id=i-1234567890abcdef0]
-
-Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
-"""
-expected = "terraform apply: complete"
 
 [[tests.terraform-apply]]
 name = "error shown"

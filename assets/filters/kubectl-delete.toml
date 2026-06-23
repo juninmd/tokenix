@@ -1,6 +1,7 @@
 [filters.kubectl-delete]
 description = "Compact kubectl delete output"
 match_command = "^kubectl\\s+delete\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,15 +16,7 @@ keep_lines_matching = [
   "not found"
 ]
 max_lines = 30
-on_empty = "kubectl delete: done"
 
-[[tests.kubectl-delete]]
-name = "clean delete"
-input = """
-deployment.apps "myapp" deleted
-service "myapp" deleted
-"""
-expected = "kubectl delete: done"
 
 [[tests.kubectl-delete]]
 name = "error shown"

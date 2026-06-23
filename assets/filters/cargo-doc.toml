@@ -1,6 +1,7 @@
 [filters.cargo-doc]
 description = "Compact cargo doc output"
 match_command = "^cargo\\s+doc\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,7 +14,6 @@ keep_lines_matching = [
   "note:"
 ]
 max_lines = 50
-on_empty = "cargo doc: generated"
 
 [[tests.cargo-doc]]
 name = "clean doc generation"

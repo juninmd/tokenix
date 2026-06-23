@@ -1,6 +1,7 @@
 [filters.govulncheck]
 description = "Compact govulncheck output"
 match_command = "^govulncheck\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,7 +14,6 @@ keep_lines_matching = [
   "Found "
 ]
 max_lines = 50
-on_empty = "govulncheck: no vulnerabilities"
 
 [[tests.govulncheck]]
 name = "clean"

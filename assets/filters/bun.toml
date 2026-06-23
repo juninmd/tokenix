@@ -1,6 +1,7 @@
 [filters.bun]
 description = "Compact bun command output"
 match_command = "^bun\\s+(run|test|install|add|remove|pm|x|build|dev)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -27,7 +28,6 @@ keep_lines_matching = [
   "WARN",
 ]
 max_lines = 40
-on_empty = "bun: ok"
 replace_patterns = [
   ["bun v[\\d.]+", "bun v<version>"],
   ["\\d+\\.\\d+s", "<duration>"],
@@ -41,14 +41,6 @@ extract_sections = [
 deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
 token_budget = 1500
 
-[[tests.bun]]
-name = "install clean"
-input = """
-bun install v1.1.0
-installed 142 packages in 1.2s
-elapsed 1.5s
-"""
-expected = "bun: ok"
 
 [[tests.bun]]
 name = "test failure"

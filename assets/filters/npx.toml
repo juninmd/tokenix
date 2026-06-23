@@ -1,6 +1,7 @@
 [filters.npx]
 description = "Compact npx output aggressively"
 match_command = "^npx\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -26,7 +27,6 @@ keep_lines_matching = [
   "success",
 ]
 max_lines = 40
-on_empty = "npx: done"
 replace_patterns = [
   ["Need to install the following packages?:", "installing:"],
   ["\\d+ packages? in \\d+[a-z]*", "<N> packages"],

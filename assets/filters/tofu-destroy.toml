@@ -1,6 +1,7 @@
 [filters.tofu-destroy]
 description = "Compact OpenTofu destroy output"
 match_command = "^tofu\\s+destroy\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -17,17 +18,7 @@ keep_lines_matching = [
   "still destroying"
 ]
 max_lines = 50
-on_empty = "tofu destroy: complete"
 
-[[tests.tofu-destroy]]
-name = "clean destroy"
-input = """
-aws_instance.web: Destroying... [id=i-1234567890abcdef0]
-aws_instance.web: Destruction complete after 5s
-
-Destroy complete! Resources: 1 destroyed.
-"""
-expected = "tofu destroy: complete"
 
 [[tests.tofu-destroy]]
 name = "error shown"

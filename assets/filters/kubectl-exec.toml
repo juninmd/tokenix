@@ -1,6 +1,7 @@
 [filters.kubectl-exec]
 description = "Compact kubectl exec output"
 match_command = "^kubectl(?:\\s+(?:-[A-Za-z][-A-Za-z0-9]*|--[A-Za-z][-A-Za-z0-9]*)(?:[=\\s]+\\S+)?)*\\s+exec\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -14,14 +15,7 @@ keep_lines_matching = [
   "OCI runtime exec failed"
 ]
 max_lines = 30
-on_empty = "kubectl exec: done"
 
-[[tests.kubectl-exec]]
-name = "clean exec"
-input = """
-root@myapp:/app# 
-"""
-expected = "kubectl exec: done"
 
 [[tests.kubectl-exec]]
 name = "error shown"

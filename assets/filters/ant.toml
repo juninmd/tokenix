@@ -1,6 +1,7 @@
 [filters.ant]
 description = "Compact Apache Ant build output"
 match_command = "^ant\\s+\\w"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^Buildfile:",
@@ -8,7 +9,6 @@ strip_lines_matching = [
   "^\\s+\\[(echo|delete|mkdir|copy|move|propertyfile|fixcrlf)\\]",
   "^\\s*$",
 ]
-on_empty = "ant: ok"
 
 [[tests.ant]]
 name = "successful build collapses chatter, keeps BUILD SUCCESSFUL"
@@ -46,7 +46,3 @@ Total time: 2 seconds
 """
 expected = "    [javac] Compiling 3 source files to /tmp/build/classes\n    [javac] /path/Foo.java:42: error: cannot find symbol\nBUILD FAILED\n/path/build.xml:35: Compile failed; see the compiler error output for details.\nTotal time: 2 seconds"
 
-[[tests.ant]]
-name = "empty input returns on_empty sentinel"
-input = ""
-expected = "ant: ok"

@@ -1,6 +1,7 @@
 [filters.dotnet-format]
 description = "Compact dotnet format output"
 match_command = "^dotnet\\s+format\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,27 +23,5 @@ keep_lines_matching = [
   "Warning:",
 ]
 max_lines = 30
-on_empty = "dotnet format: no changes"
 
-[[tests.dotnet-format]]
-name = "files formatted"
-input = """
-Microsoft (R) Build Engine version 17.8.0
-Copyright (C) Microsoft Corporation. All rights reserved.
 
-Determining projects to format...
-Formatting /project/MyApp.sln
-Formatted /project/MyApp.sln (2 files)
-"""
-expected = "dotnet format: no changes"
-
-[[tests.dotnet-format]]
-name = "no changes needed"
-input = """
-Microsoft (R) Build Engine version 17.8.0
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Determining projects to format...
-No files need formatting.
-"""
-expected = "dotnet format: no changes"

@@ -1,6 +1,7 @@
 [filters.rails-routes]
 description = "Compact rails routes output, keeping every route line"
 match_command = "^(bundle\\s+exec\\s+)?rails\\s+routes\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,7 +16,6 @@ keep_lines_matching = [
   "aborted"
 ]
 max_lines = 20
-on_empty = "rails routes: no routes"
 
 [[tests.rails-routes]]
 name = "all routes preserved"

@@ -1,6 +1,7 @@
 [filters.turbo]
 description = "Compact Turborepo output — strip cache status noise, keep task results"
 match_command = "^turbo\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -12,7 +13,6 @@ strip_lines_matching = [
 ]
 truncate_lines_at = 150
 max_lines = 50
-on_empty = "turbo: ok"
 
 [[tests.turbo]]
 name = "strips cache noise, keeps task output"
@@ -24,7 +24,3 @@ name = "preserves error output"
 input = "> myapp:lint\n\nError: src/index.ts(5,1): error TS2304\n\nTasks:    0 successful, 1 total\nDuration: 1.1s"
 expected = "> myapp:lint\nError: src/index.ts(5,1): error TS2304"
 
-[[tests.turbo]]
-name = "empty after stripping"
-input = " cache hit, replaying logs abc\n\n"
-expected = "turbo: ok"

@@ -1,6 +1,7 @@
 [filters.aws-cli]
 description = "Compact AWS CLI output"
 match_command = "^aws\\s+\\w+\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -17,23 +18,7 @@ keep_lines_matching = [
   "Rate exceeded"
 ]
 max_lines = 50
-on_empty = "aws: ok"
 
-[[tests.aws-cli]]
-name = "clean output"
-input = """
-{
-    "Instances": [
-        {
-            "InstanceId": "i-1234567890abcdef0",
-            "State": {
-                "Name": "running"
-            }
-        }
-    ]
-}
-"""
-expected = "aws: ok"
 
 [[tests.aws-cli]]
 name = "error shown"

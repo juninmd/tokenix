@@ -1,6 +1,7 @@
 [filters.go-fmt]
 description = "Compact go fmt output"
 match_command = "^go\\s+fmt\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,13 +12,7 @@ keep_lines_matching = [
   "warning:"
 ]
 max_lines = 30
-on_empty = "go fmt: formatted"
 
-[[tests.go-fmt]]
-name = "clean"
-input = """
-"""
-expected = "go fmt: formatted"
 
 [[tests.go-fmt]]
 name = "files changed"

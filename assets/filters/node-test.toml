@@ -1,6 +1,7 @@
 [filters.node-test]
 description = "Compact node built-in test runner output — failures and summary only"
 match_command = "^node\\s+(--test|--run)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -8,7 +9,6 @@ strip_lines_matching = [
   "^\\s*ℹ (tests|suites|pass \\d|cancelled|skipped|todo|duration_ms)",
 ]
 max_lines = 60
-on_empty = "node --test: all tests passed"
 
 [[tests.node-test]]
 name = "all passing"

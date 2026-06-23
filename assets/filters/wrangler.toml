@@ -1,6 +1,7 @@
 [filters.wrangler]
 description = "Compact Cloudflare Wrangler worker/pages deploy outputs. Tolerates the npx/pnpm/yarn/bunx runner prefixes Wrangler is usually invoked with."
 match_command = "^(npx\\s+|pnpm\\s+(?:exec\\s+|dlx\\s+)?|yarn\\s+(?:dlx\\s+)?|bunx\\s+)?wrangler\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -24,7 +25,6 @@ keep_lines_matching = [
   "Deployment complete"
 ]
 max_lines = 40
-on_empty = "wrangler: ok"
 
 [[tests.wrangler]]
 name = "wrangler deploy success"

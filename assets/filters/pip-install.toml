@@ -1,6 +1,7 @@
 [filters.pip-install]
 description = "Compact pip install output"
 match_command = "^pip\\s+install\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -21,17 +22,7 @@ keep_lines_matching = [
   "No matching distribution"
 ]
 max_lines = 40
-on_empty = "pip install: ok"
 
-[[tests.pip-install]]
-name = "clean install"
-input = """
-Collecting requests
-  Downloading requests-2.31.0-py3-none-any.whl (62 kB)
-Installing collected packages: requests
-Successfully installed requests-2.31.0
-"""
-expected = "pip install: ok"
 
 [[tests.pip-install]]
 name = "error shown"

@@ -1,6 +1,7 @@
 [filters.pnpm-script]
 description = "Compact pnpm direct script output"
 match_command = "^pnpm\\s+(build|check|dev|format|lint|start|typecheck)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,7 +23,6 @@ keep_lines_matching = [
   "failed",
 ]
 max_lines = 80
-on_empty = "pnpm script: ok"
 
 [[tests.pnpm-script]]
 name = "typecheck error"
@@ -38,17 +38,4 @@ ELIFECYCLE Command failed with exit code 1.
 expected = """
 web:typecheck: src/main.ts(4,7): error TS2322: Type 'string' is not assignable to type 'number'.
 ELIFECYCLE Command failed with exit code 1."""
-
-[[tests.pnpm-script]]
-name = "successful check"
-command = "pnpm typecheck"
-input = """
-> app@0.1.0 typecheck D:/repo
-> turbo run typecheck
-
-• Packages in scope: web, api
-web:typecheck: cache hit, re-using cached output.
-Tasks: 2 successful, 2 total
-"""
-expected = "pnpm script: ok"
 

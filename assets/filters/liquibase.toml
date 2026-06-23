@@ -1,6 +1,7 @@
 [filters.liquibase]
 description = "Compact liquibase output — strip headers and generic info"
 match_command = "(?:^|/)liquibase(?:\\s|$)"
+passthrough_when_emptied = true
 strip_ansi = true
 filter_stderr = true
 strip_lines_matching = [
@@ -17,7 +18,6 @@ strip_lines_matching = [
   "^(?:\\[?INFO\\]?\\s*)?#+$",
   "^\\s*##"
 ]
-on_empty = "liquibase: ok"
 max_lines = 200
 
 [[tests.liquibase]]
@@ -78,7 +78,3 @@ Liquibase Version: 4.30.0
 HR@jdbc:oracle:thin:@localhost:1523:XE is up to date
 Liquibase command 'status' was executed successfully.'''
 
-[[tests.liquibase]]
-name = "empty input"
-input = ""
-expected = "liquibase: ok"

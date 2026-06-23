@@ -1,6 +1,7 @@
 [filters.pytest]
 description = "Compact pytest output"
 match_command = "^(python\\s+-m\\s+)?pytest\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -26,20 +27,7 @@ keep_lines_matching = [
   "E       "
 ]
 max_lines = 80
-on_empty = "pytest: all tests passed"
 
-[[tests.pytest]]
-name = "all pass"
-input = """
-============================= test session starts =============================
-collected 15 items
-
-test_utils.py ..........
-test_api.py .....
-
-============================= 15 passed in 0.45s =============================
-"""
-expected = "pytest: all tests passed"
 
 [[tests.pytest]]
 name = "failure shown"

@@ -1,6 +1,7 @@
 [filters.cargo-install]
 description = "Compact cargo install output"
 match_command = "^cargo\\s+install\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -19,19 +20,7 @@ keep_lines_matching = [
   "Replacing",
 ]
 max_lines = 30
-on_empty = "cargo install: ok"
 
-[[tests.cargo-install]]
-name = "clean install"
-input = """
-   Updating crates.io index
-  Downloading my-tool v1.0.0
-  Downloading 1 file (123 KB)
-  Compiling my-tool v1.0.0
-   Finished release [optimized] target(s) in 5.2s
-  Installing /home/user/.cargo/bin/my-tool
-"""
-expected = "cargo install: ok"
 
 [[tests.cargo-install]]
 name = "compilation error shown"

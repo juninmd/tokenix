@@ -14,7 +14,6 @@ keep_lines_matching = [
   "^Merge:",
 ]
 max_lines = 30
-on_empty = "git log: no commits"
 # Compact variants (`git log --oneline`, `--graph`) don't match the full-log keep
 # rules; show the real output instead of a false "no commits".
 passthrough_when_emptied = true

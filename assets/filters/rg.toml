@@ -1,6 +1,7 @@
 [filters.rg]
 description = "Compact ripgrep output"
 match_command = "^rg\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,7 +12,6 @@ keep_lines_matching = [
   "warning:"
 ]
 max_lines = 50
-on_empty = "rg: no matches"
 
 [[tests.rg]]
 name = "matches found"

@@ -1,6 +1,7 @@
 [filters.find]
 description = "Compact find output: drop permission-denied noise, cap long path listings"
 match_command = "^find\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -9,7 +10,6 @@ strip_lines_matching = [
   "^find: .*cannot (access|read|open)",
 ]
 max_lines = 50
-on_empty = "find: no matches"
 token_budget = 2000
 
 [[tests.find]]
@@ -36,8 +36,3 @@ expected = """
 ./src/main.rs
 ./src/lib.rs"""
 
-[[tests.find]]
-name = "no matches"
-input = """
-"""
-expected = "find: no matches"

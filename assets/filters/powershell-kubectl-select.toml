@@ -1,6 +1,7 @@
 [filters.powershell-kubectl-select]
 description = "Compact PowerShell kubectl get piped through Select-String"
 match_command = "^(kubectl|k)\\s+get\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,7 +14,6 @@ keep_lines_matching = [
 ]
 truncate_lines_at = 180
 max_lines = 60
-on_empty = "kubectl get: no matching resources"
 
 [[tests.powershell-kubectl-select]]
 name = "keeps headers and matching workload"

@@ -1,6 +1,7 @@
 [filters.next-build]
 description = "Compact Next.js build output — pages and errors"
 match_command = "^(npx\\s+)?next\\s+build\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -24,7 +25,6 @@ keep_lines_matching = [
   "Type checking"
 ]
 max_lines = 50
-on_empty = "next build: ok"
 
 [[tests.next-build]]
 name = "successful build"

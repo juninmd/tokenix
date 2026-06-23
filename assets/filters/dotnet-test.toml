@@ -1,6 +1,7 @@
 [filters.dotnet-test]
 description = "Compact dotnet test output"
 match_command = "^dotnet\\s+test\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,25 +23,7 @@ keep_lines_matching = [
   "StackTrace:"
 ]
 max_lines = 60
-on_empty = "dotnet test: passed"
 
-[[tests.dotnet-test]]
-name = "tests pass"
-input = """
-Microsoft (R) Test Execution Command Line Tool Version 17.8.0
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Starting test execution, please wait...
-A total of 1 test files matched the specified pattern.
-
-Test Run Successful.
-Total tests: 10
-     Passed: 10
-     Failed: 0
-     Skipped: 0
-Test Run Successful.
-"""
-expected = "dotnet test: passed"
 
 [[tests.dotnet-test]]
 name = "failure shown"

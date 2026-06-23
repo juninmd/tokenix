@@ -1,6 +1,7 @@
 [filters.gcloud]
 description = "Compact gcloud output"
 match_command = "^gcloud\\s+\\w+\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -21,16 +22,7 @@ keep_lines_matching = [
   "Quota exceeded"
 ]
 max_lines = 40
-on_empty = "gcloud: ok"
 
-[[tests.gcloud]]
-name = "clean operation"
-input = """
-Created [https://compute.googleapis.com/projects/my-project/zones/us-central1-a/instances/my-instance].
-NAME        ZONE           MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP  EXTERNAL_IP     STATUS
-my-instance  us-central1-a  e2-medium                   10.128.0.2   34.123.45.67   RUNNING
-"""
-expected = "gcloud: ok"
 
 [[tests.gcloud]]
 name = "error shown"

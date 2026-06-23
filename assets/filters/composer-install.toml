@@ -1,6 +1,7 @@
 [filters.composer-install]
 description = "Compact composer install output"
 match_command = "^composer\\s+install\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -23,20 +24,7 @@ keep_lines_matching = [
   "^\\s*- "
 ]
 max_lines = 40
-on_empty = "composer install: ok"
 
-[[tests.composer-install]]
-name = "clean install"
-input = """
-Loading composer repositories with package information
-Installing dependencies (including require-dev) from lock file
-Package operations: 12 installs, 0 updates, 0 removals
-  - Installing symfony/polyfill-ctype (v1.28.0): Extracting archive
-  - Installing symfony/console (v6.4.0): Extracting archive
-Generating autoload files
-12 packages installed in 2.3s
-"""
-expected = "composer install: ok"
 
 [[tests.composer-install]]
 name = "dependency resolution failure preserved"

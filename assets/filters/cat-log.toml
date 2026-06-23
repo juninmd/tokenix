@@ -1,6 +1,7 @@
 [filters.cat-log]
 description = "Compact cat/Get-Content log file output"
 match_command = "^(cat|type)\\b.*\\.(log|output|txt)\\b|^Get-Content\\b.*\\.(log|output|txt)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -17,7 +18,6 @@ keep_lines_matching = [
   "FATAL",
 ]
 max_lines = 120
-on_empty = "log: no errors or warnings in output"
 
 [[tests.cat-log]]
 name = "keeps log failures"
@@ -32,14 +32,4 @@ INFO done
 expected = """
 ERROR tool failed
 WARN retrying"""
-
-[[tests.cat-log]]
-name = "clean log"
-command = "cat /tmp/clean.log"
-input = """
-INFO boot
-DEBUG polling
-INFO done
-"""
-expected = "log: no errors or warnings in output"
 

@@ -1,6 +1,7 @@
 [filters.pnpm-run]
 description = "Compact pnpm run/exec/dlx script output"
 match_command = "^pnpm\\s+(run|exec|dlx)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -11,16 +12,7 @@ strip_lines_matching = [
   "^\\s*WARN\\s+deprecated",
 ]
 max_lines = 50
-on_empty = "pnpm run: done"
 
-[[tests.pnpm-run]]
-name = "build script"
-input = """
-> my-app@1.0.0 build /repo
-> tsc -p .
-
-"""
-expected = "pnpm run: done"
 
 [[tests.pnpm-run]]
 name = "script error shown"

@@ -1,6 +1,7 @@
 [filters.redis-cli]
 description = "Compact redis-cli output"
 match_command = "^redis-cli\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -13,14 +14,7 @@ keep_lines_matching = [
   "NIL"
 ]
 max_lines = 30
-on_empty = "redis-cli: ok"
 
-[[tests.redis-cli]]
-name = "clean command"
-input = """
-OK
-"""
-expected = "redis-cli: ok"
 
 [[tests.redis-cli]]
 name = "error shown"

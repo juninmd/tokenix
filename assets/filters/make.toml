@@ -1,13 +1,13 @@
 [filters.make]
 description = "Compact make output"
 match_command = "^make\\b"
+passthrough_when_emptied = true
 strip_lines_matching = [
   "^make\\[\\d+\\]:",
   "^\\s*$",
   "^Nothing to be done",
 ]
 max_lines = 50
-on_empty = "make: ok"
 
 [[tests.make]]
 name = "strips entering/leaving lines"
@@ -32,10 +32,3 @@ gcc -O2 foo.c
 gcc -O2 bar.c
 """
 
-[[tests.make]]
-name = "on_empty when all stripped"
-input = """
-make[1]: Entering directory '/home/user'
-make[1]: Leaving directory '/home/user'
-"""
-expected = "make: ok"

@@ -1,6 +1,7 @@
 [filters.gosec]
 description = "Compact gosec output"
 match_command = "^gosec\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -17,17 +18,7 @@ keep_lines_matching = [
   "WARNING:"
 ]
 max_lines = 50
-on_empty = "gosec: no issues"
 
-[[tests.gosec]]
-name = "clean"
-input = """
-Summary:
-  Gosec 2.18.0
-  Scanned 10 files
-  Found 0 issues
-"""
-expected = "gosec: no issues"
 
 [[tests.gosec]]
 name = "issues shown"

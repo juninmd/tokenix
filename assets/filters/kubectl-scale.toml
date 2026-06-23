@@ -1,6 +1,7 @@
 [filters.kubectl-scale]
 description = "Compact kubectl scale output"
 match_command = "^kubectl\\s+scale\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -14,14 +15,7 @@ keep_lines_matching = [
   "cannot"
 ]
 max_lines = 20
-on_empty = "kubectl scale: done"
 
-[[tests.kubectl-scale]]
-name = "clean scale"
-input = """
-deployment.apps/myapp scaled
-"""
-expected = "kubectl scale: done"
 
 [[tests.kubectl-scale]]
 name = "error shown"

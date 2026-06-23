@@ -1,6 +1,7 @@
 [filters.go-generate]
 description = "Compact go generate output"
 match_command = "^go\\s+generate\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -12,14 +13,7 @@ keep_lines_matching = [
   "cannot find"
 ]
 max_lines = 30
-on_empty = "go generate: done"
 
-[[tests.go-generate]]
-name = "clean generate"
-input = """
-Running "go run github.com/golang/mock/mockgen -source=foo.go -destination=mock_foo.go"
-"""
-expected = "go generate: done"
 
 [[tests.go-generate]]
 name = "error shown"

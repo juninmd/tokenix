@@ -1,6 +1,7 @@
 [filters.curl]
 description = "Compact curl output"
 match_command = "^curl\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -21,17 +22,7 @@ keep_lines_matching = [
   "certificate"
 ]
 max_lines = 30
-on_empty = "curl: ok"
 
-[[tests.curl]]
-name = "success response"
-input = """
-  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
-                                  Dload  Upload   Total   Spent    Left  Speed
-100   234  100   234    0     0    234      0  0:00:01  0:00:01 --:--:--   234
-{"status": "ok", "data": {"id": 1}}
-"""
-expected = "curl: ok"
 
 [[tests.curl]]
 name = "connection error shown"

@@ -1,6 +1,7 @@
 [filters.helm-repo]
 description = "Compact helm repo output"
 match_command = "^helm\\s+repo\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,7 +14,6 @@ keep_lines_matching = [
   "oci://"
 ]
 max_lines = 20
-on_empty = "helm repo: none"
 
 [[tests.helm-repo]]
 name = "list repos"
@@ -26,9 +26,3 @@ expected = """
 stable  https://charts.helm.sh/stable
 bitnami https://charts.bitnami.com/bitnami"""
 
-[[tests.helm-repo]]
-name = "add repo"
-input = """
-"stable" has been added to your repositories
-"""
-expected = "helm repo: none"

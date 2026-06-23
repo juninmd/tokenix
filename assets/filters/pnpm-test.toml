@@ -1,6 +1,7 @@
 [filters.pnpm-test]
 description = "Compact pnpm test output"
 match_command = "^pnpm\\s+test\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -21,7 +22,6 @@ keep_lines_matching = [
   "Received:"
 ]
 max_lines = 60
-on_empty = "pnpm test: passed"
 
 [[tests.pnpm-test]]
 name = "tests pass"

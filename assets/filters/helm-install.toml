@@ -1,6 +1,7 @@
 [filters.helm-install]
 description = "Compact helm install/upgrade output"
 match_command = "^helm\\s+(install|upgrade|template)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -21,7 +22,6 @@ keep_lines_matching = [
   "release.*failed"
 ]
 max_lines = 40
-on_empty = "helm: deployed"
 
 [[tests.helm-install]]
 name = "clean install"

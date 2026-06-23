@@ -1,6 +1,7 @@
 [filters.node-e-json]
 description = "Compact node -e JSON/SQLite probe output"
 match_command = "^node\\s+-e\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -13,7 +14,6 @@ replace_patterns = [
 ]
 truncate_lines_at = 220
 max_lines = 40
-on_empty = "node -e: ok"
 
 [[tests.node-e-json]]
 name = "sqlite json lines are bounded"

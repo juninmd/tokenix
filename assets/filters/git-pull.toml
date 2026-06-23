@@ -12,7 +12,6 @@ strip_lines_matching = [
 ]
 max_lines = 30
 passthrough_when_emptied = true
-on_empty = "git pull: ok"
 
 [[tests.git-pull]]
 name = "clean pull"

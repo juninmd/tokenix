@@ -1,6 +1,7 @@
 [filters.yamllint]
 description = "Compact yamllint output"
 match_command = "^yamllint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -11,13 +12,7 @@ keep_lines_matching = [
   "warning:"
 ]
 max_lines = 50
-on_empty = "yamllint: no issues"
 
-[[tests.yamllint]]
-name = "clean"
-input = """
-"""
-expected = "yamllint: no issues"
 
 [[tests.yamllint]]
 name = "issues shown"

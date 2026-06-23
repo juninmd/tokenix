@@ -1,6 +1,7 @@
 [filters.ty]
 description = "Compact ty type checker output — strip blank lines, keep errors"
 match_command = "^ty\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -8,7 +9,6 @@ strip_lines_matching = [
   "^ty \\d+\\.\\d+",
 ]
 max_lines = 50
-on_empty = "ty: ok"
 
 [[tests.ty]]
 name = "strips noise, keeps diagnostics"

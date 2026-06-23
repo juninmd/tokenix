@@ -1,6 +1,7 @@
 [filters.jest]
 description = "Compact Jest test output"
 match_command = "^((pnpm\\s+exec|pnpm\\s+dlx|yarn\\s+dlx|deno\\s+task|npx|bunx|pnpm|yarn)\\s+)?jest\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,20 +23,7 @@ keep_lines_matching = [
   "SyntaxError"
 ]
 max_lines = 80
-on_empty = "jest: all tests passed"
 
-[[tests.jest]]
-name = "all pass"
-input = """
- PASS  src/utils.test.ts
- PASS  src/components.test.tsx
-Test Suites: 2 passed, 2 total
-Tests:       15 passed, 15 total
-Snapshots:   0 total
-Time:        2.345 s
-Ran all test suites.
-"""
-expected = "jest: all tests passed"
 
 [[tests.jest]]
 name = "test failure shown"

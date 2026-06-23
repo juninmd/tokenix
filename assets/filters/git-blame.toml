@@ -1,6 +1,7 @@
 [filters.git-blame]
 description = "Compact git blame output"
 match_command = "^git\\s+blame\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -12,7 +13,6 @@ keep_lines_matching = [
   ")"
 ]
 max_lines = 50
-on_empty = "git blame: empty file"
 
 [[tests.git-blame]]
 name = "blame output"

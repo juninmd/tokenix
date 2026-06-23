@@ -159,14 +159,16 @@ Legacy `hook-post` compression flows through (in order):
 
 `apply_filter()` pipeline: `match_output` short-circuit → `strip_ansi` → `strip_lines_matching` → `keep_lines_matching` → `head/tail/max_lines` → `truncate_lines_at` → `on_empty`. Opt-in `passthrough_when_emptied`: when the pipeline reduces *non-empty* output to nothing (an unrecognized output shape, not a genuinely empty command), emit a bounded view of the real output instead of `on_empty` — set on `git-log`/`git-diff` so `--oneline`/`--stat` don't report a false "no commits"/"no changes". The same bounded fallback fires **automatically** (no opt-in) whenever the original output matches `output_has_failure_signal()` (a strict, case/anchor-tuned `error`/`fatal`/`panic`/`FAILED`/`exit code N` probe) — so a failed build/test/deploy whose error text isn't matched by the tool's `keep_lines_matching` is never masked as the success `on_empty`. Guarded by `bundled_filters_never_mask_generic_failure`.
 
+**Filter design rule: never use `on_empty` — use `passthrough_when_emptied = true` instead.** `on_empty` fabricates a static string when real output is filtered to nothing; `passthrough_when_emptied` returns the original unfiltered output. Filters must only filter, never invent responses. `match_output` is the only valid short-circuit (it fires only when a confirmed pattern exists in the real output). Tests must not assert on fabricated strings.
+
 ```toml
 [filters.my-cmd]
 match_command  = "^my-cmd\\b"
+passthrough_when_emptied = true
 strip_ansi     = true
 strip_lines_matching  = ["^\\s+Downloading"]
 match_output   = [{ pattern = "Success", message = "ok" }]
 max_lines      = 30
-on_empty       = "my-cmd: ok"
 ```
 
 ## Prompt Audit (MCP/tool weight)

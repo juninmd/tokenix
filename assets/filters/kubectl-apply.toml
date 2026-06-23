@@ -1,6 +1,7 @@
 [filters.kubectl-apply]
 description = "Compact kubectl apply output"
 match_command = "^kubectl\\s+apply\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,16 +16,7 @@ keep_lines_matching = [
   "Invalid"
 ]
 max_lines = 30
-on_empty = "kubectl apply: done"
 
-[[tests.kubectl-apply]]
-name = "clean apply"
-input = """
-deployment.apps/myapp created
-service/myapp created
-configmap/myapp-config unchanged
-"""
-expected = "kubectl apply: done"
 
 [[tests.kubectl-apply]]
 name = "error shown"

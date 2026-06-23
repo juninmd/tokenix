@@ -1,6 +1,7 @@
 [filters.mise]
 description = "Compact mise task runner output — strip status lines, keep task results"
 match_command = "^mise\\s+(run|exec|install|upgrade)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -12,7 +13,6 @@ strip_lines_matching = [
 ]
 truncate_lines_at = 150
 max_lines = 50
-on_empty = "mise: ok"
 
 [[tests.mise]]
 name = "strips install noise, keeps task output"
@@ -24,7 +24,3 @@ name = "preserves error output"
 input = "mise run lint\nError: biome check failed\nsrc/index.ts:5 — unused variable"
 expected = "mise run lint\nError: biome check failed\nsrc/index.ts:5 — unused variable"
 
-[[tests.mise]]
-name = "empty after stripping"
-input = "mise trust ~/dev/.mise.toml ✓\nmise install node@20 ✓\n"
-expected = "mise: ok"

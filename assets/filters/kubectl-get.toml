@@ -11,7 +11,6 @@ strip_lines_matching = [
 ]
 max_lines = 40
 passthrough_when_emptied = true
-on_empty = "kubectl get: no resources"
 
 [[tests.kubectl-get]]
 name = "pods running"

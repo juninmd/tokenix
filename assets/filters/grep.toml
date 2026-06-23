@@ -1,6 +1,7 @@
 [filters.grep]
 description = "Compact grep output"
 match_command = "^grep\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -13,7 +14,6 @@ replace_patterns = [
 ]
 truncate_lines_at = 180
 max_lines = 50
-on_empty = "grep: no matches"
 
 [[tests.grep]]
 name = "source matches are compacted"
@@ -35,8 +35,3 @@ expected = """
     let total = compute(a, b);
     return total + 1;"""
 
-[[tests.grep]]
-name = "no matches"
-input = """
-"""
-expected = "grep: no matches"

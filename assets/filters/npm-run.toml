@@ -1,6 +1,7 @@
 [filters.npm-run]
 description = "Compact npm run script output"
 match_command = "^npm\\s+run\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -9,7 +10,6 @@ strip_lines_matching = [
   "^\\s*npm WARN"
 ]
 max_lines = 50
-on_empty = "npm run: done"
 
 [[tests.npm-run]]
 name = "build script"

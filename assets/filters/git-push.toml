@@ -18,7 +18,6 @@ strip_lines_matching = [
 max_lines = 20
 # If an unexpected format strips to empty, show the real output instead of on_empty.
 passthrough_when_emptied = true
-on_empty = "git push: ok"
 
 [[tests.git-push]]
 name = "clean push"

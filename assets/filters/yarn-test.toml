@@ -1,6 +1,7 @@
 [filters.yarn-test]
 description = "Compact yarn test output"
 match_command = "^yarn\\s+test\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,7 +23,6 @@ keep_lines_matching = [
   "error Command failed"
 ]
 max_lines = 60
-on_empty = "yarn test: passed"
 
 [[tests.yarn-test]]
 name = "tests pass with counts visible"

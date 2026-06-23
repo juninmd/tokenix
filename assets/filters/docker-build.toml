@@ -1,6 +1,7 @@
 [filters.docker-build]
 description = "Compact docker build output aggressively"
 match_command = "^docker\\s+(build|buildx\\s+build)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -27,7 +28,6 @@ keep_lines_matching = [
   "WARN",
 ]
 max_lines = 40
-on_empty = "docker build: success"
 replace_patterns = [
   ["sha256:[a-f0-9]{64}", "sha256:<hash>"],
   ["[a-f0-9]{12,}(?=\\s|$)", "<layer_id>"],
@@ -41,25 +41,6 @@ extract_sections = [
 deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
 token_budget = 2000
 
-[[tests.docker-build]]
-name = "clean build"
-input = """
-[+] Building 12.3s (10/10) FINISHED
- => [internal] load build definition from Dockerfile
- => => transferring dockerfile: 32B
- => [internal] load .dockerignore
- => => transferring context: 2B
- => [internal] load metadata for docker.io/library/node:20-alpine
- => [1/5] FROM docker.io/library/node:20-alpine
- => [2/5] WORKDIR /app
- => [3/5] COPY package*.json ./
- => [4/5] RUN npm ci
- => [5/5] COPY . .
- => exporting to image
- => => exporting layers
- => => writing image sha256:abc123
-"""
-expected = "docker build: success"
 
 [[tests.docker-build]]
 name = "build failure shown"
@@ -76,20 +57,3 @@ input = """
 """
 expected = " error: could not resolve dependency"
 
-[[tests.docker-build]]
-name = "repeated layers deduplicated"
-input = """
-[+] Building 15.2s (12/12) FINISHED
- => [1/8] FROM docker.io/library/node:20-alpine
- => [2/8] WORKDIR /app
- => [3/8] COPY package*.json ./
- => [4/8] RUN npm ci
- => [5/8] COPY . .
- => [6/8] RUN npm test
- => [7/8] RUN npm run build
- => [8/8] RUN npm run lint
- => exporting to image
- => => exporting layers
- => => writing image sha256:abc123def456789
-"""
-expected = "docker build: success"

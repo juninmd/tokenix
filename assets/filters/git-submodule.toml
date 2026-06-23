@@ -1,6 +1,7 @@
 [filters.git-submodule]
 description = "Compact git submodule output"
 match_command = "^git\\s+submodule\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -13,7 +14,6 @@ keep_lines_matching = [
   "^\\s*Checking out"
 ]
 max_lines = 30
-on_empty = "git submodule: none"
 
 [[tests.git-submodule]]
 name = "list submodules"

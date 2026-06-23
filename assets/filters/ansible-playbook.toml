@@ -1,6 +1,7 @@
 [filters.ansible-playbook]
 description = "Compact ansible-playbook output"
 match_command = "^ansible-playbook\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -22,23 +23,7 @@ keep_lines_matching = [
   "MSG:"
 ]
 max_lines = 50
-on_empty = "ansible-playbook: ok"
 
-[[tests.ansible-playbook]]
-name = "clean run"
-input = """
-PLAY [webservers] ************************************************************
-
-TASK [Gathering Facts] *******************************************************
-ok: [web1]
-
-TASK [Install nginx] *********************************************************
-changed: [web1]
-
-PLAY RECAP *******************************************************************
-web1                   : ok=2    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
-"""
-expected = "ansible-playbook: ok"
 
 [[tests.ansible-playbook]]
 name = "failure shown"

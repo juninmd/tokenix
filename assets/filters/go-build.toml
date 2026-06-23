@@ -1,6 +1,7 @@
 [filters.go-build]
 description = "Compact go build output"
 match_command = "^go\\s+build\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,13 +14,7 @@ keep_lines_matching = [
   "cannot find package"
 ]
 max_lines = 40
-on_empty = "go build: ok"
 
-[[tests.go-build]]
-name = "clean build"
-input = """
-"""
-expected = "go build: ok"
 
 [[tests.go-build]]
 name = "build error shown"

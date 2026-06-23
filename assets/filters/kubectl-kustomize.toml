@@ -18,7 +18,6 @@ keep_lines_matching = [
   "failed"
 ]
 max_lines = 120
-on_empty = "kustomize: no manifests"
 passthrough_when_emptied = true
 token_budget = 3000
 

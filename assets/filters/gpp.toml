@@ -1,6 +1,7 @@
 [filters.gpp]
 description = "Compact g++ compiler output — strip notes, keep errors and warnings"
 match_command = "^g\\+\\+(\\s|$)"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -17,7 +18,6 @@ keep_lines_matching = [
   "fatal error:",
 ]
 max_lines = 50
-on_empty = "g++: ok"
 
 [[tests.gpp]]
 name = "strips include chain, keeps errors and warnings"
@@ -37,7 +37,3 @@ expected = """
 main.cpp:10:5: error: use of undeclared identifier 'foo'
 main.cpp:15:12: warning: unused variable 'x' [-Wunused-variable]"""
 
-[[tests.gpp]]
-name = "clean compilation"
-input = ""
-expected = "g++: ok"

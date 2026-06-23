@@ -1,6 +1,7 @@
 [filters.terraform-providers]
 description = "Compact terraform providers output"
 match_command = "^terraform\\s+providers\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,7 +14,6 @@ keep_lines_matching = [
   "Error"
 ]
 max_lines = 30
-on_empty = "terraform providers: none"
 
 [[tests.terraform-providers]]
 name = "providers tree"

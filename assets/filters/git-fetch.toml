@@ -10,7 +10,6 @@ strip_lines_matching = [
 ]
 max_lines = 20
 passthrough_when_emptied = true
-on_empty = "git fetch: done"
 
 [[tests.git-fetch]]
 name = "clean fetch"

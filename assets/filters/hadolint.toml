@@ -1,6 +1,7 @@
 [filters.hadolint]
 description = "Compact hadolint output"
 match_command = "^hadolint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -13,13 +14,7 @@ keep_lines_matching = [
   "Style:"
 ]
 max_lines = 50
-on_empty = "hadolint: no issues"
 
-[[tests.hadolint]]
-name = "clean"
-input = """
-"""
-expected = "hadolint: no issues"
 
 [[tests.hadolint]]
 name = "issues shown"

@@ -1,6 +1,7 @@
 [filters.docker-images]
 description = "Compact docker images output"
 match_command = "^docker\\s+images\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -11,7 +12,6 @@ keep_lines_matching = [
   "<none>"
 ]
 max_lines = 30
-on_empty = "docker images: none"
 
 [[tests.docker-images]]
 name = "list images"

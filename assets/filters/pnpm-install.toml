@@ -1,6 +1,7 @@
 [filters.pnpm-install]
 description = "Compact pnpm install output"
 match_command = "^pnpm\\s+(install|add|i|in)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -20,7 +21,6 @@ strip_lines_matching = [
   "WARN.*deprecated"
 ]
 max_lines = 40
-on_empty = "pnpm install: ok"
 
 [[tests.pnpm-install]]
 name = "clean install"

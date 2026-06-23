@@ -1,6 +1,7 @@
 [filters.tofu-apply]
 description = "Compact OpenTofu apply output"
 match_command = "^tofu\\s+apply\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -20,17 +21,7 @@ keep_lines_matching = [
   "still destroying"
 ]
 max_lines = 60
-on_empty = "tofu apply: complete"
 
-[[tests.tofu-apply]]
-name = "apply complete"
-input = """
-aws_instance.web: Creating...
-aws_instance.web: Creation complete after 10s [id=i-1234567890abcdef0]
-
-Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
-"""
-expected = "tofu apply: complete"
 
 [[tests.tofu-apply]]
 name = "error shown"

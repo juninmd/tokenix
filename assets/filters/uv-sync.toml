@@ -1,6 +1,7 @@
 [filters.uv-sync]
 description = "Compact uv sync output"
 match_command = "^uv\\s+sync\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,16 +14,7 @@ strip_lines_matching = [
   "in \\d+\\.\\d+s"
 ]
 max_lines = 30
-on_empty = "uv sync: ok"
 
-[[tests.uv-sync]]
-name = "uv sync clean"
-input = """
-Resolving dependencies...
-Installing 45 packages...
-Installed 45 packages in 2.1s
-"""
-expected = "uv sync: ok"
 
 [[tests.uv-sync]]
 name = "pyproject parse error preserved"

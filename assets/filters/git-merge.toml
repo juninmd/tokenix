@@ -1,6 +1,7 @@
 [filters.git-merge]
 description = "Compact git merge output"
 match_command = "^git\\s+merge\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -17,16 +18,7 @@ keep_lines_matching = [
   "Unmerged paths"
 ]
 max_lines = 30
-on_empty = "git merge: done"
 
-[[tests.git-merge]]
-name = "clean merge"
-input = """
-Merge made by the 'ort' strategy.
- src/main.rs | 2 ++
- 1 file changed, 2 insertions(+)
-"""
-expected = "git merge: done"
 
 [[tests.git-merge]]
 name = "conflict shown"

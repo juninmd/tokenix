@@ -1,6 +1,7 @@
 [filters.git-status]
 description = "Compact git status output (both long and short)"
 match_command = "^git\\s+status\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^On branch",
@@ -11,7 +12,6 @@ strip_lines_matching = [
   "^\\s*$"
 ]
 max_lines = 100
-on_empty = "git status: clean"
 
 [[tests.git-status]]
 name = "long status modified and untracked"

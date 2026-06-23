@@ -1,6 +1,7 @@
 [filters.kubectl-logs]
 description = "Compact kubectl logs output"
 match_command = "^kubectl(?:\\s+(?:-[A-Za-z][-A-Za-z0-9]*|--[A-Za-z][-A-Za-z0-9]*)(?:[=\\s]+\\S+)?)*\\s+logs\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
@@ -27,7 +28,6 @@ keep_lines_matching = [
 ]
 truncate_lines_at = 240
 max_lines = 120
-on_empty = "kubectl logs: no errors or warnings in output"
 
 [[tests.kubectl-logs]]
 name = "logs with errors"
@@ -50,13 +50,6 @@ Error from server (NotFound): pods "myapp-abc123" not found
 expected = """
 Error from server (NotFound): pods "myapp-abc123" not found"""
 
-[[tests.kubectl-logs]]
-name = "healthy logs summarized honestly"
-input = """
-2024-01-15 10:30:00 INFO  Starting server on port 8080
-2024-01-15 10:30:01 INFO  Connected to database
-"""
-expected = "kubectl logs: no errors or warnings in output"
 
 [[tests.kubectl-logs]]
 name = "pino error context and stack preserved"

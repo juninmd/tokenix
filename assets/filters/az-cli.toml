@@ -1,6 +1,7 @@
 [filters.az-cli]
 description = "Compact Azure CLI output"
 match_command = "^az\\s+\\w+\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -20,7 +21,6 @@ keep_lines_matching = [
   "ResourceNotFound"
 ]
 max_lines = 50
-on_empty = "az: ok"
 
 [[tests.az-cli]]
 name = "clean output"

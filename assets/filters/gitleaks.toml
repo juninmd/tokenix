@@ -1,6 +1,7 @@
 [filters.gitleaks]
 description = "Compact gitleaks secret-scan output: keep findings + summary, drop the ASCII banner and routine INF log noise"
 match_command = "^gitleaks\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 filter_stderr = true
 # Clean run: gitleaks logs "no leaks found". Collapse the whole scan to one line,
@@ -31,22 +32,7 @@ keep_lines_matching = [
   "\\bfatal\\b"
 ]
 max_lines = 80
-on_empty = "gitleaks: no findings"
 
-[[tests.gitleaks]]
-name = "clean scan collapses to one line"
-input = """
-    ○
-    │╲
-    │ ○
-    ○ ░
-    ░    gitleaks
-
-11:20AM INF 240 commits scanned.
-11:20AM INF scan completed in 1.2s
-11:20AM INF no leaks found
-"""
-expected = "gitleaks: no leaks found"
 
 [[tests.gitleaks]]
 name = "finding keeps fields and summary, drops banner/noise"

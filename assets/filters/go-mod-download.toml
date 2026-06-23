@@ -1,6 +1,7 @@
 [filters.go-mod-download]
 description = "Compact go mod download output"
 match_command = "^go\\s+mod\\s+download\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -9,16 +10,7 @@ strip_lines_matching = [
   "^go: extracting"
 ]
 max_lines = 20
-on_empty = "go mod download: done"
 
-[[tests.go-mod-download]]
-name = "clean download"
-input = """
-go: finding module for package github.com/gin-gonic/gin
-go: downloading github.com/gin-gonic/gin v1.9.1
-go: extracting github.com/gin-gonic/gin v1.9.1
-"""
-expected = "go mod download: done"
 
 [[tests.go-mod-download]]
 name = "unknown revision error preserved"

@@ -1,6 +1,7 @@
 [filters.npm-install]
 description = "Compact npm/pnpm/yarn install outputs aggressively"
 match_command = "^(npm|ni)\\s+(install|add|i|in|inst|insta|instal)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -36,7 +37,6 @@ keep_lines_matching = [
   "audit fix",
 ]
 max_lines = 30
-on_empty = "npm install: ok"
 replace_patterns = [
   ["added \\d+ packages? in \\d+[a-z]*", "added <N> packages"],
   ["removed \\d+ packages? in \\d+[a-z]*", "removed <N> packages"],
@@ -52,16 +52,6 @@ extract_sections = [
 deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
 token_budget = 1500
 
-[[tests.npm-install]]
-name = "clean install collapses to ok"
-input = """
-added 120 packages in 3s
-
-up to date
-
-found 0 vulnerabilities
-"""
-expected = "npm install: ok"
 
 [[tests.npm-install]]
 name = "vulnerabilities survive"
