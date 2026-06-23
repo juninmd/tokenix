@@ -44,3 +44,8 @@ BUILD FAILED in 5s
 expected = """
 > Compilation failed; see the compiler error output for details.
 BUILD FAILED in 5s"""
+
+[[tests.gradle-build]]
+name = "silent success stays empty"
+input = ""
+expected = ""

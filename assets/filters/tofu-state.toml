@@ -26,3 +26,7 @@ aws_instance.web
 aws_s3_bucket.data
 aws_security_group.web"""
 
+[[tests.tofu-state]]
+name = "silent success stays empty"
+input = ""
+expected = ""

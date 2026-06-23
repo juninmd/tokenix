@@ -25,3 +25,8 @@ utils.go:15:1: line too long (lll)
 expected = """
 main.go:10:5: unused variable x (unused)
 utils.go:15:1: line too long (lll)"""
+
+[[tests.golangci-lint]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -25,3 +25,8 @@ Installing dependencies from lock file
 pyproject.toml changed significantly since poetry.lock was last generated. Run `poetry lock` to fix the lock file.
 """
 expected = "pyproject.toml changed significantly since poetry.lock was last generated. Run `poetry lock` to fix the lock file."
+
+[[tests.poetry-install]]
+name = "silent success stays empty"
+input = ""
+expected = ""

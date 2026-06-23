@@ -23,3 +23,8 @@ foo.go:10:5: cannot find package "github.com/golang/mock/mockgen"
 """
 expected = """
 foo.go:10:5: cannot find package "github.com/golang/mock/mockgen" """
+
+[[tests.go-generate]]
+name = "silent success stays empty"
+input = ""
+expected = ""

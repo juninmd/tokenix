@@ -21,3 +21,8 @@ Found 2 errors.
 """
 expected = """src/main.ts(10,5): error TS2304: Cannot find name 'foo'.
 src/utils.ts(15,1): error TS2322: Type 'string' is not assignable to type 'number'."""
+
+[[tests.tsc]]
+name = "silent success stays empty"
+input = ""
+expected = ""

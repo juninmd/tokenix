@@ -23,3 +23,8 @@ input = """
 ./main.go:10:5: undefined: foo
 """
 expected = "./main.go:10:5: undefined: foo"
+
+[[tests.go-build]]
+name = "silent success stays empty"
+input = ""
+expected = ""

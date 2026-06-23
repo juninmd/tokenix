@@ -29,3 +29,8 @@ lost connection
 expected = """
 scp: /remote/path/main.rs: Permission denied
 lost connection"""
+
+[[tests.scp]]
+name = "silent success stays empty"
+input = ""
+expected = ""

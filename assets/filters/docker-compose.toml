@@ -25,4 +25,14 @@ keep_lines_matching = [
 ]
 max_lines = 40
 
+[[tests.docker-compose]]
+name = "failure shown"
+input = """
+container web-1 exited with code 1
+"""
+expected = "container web-1 exited with code 1"
 
+[[tests.docker-compose]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -27,3 +27,8 @@ input = """
 Error response from daemon: cannot remove network myapp_default: network has active endpoints
 """
 expected = "Error response from daemon: cannot remove network myapp_default: network has active endpoints"
+
+[[tests.docker-compose-down]]
+name = "silent success stays empty"
+input = ""
+expected = ""

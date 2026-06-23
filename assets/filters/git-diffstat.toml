@@ -24,3 +24,7 @@ input = """
 """
 expected = " 3 files changed, 15 insertions(+), 3 deletions(-)"
 
+[[tests.git-diffstat]]
+name = "silent success stays empty"
+input = ""
+expected = ""

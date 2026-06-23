@@ -39,3 +39,7 @@ expected = """
 web:typecheck: src/main.ts(4,7): error TS2322: Type 'string' is not assignable to type 'number'.
 ELIFECYCLE Command failed with exit code 1."""
 
+[[tests.pnpm-script]]
+name = "silent success stays empty"
+input = ""
+expected = ""

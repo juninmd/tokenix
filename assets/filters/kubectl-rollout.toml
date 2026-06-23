@@ -25,3 +25,8 @@ error: deployment "myapp" exceeded its progress deadline
 """
 expected = """
 error: deployment "myapp" exceeded its progress deadline"""
+
+[[tests.kubectl-rollout]]
+name = "silent success stays empty"
+input = ""
+expected = ""

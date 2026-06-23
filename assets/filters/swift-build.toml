@@ -26,3 +26,8 @@ main.swift:10:5: error: cannot find 'foo' in scope
     ^~~
 """
 expected = "main.swift:10:5: error: cannot find 'foo' in scope"
+
+[[tests.swift-build]]
+name = "silent success stays empty"
+input = ""
+expected = ""

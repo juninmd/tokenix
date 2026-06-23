@@ -21,3 +21,7 @@ warning: variable "conn" is unused
 """
 expected = "warning: variable \"conn\" is unused\n  lib/router.ex:42"
 
+[[tests.mix-compile]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -31,3 +31,8 @@ Error: Failed to get existing workspaces: accessing S3 bucket: AccessDenied
 """
 expected = """
 Error: Failed to get existing workspaces: accessing S3 bucket: AccessDenied"""
+
+[[tests.terraform-init]]
+name = "silent success stays empty"
+input = ""
+expected = ""

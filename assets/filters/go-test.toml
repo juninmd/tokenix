@@ -32,3 +32,8 @@ expected = """
 --- FAIL: TestAdd (0.00s)
 FAIL
 FAIL    github.com/user/project  0.234s"""
+
+[[tests.go-test]]
+name = "silent success stays empty"
+input = ""
+expected = ""

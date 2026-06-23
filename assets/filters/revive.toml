@@ -23,3 +23,8 @@ utils.go:15:1: var-naming: don't use underscores in Go names
 expected = """
 main.go:10:5: exported: Add: exported function should have comment
 utils.go:15:1: var-naming: don't use underscores in Go names"""
+
+[[tests.revive]]
+name = "silent success stays empty"
+input = ""
+expected = ""

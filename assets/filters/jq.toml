@@ -22,7 +22,12 @@ input = """
   "city": "New York"
 }
 """
-expected = "jq: ok"
+expected = '''
+{
+  "name": "John",
+  "age": 30,
+  "city": "New York"
+}'''
 
 [[tests.jq]]
 name = "parse error shown"

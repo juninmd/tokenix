@@ -23,3 +23,8 @@ utils.go:15:1: unreachable code
 expected = """
 main.go:10:5: loop condition never evaluates to false
 utils.go:15:1: unreachable code"""
+
+[[tests.go-vet]]
+name = "silent success stays empty"
+input = ""
+expected = ""

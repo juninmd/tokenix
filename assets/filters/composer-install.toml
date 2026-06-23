@@ -43,3 +43,8 @@ Your requirements could not be resolved to an installable set of packages.
   Problem 1
     - Root composer.json requires php >=8.3 but your php version (8.1.27) does not satisfy that requirement.
 Installation failed, reverting ./composer.json and ./composer.lock to their original content."""
+
+[[tests.composer-install]]
+name = "silent success stays empty"
+input = ""
+expected = ""

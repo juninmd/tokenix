@@ -4,7 +4,6 @@ match_command = "^git\\s+diff\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^diff --git",
   "^index ",
   "^--- ",
   "^\\+\\+\\+ ",
@@ -13,7 +12,8 @@ strip_lines_matching = [
 keep_lines_matching = [
   "^\\+",
   "^\\-",
-  "^\\\\ "
+  "^\\\\ ",
+  "^diff --git"
 ]
 max_lines = 100
 # `git diff --stat` / `--name-only` have no +/- hunk lines; show the real summary
@@ -44,8 +44,9 @@ index 1234567..abcdefg 100644
      println!("Hello, world!");
 +    println!("New line");
  }
-"""
+ """
 expected = """
+diff --git a/src/main.rs b/src/main.rs
 +    println!("New line");"""
 
 [[tests.git-diff]]
@@ -60,6 +61,12 @@ index 1234567..abcdefg 100644
      println!("Hello, world!");
 -    println!("Old line");
  }
-"""
+ """
 expected = """
+diff --git a/src/main.rs b/src/main.rs
 -    println!("Old line");"""
+
+[[tests.git-diff]]
+name = "silent success stays empty"
+input = ""
+expected = ""

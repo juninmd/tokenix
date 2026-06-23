@@ -32,4 +32,6 @@ input = """
 Workspace "staging" created.
 Switched to workspace "staging".
 """
-expected = "tofu workspace: default"
+expected = '''
+Workspace "staging" created.
+Switched to workspace "staging".'''

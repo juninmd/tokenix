@@ -35,3 +35,8 @@ input = """
 expected = """
 [ERROR] BUILD FAILURE
 [ERROR] There are test failures."""
+
+[[tests.maven-test]]
+name = "silent success stays empty"
+input = ""
+expected = ""

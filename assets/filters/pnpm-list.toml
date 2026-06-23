@@ -30,3 +30,8 @@ my-project@1.0.0 /home/user/my-project
 UNMET PEER DEPENDENCY @babel/core@^7.0.0
 """
 expected = "UNMET PEER DEPENDENCY @babel/core@^7.0.0"
+
+[[tests.pnpm-list]]
+name = "silent success stays empty"
+input = ""
+expected = ""

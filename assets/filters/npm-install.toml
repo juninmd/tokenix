@@ -13,9 +13,7 @@ strip_lines_matching = [
   "Extracting",
   "Checking",
   "up to date",
-  "packages in",
   "found 0 vulnerabilities",
-  "audited \\d+ packages",
   "npm WARN deprecated",
   "npm WARN ",
   "WARN ",
@@ -25,6 +23,8 @@ strip_lines_matching = [
   "preinstall",
 ]
 keep_lines_matching = [
+  "^added \\d+ packages",
+  "ERR!",
   "error",
   "ERROR",
   "fail",
@@ -74,8 +74,7 @@ npm ERR! 404 Not Found - GET https://registry.npmjs.org/not-a-real-package
 npm ERR! A complete log of this run can be found in:
 npm ERR!     /home/user/.npm/_logs/2024-01-15T10_30_00_000Z-debug-0.log
 """
-expected = """added 100 packages in 5s
-npm ERR! code E404
+expected = """npm ERR! code E404
 npm ERR! 404 Not Found - GET https://registry.npmjs.org/not-a-real-package
 npm ERR! A complete log of this run can be found in:
 npm ERR!     /home/user/.npm/_logs/2024-01-15T10_30_00_000Z-debug-0.log"""

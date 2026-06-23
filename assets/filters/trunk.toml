@@ -35,3 +35,8 @@ Found 2 issues.
 expected = """
 src/main.ts:10:5: error: 'x' is assigned a value but never used
 src/main.ts:15:1: warning: Line too long"""
+
+[[tests.trunk]]
+name = "silent success stays empty"
+input = ""
+expected = ""

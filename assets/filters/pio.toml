@@ -45,3 +45,7 @@ src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared in this scope
 """
 expected = "src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared in this scope"
 
+[[tests.pio]]
+name = "silent success stays empty"
+input = ""
+expected = ""

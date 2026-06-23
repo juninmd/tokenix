@@ -15,4 +15,14 @@ keep_lines_matching = [
 ]
 max_lines = 20
 
+[[tests.tofu-taint]]
+name = "error shown"
+input = """
+Error: No such resource instance
+"""
+expected = "Error: No such resource instance"
 
+[[tests.tofu-taint]]
+name = "silent success stays empty"
+input = ""
+expected = ""

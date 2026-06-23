@@ -23,3 +23,8 @@ utils.go:15:1: don't use ALL_CAPS in Go names; use CamelCase
 expected = """
 main.go:10:5: exported function Add should have comment or be unexported
 utils.go:15:1: don't use ALL_CAPS in Go names; use CamelCase"""
+
+[[tests.go-lint]]
+name = "silent success stays empty"
+input = ""
+expected = ""

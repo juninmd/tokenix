@@ -29,3 +29,8 @@ utils.go:15:1: G104: Errors unhandled (MEDIUM)
 expected = """
 main.go:10:5: G101: Hardcoded credentials (HIGH)
 utils.go:15:1: G104: Errors unhandled (MEDIUM)"""
+
+[[tests.gosec]]
+name = "silent success stays empty"
+input = ""
+expected = ""

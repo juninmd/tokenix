@@ -22,7 +22,9 @@ input = """
 Checking my-crate v0.1.0
 Finished dev [unoptimized + debuginfo] target(s) in 0.5s
 """
-expected = "cargo clippy: no warnings"
+expected = '''
+Checking my-crate v0.1.0
+Finished dev [unoptimized + debuginfo] target(s) in 0.5s'''
 
 [[tests.cargo-clippy]]
 name = "warnings shown"

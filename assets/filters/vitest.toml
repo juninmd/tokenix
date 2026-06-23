@@ -38,3 +38,8 @@ expected = """
  FAIL  src/utils.test.ts [ src/utils.test.ts ]
  × add › should add two numbers
    AssertionError: expected 4 toBe 3"""
+
+[[tests.vitest]]
+name = "silent success stays empty"
+input = ""
+expected = ""

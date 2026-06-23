@@ -41,3 +41,8 @@ Could not find gem 'nonexistent-gem' in any of the gem sources listed in your Ge
 """
 expected = """
 Could not find gem 'nonexistent-gem' in any of the gem sources listed in your Gemfile."""
+
+[[tests.bundle]]
+name = "silent success stays empty"
+input = ""
+expected = ""

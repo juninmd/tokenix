@@ -53,4 +53,6 @@ input = """
     Finished dev [unoptimized + debuginfo] target(s) in 0.1s
      Running `target/debug/my-crate`
 """
-expected = "cargo run: finished (no output)"
+expected = '''
+    Finished dev [unoptimized + debuginfo] target(s) in 0.1s
+     Running `target/debug/my-crate`'''

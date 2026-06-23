@@ -23,3 +23,7 @@ Theme 'Development' (id: 12345) pushed to store.example.myshopify.com
 """
 expected = "Theme 'Development' (id: 12345) pushed to store.example.myshopify.com"
 
+[[tests.shopify-theme]]
+name = "silent success stays empty"
+input = ""
+expected = ""

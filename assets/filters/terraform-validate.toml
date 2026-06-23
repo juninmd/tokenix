@@ -22,7 +22,8 @@ name = "valid config"
 input = """
 Success! The configuration is valid.
 """
-expected = "terraform validate: valid"
+expected = '''
+Success! The configuration is valid.'''
 
 [[tests.terraform-validate]]
 name = "validation error"

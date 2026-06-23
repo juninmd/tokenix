@@ -57,3 +57,7 @@ input = """
 """
 expected = " error: could not resolve dependency"
 
+[[tests.docker-build]]
+name = "silent success stays empty"
+input = ""
+expected = ""

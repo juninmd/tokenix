@@ -10,3 +10,8 @@ max_lines = 30
 name = "changed files pass through"
 input = "main.tf\nvariables.tf"
 expected = "main.tf\nvariables.tf"
+
+[[tests.tofu-fmt]]
+name = "silent success stays empty"
+input = ""
+expected = ""

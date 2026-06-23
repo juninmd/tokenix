@@ -24,4 +24,14 @@ keep_lines_matching = [
 ]
 max_lines = 60
 
+[[tests.tofu-plan]]
+name = "error shown"
+input = """
+Error: Invalid resource type
+"""
+expected = "Error: Invalid resource type"
 
+[[tests.tofu-plan]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -23,3 +23,7 @@ expected = """
 src/main.rs:    let foo = "bar";
 src/utils.rs:   println!("{}", foo);"""
 
+[[tests.git-grep]]
+name = "silent success stays empty"
+input = ""
+expected = ""

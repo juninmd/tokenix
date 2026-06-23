@@ -72,3 +72,8 @@ Date:        2023-01-02T03:04:05Z
 Fingerprint: 9d8e7f6a:config/secrets.yml:aws-access-token:12
 11:25AM WRN leaks found: 1
 """
+
+[[tests.gitleaks]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -19,3 +19,8 @@ go: downloading github.com/missing/pkg v1.0.0
 go: github.com/missing/pkg@v1.0.0: reading github.com/missing/pkg/go.mod at revision v1.0.0: unknown revision v1.0.0
 """
 expected = "go: github.com/missing/pkg@v1.0.0: reading github.com/missing/pkg/go.mod at revision v1.0.0: unknown revision v1.0.0"
+
+[[tests.go-mod-download]]
+name = "silent success stays empty"
+input = ""
+expected = ""

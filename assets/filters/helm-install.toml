@@ -8,12 +8,12 @@ strip_lines_matching = [
   "^NAME:",
   "^LAST DEPLOYED:",
   "^NAMESPACE:",
-  "^STATUS:",
   "^REVISION:",
   "^TEST SUITE:",
   "^\\s*\\d+\\.\\d+s$"
 ]
 keep_lines_matching = [
+  "^STATUS:",
   "Error:",
   "FAILED",
   "failed to",
@@ -33,7 +33,7 @@ STATUS: deployed
 REVISION: 1
 TEST SUITE: None
 """
-expected = "helm: deployed"
+expected = "STATUS: deployed"
 
 [[tests.helm-install]]
 name = "failure shown"

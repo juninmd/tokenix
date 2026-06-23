@@ -25,3 +25,8 @@ Dockerfile:15 DL3015 Avoid additional packages by specifying --no-install-recomm
 expected = """
 Dockerfile:10 DL3008 Pin versions in apt get install
 Dockerfile:15 DL3015 Avoid additional packages by specifying --no-install-recommends"""
+
+[[tests.hadolint]]
+name = "silent success stays empty"
+input = ""
+expected = ""

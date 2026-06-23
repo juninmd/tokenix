@@ -1812,9 +1812,11 @@ mod tests {
     }
 
     #[test]
-    fn silent_success_may_use_on_empty_sentinel() {
+    fn silent_success_stays_empty() {
+        // on_empty sentinels were removed: a silent successful command must not
+        // fabricate a "succeeded" string — genuinely empty output stays empty.
         let (stdout, stderr) = compress_command_streams("cargo build", "", "", true);
-        assert_eq!(stdout, "cargo build: build succeeded");
+        assert_eq!(stdout, "");
         assert_eq!(stderr, "");
     }
 

@@ -25,3 +25,8 @@ Error: near "SELCT": syntax error
 """
 expected = """
 Error: near "SELCT": syntax error"""
+
+[[tests.sqlite3]]
+name = "silent success stays empty"
+input = ""
+expected = ""

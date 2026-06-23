@@ -25,7 +25,14 @@ dist/assets/index-BQx2.css     12.10 kB
 dist/assets/index-Cf3k.js     143.52 kB
 ✓ built in 1.24s
 """
-expected = "vite: build succeeded"
+expected = '''
+vite v5.4.2 building for production...
+transforming (34) src/main.ts
+✓ 128 modules transformed.
+dist/index.html                 0.46 kB
+dist/assets/index-BQx2.css     12.10 kB
+dist/assets/index-Cf3k.js     143.52 kB
+✓ built in 1.24s'''
 
 [[tests.vite]]
 name = "build error shown"

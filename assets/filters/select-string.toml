@@ -27,3 +27,7 @@ expected = """
 Select-String : O objeto de entrada não pode ser associado a quaisquer parâmetros do comando
 No linha:1 caractere:1"""
 
+[[tests.select-string]]
+name = "silent success stays empty"
+input = ""
+expected = ""

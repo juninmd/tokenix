@@ -23,3 +23,8 @@ utils.go:15:1: unchecked error return
 expected = """
 main.go:10:5: ignored error
 utils.go:15:1: unchecked error return"""
+
+[[tests.errcheck]]
+name = "silent success stays empty"
+input = ""
+expected = ""

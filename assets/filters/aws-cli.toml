@@ -27,3 +27,8 @@ An error occurred (UnauthorizedOperation) when calling the DescribeInstances ope
 """
 expected = """
 An error occurred (UnauthorizedOperation) when calling the DescribeInstances operation: You are not authorized to perform this operation."""
+
+[[tests.aws-cli]]
+name = "silent success stays empty"
+input = ""
+expected = ""

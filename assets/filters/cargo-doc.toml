@@ -21,7 +21,9 @@ input = """
 Documenting my-crate v0.1.0
 Finished dev [unoptimized + debuginfo] target(s) in 2.3s
 """
-expected = "cargo doc: generated"
+expected = '''
+Documenting my-crate v0.1.0
+Finished dev [unoptimized + debuginfo] target(s) in 2.3s'''
 
 [[tests.cargo-doc]]
 name = "warning shown"

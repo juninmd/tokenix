@@ -8,7 +8,6 @@ strip_lines_matching = [
   "^\\s*Compiling",
   "^\\s*Running unittests",
   "^\\s*Running tests/",
-  "^\\s*test result: ok\\.",
   "^\\s*Doc-tests",
   "^\\s*Finished",
   "^\\s*running \\d+ test",
@@ -59,3 +58,7 @@ expected = """
 test test_fail ... FAILED
 test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"""
 
+[[tests.cargo-test]]
+name = "silent success stays empty"
+input = ""
+expected = ""

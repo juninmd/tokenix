@@ -22,3 +22,8 @@ src/main.ts
 SyntaxError: Could not parse src/main.ts: Unexpected token (10:5)
 """
 expected = "SyntaxError: Could not parse src/main.ts: Unexpected token (10:5)"
+
+[[tests.prettier]]
+name = "silent success stays empty"
+input = ""
+expected = ""

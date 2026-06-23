@@ -59,3 +59,8 @@ test test_fail ... FAILED
 failures:
     test_fail
 test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"""
+
+[[tests.deno]]
+name = "silent success stays empty"
+input = ""
+expected = ""

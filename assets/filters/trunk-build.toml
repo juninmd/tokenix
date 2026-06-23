@@ -28,3 +28,7 @@ input = """
 """
 expected = "   Finished release [optimized] target(s) in 45.23s\n   Binary: target/release/my-crate (5.2MB)"
 
+[[tests.trunk-build]]
+name = "silent success stays empty"
+input = ""
+expected = ""

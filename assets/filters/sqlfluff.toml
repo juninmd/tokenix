@@ -17,4 +17,14 @@ keep_lines_matching = [
 ]
 max_lines = 50
 
+[[tests.sqlfluff]]
+name = "error shown"
+input = """
+Error: Parse error in model.sql
+"""
+expected = "Error: Parse error in model.sql"
 
+[[tests.sqlfluff]]
+name = "silent success stays empty"
+input = ""
+expected = ""

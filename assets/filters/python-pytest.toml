@@ -48,3 +48,8 @@ E    +  where 4 = add(1, 2)
 expected = """
     assert add(1, 2) == 3
 E   AssertionError: assert 4 == 3"""
+
+[[tests.python-pytest]]
+name = "silent success stays empty"
+input = ""
+expected = ""

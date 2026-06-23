@@ -8,13 +8,13 @@ strip_lines_matching = [
   "^\\s*Collecting ",
   "^\\s*Downloading ",
   "^\\s*Installing collected packages",
-  "^\\s*Successfully installed",
   "^\\s*Requirement already satisfied",
   "^\\s*WARNING: ",
   "packages in",
   "found 0 vulnerabilities"
 ]
 keep_lines_matching = [
+  "^Successfully installed",
   "ERROR:",
   "error:",
   "Failed",
@@ -34,3 +34,8 @@ ERROR: No matching distribution found for nonexistent-package
 expected = """
   ERROR: Could not find a version that satisfies the requirement nonexistent-package
 ERROR: No matching distribution found for nonexistent-package"""
+
+[[tests.pip-install]]
+name = "silent success stays empty"
+input = ""
+expected = ""

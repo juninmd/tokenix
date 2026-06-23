@@ -9,16 +9,16 @@ strip_lines_matching = [
   "^Author:",
   "^Date:",
   "^    ",
-  "^diff --git",
   "^index ",
   "^--- ",
   "^\\+\\+\\+ ",
-  "^@@ ",
+  "^@@ "
 ]
 keep_lines_matching = [
   "^\\+",
   "^\\-",
   "^\\\\ ",
+  "^diff --git"
 ]
 max_lines = 50
 
@@ -40,7 +40,12 @@ index 1234567..abcdefg 100644
      println!("Hello, world!");
 +    println!("New line");
  }
-"""
+ """
 expected = """
+diff --git a/src/main.rs b/src/main.rs
 +    println!("New line");"""
 
+[[tests.git-show]]
+name = "silent success stays empty"
+input = ""
+expected = ""

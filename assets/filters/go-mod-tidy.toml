@@ -22,3 +22,8 @@ go: github.com/acme/app imports
 expected = """
 go: github.com/acme/app imports
 	github.com/acme/internal/util: cannot find module providing package github.com/acme/internal/util"""
+
+[[tests.go-mod-tidy]]
+name = "silent success stays empty"
+input = ""
+expected = ""

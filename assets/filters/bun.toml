@@ -56,3 +56,8 @@ test/add.test.ts:12:3: expected 3 but got 4
 expected = """
   FAIL test/add.test.ts [FAILED]
 1 fail"""
+
+[[tests.bun]]
+name = "silent success stays empty"
+input = ""
+expected = ""

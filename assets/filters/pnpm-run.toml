@@ -27,3 +27,8 @@ ELIFECYCLE Command failed with exit code 1.
 expected = """/repo/src/main.ts
   4:7  error  'unused' is assigned a value but never used  no-unused-vars
 ELIFECYCLE Command failed with exit code 1."""
+
+[[tests.pnpm-run]]
+name = "silent success stays empty"
+input = ""
+expected = ""

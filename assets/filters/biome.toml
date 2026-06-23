@@ -39,3 +39,8 @@ warning: Variable 'x' is assigned a value but never used.
   │
 15 │     let x = 5;
    │     ^^^^^^^^^^"""
+
+[[tests.biome]]
+name = "silent success stays empty"
+input = ""
+expected = ""

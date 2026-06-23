@@ -31,4 +31,4 @@ Mode    LastWriteTime    Length Name
 name = "empty directory"
 input = """
 """
-expected = "Get-ChildItem: no items"
+expected = ""

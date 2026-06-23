@@ -30,3 +30,7 @@ src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared
 """
 expected = "src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared"
 
+[[tests.pio-run]]
+name = "silent success stays empty"
+input = ""
+expected = ""

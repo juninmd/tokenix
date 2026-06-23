@@ -41,3 +41,8 @@ expected = """
 com.example.MyTest > testAdd FAILED
     java.lang.AssertionError: expected:<3> but was:<4>
 BUILD FAILED in 5s"""
+
+[[tests.gradle-test]]
+name = "silent success stays empty"
+input = ""
+expected = ""

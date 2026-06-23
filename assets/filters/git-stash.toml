@@ -17,4 +17,14 @@ keep_lines_matching = [
 ]
 max_lines = 20
 
+[[tests.git-stash]]
+name = "error shown"
+input = """
+fatal: unknown switch 'z'
+"""
+expected = "fatal: unknown switch 'z'"
 
+[[tests.git-stash]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -25,3 +25,8 @@ error: error validating "deployment.yaml": error validating data: apiVersion "ap
 """
 expected = """
 error: error validating "deployment.yaml": error validating data: apiVersion "apps/v1" is missing; if you choose to manually configure this resource, you must specify a valid apiVersion"""
+
+[[tests.kubectl-apply]]
+name = "silent success stays empty"
+input = ""
+expected = ""

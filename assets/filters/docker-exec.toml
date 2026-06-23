@@ -24,3 +24,8 @@ input = """
 Error response from daemon: Container abc123456 is not running
 """
 expected = "Error response from daemon: Container abc123456 is not running"
+
+[[tests.docker-exec]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -37,4 +37,7 @@ No changes. No objects need to be destroyed.
 
 Plan: 0 to add, 0 to change, 0 to destroy.
 """
-expected = "terraform plan -destroy: nothing to destroy"
+expected = '''
+No changes. No objects need to be destroyed.
+
+Plan: 0 to add, 0 to change, 0 to destroy.'''

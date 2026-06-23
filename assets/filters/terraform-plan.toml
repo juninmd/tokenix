@@ -56,4 +56,7 @@ No changes. Infrastructure is up-to-date.
 """
 expected = "No changes. Infrastructure is up-to-date."
 
-
+[[tests.terraform-plan]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -33,3 +33,8 @@ Running models...
 Done.
 """
 expected = "  ERROR: division by zero"
+
+[[tests.dbt]]
+name = "silent success stays empty"
+input = ""
+expected = ""

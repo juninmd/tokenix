@@ -32,4 +32,6 @@ input = """
 Workspace "staging" created.
 Switched to workspace "staging".
 """
-expected = "terraform workspace: default"
+expected = '''
+Workspace "staging" created.
+Switched to workspace "staging".'''

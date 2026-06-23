@@ -29,3 +29,8 @@ fatal: repository 'https://github.com/user/nonexistent.git' not found
 """
 expected = """
 fatal: repository 'https://github.com/user/nonexistent.git' not found"""
+
+[[tests.git-clone]]
+name = "silent success stays empty"
+input = ""
+expected = ""

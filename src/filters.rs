@@ -3096,7 +3096,10 @@ on_empty = "empty filter output"
         let filters = load_bundled_filters();
         let f = find_filter("./gradlew", &filters);
         assert!(f.is_some(), "gradlew filter must be found for './gradlew'");
-        assert_eq!(f.unwrap().on_empty.as_deref(), Some("gradlew: success"));
+        assert!(
+            f.unwrap().passthrough_when_emptied,
+            "gradlew filter must pass real output through when filtering empties it"
+        );
     }
 
     #[test]

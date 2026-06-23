@@ -31,3 +31,7 @@ expected = """
 2024-01-15 10:30:02 ERROR Failed to connect to redis: connection refused
 2024-01-15 10:30:03 WARN  Retrying in 5s"""
 
+[[tests.docker-logs]]
+name = "silent success stays empty"
+input = ""
+expected = ""

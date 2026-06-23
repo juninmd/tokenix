@@ -24,3 +24,8 @@ error: resource(s) were provided, but no name, label selector, or --all flag spe
 """
 expected = """
 error: resource(s) were provided, but no name, label selector, or --all flag specified"""
+
+[[tests.kubectl-scale]]
+name = "silent success stays empty"
+input = ""
+expected = ""

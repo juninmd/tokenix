@@ -32,3 +32,8 @@ CONFLICT (content): Merge conflict in src/main.rs
 error: could not apply 1a2b3c4... Fix bug
 hint: after resolving the conflicts, mark them with
 hint: "git add/rm <pathspec>", then run "git cherry-pick --continue"."""
+
+[[tests.git-cherry-pick]]
+name = "silent success stays empty"
+input = ""
+expected = ""

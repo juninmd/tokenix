@@ -31,3 +31,8 @@ aws_instance.web: Still creating... [10s elapsed]
 Error: Error launching instance: InvalidParameterValue
 """
 expected = "Error: Error launching instance: InvalidParameterValue"
+
+[[tests.tofu-apply]]
+name = "silent success stays empty"
+input = ""
+expected = ""

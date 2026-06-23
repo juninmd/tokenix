@@ -26,3 +26,7 @@ main.tf
 variables.tf
 outputs.tf"""
 
+[[tests.terraform-fmt]]
+name = "silent success stays empty"
+input = ""
+expected = ""

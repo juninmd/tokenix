@@ -43,3 +43,8 @@ StackTrace:
 expected = """Failed MyApp.Tests.TestAdd [10 ms]
 Error Message:
 StackTrace:"""
+
+[[tests.dotnet-test]]
+name = "silent success stays empty"
+input = ""
+expected = ""

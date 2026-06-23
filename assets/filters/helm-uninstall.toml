@@ -23,3 +23,8 @@ Error: uninstall: Release not loaded: myapp: release: not found
 """
 expected = """
 Error: uninstall: Release not loaded: myapp: release: not found"""
+
+[[tests.helm-uninstall]]
+name = "silent success stays empty"
+input = ""
+expected = ""

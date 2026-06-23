@@ -34,3 +34,8 @@ Resolving dependencies... (0.5s)
 Because my-project depends on requests (^99.0) which doesn't match any versions, version solving failed.
 """
 expected = "Because my-project depends on requests (^99.0) which doesn't match any versions, version solving failed."
+
+[[tests.poetry-add]]
+name = "silent success stays empty"
+input = ""
+expected = ""

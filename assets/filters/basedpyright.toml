@@ -29,3 +29,8 @@ src/utils.py:15:1: warning: Line too long  [reportLineTooLong]
 expected = """
 src/main.py:10:5: error: Variable "foo" is not defined  [reportUndefinedVariable]
 src/utils.py:15:1: warning: Line too long  [reportLineTooLong]"""
+
+[[tests.basedpyright]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -37,3 +37,7 @@ expected = """
 main.cpp:10:5: error: use of undeclared identifier 'foo'
 main.cpp:15:12: warning: unused variable 'x' [-Wunused-variable]"""
 
+[[tests.gpp]]
+name = "silent success stays empty"
+input = ""
+expected = ""

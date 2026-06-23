@@ -26,5 +26,5 @@ reports/daily-2026-06-15-agent-failure.md"""
 [[tests.git-ls-tree]]
 name = "empty tree"
 input = ""
-expected = "git ls-tree: no paths"
+expected = ""
 

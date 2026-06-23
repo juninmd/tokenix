@@ -39,3 +39,8 @@ Time Elapsed 00:00:05.23
 expected = """
 /MyApp/Program.cs(10,5): error CS0103: The name 'foo' does not exist in the current context [MyApp.csproj]
 Build FAILED."""
+
+[[tests.dotnet-build]]
+name = "silent success stays empty"
+input = ""
+expected = ""

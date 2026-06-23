@@ -20,4 +20,17 @@ keep_lines_matching = [
 ]
 max_lines = 30
 
+[[tests.rails-migrate]]
+name = "migration step kept"
+input = """
+== 20240101000000 CreateUsers: migrating
+-- create_table(:users)
+CreateTable completed
+== 20240101000000 CreateUsers: migrated (0.0050s)
+"""
+expected = "CreateTable completed"
 
+[[tests.rails-migrate]]
+name = "silent success stays empty"
+input = ""
+expected = ""

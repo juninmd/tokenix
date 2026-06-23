@@ -22,7 +22,8 @@ name = "valid config"
 input = """
 Success! The configuration is valid.
 """
-expected = "tofu validate: valid"
+expected = '''
+Success! The configuration is valid.'''
 
 [[tests.tofu-validate]]
 name = "validation error"

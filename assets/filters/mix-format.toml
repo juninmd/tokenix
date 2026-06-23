@@ -9,3 +9,8 @@ max_lines = 20
 name = "changed files pass through"
 input = "lib/my_app.ex\ntest/my_app_test.exs"
 expected = "lib/my_app.ex\ntest/my_app_test.exs"
+
+[[tests.mix-format]]
+name = "silent success stays empty"
+input = ""
+expected = ""

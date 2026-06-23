@@ -33,3 +33,7 @@ expected = """
 ERROR tool failed
 WARN retrying"""
 
+[[tests.cat-log]]
+name = "silent success stays empty"
+input = ""
+expected = ""

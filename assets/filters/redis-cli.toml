@@ -23,3 +23,8 @@ ERR unknown command 'INVALID', with args beginning with:
 """
 expected = """
 ERR unknown command 'INVALID', with args beginning with:"""
+
+[[tests.redis-cli]]
+name = "silent success stays empty"
+input = ""
+expected = ""

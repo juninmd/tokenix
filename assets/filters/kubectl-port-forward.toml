@@ -24,7 +24,10 @@ Forwarding from 127.0.0.1:8080 -> 8080
 Forwarding from [::1]:8080 -> 8080
 Handling connection for 8080
 """
-expected = "kubectl port-forward: running"
+expected = '''
+Forwarding from 127.0.0.1:8080 -> 8080
+Forwarding from [::1]:8080 -> 8080
+Handling connection for 8080'''
 
 [[tests.kubectl-port-forward]]
 name = "error shown"

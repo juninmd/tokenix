@@ -6,13 +6,13 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Compiling",
-  "^\\s*Fresh",
-  "^\\s*Finished"
+  "^\\s*Fresh"
 ]
 keep_lines_matching = [
   "error\\[",
   "warning:",
-  "note:"
+  "note:",
+  "^\\s*Finished"
 ]
 max_lines = 80
 
@@ -23,7 +23,7 @@ input = """
    Compiling my-crate v0.1.0
     Finished dev [unoptimized + debuginfo] target(s) in 2.3s
 """
-expected = "cargo build: build succeeded"
+expected = "    Finished dev [unoptimized + debuginfo] target(s) in 2.3s"
 
 [[tests.cargo-build]]
 name = "build with warnings"
@@ -40,4 +40,5 @@ warning: unused import: `std::io::Write`
     Finished dev [unoptimized + debuginfo] target(s) in 1.2s
 """
 expected = """warning: unused import: `std::io::Write`
-  = note: `#[warn(unused_imports)]` on by default"""
+  = note: `#[warn(unused_imports)]` on by default
+    Finished dev [unoptimized + debuginfo] target(s) in 1.2s"""

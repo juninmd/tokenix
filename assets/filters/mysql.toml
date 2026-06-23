@@ -28,3 +28,8 @@ ERROR 1049 (42000): Unknown database 'mydb'
 """
 expected = """
 ERROR 1049 (42000): Unknown database 'mydb'"""
+
+[[tests.mysql]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -31,3 +31,8 @@ curl: (7) Failed to connect to api.example.com port 443: Connection refused
 """
 expected = """
 curl: (7) Failed to connect to api.example.com port 443: Connection refused"""
+
+[[tests.curl]]
+name = "silent success stays empty"
+input = ""
+expected = ""

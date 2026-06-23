@@ -51,3 +51,8 @@ expected = """
 [ERROR] COMPILATION ERROR : 
 [ERROR] /project/src/main/java/com/example/Main.java:[10,5] cannot find symbol
 [INFO] BUILD FAILURE"""
+
+[[tests.mvn]]
+name = "silent success stays empty"
+input = ""
+expected = ""

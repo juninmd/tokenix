@@ -32,3 +32,8 @@ error[vulnerability]: ring 0.16.20 has a known vulnerability (RUSTSEC-2025-0001)
 expected = """
 error[vulnerability]: ring 0.16.20 has a known vulnerability (RUSTSEC-2025-0001)
 2026-06-16 advisories FAILED"""
+
+[[tests.cargo-deny]]
+name = "silent success stays empty"
+input = ""
+expected = ""

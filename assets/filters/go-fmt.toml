@@ -23,3 +23,8 @@ utils.go:15:1: extra blank line
 expected = """
 main.go:10:5: missing comma
 utils.go:15:1: extra blank line"""
+
+[[tests.go-fmt]]
+name = "silent success stays empty"
+input = ""
+expected = ""

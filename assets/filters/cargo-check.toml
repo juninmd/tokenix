@@ -33,3 +33,8 @@ Finished dev [unoptimized + debuginfo] target(s) in 0.5s
 """
 expected = """warning: unused variable: `x`
   = note: `#[warn(unused_variables)]` on by default"""
+
+[[tests.cargo-check]]
+name = "silent success stays empty"
+input = ""
+expected = ""

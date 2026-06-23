@@ -24,4 +24,14 @@ keep_lines_matching = [
 ]
 max_lines = 30
 
+[[tests.dotnet-format]]
+name = "warning shown"
+input = """
+warning: IDE0005 Using directive is unnecessary
+"""
+expected = "warning: IDE0005 Using directive is unnecessary"
 
+[[tests.dotnet-format]]
+name = "silent success stays empty"
+input = ""
+expected = ""

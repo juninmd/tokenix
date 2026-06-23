@@ -38,5 +38,5 @@ D:.
 name = "empty tree"
 command = "tree"
 input = ""
-expected = "tree: no paths"
+expected = ""
 

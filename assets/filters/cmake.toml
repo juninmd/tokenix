@@ -27,7 +27,12 @@ input = """
 -- Generating done
 -- Build files have been written to: /build
 """
-expected = "cmake: configured"
+expected = '''
+-- The C compiler identification is GNU 13.2.0
+-- The CXX compiler identification is GNU 13.2.0
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /build'''
 
 [[tests.cmake]]
 name = "error shown"

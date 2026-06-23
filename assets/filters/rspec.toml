@@ -50,3 +50,8 @@ Finished in 0.5 seconds
 5 examples, 1 failure
 """
 expected = "Failures:\n     Failure/Error: expect(user.name).to eq(\"John\")\n       expected: \"John\""
+
+[[tests.rspec]]
+name = "silent success stays empty"
+input = ""
+expected = ""

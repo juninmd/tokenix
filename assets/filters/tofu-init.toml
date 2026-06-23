@@ -27,3 +27,7 @@ OpenTofu has been successfully initialized!
 """
 expected = "OpenTofu has been successfully initialized!"
 
+[[tests.tofu-init]]
+name = "silent success stays empty"
+input = ""
+expected = ""

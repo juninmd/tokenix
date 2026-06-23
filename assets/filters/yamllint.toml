@@ -23,3 +23,8 @@ input = """
 expected = """
 .github/workflows/ci.yml:10:15: error: mapping values are not allowed in this context
 .github/workflows/ci.yml:20:1: warning: trailing spaces"""
+
+[[tests.yamllint]]
+name = "silent success stays empty"
+input = ""
+expected = ""

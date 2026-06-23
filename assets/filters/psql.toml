@@ -29,3 +29,8 @@ LINE 1: SELECT * FROM users;
                ^
 """
 expected = "ERROR:  relation \"users\" does not exist"
+
+[[tests.psql]]
+name = "silent success stays empty"
+input = ""
+expected = ""

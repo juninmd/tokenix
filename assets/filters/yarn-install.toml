@@ -32,3 +32,8 @@ info Visit https://yarnpkg.com/en/docs/cli/install for documentation about this 
 """
 expected = """
 error Couldn't find any versions for "left-pad" that matches "99.9.9\""""
+
+[[tests.yarn-install]]
+name = "silent success stays empty"
+input = ""
+expected = ""

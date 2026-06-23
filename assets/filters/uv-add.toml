@@ -29,7 +29,12 @@ Installed 2 packages in 18ms
  + requests==2.32.3
  + urllib3==2.2.1
 """
-expected = "uv: done"
+expected = '''
+Resolved 14 packages in 312ms
+Prepared 2 packages in 90ms
+Installed 2 packages in 18ms
+ + requests==2.32.3
+ + urllib3==2.2.1'''
 
 [[tests.uv-add]]
 name = "resolution error shown"

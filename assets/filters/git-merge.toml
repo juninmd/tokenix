@@ -30,3 +30,8 @@ Automatic merge failed; fix conflicts and then commit the result.
 expected = """
 CONFLICT (content): Merge conflict in src/main.rs
 Automatic merge failed; fix conflicts and then commit the result."""
+
+[[tests.git-merge]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -27,3 +27,8 @@ MongoServerError: Authentication failed.
 """
 expected = """
 MongoServerError: Authentication failed."""
+
+[[tests.mongosh]]
+name = "silent success stays empty"
+input = ""
+expected = ""

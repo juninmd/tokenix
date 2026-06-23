@@ -28,3 +28,8 @@ aws_instance.web: Still destroying... [10s elapsed]
 Error: Error terminating instance: InvalidInstanceID.NotFound
 """
 expected = "Error: Error terminating instance: InvalidInstanceID.NotFound"
+
+[[tests.terraform-destroy]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -20,7 +20,8 @@ name = "clean"
 input = """
 No vulnerabilities found.
 """
-expected = "govulncheck: no vulnerabilities"
+expected = '''
+No vulnerabilities found.'''
 
 [[tests.govulncheck]]
 name = "vulnerability shown"

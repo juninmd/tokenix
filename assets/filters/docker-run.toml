@@ -29,7 +29,11 @@ latest: Pulling from library/nginx
 Digest: sha256:abc123...
 Status: Downloaded newer image for nginx:latest
 """
-expected = "docker run: started"
+expected = '''
+Unable to find image 'nginx:latest' locally
+latest: Pulling from library/nginx
+Digest: sha256:abc123...
+Status: Downloaded newer image for nginx:latest'''
 
 [[tests.docker-run]]
 name = "error shown"

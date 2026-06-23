@@ -49,3 +49,8 @@ expected = """
     Expected: 3
     Received: 4
       12 |   expect(add(1, 2)).toBe(3);"""
+
+[[tests.jest]]
+name = "silent success stays empty"
+input = ""
+expected = ""

@@ -25,3 +25,8 @@ input = """
 expected = """
   × No solution found when resolving dependencies:
   ╰─▶ Because nonexistent-package-xyz was not found in the package registry and you require nonexistent-package-xyz, we can conclude that your requirements are unsatisfiable."""
+
+[[tests.uv-pip-install]]
+name = "silent success stays empty"
+input = ""
+expected = ""

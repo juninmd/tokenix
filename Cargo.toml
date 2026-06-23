@@ -1,6 +1,6 @@
 [package]
 name = "tokenix"
-version = "0.46.0"
+version = "0.46.1"
 edition = "2021"
 description = "Semantic search, symbol graphs, secrets scanning, output filters, and CLI hooks that save 60-90% LLM tokens"
 license = "MIT"
@@ -9,7 +9,7 @@ homepage = "https://github.com/juninmd/tokenix"
 readme = "README.md"
 keywords = ["llm", "embeddings", "code-search", "semantic-search", "cli"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = ["/tokenix-logo.png", "/assets/screenshots", "/benchmark", "/docs", "/.github"]
+exclude = ["/tokenix-logo.png", "/assets/screenshots", "/benchmark", "/.github"]
 
 [[bin]]
 name = "tokenix"

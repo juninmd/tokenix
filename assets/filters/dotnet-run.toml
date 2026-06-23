@@ -33,3 +33,7 @@ Restored /app/app.csproj (in 120 ms).
 """
 expected = "/app/Program.cs(10,13): error CS0103: The name 'foo' does not exist in the current context"
 
+[[tests.dotnet-run]]
+name = "silent success stays empty"
+input = ""
+expected = ""
