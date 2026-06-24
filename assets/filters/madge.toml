@@ -1,0 +1,42 @@
+[filters.madge]
+description = "Keep madge circular-dependency findings"
+match_command = "^madge\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Processed \\d+ files",
+]
+keep_lines_matching = [
+  "circular",
+  "^[✖✗×]",
+  "^[✔✓]",
+  "^\\d+\\) ",
+  "No circular dependency",
+  "(?i)error",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.madge]]
+name = "circular deps kept"
+input = """
+Processed 42 files (1.2s)
+
+✖ Found 2 circular dependencies!
+
+1) a.js > b.js > a.js
+2) x.js > y.js > z.js > x.js
+"""
+expected = """✖ Found 2 circular dependencies!
+1) a.js > b.js > a.js
+2) x.js > y.js > z.js > x.js"""
+
+[[tests.madge]]
+name = "no circular deps kept"
+input = """
+Processed 42 files (1.0s)
+
+✔ No circular dependency found!
+"""
+expected = """✔ No circular dependency found!"""

@@ -1,0 +1,56 @@
+[filters.artillery]
+description = "Compact artillery load-test summary: keep codes, rates and errors"
+match_command = "^artillery\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Phase ",
+  "^Started phase",
+  "^\\s*--------",
+]
+keep_lines_matching = [
+  "Summary report",
+  "^http\\.codes\\.",
+  "request_rate",
+  "^errors\\.",
+  "vusers\\.(?:failed|completed)",
+  "^http\\.response_time",
+  "p9[59]",
+  "(?i)\\berror\\b",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.artillery]]
+name = "summary metrics kept"
+input = """
+Phase started: warmup
+Started phase 0
+--------------------------------
+Summary report @ 01:00:00(+0000)
+http.codes.200: ................ 995
+http.codes.500: ................ 5
+http.request_rate: ............. 200/sec
+vusers.completed: .............. 1000
+vusers.failed: ................. 0
+errors.ETIMEDOUT: .............. 3
+"""
+expected = """Summary report @ 01:00:00(+0000)
+http.codes.200: ................ 995
+http.codes.500: ................ 5
+http.request_rate: ............. 200/sec
+vusers.completed: .............. 1000
+vusers.failed: ................. 0
+errors.ETIMEDOUT: .............. 3"""
+
+[[tests.artillery]]
+name = "clean run keeps codes"
+input = """
+Summary report @ 01:00:00(+0000)
+http.codes.200: ................ 500
+vusers.failed: ................. 0
+"""
+expected = """Summary report @ 01:00:00(+0000)
+http.codes.200: ................ 500
+vusers.failed: ................. 0"""

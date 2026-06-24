@@ -1,0 +1,53 @@
+[filters.netlify]
+description = "Compact netlify deploy output: keep live URL and errors"
+match_command = "^(?:netlify|ntl)\\s+(deploy|build)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Deploy path:",
+  "^Functions path:",
+  "^Configuration path:",
+  "^Deploying to ",
+  "^\\s*✔ Finished hashing",
+  "^\\s*✔ CDN requesting",
+  "^\\s*✔ Finished uploading",
+]
+keep_lines_matching = [
+  "Deploy is live",
+  "Website URL:",
+  "Website Draft URL:",
+  "Unique Deploy URL:",
+  "Logs:",
+  "(?i)error",
+  "Failed",
+  "Build failed",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.netlify]]
+name = "live url kept, hashing noise dropped"
+input = """
+Deploy path: /work/dist
+Configuration path: /work/netlify.toml
+Deploying to main site URL...
+✔ Finished hashing 42 files
+✔ CDN requesting 10 files
+✔ Finished uploading 10 assets
+✔ Deploy is live!
+
+Website URL: https://my-app.netlify.app
+"""
+expected = """✔ Deploy is live!
+Website URL: https://my-app.netlify.app"""
+
+[[tests.netlify]]
+name = "build failure surfaced"
+input = """
+Deploying to main site URL...
+Error: Build script returned non-zero exit code: 2
+Failed during stage 'building site': Build script returned non-zero exit code: 2
+"""
+expected = """Error: Build script returned non-zero exit code: 2
+Failed during stage 'building site': Build script returned non-zero exit code: 2"""

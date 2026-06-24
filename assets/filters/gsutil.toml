@@ -1,0 +1,45 @@
+[filters.gsutil]
+description = "Compact gsutil cp/rsync output: drop per-file progress, keep result"
+match_command = "^gsutil\\s+(-m\\s+)?(cp|rsync|mv|rm)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Copying ",
+  "^Removing ",
+  "^/ \\[",
+  "^- \\[",
+  "^\\\\ \\[",
+  "^\\| \\[",
+  "^\\s*\\d+ files?\\]\\[",
+]
+keep_lines_matching = [
+  "Operation completed over",
+  "(?i)error",
+  "AccessDenied",
+  "ServiceException",
+  "ResumableUploadException",
+  "Exception",
+  "CommandException",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.gsutil]]
+name = "completion kept, progress dropped"
+input = """
+Copying file://a.txt [Content-Type=text/plain]...
+/ [1 files][  1.0 KiB/  1.0 KiB]
+Copying file://b.txt [Content-Type=text/plain]...
+/ [2 files][  2.0 KiB/  2.0 KiB]
+Operation completed over 2 objects/2.0 KiB.
+"""
+expected = """Operation completed over 2 objects/2.0 KiB."""
+
+[[tests.gsutil]]
+name = "access error surfaced"
+input = """
+Copying file://a.txt [Content-Type=text/plain]...
+AccessDeniedException: 403 user does not have storage.objects.create access
+"""
+expected = """AccessDeniedException: 403 user does not have storage.objects.create access"""

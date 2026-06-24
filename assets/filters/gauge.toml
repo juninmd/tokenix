@@ -1,0 +1,48 @@
+[filters.gauge]
+description = "Compact gauge BDD output: keep totals and failures"
+match_command = "^gauge\\s+run\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+keep_lines_matching = [
+  "^Specifications:\\s",
+  "^Scenarios:\\s",
+  "failed",
+  "[✘✕✗]",
+  "Error Message",
+  "\\.spec:\\d+",
+  "(?i)\\berror\\b",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.gauge]]
+name = "totals and failure kept"
+input = """
+# Login specification
+  ## Successful login
+    * Open the app	✔
+  ## Failed login
+    * Submit bad creds	✘
+    Error Message: expected dashboard but got error page
+    specs/login.spec:8
+
+Specifications:	1 executed	0 passed	1 failed	0 skipped
+Scenarios:	2 executed	1 passed	1 failed	0 skipped
+"""
+expected = """    * Submit bad creds	✘
+    Error Message: expected dashboard but got error page
+    specs/login.spec:8
+Specifications:	1 executed	0 passed	1 failed	0 skipped
+Scenarios:	2 executed	1 passed	1 failed	0 skipped"""
+
+[[tests.gauge]]
+name = "all pass keeps totals"
+input = """
+# Smoke
+  ## Home
+    * Open the app	✔
+Specifications:	1 executed	1 passed	0 failed	0 skipped
+Scenarios:	1 executed	1 passed	0 failed	0 skipped
+"""
+expected = """Specifications:	1 executed	1 passed	0 failed	0 skipped
+Scenarios:	1 executed	1 passed	0 failed	0 skipped"""

@@ -1,0 +1,51 @@
+[filters.rebar3]
+description = "Compact rebar3 (Erlang) output: drop progress, keep errors and results"
+match_command = "^rebar3\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^===> Verifying dependencies",
+  "^===> Compiling ",
+  "^===> Fetching ",
+  "^===> Analyzing ",
+  "^===> Running ",
+]
+keep_lines_matching = [
+  "^===> Error",
+  "Failures:",
+  "^\\s+\\d+\\) ",
+  "tests?,? .*(?:passed|failed)",
+  "rror",
+  "All \\d+ tests passed",
+  "Failed \\d+ tests",
+  "\\d+ failures?",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.rebar3]]
+name = "test failure surfaced"
+input = """
+===> Verifying dependencies...
+===> Compiling myapp
+===> Running tests...
+Failures:
+
+  1) mymodule_tests:add_test/0
+     Failure/Error: ?assertEqual(5, add(2, 2))
+Failed 1 tests. 4 passed.
+"""
+expected = """Failures:
+  1) mymodule_tests:add_test/0
+     Failure/Error: ?assertEqual(5, add(2, 2))
+Failed 1 tests. 4 passed."""
+
+[[tests.rebar3]]
+name = "compile error surfaced"
+input = """
+===> Verifying dependencies...
+===> Compiling myapp
+===> Error: Compilation failed: src/mymodule.erl:10: syntax error before: '}'
+"""
+expected = """===> Error: Compilation failed: src/mymodule.erl:10: syntax error before: '}'"""

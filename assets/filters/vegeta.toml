@@ -1,0 +1,53 @@
+[filters.vegeta]
+description = "Compact vegeta report: keep the core metrics and error set"
+match_command = "\\bvegeta\\s+report\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Requests\\s",
+  "^Latencies\\s",
+  "^Bytes ",
+  "^Success\\s",
+  "^Status Codes\\s",
+  "^Error Set:",
+  "^\\d{3} ",
+  "(?i)\\berror\\b",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.vegeta]]
+name = "metrics and error set kept"
+input = """
+Requests      [total, rate, throughput]         1000, 100.10, 99.50
+Duration      [total, attack, wait]             10.05s, 9.99s, 60ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  5ms, 25ms, 20ms, 45ms, 60ms, 120ms, 300ms
+Bytes In      [total, mean]                      640000, 640.00
+Success       [ratio]                            99.50%
+Status Codes  [code:count]                       200:995  500:5
+Error Set:
+500 Internal Server Error
+"""
+expected = """Requests      [total, rate, throughput]         1000, 100.10, 99.50
+Latencies     [min, mean, 50, 90, 95, 99, max]  5ms, 25ms, 20ms, 45ms, 60ms, 120ms, 300ms
+Bytes In      [total, mean]                      640000, 640.00
+Success       [ratio]                            99.50%
+Status Codes  [code:count]                       200:995  500:5
+Error Set:
+500 Internal Server Error"""
+
+[[tests.vegeta]]
+name = "clean run keeps success ratio"
+input = """
+Requests      [total, rate, throughput]         500, 50.10, 50.00
+Success       [ratio]                            100.00%
+Status Codes  [code:count]                       200:500
+Error Set:
+"""
+expected = """Requests      [total, rate, throughput]         500, 50.10, 50.00
+Success       [ratio]                            100.00%
+Status Codes  [code:count]                       200:500
+Error Set:"""
