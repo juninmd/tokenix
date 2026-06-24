@@ -1,0 +1,57 @@
+[filters.cargo-audit]
+description = "Keep cargo-audit vulnerability report, drop fetch noise"
+match_command = "^cargo\\s+audit\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Fetching advisory database",
+  "^\\s*Loaded \\d+ security advisories",
+  "^\\s*Updating crates.io index",
+  "^\\s*Scanning Cargo.lock",
+]
+keep_lines_matching = [
+  "Crate:",
+  "Version:",
+  "Title:",
+  "ID:",
+  "RUSTSEC-",
+  "Severity",
+  "Solution:",
+  "vulnerabilit",
+  "(?i)^error",
+  "(?i)\\bfatal\\b",
+  "(?i)\\bfailed\\b",
+  "warning:",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.cargo-audit]]
+name = "vulnerability report kept"
+input = """
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 600 security advisories (from /home/u/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (412 crate dependencies)
+Crate:     time
+Version:   0.1.45
+Title:     Potential segfault in the time crate
+ID:        RUSTSEC-2020-0071
+Solution:  Upgrade to >=0.2.23
+error: 1 vulnerability found!
+"""
+expected = """Crate:     time
+Version:   0.1.45
+Title:     Potential segfault in the time crate
+ID:        RUSTSEC-2020-0071
+Solution:  Upgrade to >=0.2.23
+error: 1 vulnerability found!"""
+
+[[tests.cargo-audit]]
+name = "clean scan collapses"
+input = """
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 600 security advisories (from /home/u/.cargo/advisory-db)
+    Scanning Cargo.lock for vulnerabilities (412 crate dependencies)
+"""
+expected = ""

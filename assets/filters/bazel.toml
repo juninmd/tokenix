@@ -1,0 +1,60 @@
+[filters.bazel]
+description = "Compact bazel build/test output, keep errors and summary"
+match_command = "^bazel\\s+(build|test|run|coverage)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Loading:",
+  "^Analyzing:",
+  "^\\[\\d+ / \\d+\\]",
+  "^INFO: Analyzed ",
+  "^INFO: Found ",
+  "^\\s*Fetching ",
+  "^Computing main repo",
+  "^INFO: From ",
+]
+keep_lines_matching = [
+  "^ERROR:",
+  "^FAILED",
+  "FAIL:",
+  "^INFO: Build completed",
+  "Executed \\d+ out of",
+  "(?i)\\bpassed\\b",
+  "no tests",
+  "^Target ",
+  "actions? completed",
+]
+max_lines = 50
+replace_patterns = [
+  ["\\d+\\.\\d+s", "<duration>"],
+]
+token_budget = 2000
+
+[[tests.bazel]]
+name = "test summary kept, progress dropped"
+input = """
+Loading:
+Analyzing: 4 targets (12 packages loaded)
+INFO: Analyzed 4 targets (12 packages loaded, 340 targets configured).
+[1,234 / 5,678] Compiling //src:lib
+[5,678 / 5,678] Linking //src:app
+INFO: Found 4 targets and 1 test target...
+//src:app_test                                          PASSED in 1.2s
+Executed 1 out of 1 test: 1 test passes.
+INFO: Build completed successfully, 5678 total actions
+"""
+expected = """//src:app_test                                          PASSED in <duration>
+Executed 1 out of 1 test: 1 test passes.
+INFO: Build completed successfully, 5678 total actions"""
+
+[[tests.bazel]]
+name = "build error surfaced"
+input = """
+Loading:
+Analyzing: 1 target (3 packages loaded)
+ERROR: /work/src/BUILD:12:11: Compiling src/main.cc failed: undeclared inclusion(s)
+FAILED: Build did NOT complete successfully
+"""
+expected = """ERROR: /work/src/BUILD:12:11: Compiling src/main.cc failed: undeclared inclusion(s)
+FAILED: Build did NOT complete successfully"""

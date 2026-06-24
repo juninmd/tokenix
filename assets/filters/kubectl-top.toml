@@ -1,0 +1,34 @@
+[filters.kubectl-top]
+description = "Compact kubectl top (resource usage) tables"
+match_command = "^kubectl(?:\\s+(?:-[A-Za-z][-A-Za-z0-9]*|--[A-Za-z][-A-Za-z0-9]*)(?:[=\\s]+\\S+)?)*\\s+top\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^NAME\\s",
+  "^\\S+\\s+\\d+m\\b",
+  "^\\S+\\s+\\d+",
+  "^error:",
+  "Metrics API not available",
+]
+max_lines = 50
+passthrough_when_emptied = true
+
+[[tests.kubectl-top]]
+name = "pod usage table kept"
+input = """
+NAME                     CPU(cores)   MEMORY(bytes)
+api-7d9f-abc              112m         210Mi
+worker-55c-def            8m           96Mi
+"""
+expected = """NAME                     CPU(cores)   MEMORY(bytes)
+api-7d9f-abc              112m         210Mi
+worker-55c-def            8m           96Mi"""
+
+[[tests.kubectl-top]]
+name = "metrics api error surfaced"
+input = """
+error: Metrics API not available
+"""
+expected = """error: Metrics API not available"""

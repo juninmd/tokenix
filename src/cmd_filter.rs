@@ -247,18 +247,6 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}~", s.chars().take(keep).collect::<String>())
 }
 
-fn human_bytes(n: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    if n >= MB {
-        format!("{:.1} MB", n as f64 / MB as f64)
-    } else if n >= KB {
-        format!("{:.1} KB", n as f64 / KB as f64)
-    } else {
-        format!("{} B", n)
-    }
-}
-
 pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<()> {
     let base_cmd = match command {
         Some(c) => c,
@@ -730,11 +718,11 @@ pub fn cmd_filter_record_stop(repo_root: &Path) -> Result<()> {
         println!("{} No active recording session.", "⚠".yellow());
         return Ok(());
     }
+    let econ = recordings::economy(repo_root);
     recordings::stop(repo_root)?;
-    let summary = recordings::summary(repo_root);
 
     box_header("filter record · stopped");
-    if summary.is_empty() {
+    if econ.is_empty() {
         println!("  {} No command output was captured.", "⚠".yellow());
         println!(
             "  {}",
@@ -744,29 +732,101 @@ pub fn cmd_filter_record_stop(repo_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "  {:<20} {:>9} {:>12}",
-        "Command".bold(),
-        "Captures".bold(),
-        "Size".bold()
-    );
-    println!("  {}", "─".repeat(43).bright_black());
-    for (cmd, count, bytes) in &summary {
-        println!(
-            "  {:<20} {:>9} {:>12}",
-            truncate(cmd, 20),
-            count,
-            human_bytes(*bytes)
-        );
-    }
+    print_economy_table(&econ);
 
+    // Recommend the command with the most absolute token waste that lacks a
+    // matching filter — that is where a freshly generated filter pays off most.
+    let target = econ
+        .iter()
+        .find(|e| !e.matched)
+        .or_else(|| econ.first())
+        .unwrap();
     println!(
-        "\n  {} turn these into a filter:  {}",
+        "\n  {} turn the biggest win into a filter:  {}",
         "→".cyan(),
-        format!("tokenix filter generate {}", summary[0].0).green()
+        format!("tokenix filter generate {}", target.command).green()
     );
     println!();
     Ok(())
+}
+
+/// Visualize captured-command token economy: a per-command bar of how much the
+/// matching bundled filter would compress the recorded output, plus a total.
+fn print_economy_table(econ: &[recordings::Economy]) {
+    let raw_total: usize = econ.iter().map(|e| e.raw_tokens).sum();
+    let out_total: usize = econ.iter().map(|e| e.filtered_tokens).sum();
+    let total_pct = if raw_total == 0 {
+        0.0
+    } else {
+        (raw_total.saturating_sub(out_total) as f64 / raw_total as f64) * 100.0
+    };
+
+    println!(
+        "  {:<18} {:>5} {:>9} {:>8}  {}",
+        "Command".bold(),
+        "Caps".bold(),
+        "Tokens".bold(),
+        "Saved".bold(),
+        "Compression".bold()
+    );
+    println!("  {}", "─".repeat(64).bright_black());
+    for e in econ {
+        let pct = e.saved_pct();
+        let bar = savings_bar(pct);
+        let saved_cell = if e.matched {
+            format!("{:>3.0}%", pct)
+        } else {
+            "  —".to_string()
+        };
+        let saved_colored = if !e.matched {
+            saved_cell.dimmed().to_string()
+        } else if pct >= 70.0 {
+            saved_cell.green().to_string()
+        } else if pct >= 40.0 {
+            saved_cell.yellow().to_string()
+        } else {
+            saved_cell.red().to_string()
+        };
+        let tokens_cell = format!("{}→{}", e.raw_tokens, e.filtered_tokens);
+        println!(
+            "  {:<18} {:>5} {:>9} {:>8}  {}",
+            truncate(&e.command, 18),
+            e.captures,
+            tokens_cell,
+            saved_colored,
+            bar
+        );
+    }
+    println!("  {}", "─".repeat(64).bright_black());
+    println!(
+        "  {:<18} {:>5} {:>9} {:>8}",
+        "TOTAL".bold(),
+        econ.iter().map(|e| e.captures).sum::<usize>(),
+        format!("{}→{}", raw_total, out_total),
+        format!("{:>3.0}%", total_pct).green().bold(),
+    );
+    if econ.iter().any(|e| !e.matched) {
+        println!(
+            "\n  {} dash = no bundled filter yet — best candidates to generate.",
+            "—".dimmed()
+        );
+    }
+}
+
+/// 12-cell bar visualizing percent compression. Filled cells scale with pct.
+fn savings_bar(pct: f64) -> String {
+    const WIDTH: usize = 12;
+    let filled = ((pct / 100.0) * WIDTH as f64)
+        .round()
+        .clamp(0.0, WIDTH as f64) as usize;
+    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(WIDTH - filled));
+    if pct >= 70.0 {
+        bar.green().to_string()
+    } else if pct >= 40.0 {
+        bar.yellow().to_string()
+    } else {
+        bar.bright_black().to_string()
+    }
 }
 
 pub fn cmd_filter_record_status(repo_root: &Path) -> Result<()> {
@@ -788,17 +848,10 @@ pub fn cmd_filter_record_status(repo_root: &Path) -> Result<()> {
         }
     }
 
-    let summary = recordings::summary(repo_root);
-    if !summary.is_empty() {
-        println!("\n  {}", "Captured so far:".bold());
-        for (cmd, count, bytes) in &summary {
-            println!(
-                "    {:<18} {:>4} captures  {:>10}",
-                truncate(cmd, 18),
-                count,
-                human_bytes(*bytes)
-            );
-        }
+    let econ = recordings::economy(repo_root);
+    if !econ.is_empty() {
+        println!("\n  {}", "Captured so far — filter preview:".bold());
+        print_economy_table(&econ);
     }
     println!();
     Ok(())

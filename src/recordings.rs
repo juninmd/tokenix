@@ -181,6 +181,88 @@ pub fn summary(repo_root: &Path) -> Vec<(String, usize, u64)> {
     out
 }
 
+/// Per-command token-economy preview for the `record` visualization.
+/// Reconstructs the raw command output (dropping the capture scaffold: the
+/// `$ cmd` echo, the `--- stderr ---` marker, and any truncation note), then
+/// runs it through the matching bundled filter exactly like the hook would —
+/// so `record stop` can show the *token* win each capture would yield, not just
+/// disk bytes.
+pub struct Economy {
+    pub command: String,
+    pub captures: usize,
+    pub raw_tokens: usize,
+    pub filtered_tokens: usize,
+    /// Whether a bundled filter actually matched the captured command.
+    pub matched: bool,
+}
+
+impl Economy {
+    pub fn saved_pct(&self) -> f64 {
+        if self.raw_tokens == 0 {
+            return 0.0;
+        }
+        (self.raw_tokens.saturating_sub(self.filtered_tokens) as f64 / self.raw_tokens as f64)
+            * 100.0
+    }
+}
+
+/// Strip the capture scaffold from a recorded sample, returning
+/// `(representative_command, raw_output)`. The first `$ ` line is the real
+/// invocation used to resolve a filter; the rest is the untouched output.
+fn unscaffold(sample: &str) -> (Option<String>, String) {
+    let mut command = None;
+    let mut raw = String::new();
+    for line in sample.lines() {
+        if command.is_none() {
+            if let Some(rest) = line.strip_prefix("$ ") {
+                command = Some(rest.trim().to_string());
+                continue;
+            }
+        }
+        if line == "--- stderr ---" || line.starts_with("... (truncated at ") {
+            continue;
+        }
+        raw.push_str(line);
+        raw.push('\n');
+    }
+    (command, raw)
+}
+
+pub fn economy(repo_root: &Path) -> Vec<Economy> {
+    let bundled = crate::filters::load_bundled_filters();
+    let mut out: Vec<Economy> = summary(repo_root)
+        .into_iter()
+        .map(|(base, captures, _raw_bytes)| {
+            let combined = read_samples(
+                repo_root,
+                &base,
+                MAX_BYTES_PER_CAPTURE * MAX_CAPTURES_PER_CMD,
+            )
+            .map(|(t, _)| t)
+            .unwrap_or_default();
+            let (cmd, raw) = unscaffold(&combined);
+            let resolve = cmd.unwrap_or_else(|| base.clone());
+            let raw_tokens = crate::chunker::count_tokens(&raw);
+            let (filtered_tokens, matched) = match crate::filters::find_filter(&resolve, &bundled) {
+                Some(f) => (
+                    crate::chunker::count_tokens(&crate::filters::apply_filter(&raw, f)),
+                    true,
+                ),
+                None => (raw_tokens, false),
+            };
+            Economy {
+                command: base,
+                captures,
+                raw_tokens,
+                filtered_tokens,
+                matched,
+            }
+        })
+        .collect();
+    out.sort_by_key(|e| std::cmp::Reverse(e.raw_tokens.saturating_sub(e.filtered_tokens)));
+    out
+}
+
 /// Base command (first whitespace token) if it is a safe identifier.
 fn base_of(command: &str) -> Option<String> {
     sanitize_base(command.split_whitespace().next()?)
@@ -268,6 +350,41 @@ mod tests {
 
         stop(&root).unwrap();
         assert!(!is_active(&root));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn economy_preview_reports_filter_savings() {
+        let root = tmp("economy");
+        start(&root, None).unwrap();
+        // A verbose, filterable command: cargo build noise collapses to a sentinel.
+        let noisy = (0..40)
+            .map(|i| format!("   Compiling crate_{i} v0.{i}.0"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        capture(
+            &root,
+            "cargo build --release",
+            &format!("{noisy}\n    Finished release [optimized] target(s) in 30.1s\n"),
+            "",
+        );
+        let econ = economy(&root);
+        assert_eq!(econ.len(), 1);
+        let e = &econ[0];
+        assert_eq!(e.command, "cargo");
+        assert!(e.matched, "cargo build should resolve a bundled filter");
+        assert!(
+            e.filtered_tokens < e.raw_tokens,
+            "filter must shrink tokens: {} -> {}",
+            e.raw_tokens,
+            e.filtered_tokens
+        );
+        assert!(
+            e.saved_pct() > 50.0,
+            "expected heavy savings, got {:.0}%",
+            e.saved_pct()
+        );
+        stop(&root).unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -1,0 +1,66 @@
+[filters.conda-install]
+description = "Compact conda/mamba install output, keep the package plan"
+match_command = "^(?:conda|mamba|micromamba)\\s+(install|create|update|remove)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Collecting package metadata",
+  "^Solving environment",
+  "^Retrieving notices",
+  "^Preparing transaction",
+  "^Verifying transaction",
+  "^Executing transaction",
+  "^\\s*-\\s*$",
+  "^\\s*\\|\\s*$",
+  "^Downloading and Extracting",
+  "^\\s*\\S+\\s+\\|\\s+\\d+ KB",
+]
+keep_lines_matching = [
+  "(?i)package plan",
+  "The following NEW packages",
+  "will be INSTALLED",
+  "will be UPDATED",
+  "will be REMOVED",
+  "will be DOWNGRADED",
+  "^\\s{2,}[A-Za-z0-9_]\\S*\\s+\\S+",
+  "PackagesNotFoundError",
+  "ResolvePackageNotFound",
+  "^CondaError",
+  "Nothing to do",
+]
+max_lines = 50
+token_budget = 2000
+
+[[tests.conda-install]]
+name = "install plan kept, churn dropped"
+input = """
+Collecting package metadata (current_repodata.json): done
+Solving environment: done
+
+## Package Plan ##
+
+The following NEW packages will be INSTALLED:
+
+  numpy              pkgs/main/linux-64::numpy-1.26.4-py312
+  python_abi         conda-forge/linux-64::python_abi-3.12
+
+Preparing transaction: done
+Verifying transaction: done
+Executing transaction: done
+"""
+expected = """## Package Plan ##
+The following NEW packages will be INSTALLED:
+  numpy              pkgs/main/linux-64::numpy-1.26.4-py312
+  python_abi         conda-forge/linux-64::python_abi-3.12"""
+
+[[tests.conda-install]]
+name = "not-found error surfaced"
+input = """
+Collecting package metadata (current_repodata.json): done
+Solving environment: failed
+
+PackagesNotFoundError: The following packages are not available from current channels:
+  - nosuchpkg
+"""
+expected = """PackagesNotFoundError: The following packages are not available from current channels:"""

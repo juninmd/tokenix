@@ -1,0 +1,54 @@
+[filters.tox]
+description = "Compact tox multi-env output: keep per-env result summary"
+match_command = "^tox\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\.pkg:",
+  "^\\s*install_deps>",
+  "^\\s*commands\\[\\d+\\]>",
+  "^\\s*[a-z0-9_.-]+: (?:install|freeze|create|recreate)",
+  "^ROOT:",
+]
+keep_lines_matching = [
+  ": OK ",
+  ": FAIL ",
+  "evaluation failed",
+  "congratulations",
+  "^\\s*[a-z0-9_.-]+: (?:OK|FAIL)",
+  "error:",
+  "^ERROR:",
+  "summary",
+]
+max_lines = 40
+replace_patterns = [
+  ["\\(\\d+\\.\\d+ seconds\\)", "(<duration>)"],
+]
+token_budget = 1500
+
+[[tests.tox]]
+name = "env summary kept"
+input = """
+py311: install_deps> pip install -r requirements.txt
+py311: commands[0]> pytest
+.pkg: _optional_hooks> python /usr/lib/build
+py311: OK (12.34 seconds)
+py312: commands[0]> pytest
+py312: FAIL code 1 (10.01 seconds)
+  evaluation failed :( (22.50 seconds)
+"""
+expected = """py311: OK (<duration>)
+py312: FAIL code 1 (<duration>)
+  evaluation failed :( (<duration>)"""
+
+[[tests.tox]]
+name = "all green collapses"
+input = """
+py311: install_deps> pip install -e .
+py311: commands[0]> pytest
+py311: OK (8.20 seconds)
+  congratulations :) (9.00 seconds)
+"""
+expected = """py311: OK (<duration>)
+  congratulations :) (<duration>)"""

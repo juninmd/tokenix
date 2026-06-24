@@ -1,0 +1,55 @@
+[filters.npm-audit]
+description = "Keep npm audit vulnerability summary, drop per-advisory noise"
+match_command = "^npm\\s+audit\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*#\\s+npm audit report",
+  "^\\s*node_modules/",
+  "^\\s*fix available",
+  "^\\s*To address",
+  "^\\s*Run `npm",
+]
+keep_lines_matching = [
+  "vulnerabilit",
+  "^\\S+\\s+(?:low|moderate|high|critical)",
+  "^\\S+\\s+[<>=*]",
+  "Severity:",
+  "found \\d+",
+  "^npm error",
+]
+max_lines = 40
+replace_patterns = [
+  ["https://github.com/advisories/\\S+", "<advisory-url>"],
+]
+token_budget = 1500
+
+[[tests.npm-audit]]
+name = "summary kept, advisory body dropped"
+input = """
+# npm audit report
+
+semver  <5.7.2
+Severity: high
+semver vulnerable to ReDoS - https://github.com/advisories/GHSA-c2qf-rxjj-qqgw
+fix available via `npm audit fix`
+node_modules/semver
+
+3 high severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix
+"""
+expected = """semver  <5.7.2
+Severity: high
+3 high severity vulnerabilities"""
+
+[[tests.npm-audit]]
+name = "clean audit collapses"
+input = """
+# npm audit report
+
+found 0 vulnerabilities
+"""
+expected = """found 0 vulnerabilities"""

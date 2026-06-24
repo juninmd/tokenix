@@ -1,0 +1,77 @@
+[filters.apt-get]
+description = "Compact apt/apt-get install & update output"
+match_command = "^(?:sudo\\s+)?apt(?:-get)?\\s+(install|update|upgrade|full-upgrade|dist-upgrade|remove|purge)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Reading package lists",
+  "^Building dependency tree",
+  "^Reading state information",
+  "^Preparing to unpack ",
+  "^Unpacking ",
+  "^Selecting previously unselected",
+  "^Setting up ",
+  "^Processing triggers for ",
+  "^\\(Reading database",
+  "^Get:\\d+ ",
+  "^Hit:\\d+ ",
+  "^Ign:\\d+ ",
+  "^Fetched ",
+  "^update-alternatives:",
+]
+keep_lines_matching = [
+  "^The following NEW packages",
+  "^The following packages will be",
+  "newly installed",
+  "to remove",
+  "not upgraded",
+  "^E:",
+  "^W:",
+  "^Err:",
+  "Unable to locate",
+  "broken packages",
+]
+max_lines = 40
+replace_patterns = [
+  ["\\b\\d+ kB\\b", "<size>"],
+  ["\\b\\d+(?:\\.\\d+)? MB\\b", "<size>"],
+]
+token_budget = 1500
+
+[[tests.apt-get]]
+name = "install summary kept, churn dropped"
+input = """
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+The following NEW packages will be installed:
+  jq libjq1 libonig5
+0 upgraded, 3 newly installed, 0 to remove and 12 not upgraded.
+Need to get 412 kB of archives.
+Get:1 http://deb.debian.org/debian bookworm/main amd64 libonig5 amd64 6.9.8-1 [188 kB]
+Fetched 412 kB in 1s (601 kB/s)
+Selecting previously unselected package libonig5:amd64.
+(Reading database ... 187340 files and directories currently installed.)
+Preparing to unpack .../libonig5_6.9.8-1_amd64.deb ...
+Unpacking libonig5:amd64 (6.9.8-1) ...
+Setting up libonig5:amd64 (6.9.8-1) ...
+Setting up jq (1.6-2.1) ...
+Processing triggers for libc-bin (2.36-9) ...
+"""
+expected = """The following NEW packages will be installed:
+0 upgraded, 3 newly installed, 0 to remove and 12 not upgraded."""
+
+[[tests.apt-get]]
+name = "error surfaced"
+input = """
+Reading package lists... Done
+Building dependency tree... Done
+E: Unable to locate package nosuchpkg
+"""
+expected = """E: Unable to locate package nosuchpkg"""
+
+[[tests.apt-get]]
+name = "silent success stays empty"
+input = ""
+expected = ""

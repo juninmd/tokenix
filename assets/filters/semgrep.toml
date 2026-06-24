@@ -1,0 +1,57 @@
+[filters.semgrep]
+description = "Keep semgrep findings and summary, drop scan progress"
+match_command = "^semgrep\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Scanning ",
+  "^\\s*Fetching ",
+  "^\\s*Loading rules",
+  "^\\s*Running \\d+ rules",
+  "^\\s*\\d+%\\|",
+  "^┌─+┐",
+  "^└─+┘",
+  "^\\s*│ ",
+]
+keep_lines_matching = [
+  "findings?",
+  "❯❯|⚠|❌",
+  "^\\s+\\d+┆",
+  "\\.(py|js|ts|go|rb|java|rs):\\d+",
+  "rule:",
+  "Blocking",
+  "Code Findings",
+  "^\\s*\\d+ Code Finding",
+]
+max_lines = 60
+token_budget = 2500
+
+[[tests.semgrep]]
+name = "findings kept, progress dropped"
+input = """
+Scanning 142 files with 890 rules.
+Loading rules from registry...
+Running 890 rules...
+  100%|████████████| 142/142
+┌─────────────────┐
+│ 2 Code Findings │
+└─────────────────┘
+    src/app.py:42
+       python.lang.security.audit.dangerous-exec
+       42┆ exec(user_input)
+2 findings (2 blocking)
+"""
+expected = """    src/app.py:42
+       42┆ exec(user_input)
+2 findings (2 blocking)"""
+
+[[tests.semgrep]]
+name = "clean scan collapses"
+input = """
+Scanning 80 files with 890 rules.
+Running 890 rules...
+  100%|████████████| 80/80
+0 findings.
+"""
+expected = """0 findings."""

@@ -1,0 +1,44 @@
+[filters.journalctl]
+description = "Keep only warnings/errors from journalctl log dumps"
+match_command = "^(?:sudo\\s+)?journalctl\\b"
+strip_ansi = true
+keep_lines_matching = [
+  "(?i)\\berror\\b",
+  "(?i)\\bwarn(?:ing)?\\b",
+  "(?i)\\bfail(?:ed|ure)?\\b",
+  "(?i)\\bfatal\\b",
+  "(?i)\\bpanic\\b",
+  "(?i)\\bcritical\\b",
+  "(?i)\\bsegfault\\b",
+  "(?i)timed out",
+  "(?i)refused",
+  "(?i)denied",
+  "-- Boot",
+]
+max_lines = 60
+replace_patterns = [
+  ["^\\w{3}\\s+\\d+\\s+\\d{2}:\\d{2}:\\d{2}", "<ts>"],
+  ["\\[\\d+\\]", "[<pid>]"],
+]
+on_empty = "journalctl: no errors/warnings in window"
+token_budget = 2000
+
+[[tests.journalctl]]
+name = "error lines kept, info dropped"
+input = """
+Jun 23 10:00:01 host systemd[1]: Started Daily apt download activities.
+Jun 23 10:00:02 host kernel: usb 1-1: new high-speed USB device
+Jun 23 10:00:03 host nginx[812]: 2025/06/23 10:00:03 [error] connect() failed
+Jun 23 10:00:04 host systemd[1]: Reached target Timers.
+Jun 23 10:00:05 host sshd[990]: Failed password for invalid user admin
+"""
+expected = """<ts> host nginx[<pid>]: 2025/06/23 10:00:03 [error] connect() failed
+<ts> host sshd[<pid>]: Failed password for invalid user admin"""
+
+[[tests.journalctl]]
+name = "clean window collapses"
+input = """
+Jun 23 10:00:01 host systemd[1]: Started service A.
+Jun 23 10:00:02 host systemd[1]: Started service B.
+"""
+expected = "journalctl: no errors/warnings in window"
