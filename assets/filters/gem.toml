@@ -1,0 +1,46 @@
+[filters.gem]
+description = "Compact gem install/update output, keep result and errors"
+match_command = "^gem\\s+(install|update|uninstall|pristine)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Fetching ",
+  "^Parsing documentation",
+  "^Installing ri documentation",
+  "^Installing rdoc documentation",
+  "^Building native extensions",
+  "^Done installing documentation",
+]
+keep_lines_matching = [
+  "^Successfully installed",
+  "^Successfully uninstalled",
+  "^\\d+ gem(?:s)? installed",
+  "^ERROR",
+  "Gem::",
+  "Could not find",
+  "conflicts",
+]
+max_lines = 40
+token_budget = 1200
+
+[[tests.gem]]
+name = "install result kept, docs dropped"
+input = """
+Fetching rake-13.0.6.gem
+Successfully installed rake-13.0.6
+Parsing documentation for rake-13.0.6
+Installing ri documentation for rake-13.0.6
+Done installing documentation for rake after 0 seconds
+1 gem installed
+"""
+expected = """Successfully installed rake-13.0.6
+1 gem installed"""
+
+[[tests.gem]]
+name = "install error surfaced"
+input = """
+Fetching nosuchgem-1.0.0.gem
+ERROR:  Could not find a valid gem 'nosuchgem' (>= 0) in any repository
+"""
+expected = """ERROR:  Could not find a valid gem 'nosuchgem' (>= 0) in any repository"""

@@ -1,0 +1,46 @@
+[filters.dmesg]
+description = "Keep only error/warning/fault lines from dmesg kernel logs"
+match_command = "^(?:sudo\\s+)?dmesg\\b"
+strip_ansi = true
+keep_lines_matching = [
+  "(?i)\\berror\\b",
+  "(?i)\\bwarn(?:ing)?\\b",
+  "(?i)\\bfail(?:ed|ure)?\\b",
+  "(?i)\\bfatal\\b",
+  "(?i)\\bpanic\\b",
+  "(?i)\\boops\\b",
+  "(?i)segfault",
+  "(?i)out of memory",
+  "(?i)\\bkilled process\\b",
+  "(?i)call trace",
+  "(?i)\\bBUG\\b",
+  "(?i)I/O error",
+  "(?i)hung task",
+]
+max_lines = 60
+replace_patterns = [
+  ["^\\[\\s*\\d+\\.\\d+\\]", "[<ts>]"],
+]
+on_empty = "dmesg: no errors/warnings"
+token_budget = 2000
+
+[[tests.dmesg]]
+name = "faults kept, boot chatter dropped"
+input = """
+[    0.000000] Linux version 6.5.0-generic
+[    0.123456] ACPI: Core revision 20230331
+[   12.345678] usb 1-1: new high-speed USB device number 2
+[  102.555000] EXT4-fs error (device sda1): ext4_lookup: deleted inode
+[  340.991200] Out of memory: Killed process 1234 (java)
+"""
+expected = """[<ts>] EXT4-fs error (device sda1): ext4_lookup: deleted inode
+[<ts>] Out of memory: Killed process 1234 (java)"""
+
+[[tests.dmesg]]
+name = "clean log collapses"
+input = """
+[    0.000000] Linux version 6.5.0-generic
+[    0.123456] ACPI: Core revision 20230331
+[   12.345678] usb 1-1: new high-speed USB device number 2
+"""
+expected = "dmesg: no errors/warnings"

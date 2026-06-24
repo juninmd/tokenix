@@ -1,0 +1,48 @@
+[filters.sbt]
+description = "Compact sbt output: drop [info] noise, keep warn/error/success"
+match_command = "^sbt\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\[info\\]",
+  "^\\s*$",
+  "^download(?:ing|ed) ",
+]
+keep_lines_matching = [
+  "^\\[error\\]",
+  "^\\[warn\\]",
+  "^\\[success\\]",
+  "Tests: ",
+  "tests? (?:passed|failed)",
+  "Compilation failed",
+  "^\\[E\\]",
+]
+max_lines = 60
+replace_patterns = [
+  ["Total time: \\d+ s", "Total time: <duration>"],
+]
+token_budget = 1500
+
+[[tests.sbt]]
+name = "success kept, info dropped"
+input = """
+[info] welcome to sbt 1.9.7
+[info] loading project definition from /work/project
+[info] compiling 14 Scala sources to /work/target/classes
+[warn] one deprecation warning; re-run with -deprecation
+[success] Total time: 9 s, completed Jun 23, 2026
+"""
+expected = """[warn] one deprecation warning; re-run with -deprecation
+[success] Total time: <duration>, completed Jun 23, 2026"""
+
+[[tests.sbt]]
+name = "compile error surfaced"
+input = """
+[info] compiling 14 Scala sources to /work/target/classes
+[error] /work/src/Main.scala:12:7: not found: value foo
+[error] one error found
+[error] (Compile / compileIncremental) Compilation failed
+"""
+expected = """[error] /work/src/Main.scala:12:7: not found: value foo
+[error] one error found
+[error] (Compile / compileIncremental) Compilation failed"""

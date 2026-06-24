@@ -1,0 +1,53 @@
+[filters.mocha]
+description = "Compact mocha output: keep failures and the passing/failing summary"
+match_command = "\\bmocha\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "\\d+ passing",
+  "\\d+ failing",
+  "\\d+ pending",
+  "^\\s+\\d+\\) ",
+  "AssertionError",
+  "Error:",
+  "Expected",
+  "[✗✖×] ",
+]
+max_lines = 60
+replace_patterns = [
+  ["\\(\\d+m?s\\)", "(<duration>)"],
+]
+token_budget = 2000
+
+[[tests.mocha]]
+name = "all passing keeps summary"
+input = """
+  Array
+    ✓ should return -1 when not present
+    ✓ should return index when present
+
+  2 passing (13ms)
+"""
+expected = """  2 passing (<duration>)"""
+
+[[tests.mocha]]
+name = "failure detail and summary kept"
+input = """
+  Array
+    ✓ should return -1 when not present
+    1) #indexOf() returns wrong value
+
+  1 passing (12ms)
+  1 failing
+
+  1) Array #indexOf() returns wrong value:
+     AssertionError: expected -1 to equal 0
+"""
+expected = """    1) #indexOf() returns wrong value
+  1 passing (<duration>)
+  1 failing
+  1) Array #indexOf() returns wrong value:
+     AssertionError: expected -1 to equal 0"""

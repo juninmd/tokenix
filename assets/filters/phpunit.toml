@@ -1,0 +1,68 @@
+[filters.phpunit]
+description = "Compact PHPUnit output: keep failures, errors and the summary"
+match_command = "\\b(?:phpunit|vendor/bin/phpunit|pest)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^PHPUnit \\d",
+  "^Pest \\d",
+  "by Sebastian Bergmann",
+  "^Runtime:",
+  "^Configuration:",
+  "^[.FEISRW]+\\s+\\d+ / \\d+ \\(",
+  "^Time: ",
+]
+keep_lines_matching = [
+  "^OK\\b",
+  "^OK \\(",
+  "FAILURES!",
+  "ERRORS!",
+  "WARNINGS!",
+  "^Tests: ",
+  "^There (?:were|was) \\d+ (?:failure|error|warning)",
+  "^\\d+\\) ",
+  "Failed asserting",
+  "^Error:",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.phpunit]]
+name = "all green keeps OK summary"
+input = """
+PHPUnit 10.5.0 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.3.0
+...............................  31 / 31 (100%)
+
+Time: 00:00.123, Memory: 8.00 MB
+
+OK (31 tests, 62 assertions)
+"""
+expected = """OK (31 tests, 62 assertions)"""
+
+[[tests.phpunit]]
+name = "failures and summary kept"
+input = """
+PHPUnit 10.5.0 by Sebastian Bergmann and contributors.
+
+F.E.                                                                4 / 4 (100%)
+
+Time: 00:00.234, Memory: 8.00 MB
+
+There were 1 failure:
+
+1) AppTest::testFoo
+Failed asserting that false is true.
+
+/app/tests/AppTest.php:12
+
+FAILURES!
+Tests: 4, Assertions: 5, Failures: 1, Errors: 1.
+"""
+expected = """There were 1 failure:
+1) AppTest::testFoo
+Failed asserting that false is true.
+FAILURES!
+Tests: 4, Assertions: 5, Failures: 1, Errors: 1."""

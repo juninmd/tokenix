@@ -1,0 +1,62 @@
+[filters.snyk]
+description = "Keep snyk vulnerability findings and summary, drop advisory bodies"
+match_command = "^snyk\\s+(test|monitor|container|code|iac)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Testing ",
+  "^\\s*Description:",
+  "^\\s*Info:",
+  "^\\s*Introduced through:",
+  "^\\s*From:",
+  "^\\s*Fixed in:",
+  "^\\s*This issue was fixed",
+  "^Organization:",
+  "^Package manager:",
+  "^Target file:",
+  "^Project name:",
+  "^Open source:",
+  "^Licenses:",
+]
+keep_lines_matching = [
+  "severity vulnerability found",
+  "Tested \\d+ dependencies",
+  "found \\d+ issue",
+  "no vulnerable paths",
+  "^✗",
+  "^✓ Tested",
+  "Issues to fix by upgrading",
+  "^error",
+]
+max_lines = 60
+token_budget = 2500
+
+[[tests.snyk]]
+name = "vulns kept, advisory body dropped"
+input = """
+Testing /work...
+
+✗ High severity vulnerability found in lodash@4.17.4
+  Description: Prototype Pollution
+  Info: https://snyk.io/vuln/SNYK-JS-LODASH-73638
+  Introduced through: app@1.0.0 > lodash@4.17.4
+  From: app@1.0.0 > lodash@4.17.4
+
+Organization:      my-org
+Package manager:   npm
+Tested 120 dependencies for known issues, found 3 issues, 3 vulnerable paths.
+"""
+expected = """✗ High severity vulnerability found in lodash@4.17.4
+Tested 120 dependencies for known issues, found 3 issues, 3 vulnerable paths."""
+
+[[tests.snyk]]
+name = "clean project summary"
+input = """
+Testing /work...
+
+Organization:      my-org
+Package manager:   npm
+✓ Tested 120 dependencies for known issues, no vulnerable paths found.
+"""
+expected = """✓ Tested 120 dependencies for known issues, no vulnerable paths found."""

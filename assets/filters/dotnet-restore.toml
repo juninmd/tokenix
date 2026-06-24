@@ -1,0 +1,40 @@
+[filters.dotnet-restore]
+description = "Compact dotnet restore output, keep restored projects and errors"
+match_command = "^dotnet\\s+restore\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Determining projects to restore",
+  "^\\s*Restored .* \\(in \\d+ ms\\)\\.\\s*$",
+]
+keep_lines_matching = [
+  "^\\s*Restored .* \\(in \\d+(?:\\.\\d+)? (?:sec|s)\\)",
+  "error",
+  "warning",
+  "Nothing to do",
+  "Unable to (?:find|resolve|load)",
+  "^\\s*Failed to",
+]
+max_lines = 40
+replace_patterns = [
+  ["\\(in \\d+(?:\\.\\d+)? (?:sec|s|ms)\\)", "(in <duration>)"],
+]
+token_budget = 1200
+
+[[tests.dotnet-restore]]
+name = "slow restore kept, fast ms churn dropped"
+input = """
+  Determining projects to restore...
+  Restored /work/Common.csproj (in 12 ms).
+  Restored /work/App.csproj (in 1.2 sec).
+"""
+expected = """  Restored /work/App.csproj (in <duration>)."""
+
+[[tests.dotnet-restore]]
+name = "restore error surfaced"
+input = """
+  Determining projects to restore...
+/work/App.csproj : error NU1101: Unable to find package NoSuchPkg.
+"""
+expected = """/work/App.csproj : error NU1101: Unable to find package NoSuchPkg."""

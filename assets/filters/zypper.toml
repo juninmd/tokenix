@@ -1,0 +1,65 @@
+[filters.zypper]
+description = "Compact zypper (openSUSE) install/update output, keep the plan"
+match_command = "^(?:sudo\\s+)?zypper\\s+(?:-\\S+\\s+)*(install|in|remove|rm|update|up|dup|patch)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Loading repository data",
+  "^Reading installed packages",
+  "^Resolving package dependencies",
+  "^Retrieving:",
+  "^Retrieving package ",
+  "^Checking for file conflicts",
+  "^\\(\\d+/\\d+\\) (?:Installing|Removing): .*\\[done\\]",
+  "^Running post-transaction",
+]
+keep_lines_matching = [
+  "going to be installed",
+  "going to be REMOVED",
+  "going to be upgraded",
+  "going to be downgraded",
+  "^The following \\d+ NEW package",
+  "to install\\.",
+  "to remove\\.",
+  "to upgrade\\.",
+  "Nothing to do",
+  "^\\s+\\S+",
+  "^Problem:",
+  "not found",
+  "^No provider of",
+  "Abort",
+]
+max_lines = 50
+token_budget = 1800
+
+[[tests.zypper]]
+name = "install plan kept, retrieval churn dropped"
+input = """
+Loading repository data...
+Reading installed packages...
+Resolving package dependencies...
+
+The following 2 NEW packages are going to be installed:
+  jq oniguruma
+
+2 new packages to install.
+Retrieving: jq-1.6-3.1.x86_64.rpm
+Checking for file conflicts: ...........[done]
+(1/2) Installing: oniguruma-6.9.6-1.1 .....[done]
+(2/2) Installing: jq-1.6-3.1 ..............[done]
+"""
+expected = """The following 2 NEW packages are going to be installed:
+  jq oniguruma
+2 new packages to install."""
+
+[[tests.zypper]]
+name = "package not found surfaced"
+input = """
+Loading repository data...
+Reading installed packages...
+'nosuchpkg' not found in package names. Trying capabilities.
+No provider of 'nosuchpkg' found.
+"""
+expected = """'nosuchpkg' not found in package names. Trying capabilities.
+No provider of 'nosuchpkg' found."""
