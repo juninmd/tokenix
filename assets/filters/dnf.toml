@@ -1,0 +1,81 @@
+[filters.dnf]
+description = "Compact dnf/yum install/update output, keep the transaction plan"
+match_command = "^(?:sudo\\s+)?(?:dnf|yum|microdnf)\\s+(install|update|upgrade|remove|erase|reinstall|downgrade|groupinstall)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Last metadata expiration",
+  "^Dependencies resolved",
+  "^=+$",
+  "^-+$",
+  "^Downloading Packages:",
+  "^Running transaction check",
+  "^Running transaction test",
+  "^Transaction test succeeded",
+  "^Running transaction\\s*$",
+  "^\\s+(?:Installing|Upgrading|Cleanup|Verifying|Preparing|Running scriptlet)\\s+:",
+  "\\d+\\s+[kKMG]B/s",
+  "^Importing GPG key",
+]
+keep_lines_matching = [
+  "^Installing:",
+  "^Upgrading:",
+  "^Removing:",
+  "^Installing dependencies:",
+  "^Transaction Summary",
+  "^Install\\s+\\d+ Package",
+  "^Upgrade\\s+\\d+ Package",
+  "^Remove\\s+\\d+ Package",
+  "^Total download size",
+  "^Complete!",
+  "^Error:",
+  "^No match for",
+  "Nothing to do",
+  "^\\s+\\S+\\s+(?:x86_64|noarch|aarch64|i686)\\s",
+]
+max_lines = 50
+token_budget = 2000
+
+[[tests.dnf]]
+name = "install plan kept, churn dropped"
+input = """
+Last metadata expiration check: 0:12:33 ago on Mon 23 Jun 2025.
+Dependencies resolved.
+================================================================================
+ Package          Arch      Version            Repository        Size
+================================================================================
+Installing:
+ jq               x86_64    1.6-17.el9         appstream         60 k
+Installing dependencies:
+ oniguruma        x86_64    6.9.6-1.el9.5      appstream        214 k
+Transaction Summary
+================================================================================
+Install  2 Packages
+Total download size: 274 k
+Downloading Packages:
+Running transaction check
+Running transaction
+  Installing       : oniguruma-6.9.6-1.el9.5.x86_64                          1/2
+  Installing       : jq-1.6-17.el9.x86_64                                    2/2
+  Verifying        : jq-1.6-17.el9.x86_64                                    1/2
+Complete!
+"""
+expected = """Installing:
+ jq               x86_64    1.6-17.el9         appstream         60 k
+Installing dependencies:
+ oniguruma        x86_64    6.9.6-1.el9.5      appstream        214 k
+Transaction Summary
+Install  2 Packages
+Total download size: 274 k
+Complete!"""
+
+[[tests.dnf]]
+name = "no match error surfaced"
+input = """
+Last metadata expiration check: 0:00:10 ago.
+No match for argument: nosuchpkg
+Error: Unable to find a match: nosuchpkg
+"""
+expected = """No match for argument: nosuchpkg
+Error: Unable to find a match: nosuchpkg"""

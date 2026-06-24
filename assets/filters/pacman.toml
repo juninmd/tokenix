@@ -1,0 +1,61 @@
+[filters.pacman]
+description = "Compact pacman install/upgrade output, keep package plan & result"
+match_command = "^(?:sudo\\s+)?pacman\\s+-S\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^resolving dependencies",
+  "^looking for conflicting packages",
+  "^:: Retrieving packages",
+  "^:: Proceed with installation",
+  "^\\s*\\S+-[0-9].*downloading",
+  "^\\(\\d+/\\d+\\) checking (?:keys|package integrity|available disk|conflicts)",
+  "^\\(\\d+/\\d+\\) (?:loading package files|checking for file conflicts)",
+  "^:: Running post-transaction hooks",
+  "^\\(\\d+/\\d+\\) (?:Arming|Reloading|Updating|Creating)",
+]
+keep_lines_matching = [
+  "^Packages \\(\\d+\\)",
+  "^Total Download Size",
+  "^Total Installed Size",
+  "^Net Upgrade Size",
+  "^\\(\\d+/\\d+\\) (?:installing|removing|upgrading|reinstalling|downgrading)",
+  "^error:",
+  "^warning:",
+  "target not found",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.pacman]]
+name = "install kept, checks dropped"
+input = """
+resolving dependencies...
+looking for conflicting packages...
+
+Packages (1) jq-1.7.1-1
+
+Total Download Size:   0.12 MiB
+Total Installed Size:  0.65 MiB
+
+:: Proceed with installation? [Y/n]
+:: Retrieving packages...
+ jq-1.7.1-1-x86_64                          120.0 KiB  2.50 MiB/s 00:00 [###] 100%
+(1/1) checking keys in keyring
+(1/1) checking package integrity
+(1/1) loading package files
+(1/1) checking for file conflicts
+(1/1) installing jq
+"""
+expected = """Packages (1) jq-1.7.1-1
+Total Download Size:   0.12 MiB
+Total Installed Size:  0.65 MiB
+(1/1) installing jq"""
+
+[[tests.pacman]]
+name = "target not found surfaced"
+input = """
+error: target not found: nosuchpkg
+"""
+expected = """error: target not found: nosuchpkg"""

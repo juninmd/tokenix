@@ -1,0 +1,46 @@
+[filters.pip-audit]
+description = "Keep pip-audit vulnerability findings, drop the audit progress"
+match_command = "^pip-audit\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Auditing ",
+  "^Collecting ",
+  "^-{3,}",
+  "^Name\\s+Version\\s+ID\\s+Fix",
+]
+keep_lines_matching = [
+  "vulnerabilit",
+  "No known vulnerabilities",
+  "PYSEC-",
+  "GHSA-",
+  "CVE-",
+  "^\\S+\\s+[0-9][^\\s]*\\s+\\S+",
+  "^ERROR",
+  "skipping",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.pip-audit]]
+name = "findings table kept, header dropped"
+input = """
+Auditing 41 packages...
+Found 2 known vulnerabilities in 1 package
+Name  Version ID             Fix Versions
+----- ------- -------------- ------------
+flask 0.5     PYSEC-2019-179 1.0
+flask 0.5     PYSEC-2018-66  0.12.3
+"""
+expected = """Found 2 known vulnerabilities in 1 package
+flask 0.5     PYSEC-2019-179 1.0
+flask 0.5     PYSEC-2018-66  0.12.3"""
+
+[[tests.pip-audit]]
+name = "clean audit summary"
+input = """
+Auditing 41 packages...
+No known vulnerabilities found
+"""
+expected = """No known vulnerabilities found"""
