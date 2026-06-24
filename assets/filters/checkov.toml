@@ -1,0 +1,57 @@
+[filters.checkov]
+description = "Compact checkov output: keep failed checks and the pass/fail summary"
+match_command = "^checkov\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s+_",
+  "^\\s+\\\\",
+  "^\\s+\\|",
+  "^By (?:Prisma|bridgecrew)",
+  "^\\s*version: ",
+  "^\\s+PASSED for resource",
+  "^\\s+Check: CKV.*PASSED",
+]
+keep_lines_matching = [
+  "Passed checks:",
+  "Failed checks:",
+  "Skipped checks:",
+  "^Check: ",
+  "\\bFAILED\\b",
+  "^\\s+File:",
+  "^\\s+Guide:",
+  "(?i)^error",
+]
+max_lines = 70
+token_budget = 3000
+
+[[tests.checkov]]
+name = "failed check kept, banner dropped"
+input = """
+       _               _
+   ___| |__   ___  ___| | _______   __
+  / __| '_ \\ / _ \\/ __| |/ / _ \\ \\ / /
+By Prisma Cloud | version: 3.2.0
+
+Passed checks: 42, Failed checks: 3, Skipped checks: 1
+
+Check: CKV_AWS_18: "Ensure the S3 bucket has access logging enabled"
+	FAILED for resource: aws_s3_bucket.data
+	File: /main.tf:1-10
+	Guide: https://docs.bridgecrew.io/docs/s3_13
+"""
+expected = """Passed checks: 42, Failed checks: 3, Skipped checks: 1
+Check: CKV_AWS_18: \"Ensure the S3 bucket has access logging enabled\"
+	FAILED for resource: aws_s3_bucket.data
+	File: /main.tf:1-10
+	Guide: https://docs.bridgecrew.io/docs/s3_13"""
+
+[[tests.checkov]]
+name = "all passed summary"
+input = """
+By Prisma Cloud | version: 3.2.0
+
+Passed checks: 45, Failed checks: 0, Skipped checks: 1
+"""
+expected = """Passed checks: 45, Failed checks: 0, Skipped checks: 1"""

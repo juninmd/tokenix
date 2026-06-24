@@ -1,0 +1,44 @@
+[filters.meson]
+description = "Compact meson setup/compile output, keep errors and key facts"
+match_command = "^meson\\s+(setup|compile|configure|test|install)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+keep_lines_matching = [
+  "ERROR:",
+  "WARNING:",
+  "^meson.build:\\d+",
+  "Build targets in project",
+  "^Project name:",
+  "^\\s*\\d+/\\d+ \\S.*(?:FAIL|ERROR|TIMEOUT)",
+  "Ok:\\s+\\d+",
+  "Fail:\\s+\\d+",
+  "Build failed",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.meson]]
+name = "build error surfaced"
+input = """
+The Meson build system
+Version: 1.3.0
+Source dir: /work
+Build dir: /work/build
+meson.build:12:0: ERROR: Unknown compiler(s): cc
+"""
+expected = """meson.build:12:0: ERROR: Unknown compiler(s): cc"""
+
+[[tests.meson]]
+name = "test summary kept"
+input = """
+ninja: Entering directory `/work/build'
+1/3 mylib_test          OK              0.05s
+2/3 io_test             FAIL            0.12s
+3/3 net_test            OK              0.03s
+
+Ok:                 2
+Fail:               1
+"""
+expected = """2/3 io_test             FAIL            0.12s
+Ok:                 2
+Fail:               1"""

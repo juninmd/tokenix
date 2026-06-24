@@ -1,0 +1,64 @@
+[filters.valgrind]
+description = "Keep valgrind error/leak summaries and top frames, drop banner"
+match_command = "\\bvalgrind\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+keep_lines_matching = [
+  "Invalid (?:read|write|free)",
+  "Mismatched free",
+  "Conditional jump",
+  "uninitialised",
+  "Use of uninitialised",
+  "ERROR SUMMARY",
+  "HEAP SUMMARY",
+  "LEAK SUMMARY",
+  "in use at exit",
+  "(?:definitely|indirectly|possibly) lost",
+  "still reachable",
+  "==\\d+==\\s+at 0x",
+  "Process terminating",
+]
+max_lines = 60
+replace_patterns = [
+  ["==\\d+==", "==<pid>=="],
+]
+token_budget = 2500
+
+[[tests.valgrind]]
+name = "errors and summaries kept, banner dropped"
+input = """
+==12345== Memcheck, a memory error detector
+==12345== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==12345== Command: ./a.out
+==12345==
+==12345== Invalid read of size 4
+==12345==    at 0x401234: main (test.c:10)
+==12345==
+==12345== HEAP SUMMARY:
+==12345==     in use at exit: 100 bytes in 2 blocks
+==12345== LEAK SUMMARY:
+==12345==    definitely lost: 40 bytes in 1 blocks
+==12345== ERROR SUMMARY: 2 errors from 2 contexts (suppressed: 0 from 0)
+"""
+expected = """==<pid>== Invalid read of size 4
+==<pid>==    at 0x401234: main (test.c:10)
+==<pid>== HEAP SUMMARY:
+==<pid>==     in use at exit: 100 bytes in 2 blocks
+==<pid>== LEAK SUMMARY:
+==<pid>==    definitely lost: 40 bytes in 1 blocks
+==<pid>== ERROR SUMMARY: 2 errors from 2 contexts (suppressed: 0 from 0)"""
+
+[[tests.valgrind]]
+name = "clean run keeps zero-error summary"
+input = """
+==999== Memcheck, a memory error detector
+==999== Command: ./a.out
+==999==
+==999== HEAP SUMMARY:
+==999==     in use at exit: 0 bytes in 0 blocks
+==999== All heap blocks were freed -- no leaks are possible
+==999== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+"""
+expected = """==<pid>== HEAP SUMMARY:
+==<pid>==     in use at exit: 0 bytes in 0 blocks
+==<pid>== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)"""

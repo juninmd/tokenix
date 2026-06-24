@@ -1,0 +1,37 @@
+[filters.stylelint]
+description = "Compact stylelint output: keep problem lines and file headers"
+match_command = "\\bstylelint\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^\\S+\\.(?:css|scss|sass|less|styl|vue)$",
+  "\\d+:\\d+",
+  "[✖✗×]",
+  "(?i)\\b(?:error|warning)\\b",
+]
+max_lines = 80
+token_budget = 2000
+
+[[tests.stylelint]]
+name = "problems kept, blank lines dropped"
+input = """
+src/style.css
+ 12:3   ✖  Expected indentation of 2 spaces   indentation
+ 20:1   ✖  Unexpected empty block             block-no-empty
+
+src/theme.scss
+ 5:10   ✖  Unexpected unit                    unit-no-unknown
+"""
+expected = """src/style.css
+ 12:3   ✖  Expected indentation of 2 spaces   indentation
+ 20:1   ✖  Unexpected empty block             block-no-empty
+src/theme.scss
+ 5:10   ✖  Unexpected unit                    unit-no-unknown"""
+
+[[tests.stylelint]]
+name = "empty success passes through"
+input = ""
+expected = ""

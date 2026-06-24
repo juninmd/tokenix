@@ -1,0 +1,60 @@
+[filters.terragrunt]
+description = "Compact terragrunt output: drop wrapper noise, keep plan/apply result"
+match_command = "^terragrunt\\s+(plan|apply|destroy|init|output|run-all)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\d{2}:\\d{2}:\\d{2}\\.\\d+ \\S+ \\[terragrunt\\]",
+  "time=\\S+ level=(?:info|debug)",
+  "^Refreshing state\\.\\.\\.",
+  "^\\S+: Refreshing state\\.\\.\\.",
+  "Reading\\.\\.\\.",
+  "Read complete after",
+]
+keep_lines_matching = [
+  "^Plan: ",
+  "^Apply complete",
+  "^Destroy complete",
+  "No changes\\.",
+  "^Error:",
+  "^\\s+#",
+  "^\\s+[+~\\-]",
+  "^\\s+[}\\]]",
+  "Terraform will perform",
+  "level=error",
+]
+max_lines = 60
+token_budget = 2500
+
+[[tests.terragrunt]]
+name = "plan summary kept, wrapper logs dropped"
+input = """
+10:00:01.123 INFO  [terragrunt] Running command: terraform plan
+aws_s3_bucket.data: Refreshing state... [id=my-bucket]
+
+Terraform will perform the following actions:
+
+  # aws_s3_bucket.logs will be created
+  + resource "aws_s3_bucket" "logs" {
+      + bucket = "my-logs"
+    }
+
+Plan: 1 to add, 0 to change, 0 to destroy.
+"""
+expected = """Terraform will perform the following actions:
+  # aws_s3_bucket.logs will be created
+  + resource \"aws_s3_bucket\" \"logs\" {
+      + bucket = \"my-logs\"
+    }
+Plan: 1 to add, 0 to change, 0 to destroy."""
+
+[[tests.terragrunt]]
+name = "no changes kept"
+input = """
+10:00:01.123 INFO  [terragrunt] Running command: terraform plan
+aws_s3_bucket.data: Refreshing state... [id=my-bucket]
+
+No changes. Your infrastructure matches the configuration.
+"""
+expected = """No changes. Your infrastructure matches the configuration."""

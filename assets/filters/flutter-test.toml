@@ -1,0 +1,45 @@
+[filters.flutter-test]
+description = "Compact flutter test output: keep failures and the final result"
+match_command = "^flutter\\s+test\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "All tests passed",
+  "Some tests failed",
+  "\\[E\\]",
+  "^\\s+Expected:",
+  "^\\s+Actual:",
+  " -\\d+:",
+  "(?i)error",
+  "FAILED",
+  "Failed to load",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.flutter-test]]
+name = "all passed keeps final line"
+input = """
+00:00 +0: loading test/widget_test.dart
+00:01 +0: MyWidget renders title
+00:02 +5: All tests passed!
+"""
+expected = """00:02 +5: All tests passed!"""
+
+[[tests.flutter-test]]
+name = "failure detail kept"
+input = """
+00:00 +0: loading test/auth_test.dart
+00:01 +4: AuthService login succeeds
+00:03 +5 -1: AuthService login fails on bad creds [E]
+  Expected: <true>
+    Actual: <false>
+00:04 +11 -1: Some tests failed.
+"""
+expected = """00:03 +5 -1: AuthService login fails on bad creds [E]
+  Expected: <true>
+    Actual: <false>
+00:04 +11 -1: Some tests failed."""

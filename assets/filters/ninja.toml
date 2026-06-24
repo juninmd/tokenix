@@ -1,0 +1,44 @@
+[filters.ninja]
+description = "Compact ninja build output: drop progress, keep failures"
+match_command = "^ninja\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[\\d+/\\d+\\] ",
+  "^ninja: Entering directory",
+  "^ninja: no work to do",
+]
+keep_lines_matching = [
+  "^FAILED:",
+  "^ninja: build stopped",
+  "^ninja: error",
+  "(?i)\\berror:",
+  "(?i)\\bwarning:",
+  "undefined reference",
+]
+max_lines = 50
+on_empty = "ninja: build ok"
+token_budget = 1500
+
+[[tests.ninja]]
+name = "compile failure surfaced"
+input = """
+[1/3] Compiling foo.c
+[2/3] Compiling bar.c
+FAILED: bar.o
+cc -c bar.c -o bar.o
+bar.c:10:5: error: use of undeclared identifier 'x'
+ninja: build stopped: subcommand failed.
+"""
+expected = """FAILED: bar.o
+bar.c:10:5: error: use of undeclared identifier 'x'
+ninja: build stopped: subcommand failed."""
+
+[[tests.ninja]]
+name = "clean build collapses"
+input = """
+[1/3] Compiling foo.c
+[2/3] Compiling bar.c
+[3/3] Linking app
+"""
+expected = "ninja: build ok"

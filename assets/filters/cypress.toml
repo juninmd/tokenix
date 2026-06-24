@@ -1,0 +1,70 @@
+[filters.cypress]
+description = "Compact cypress run output: keep failures and the results summary"
+match_command = "\\bcypress\\s+run\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s+[✓√] ",
+  "^\\s+Running:",
+  "^\\s+\\(Run ",
+  "^\\s+- ",
+  "^\\s+Cypress:",
+  "^\\s+Browser:",
+  "^\\s+Node Version:",
+  "^\\s+Specs:",
+  "^\\s+Searching for",
+]
+keep_lines_matching = [
+  "✗|✖|×|\\d+\\) ",
+  "passing",
+  "failing",
+  "pending",
+  "Tests:",
+  "Passing:",
+  "Failing:",
+  "AssertionError",
+  "CypressError",
+  "All specs passed",
+  "\\bfailed\\b",
+]
+max_lines = 70
+replace_patterns = [
+  ["\\(\\d+m?s\\)", "(<duration>)"],
+  ["\\d+:\\d+:\\d+", "<time>"],
+]
+token_budget = 2500
+
+[[tests.cypress]]
+name = "failure and summary kept"
+input = """
+  Running:  login.cy.js
+
+  Login
+    ✓ shows the form (520ms)
+    1) submits valid credentials
+
+  1 passing (2s)
+  1 failing
+
+  1) Login submits valid credentials:
+     AssertionError: expected 'Welcome' to equal 'Dashboard'
+"""
+expected = """    1) submits valid credentials
+  1 passing (<duration>)
+  1 failing
+  1) Login submits valid credentials:
+     AssertionError: expected 'Welcome' to equal 'Dashboard'"""
+
+[[tests.cypress]]
+name = "all green keeps passing summary"
+input = """
+  Running:  smoke.cy.js
+
+  Smoke
+    ✓ loads home (300ms)
+    ✓ loads about (210ms)
+
+  2 passing (1s)
+"""
+expected = """  2 passing (<duration>)"""
