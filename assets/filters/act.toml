@@ -1,0 +1,46 @@
+[filters.act]
+description = "Compact act (local GitHub Actions) output: keep failures and job results"
+match_command = "^act\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "\\]\\s+🚀\\s+Start ",
+  "\\]\\s+⭐\\s+Run ",
+  "\\]\\s+☁\\s+",
+  "\\]\\s+✅\\s+Success - ",
+  "\\]\\s+🐳\\s+docker ",
+]
+keep_lines_matching = [
+  "❌",
+  "Failure -",
+  "Job failed",
+  "Job succeeded",
+  "(?i)error",
+  "exitcode",
+]
+max_lines = 60
+on_empty = "act: ok"
+token_budget = 2000
+
+[[tests.act]]
+name = "job failure surfaced"
+input = """
+[CI/build] 🚀  Start image=node:20
+[CI/build] ⭐ Run Set up job
+[CI/build]   ✅  Success - Set up job
+[CI/build] ⭐ Run tests
+[CI/build]   ❌  Failure - Run tests
+[CI/build] exitcode '1': failure
+"""
+expected = """[CI/build]   ❌  Failure - Run tests
+[CI/build] exitcode '1': failure"""
+
+[[tests.act]]
+name = "all success collapses"
+input = """
+[CI/build] 🚀  Start image=node:20
+[CI/build] ⭐ Run Set up job
+[CI/build]   ✅  Success - Set up job
+[CI/build]   ✅  Success - Run tests
+"""
+expected = "act: ok"

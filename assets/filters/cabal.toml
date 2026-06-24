@@ -1,0 +1,50 @@
+[filters.cabal]
+description = "Compact cabal build output: drop compile progress, keep errors"
+match_command = "^cabal\\s+(build|test|run|install|configure)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Resolving dependencies",
+  "^Build profile:",
+  "^In order, the following will be built",
+  "^\\s*- ",
+  "^Configuring ",
+  "^Preprocessing ",
+  "^\\[\\d+ of \\d+\\] Compiling ",
+  "^Building ",
+]
+keep_lines_matching = [
+  "^Linking ",
+  "(?i)error",
+  "(?i)warning",
+  "rror:",
+  "Failed to build",
+  "cannot satisfy",
+  "tests? (?:passed|failed)",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.cabal]]
+name = "build error surfaced"
+input = """
+Resolving dependencies...
+Build profile: -w ghc-9.4.7 -O1
+In order, the following will be built:
+ - app-0.1.0.0 (exe:app)
+Configuring executable 'app'
+Preprocessing executable 'app'
+[1 of 2] Compiling Main
+src/Main.hs:10:7: error: Variable not in scope: foo
+"""
+expected = """src/Main.hs:10:7: error: Variable not in scope: foo"""
+
+[[tests.cabal]]
+name = "successful link kept"
+input = """
+[1 of 2] Compiling Main
+[2 of 2] Compiling Lib
+Linking dist-newstyle/build/app
+"""
+expected = """Linking dist-newstyle/build/app"""

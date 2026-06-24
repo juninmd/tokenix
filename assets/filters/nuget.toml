@@ -1,0 +1,42 @@
+[filters.nuget]
+description = "Compact nuget restore/install output, keep results and errors"
+match_command = "^nuget\\s+(restore|install|update|push)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*GET https?://",
+  "^\\s*OK https?://",
+  "^\\s*Installing ",
+  "^Restoring packages for ",
+  "^\\s*CACHE ",
+]
+keep_lines_matching = [
+  "^\\s*Restored ",
+  "Package .* successfully",
+  "(?i)error",
+  "Unable to find",
+  "warning",
+  "Your package was pushed",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.nuget]]
+name = "restore result kept, fetch noise dropped"
+input = """
+Restoring packages for /work/App.csproj...
+  GET https://api.nuget.org/v3/index.json
+  OK https://api.nuget.org/v3/index.json 120ms
+Installing Newtonsoft.Json 13.0.1.
+  Restored /work/App.csproj (in 1.2 sec).
+"""
+expected = """  Restored /work/App.csproj (in 1.2 sec)."""
+
+[[tests.nuget]]
+name = "missing package surfaced"
+input = """
+Restoring packages for /work/App.csproj...
+  Unable to find package NoSuchPackage. No packages exist with this id.
+"""
+expected = """  Unable to find package NoSuchPackage. No packages exist with this id."""

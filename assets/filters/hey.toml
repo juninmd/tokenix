@@ -1,0 +1,68 @@
+[filters.hey]
+description = "Compact hey load-test output: keep summary and status distribution"
+match_command = "^hey\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Latency distribution:",
+  "^Response time histogram:",
+  "^\\s+\\d+\\.\\d+ \\[\\d+\\]\\s+\\|",
+  "^\\s+\\d+% in ",
+  "^DNS",
+  "^Details \\(",
+  "^\\s+(?:DNS-lookup|req write|resp wait|resp read):",
+]
+keep_lines_matching = [
+  "^Summary:",
+  "Total:",
+  "Requests/sec:",
+  "Average:",
+  "Slowest:",
+  "Fastest:",
+  "^Status code distribution:",
+  "^\\s+\\[\\d+\\]",
+  "Error",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.hey]]
+name = "summary and status codes kept, histogram dropped"
+input = """
+Summary:
+  Total:	1.2030 secs
+  Slowest:	0.4500 secs
+  Fastest:	0.0200 secs
+  Average:	0.1100 secs
+  Requests/sec:	850.20
+
+Response time histogram:
+  0.020 [1]    |
+  0.150 [800]  |■■■■■■■■■■
+
+Latency distribution:
+  10% in 0.0400 secs
+
+Status code distribution:
+  [200]	995 responses
+  [500]	5 responses
+"""
+expected = """Summary:
+  Total:	1.2030 secs
+  Slowest:	0.4500 secs
+  Fastest:	0.0200 secs
+  Average:	0.1100 secs
+  Requests/sec:	850.20
+Status code distribution:
+  [200]	995 responses
+  [500]	5 responses"""
+
+[[tests.hey]]
+name = "error surfaced"
+input = """
+Error distribution:
+  [5]	Get http://localhost: connection refused
+"""
+expected = """Error distribution:
+  [5]	Get http://localhost: connection refused"""

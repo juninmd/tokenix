@@ -1,0 +1,62 @@
+[filters.nose2]
+description = "Compact nose2 test output: keep failures and the result line"
+match_command = "\\bnose2\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^[.sFEx]+$",
+  "^-{3,}$",
+  "^=+$",
+]
+keep_lines_matching = [
+  "^(?:FAIL|ERROR): ",
+  "^Ran \\d+ tests?",
+  "^OK\\b",
+  "^FAILED",
+  "Traceback",
+  "^\\s+File \"",
+  "Error",
+  "assert",
+]
+max_lines = 60
+replace_patterns = [
+  ["in \\d+\\.\\d+s", "in <duration>"],
+]
+token_budget = 2500
+
+[[tests.nose2]]
+name = "failures and summary kept"
+input = """
+..F.E
+======================================================================
+FAIL: test_divide (tests.test_math.MathTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "tests/test_math.py", line 10, in test_divide
+    self.assertEqual(divide(10, 2), 4)
+AssertionError: 5 != 4
+----------------------------------------------------------------------
+Ran 5 tests in 0.012s
+
+FAILED (failures=1, errors=1)
+"""
+expected = """FAIL: test_divide (tests.test_math.MathTest)
+Traceback (most recent call last):
+  File \"tests/test_math.py\", line 10, in test_divide
+    self.assertEqual(divide(10, 2), 4)
+AssertionError: 5 != 4
+Ran 5 tests in <duration>
+FAILED (failures=1, errors=1)"""
+
+[[tests.nose2]]
+name = "all pass keeps ok"
+input = """
+.....
+----------------------------------------------------------------------
+Ran 5 tests in 0.008s
+
+OK
+"""
+expected = """Ran 5 tests in <duration>
+OK"""

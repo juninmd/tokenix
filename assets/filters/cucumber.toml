@@ -1,0 +1,52 @@
+[filters.cucumber]
+description = "Compact cucumber output: keep totals and failing scenarios"
+match_command = "\\bcucumber\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+keep_lines_matching = [
+  "\\d+ scenarios? \\(",
+  "\\d+ steps? \\(",
+  "^Failing Scenarios:",
+  "\\.feature:\\d+",
+  "(?i)error",
+  "expected",
+  "\\(::",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.cucumber]]
+name = "totals and failing scenarios kept"
+input = """
+Feature: Login
+
+  Scenario: valid login
+    Given a registered user
+    When they log in
+    Then they see the dashboard
+
+Failing Scenarios:
+cucumber features/login.feature:12
+
+2 scenarios (1 failed, 1 passed)
+10 steps (1 failed, 9 passed)
+"""
+expected = """Failing Scenarios:
+cucumber features/login.feature:12
+2 scenarios (1 failed, 1 passed)
+10 steps (1 failed, 9 passed)"""
+
+[[tests.cucumber]]
+name = "all green keeps totals"
+input = """
+Feature: Smoke
+
+  Scenario: home loads
+    Given the app runs
+    Then home renders
+
+1 scenario (1 passed)
+2 steps (2 passed)
+"""
+expected = """1 scenario (1 passed)
+2 steps (2 passed)"""

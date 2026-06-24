@@ -1,0 +1,47 @@
+[filters.pipenv]
+description = "Compact pipenv install/lock output, keep result and errors"
+match_command = "^pipenv\\s+(install|uninstall|update|lock|sync)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Installing ",
+  "^Adding ",
+  "^Locking \\[",
+  "^Resolving ",
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "Installation Succeeded",
+  "Updated Pipfile.lock",
+  "Success",
+  "(?i)error",
+  "Failed",
+  "Locking Failed",
+  "Your Pipfile",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.pipenv]]
+name = "install success kept, progress dropped"
+input = """
+Installing flask...
+Adding flask to Pipfile's [packages]...
+Installation Succeeded
+Locking [packages] dependencies...
+Updated Pipfile.lock (abc123)!
+"""
+expected = """Installation Succeeded
+Updated Pipfile.lock (abc123)!"""
+
+[[tests.pipenv]]
+name = "lock failure surfaced"
+input = """
+Installing flask...
+Locking [packages] dependencies...
+Locking Failed!
+ERROR: Could not find a version that matches flask==999
+"""
+expected = """Locking Failed!
+ERROR: Could not find a version that matches flask==999"""

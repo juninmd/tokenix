@@ -1,0 +1,55 @@
+[filters.robot]
+description = "Compact Robot Framework output: keep failures and the totals"
+match_command = "^(?:robot|python -m robot)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^=+$",
+  "^-+$",
+  "^\\s*$",
+  "\\| PASS \\|\\s*$",
+]
+keep_lines_matching = [
+  "\\| FAIL \\|",
+  "\\d+ tests?, \\d+ passed",
+  "^Expected ",
+  "(?i)error",
+  "Output:",
+  "Report:",
+]
+max_lines = 60
+token_budget = 2500
+
+[[tests.robot]]
+name = "failures and totals kept"
+input = """
+==============================================================================
+Login :: Authentication tests
+==============================================================================
+Valid Login                                                           | PASS |
+------------------------------------------------------------------------------
+Invalid Login                                                         | FAIL |
+Expected status '200' but got '401'
+------------------------------------------------------------------------------
+Login :: Authentication tests                                         | FAIL |
+2 tests, 1 passed, 1 failed
+==============================================================================
+"""
+expected = """Invalid Login                                                         | FAIL |
+Expected status '200' but got '401'
+Login :: Authentication tests                                         | FAIL |
+2 tests, 1 passed, 1 failed"""
+
+[[tests.robot]]
+name = "all pass keeps totals"
+input = """
+==============================================================================
+Smoke
+==============================================================================
+Home Loads                                                            | PASS |
+------------------------------------------------------------------------------
+Smoke                                                                 | PASS |
+1 test, 1 passed, 0 failed
+==============================================================================
+"""
+expected = """1 test, 1 passed, 0 failed"""
