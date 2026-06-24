@@ -1,0 +1,41 @@
+[filters.dockle]
+description = "Compact dockle (container lint) output: keep WARN/FATAL, drop INFO/PASS"
+match_command = "^dockle\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^INFO\\s+-",
+  "^PASS\\s+-",
+]
+keep_lines_matching = [
+  "^FATAL\\s+-",
+  "^WARN\\s+-",
+  "^\\s+\\* ",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "dockle: ok"
+token_budget = 2000
+
+[[tests.dockle]]
+name = "warnings kept, info/pass dropped"
+input = """
+PASS	- CIS-DI-0006: Add HEALTHCHECK instruction
+WARN	- CIS-DI-0001: Create a user for the container
+	* Last user should not be root
+INFO	- DKL-LI-0003: Only put necessary files
+FATAL	- CIS-DI-0009: Use COPY instead of ADD
+	* Use COPY : /app
+"""
+expected = """WARN	- CIS-DI-0001: Create a user for the container
+	* Last user should not be root
+FATAL	- CIS-DI-0009: Use COPY instead of ADD
+	* Use COPY : /app"""
+
+[[tests.dockle]]
+name = "clean image collapses"
+input = """
+PASS	- CIS-DI-0001: Create a user for the container
+PASS	- CIS-DI-0006: Add HEALTHCHECK instruction
+"""
+expected = "dockle: ok"

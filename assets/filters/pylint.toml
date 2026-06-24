@@ -1,0 +1,40 @@
+[filters.pylint]
+description = "Compact pylint output: keep messages and the rating"
+match_command = "\\bpylint\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\*+ Module ",
+  "^-{3,}",
+]
+keep_lines_matching = [
+  ":\\d+:\\d+: [A-Z]\\d+:",
+  "rated at",
+  "(?i)error",
+  "Your code has been rated",
+]
+max_lines = 70
+token_budget = 2500
+
+[[tests.pylint]]
+name = "messages and rating kept"
+input = """
+************* Module app
+app.py:10:0: C0114: Missing module docstring (missing-module-docstring)
+app.py:15:4: W0612: Unused variable 'x' (unused-variable)
+
+------------------------------------------------------------------
+Your code has been rated at 8.50/10 (previous run: 8.00/10, +0.50)
+"""
+expected = """app.py:10:0: C0114: Missing module docstring (missing-module-docstring)
+app.py:15:4: W0612: Unused variable 'x' (unused-variable)
+Your code has been rated at 8.50/10 (previous run: 8.00/10, +0.50)"""
+
+[[tests.pylint]]
+name = "perfect score kept"
+input = """
+--------------------------------------------------------------------
+Your code has been rated at 10.00/10 (previous run: 10.00/10, +0.00)
+"""
+expected = """Your code has been rated at 10.00/10 (previous run: 10.00/10, +0.00)"""

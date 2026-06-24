@@ -1,0 +1,60 @@
+[filters.bandit]
+description = "Compact bandit (python security) output: keep issues and totals"
+match_command = "^bandit\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[main\\]\\s+INFO",
+  "^Run started:",
+  "^Test results:",
+  "^Code scanned:",
+  "^\\s+Total lines of code:",
+  "^\\s+Total lines skipped",
+  "^Files skipped ",
+  "^\\s+Location: .*:\\d+:\\d+$",
+]
+keep_lines_matching = [
+  ">> Issue: ",
+  "Severity: ",
+  "^\\s+Location: ",
+  "Total issues",
+  "(?:High|Medium|Low): \\d+",
+  "No issues identified",
+  "(?i)error",
+]
+max_lines = 70
+token_budget = 2500
+
+[[tests.bandit]]
+name = "issue and severity totals kept"
+input = """
+[main]  INFO    profile include tests: None
+Run started:2026-06-24 01:00:00
+
+Test results:
+>> Issue: [B602:subprocess_popen_with_shell_equals_true] subprocess call with shell=True
+   Severity: High   Confidence: High
+   Location: app.py:10:4
+Code scanned:
+        Total lines of code: 200
+Total issues (by severity):
+        High: 1
+        Medium: 0
+        Low: 0
+"""
+expected = """>> Issue: [B602:subprocess_popen_with_shell_equals_true] subprocess call with shell=True
+   Severity: High   Confidence: High
+Total issues (by severity):
+        High: 1
+        Medium: 0
+        Low: 0"""
+
+[[tests.bandit]]
+name = "clean scan keeps no-issues line"
+input = """
+Run started:2026-06-24 01:00:00
+Test results:
+        No issues identified.
+"""
+expected = """        No issues identified."""

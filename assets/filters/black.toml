@@ -1,0 +1,40 @@
+[filters.black]
+description = "Compact black formatter output: keep reformat summary and errors"
+match_command = "^black\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Oh no!",
+  "^All done!",
+]
+keep_lines_matching = [
+  "would reformat ",
+  "reformatted ",
+  "left unchanged",
+  "would be reformatted",
+  "cannot format",
+  "(?i)error",
+]
+max_lines = 60
+token_budget = 1500
+
+[[tests.black]]
+name = "reformat summary kept"
+input = """
+would reformat src/app.py
+would reformat src/util.py
+Oh no! 💥 💔 💥
+2 files would be reformatted, 3 files would be left unchanged.
+"""
+expected = """would reformat src/app.py
+would reformat src/util.py
+2 files would be reformatted, 3 files would be left unchanged."""
+
+[[tests.black]]
+name = "all clean keeps summary"
+input = """
+All done! ✨ 🍰 ✨
+4 files left unchanged.
+"""
+expected = """4 files left unchanged."""

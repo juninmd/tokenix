@@ -1,0 +1,29 @@
+[filters.flake8]
+description = "Keep flake8 diagnostics"
+match_command = "\\bflake8\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  ":\\d+:\\d+: [A-Z]\\d+",
+  "(?i)error",
+]
+max_lines = 70
+on_empty = "flake8: ok"
+token_budget = 2000
+
+[[tests.flake8]]
+name = "violations kept"
+input = """
+app.py:10:80: E501 line too long (88 > 79 characters)
+app.py:15:1: F401 'os' imported but unused
+"""
+expected = """app.py:10:80: E501 line too long (88 > 79 characters)
+app.py:15:1: F401 'os' imported but unused"""
+
+[[tests.flake8]]
+name = "clean run collapses"
+input = """
+"""
+expected = "flake8: ok"

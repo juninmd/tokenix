@@ -1,0 +1,43 @@
+[filters.safety]
+description = "Compact safety (python deps security) output: keep vulnerabilities"
+match_command = "^safety\\s+(check|scan)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\+.*$",
+  "^\\|.*\\|\\s*$",
+]
+keep_lines_matching = [
+  "Vulnerability found",
+  "Vulnerability ID",
+  "(?i)affected versions",
+  "vulnerabilit(?:y|ies) found",
+  "No known security vulnerabilities",
+  "^-> ",
+  "(?i)error",
+]
+max_lines = 70
+token_budget = 2500
+
+[[tests.safety]]
+name = "vulnerabilities kept, ascii frame dropped"
+input = """
++==============================================================+
+|                    VULNERABILITIES FOUND                     |
++==============================================================+
+-> Vulnerability found in flask version 0.12
+   Vulnerability ID: 12345
+   Affected versions: <0.12.3
+"""
+expected = """-> Vulnerability found in flask version 0.12
+   Vulnerability ID: 12345
+   Affected versions: <0.12.3"""
+
+[[tests.safety]]
+name = "clean scan summary"
+input = """
++==============================================================+
+No known security vulnerabilities found.
+"""
+expected = """No known security vulnerabilities found."""

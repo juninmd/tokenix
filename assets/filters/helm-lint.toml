@@ -1,0 +1,42 @@
+[filters.helm-lint]
+description = "Compact helm lint output: keep errors/warnings and the result"
+match_command = "^helm\\s+lint\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^==> Linting ",
+  "^\\[INFO\\]",
+]
+keep_lines_matching = [
+  "^\\[ERROR\\]",
+  "^\\[WARNING\\]",
+  "chart\\(s\\) failed",
+  "chart\\(s\\) linted",
+  "(?i)error",
+  "no chart found",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.helm-lint]]
+name = "error kept, info dropped"
+input = """
+==> Linting mychart
+[INFO] Chart.yaml: icon is recommended
+[ERROR] templates/deployment.yaml: unable to parse YAML: error converting
+
+Error: 1 chart(s) linted, 1 chart(s) failed
+"""
+expected = """[ERROR] templates/deployment.yaml: unable to parse YAML: error converting
+Error: 1 chart(s) linted, 1 chart(s) failed"""
+
+[[tests.helm-lint]]
+name = "clean lint keeps result"
+input = """
+==> Linting mychart
+[INFO] Chart.yaml: icon is recommended
+
+1 chart(s) linted, 0 chart(s) failed
+"""
+expected = """1 chart(s) linted, 0 chart(s) failed"""

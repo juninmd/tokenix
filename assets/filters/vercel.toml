@@ -1,0 +1,42 @@
+[filters.vercel]
+description = "Compact vercel deploy output: keep the deployment URL and errors"
+match_command = "^(?:vercel|vc)\\s+(deploy|--prod|build|dev|pull)?\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Vercel CLI ",
+  "^🔍 ",
+  "Inspect: ",
+  "^\\s*Retrieving ",
+]
+keep_lines_matching = [
+  "Production: ",
+  "Preview: ",
+  "Ready",
+  "Build Completed",
+  "deployed",
+  "(?i)error",
+  "Failed",
+  "✅|❌",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.vercel]]
+name = "production url kept, banner dropped"
+input = """
+Vercel CLI 32.0.0
+🔍  Inspect: https://vercel.com/acme/app/abc123 [2s]
+✅  Production: https://app.vercel.app [3s]
+"""
+expected = """✅  Production: https://app.vercel.app [3s]"""
+
+[[tests.vercel]]
+name = "build error surfaced"
+input = """
+Vercel CLI 32.0.0
+🔍  Inspect: https://vercel.com/acme/app/def456 [2s]
+Error: Command "npm run build" exited with 1
+"""
+expected = """Error: Command \"npm run build\" exited with 1"""
