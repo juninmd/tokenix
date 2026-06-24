@@ -1,0 +1,51 @@
+[filters.stack]
+description = "Compact stack (Haskell) build output: drop compile progress, keep errors"
+match_command = "^stack\\s+(build|test|run|exec|install|bench)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\S+> Preprocessing",
+  "^\\S+> build \\(",
+  "^\\S+> Building ",
+  "^\\[\\d+ of \\d+\\] Compiling ",
+  "^Building all executables",
+  "^\\S+> configure ",
+  "^\\S+> Configuring ",
+]
+keep_lines_matching = [
+  "rror:",
+  "^\\s{4,}\\S",
+  "(?i)warning",
+  "Linking ",
+  "Failed",
+  "Test suite .* (?:passed|failed)",
+  "examples?, \\d+ failures?",
+  "^\\S+> copy/register",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.stack]]
+name = "compile error surfaced"
+input = """
+Building all executables for `app' once. After a successful build of all of them, only specified executables will be rebuilt.
+app> build (lib + exe)
+app> Preprocessing library for app-0.1.0.0..
+[1 of 5] Compiling Lib
+src/Lib.hs:12:9: error:
+    Variable not in scope: foo :: Int
+"""
+expected = """src/Lib.hs:12:9: error:
+    Variable not in scope: foo :: Int"""
+
+[[tests.stack]]
+name = "link success kept"
+input = """
+app> Preprocessing executable for app-0.1.0.0..
+[2 of 5] Compiling Main
+Linking .stack-work/dist/build/app/app
+app> copy/register
+"""
+expected = """Linking .stack-work/dist/build/app/app
+app> copy/register"""

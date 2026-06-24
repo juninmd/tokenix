@@ -1,0 +1,52 @@
+[filters.wrk]
+description = "Compact wrk load-test output: keep throughput and error stats"
+match_command = "^wrk\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Running \\d+",
+  "^\\s+\\d+ threads and \\d+ connections",
+  "^\\s+Thread Stats",
+  "^\\s+Thread calibration",
+]
+keep_lines_matching = [
+  "requests in ",
+  "Requests/sec:",
+  "Transfer/sec:",
+  "^\\s+Latency\\s",
+  "Non-2xx",
+  "Socket errors",
+  "(?i)error",
+]
+max_lines = 40
+token_budget = 1200
+
+[[tests.wrk]]
+name = "throughput kept, banner dropped"
+input = """
+Running 10s test @ http://localhost:8080
+  4 threads and 100 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency   120.00ms   45.00ms   500.00ms   70.00%
+    Req/Sec    12.5k     1.2k     15.0k    68.00%
+  500000 requests in 10.00s, 65.00MB read
+Requests/sec:  50000.00
+Transfer/sec:      6.50MB
+"""
+expected = """    Latency   120.00ms   45.00ms   500.00ms   70.00%
+  500000 requests in 10.00s, 65.00MB read
+Requests/sec:  50000.00
+Transfer/sec:      6.50MB"""
+
+[[tests.wrk]]
+name = "socket errors surfaced"
+input = """
+Running 5s test @ http://localhost:8080
+  500 requests in 5.00s, 1.00MB read
+  Socket errors: connect 0, read 12, write 0, timeout 5
+Requests/sec:    100.00
+"""
+expected = """  500 requests in 5.00s, 1.00MB read
+  Socket errors: connect 0, read 12, write 0, timeout 5
+Requests/sec:    100.00"""

@@ -1,0 +1,46 @@
+[filters.trufflehog]
+description = "Keep trufflehog secret findings metadata, never echo raw secrets"
+match_command = "^trufflehog\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "TruffleHog. Unearth",
+  "^Decoder Type:",
+  "^Raw result:",
+  "^Raw:",
+  "^Line:",
+]
+keep_lines_matching = [
+  "Found verified result",
+  "Found unverified result",
+  "^Detector Type:",
+  "verified secrets?",
+  "^Repository:",
+  "^File:",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "trufflehog: no secrets found"
+token_budget = 2000
+
+[[tests.trufflehog]]
+name = "finding metadata kept, raw secret dropped"
+input = """
+🐷🔑🐷  TruffleHog. Unearth your secrets. 🐷🔑🐷
+
+Found verified result 🐷🔑
+Detector Type: AWS
+Decoder Type: PLAIN
+Raw result: AKIAIOSFODNN7EXAMPLE
+File: config/prod.env
+"""
+expected = """Found verified result 🐷🔑
+Detector Type: AWS
+File: config/prod.env"""
+
+[[tests.trufflehog]]
+name = "clean scan collapses"
+input = """
+🐷🔑🐷  TruffleHog. Unearth your secrets. 🐷🔑🐷
+"""
+expected = "trufflehog: no secrets found"

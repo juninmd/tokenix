@@ -1,0 +1,52 @@
+[filters.lhci]
+description = "Compact Lighthouse CI output: keep assertion failures and results"
+match_command = "^lhci\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Running Lighthouse \\d+ time",
+  "^Run #\\d+\\.\\.\\.done",
+  "^\\s*✅  ",
+  "^Started a web server",
+  "^Saved LHRs",
+]
+keep_lines_matching = [
+  "^✘",
+  "Assertion failed",
+  "result\\(s\\) for",
+  "expected",
+  "(?i)error",
+  "failed",
+]
+max_lines = 60
+on_empty = "lhci: assertions passed"
+token_budget = 2000
+
+[[tests.lhci]]
+name = "assertion failure kept"
+input = """
+✅  .lighthouseci/ directory writable
+Running Lighthouse 3 time(s) on http://localhost:3000
+Run #1...done.
+Checking assertions against 1 URL(s)...
+
+1 result(s) for http://localhost:3000
+✘  categories.performance failure for minScore assertion
+       expected: >=0.9
+          found: 0.75
+Assertion failed. Exiting with status code 1.
+"""
+expected = """1 result(s) for http://localhost:3000
+✘  categories.performance failure for minScore assertion
+       expected: >=0.9
+Assertion failed. Exiting with status code 1."""
+
+[[tests.lhci]]
+name = "all assertions pass collapses"
+input = """
+✅  .lighthouseci/ directory writable
+Running Lighthouse 3 time(s) on http://localhost:3000
+Run #1...done.
+✅  All assertions passed
+"""
+expected = "lhci: assertions passed"

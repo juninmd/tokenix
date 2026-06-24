@@ -1,0 +1,52 @@
+[filters.pa11y]
+description = "Compact pa11y accessibility output: keep issues, drop selector tree"
+match_command = "^pa11y\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Welcome to Pa11y",
+  "^\\s*├──",
+  "^\\s*└──",
+  "^Running Pa11y",
+]
+keep_lines_matching = [
+  "^\\s*[•·]?\\s*Error:",
+  "^\\s*[•·]?\\s*Warning:",
+  "^\\s*[•·]?\\s*Notice:",
+  "Results for URL:",
+  "No issues found",
+  "(?i)\\berror\\b",
+]
+max_lines = 70
+token_budget = 2500
+
+[[tests.pa11y]]
+name = "issues kept, selector tree dropped"
+input = """
+Welcome to Pa11y
+
+Results for URL: http://localhost:3000
+
+ • Error: Img element missing an alt attribute.
+   ├── #content > img
+   └── <img src="logo.png">
+ • Warning: Heading levels should only increase by one.
+   ├── h3
+   └── <h3>Section</h3>
+"""
+expected = """Results for URL: http://localhost:3000
+ • Error: Img element missing an alt attribute.
+ • Warning: Heading levels should only increase by one."""
+
+[[tests.pa11y]]
+name = "clean page kept"
+input = """
+Welcome to Pa11y
+
+Results for URL: http://localhost:3000
+
+No issues found!
+"""
+expected = """Results for URL: http://localhost:3000
+No issues found!"""

@@ -1,0 +1,47 @@
+[filters.wasm-pack]
+description = "Compact wasm-pack build output: keep result and compile errors"
+match_command = "^wasm-pack\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[INFO\\]: Checking for ",
+  "^\\[INFO\\]: Compiling to Wasm",
+  "^\\[INFO\\]: Installing ",
+  "^\\[INFO\\]: Optimizing ",
+  "^\\s*Compiling \\S+ v",
+]
+keep_lines_matching = [
+  "Done in ",
+  "ready to publish",
+  "^error",
+  "^warning",
+  "(?i)error\\[",
+  "Failed",
+  "^\\[ERROR\\]",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.wasm-pack]]
+name = "build success kept, info dropped"
+input = """
+[INFO]: Checking for the Wasm target...
+[INFO]: Compiling to Wasm...
+   Compiling my-crate v0.1.0
+[INFO]: ✨   Done in 5.20s
+[INFO]: 📦   Your wasm pkg is ready to publish at ./pkg.
+"""
+expected = """[INFO]: ✨   Done in 5.20s
+[INFO]: 📦   Your wasm pkg is ready to publish at ./pkg."""
+
+[[tests.wasm-pack]]
+name = "compile error surfaced"
+input = """
+[INFO]: Checking for the Wasm target...
+[INFO]: Compiling to Wasm...
+error[E0425]: cannot find value `foo` in this scope
+[ERROR]: Compiling your crate to WebAssembly failed
+"""
+expected = """error[E0425]: cannot find value `foo` in this scope
+[ERROR]: Compiling your crate to WebAssembly failed"""

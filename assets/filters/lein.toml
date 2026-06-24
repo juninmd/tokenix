@@ -1,0 +1,52 @@
+[filters.lein]
+description = "Compact leiningen (Clojure) output: keep test results and errors"
+match_command = "^lein\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Compiling ",
+  "^Retrieving ",
+  "^Warning: implicit hook",
+]
+keep_lines_matching = [
+  "Ran \\d+ tests",
+  "\\d+ failures?, \\d+ errors?",
+  "^FAIL ",
+  "^ERROR ",
+  "Exception",
+  "Syntax error",
+  "(?i)\\bexpected:",
+  "(?i)\\bactual:",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.lein]]
+name = "test failure detail kept"
+input = """
+Compiling myapp.core
+Retrieving org/clojure/clojure/1.11.1/clojure-1.11.1.jar
+
+FAIL in (test-add) (core_test.clj:8)
+expected: (= 4 (add 2 3))
+  actual: (not (= 4 5))
+
+Ran 3 tests containing 5 assertions.
+1 failures, 0 errors.
+"""
+expected = """FAIL in (test-add) (core_test.clj:8)
+expected: (= 4 (add 2 3))
+  actual: (not (= 4 5))
+Ran 3 tests containing 5 assertions.
+1 failures, 0 errors."""
+
+[[tests.lein]]
+name = "all green keeps summary"
+input = """
+Compiling myapp.core
+Ran 3 tests containing 5 assertions.
+0 failures, 0 errors.
+"""
+expected = """Ran 3 tests containing 5 assertions.
+0 failures, 0 errors."""

@@ -1,0 +1,45 @@
+[filters.pdm]
+description = "Compact pdm install/lock/sync output, keep result and errors"
+match_command = "^pdm\\s+(install|add|remove|update|lock|sync)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Updating the lock file",
+  "^Synchronizing working set",
+  "^\\s*Changes are written",
+  "^\\s+✔ Install \\S+ \\S+ successful",
+]
+keep_lines_matching = [
+  "Lock successful",
+  "All complete",
+  "(?i)error",
+  "Lock failed",
+  "Synchronization complete",
+  "WARNING",
+  "Unable to",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.pdm]]
+name = "result kept, per-package churn dropped"
+input = """
+Updating the lock file...
+🔒 Lock successful
+Changes are written to pdm.lock.
+Synchronizing working set with resolved packages: 3 to add
+  ✔ Install flask 2.0.1 successful
+  ✔ Install jinja2 3.0.0 successful
+🎉 All complete! 3 installed
+"""
+expected = """🔒 Lock successful
+🎉 All complete! 3 installed"""
+
+[[tests.pdm]]
+name = "resolution error surfaced"
+input = """
+Updating the lock file...
+Unable to find a resolution: flask==999 not found
+"""
+expected = """Unable to find a resolution: flask==999 not found"""
