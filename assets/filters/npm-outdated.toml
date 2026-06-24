@@ -1,0 +1,32 @@
+[filters.npm-outdated]
+description = "Compact npm/pnpm/yarn outdated table"
+match_command = "^(?:npm|pnpm|yarn)\\s+outdated\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Package\\s+Current",
+  "^\\S+\\s+\\d+\\.\\d+",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "outdated: all up to date"
+token_budget = 2000
+
+[[tests.npm-outdated]]
+name = "outdated table kept"
+input = """
+Package  Current  Wanted   Latest   Location              Depended by
+lodash   4.17.4   4.17.21  4.17.21  node_modules/lodash   app
+react    17.0.2   17.0.2   18.3.1   node_modules/react    app
+"""
+expected = """Package  Current  Wanted   Latest   Location              Depended by
+lodash   4.17.4   4.17.21  4.17.21  node_modules/lodash   app
+react    17.0.2   17.0.2   18.3.1   node_modules/react    app"""
+
+[[tests.npm-outdated]]
+name = "all current collapses"
+input = ""
+expected = "outdated: all up to date"

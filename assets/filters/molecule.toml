@@ -1,0 +1,51 @@
+[filters.molecule]
+description = "Compact molecule test output: keep RECAP, failures and errors"
+match_command = "^molecule\\s+(test|converge|verify|idempotence)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^INFO ",
+  "^PLAY \\[",
+  "^TASK \\[",
+  "^ok: ",
+  "^skipping: ",
+  "^changed: ",
+  "^PLAY RECAP",
+  "^Using ",
+]
+keep_lines_matching = [
+  "^\\S+\\s*:.*failed=[1-9]",
+  "^\\S+\\s*:.*unreachable=[1-9]",
+  "^fatal:",
+  "(?i)error",
+  "FAILED",
+  "idempotence test failed",
+]
+max_lines = 60
+on_empty = "molecule: passed"
+token_budget = 2000
+
+[[tests.molecule]]
+name = "failed recap surfaced"
+input = """
+INFO     Running default > converge
+PLAY [Converge] ****************************************************************
+TASK [Gathering Facts] ********************************************************
+ok: [instance]
+TASK [install nginx] *********************************************************
+fatal: [instance]: FAILED! => {"msg": "package not found"}
+PLAY RECAP *******************************************************************
+instance                   : ok=2    changed=0    unreachable=0    failed=1
+"""
+expected = """fatal: [instance]: FAILED! => {\"msg\": \"package not found\"}
+instance                   : ok=2    changed=0    unreachable=0    failed=1"""
+
+[[tests.molecule]]
+name = "all green collapses"
+input = """
+INFO     Running default > converge
+PLAY RECAP *******************************************************************
+instance                   : ok=5    changed=2    unreachable=0    failed=0
+INFO     Running default > idempotence
+"""
+expected = "molecule: passed"

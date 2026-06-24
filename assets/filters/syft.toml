@@ -1,0 +1,41 @@
+[filters.syft]
+description = "Compact syft SBOM output: drop progress, keep the package table"
+match_command = "^syft\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^ ?[✔✓] ",
+  "^\\s*Indexed ",
+  "^\\s*Cataloged ",
+  "^\\s*Scanning ",
+]
+keep_lines_matching = [
+  "^NAME\\s+VERSION",
+  "^\\S+\\s+\\S+\\s+\\S+",
+  "(?i)error",
+  "no packages found",
+]
+max_lines = 80
+token_budget = 3000
+
+[[tests.syft]]
+name = "package table kept, progress dropped"
+input = """
+ ✔ Loaded image
+ ✔ Parsed image
+ ✔ Cataloged packages      [142 packages]
+NAME       VERSION   TYPE
+log4j-core 2.14.1    java-archive
+openssl    1.1.1k    deb
+zlib       1.2.11    deb
+"""
+expected = """NAME       VERSION   TYPE
+log4j-core 2.14.1    java-archive
+openssl    1.1.1k    deb
+zlib       1.2.11    deb"""
+
+[[tests.syft]]
+name = "empty scan passes through"
+input = ""
+expected = ""

@@ -1,0 +1,30 @@
+[filters.clang-format]
+description = "Keep clang-format dry-run violations"
+match_command = "\\bclang-format\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  ":\\d+:\\d+: (?:warning|error):",
+  "clang-format-violations",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "clang-format: ok"
+token_budget = 1500
+
+[[tests.clang-format]]
+name = "format violations kept"
+input = """
+src/main.cpp:10:5: warning: code should be clang-formatted [-Wclang-format-violations]
+src/util.cpp:22:1: warning: code should be clang-formatted [-Wclang-format-violations]
+"""
+expected = """src/main.cpp:10:5: warning: code should be clang-formatted [-Wclang-format-violations]
+src/util.cpp:22:1: warning: code should be clang-formatted [-Wclang-format-violations]"""
+
+[[tests.clang-format]]
+name = "clean run collapses"
+input = """
+"""
+expected = "clang-format: ok"

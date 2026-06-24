@@ -1,0 +1,51 @@
+[filters.flyctl]
+description = "Compact fly/flyctl deploy output: keep release result and errors"
+match_command = "^(?:fly|flyctl)\\s+(deploy|launch|scale|releases|status)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^==> ",
+  "^--> (?:Verified|Building|Pushing|Building image|Creating)",
+  "^\\s*$",
+  "^\\s+\\d+\\.\\d+s ",
+]
+keep_lines_matching = [
+  "^--> v\\d+ ",
+  "deployed",
+  "Visit your newly deployed",
+  "(?i)error",
+  "failed",
+  "Health check",
+  "unhealthy",
+  "smoke checks",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.flyctl]]
+name = "release result kept, build noise dropped"
+input = """
+==> Verifying app config
+--> Verified app config
+==> Building image
+--> Building image done
+==> Pushing image to fly
+--> Pushing image done
+==> Creating release
+--> v12 created
+Visit your newly deployed app at https://my-app.fly.dev/
+"""
+expected = """--> v12 created
+Visit your newly deployed app at https://my-app.fly.dev/"""
+
+[[tests.flyctl]]
+name = "health check failure surfaced"
+input = """
+==> Creating release
+--> v13 created
+Health check for your app failed: 1 critical
+Error: deployment failed: timeout reached waiting for health checks
+"""
+expected = """--> v13 created
+Health check for your app failed: 1 critical
+Error: deployment failed: timeout reached waiting for health checks"""

@@ -1,0 +1,47 @@
+[filters.knip]
+description = "Keep knip unused-code findings, drop blank padding"
+match_command = "\\bknip\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Unused ",
+  "^Unlisted ",
+  "^Unresolved ",
+  "^Duplicate ",
+  "^\\S+:\\d+",
+  "^\\S+\\.\\w+$",
+  "^\\S+\\s+\\S+",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "knip: no issues"
+token_budget = 2500
+
+[[tests.knip]]
+name = "unused findings kept"
+input = """
+Unused files (2)
+src/old-helper.ts
+src/legacy/index.ts
+
+Unused dependencies (1)
+lodash  package.json
+
+Unused exports (1)
+formatDate  src/utils.ts:12:14
+"""
+expected = """Unused files (2)
+src/old-helper.ts
+src/legacy/index.ts
+Unused dependencies (1)
+lodash  package.json
+Unused exports (1)
+formatDate  src/utils.ts:12:14"""
+
+[[tests.knip]]
+name = "clean run collapses"
+input = ""
+expected = "knip: no issues"

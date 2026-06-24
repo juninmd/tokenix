@@ -1,0 +1,48 @@
+[filters.heroku]
+description = "Compact heroku build/deploy output: keep result and errors"
+match_command = "^(?:heroku|git push heroku)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^remote: -----> (?:Installing|Caching|Pruning|Building|Resolving|Fetching|Compressing)",
+  "^remote:\\s*$",
+  "^remote:        ",
+]
+keep_lines_matching = [
+  "Build succeeded",
+  "Build failed",
+  "Verifying deploy",
+  "deployed to Heroku",
+  "Released ",
+  "(?i)error",
+  "Push rejected",
+  "Push failed",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.heroku]]
+name = "build success kept, install noise dropped"
+input = """
+remote: -----> Building on the Heroku-22 stack
+remote: -----> Installing dependencies
+remote:        added 240 packages
+remote: -----> Build succeeded!
+remote: -----> Compressing...
+remote: Verifying deploy... done.
+remote: Released v42
+"""
+expected = """remote: -----> Build succeeded!
+remote: Verifying deploy... done.
+remote: Released v42"""
+
+[[tests.heroku]]
+name = "push rejected surfaced"
+input = """
+remote: -----> Installing dependencies
+remote:  !     Push rejected, failed to compile Node.js app.
+remote: Push failed
+"""
+expected = """remote:  !     Push rejected, failed to compile Node.js app.
+remote: Push failed"""
