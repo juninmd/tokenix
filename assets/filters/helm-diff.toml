@@ -1,0 +1,39 @@
+[filters.helm-diff]
+description = "Compact helm diff output: keep changed resources and +/- lines"
+match_command = "^helm\\s+diff\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+keep_lines_matching = [
+  "has changed:",
+  "has been added:",
+  "has been removed:",
+  "^\\+",
+  "^-",
+  "^default,",
+  "Error:",
+]
+max_lines = 80
+on_empty = "helm diff: no changes"
+token_budget = 2500
+
+[[tests.helm-diff]]
+name = "changed resource diff kept"
+input = """
+default, my-release, Deployment (apps) has changed:
+  # Source: chart/templates/deployment.yaml
+  spec:
+    template:
+      spec:
+        containers:
+-       replicas: 2
++       replicas: 3
+"""
+expected = """default, my-release, Deployment (apps) has changed:
+-       replicas: 2
++       replicas: 3"""
+
+[[tests.helm-diff]]
+name = "no changes collapses"
+input = """
+"""
+expected = "helm diff: no changes"

@@ -1,0 +1,47 @@
+[filters.flyway]
+description = "Compact flyway migrate/validate output, keep migration results"
+match_command = "^(?:flyway|\\./flyway)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Flyway (?:Community|Teams|Enterprise) Edition",
+  "^Database: jdbc:",
+  "^See release notes",
+  "^WARNING: A newer version",
+]
+keep_lines_matching = [
+  "^Successfully (?:applied|validated|undid)",
+  "^Migrating schema",
+  "^Current version of schema",
+  "Schema .* is up to date",
+  "^ERROR",
+  "Migration .* failed",
+  "No migration necessary",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.flyway]]
+name = "migration result kept, banner dropped"
+input = """
+Flyway Community Edition 9.22.0 by Redgate
+Database: jdbc:postgresql://localhost:5432/app (PostgreSQL 16.1)
+Successfully validated 5 migrations (execution time 00:00.045s)
+Current version of schema "public": 3
+Migrating schema "public" to version "4 - add users"
+Successfully applied 1 migration to schema "public" (execution time 00:00.120s)
+"""
+expected = """Successfully validated 5 migrations (execution time 00:00.045s)
+Current version of schema \"public\": 3
+Migrating schema \"public\" to version \"4 - add users\"
+Successfully applied 1 migration to schema \"public\" (execution time 00:00.120s)"""
+
+[[tests.flyway]]
+name = "migration failure surfaced"
+input = """
+Flyway Community Edition 9.22.0 by Redgate
+Database: jdbc:postgresql://localhost:5432/app (PostgreSQL 16.1)
+ERROR: Migration V4__add_users.sql failed
+"""
+expected = """ERROR: Migration V4__add_users.sql failed"""

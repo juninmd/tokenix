@@ -1,0 +1,59 @@
+[filters.tfsec]
+description = "Compact tfsec output: keep findings, drop timings and counts"
+match_command = "^tfsec\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*_",
+  "^\\s*\\\\",
+  "^\\s*timings",
+  "^\\s*counts",
+  "^\\s*[a-z ]+\\s+\\d+\\s*$",
+  "^\\s*-{3,}",
+  "^\\s*\\d+ \\|",
+]
+keep_lines_matching = [
+  "^Result #\\d+",
+  "(?:CRITICAL|HIGH|MEDIUM|LOW)",
+  "\\.tf:\\d+",
+  "^\\s+ID\\b",
+  "^\\s+Impact\\b",
+  "^\\s+Resolution\\b",
+  "No problems detected",
+]
+max_lines = 70
+token_budget = 3000
+
+[[tests.tfsec]]
+name = "finding kept, footer stats dropped"
+input = """
+Result #1 CRITICAL Bucket has an ACL specified which allows public access.
+─────────────────────────────────────
+  main.tf:5
+─────────────────────────────────────
+    5 | resource "aws_s3_bucket" "data" {
+─────────────────────────────────────
+  ID         aws-s3-no-public-access-with-acl
+  Impact     The bucket is publicly accessible
+  Resolution Apply a more restrictive ACL
+
+  timings
+  ──────────────
+  disk i/o          1ms
+  counts
+  ──────────────
+  files loaded          1
+"""
+expected = """Result #1 CRITICAL Bucket has an ACL specified which allows public access.
+  main.tf:5
+  ID         aws-s3-no-public-access-with-acl
+  Impact     The bucket is publicly accessible
+  Resolution Apply a more restrictive ACL"""
+
+[[tests.tfsec]]
+name = "clean scan summary"
+input = """
+No problems detected!
+"""
+expected = """No problems detected!"""

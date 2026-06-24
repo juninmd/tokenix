@@ -1,0 +1,43 @@
+[filters.tflint]
+description = "Compact tflint output: keep issues and the found-count summary"
+match_command = "^tflint\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\|",
+  "^\\s*\\d+ \\|",
+]
+keep_lines_matching = [
+  "issue\\(s\\) found",
+  "^(?:Warning|Error|Notice):",
+  "on .* line \\d+",
+  "\\((?:terraform|aws|google|azurerm)_\\S+\\)",
+  "Reference:",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.tflint]]
+name = "issue kept, code frame dropped"
+input = """
+1 issue(s) found:
+
+Warning: terraform "required_version" attribute is required (terraform_required_version)
+
+  on main.tf line 1:
+   1 | resource "aws_instance" "web" {
+
+Reference: https://github.com/terraform-linters/tflint
+"""
+expected = """1 issue(s) found:
+Warning: terraform \"required_version\" attribute is required (terraform_required_version)
+  on main.tf line 1:
+Reference: https://github.com/terraform-linters/tflint"""
+
+[[tests.tflint]]
+name = "clean run passes through small output"
+input = """
+0 issue(s) found:
+"""
+expected = """0 issue(s) found:"""

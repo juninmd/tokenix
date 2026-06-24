@@ -1,0 +1,47 @@
+[filters.grype]
+description = "Keep grype vulnerability table, drop DB/scan progress"
+match_command = "^grype\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^ ?[✔✓] ",
+  "^\\s*Vulnerability DB",
+  "^\\s*Loaded image",
+  "^\\s*Parsed image",
+  "^\\s*Cataloged",
+  "^\\s*Scanning image",
+]
+keep_lines_matching = [
+  "^NAME\\s+INSTALLED",
+  "CVE-",
+  "GHSA-",
+  "(?:Critical|High|Medium|Low|Negligible)",
+  "No vulnerabilities found",
+]
+max_lines = 60
+token_budget = 2500
+
+[[tests.grype]]
+name = "vuln rows kept, progress dropped"
+input = """
+ ✔ Vulnerability DB        [updated]
+ ✔ Loaded image
+ ✔ Parsed image
+ ✔ Cataloged packages      [142 packages]
+NAME       INSTALLED  FIXED-IN  TYPE  VULNERABILITY   SEVERITY
+log4j-core 2.14.1     2.16.0    java  CVE-2021-44228  Critical
+openssl    1.1.1k     1.1.1n    deb   CVE-2022-0778   High
+"""
+expected = """NAME       INSTALLED  FIXED-IN  TYPE  VULNERABILITY   SEVERITY
+log4j-core 2.14.1     2.16.0    java  CVE-2021-44228  Critical
+openssl    1.1.1k     1.1.1n    deb   CVE-2022-0778   High"""
+
+[[tests.grype]]
+name = "clean image summary"
+input = """
+ ✔ Vulnerability DB        [updated]
+ ✔ Scanning image
+No vulnerabilities found
+"""
+expected = """No vulnerabilities found"""

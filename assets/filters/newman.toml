@@ -1,0 +1,79 @@
+[filters.newman]
+description = "Compact newman (Postman) run output: keep failures and the summary"
+match_command = "^newman\\s+run\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^→ ",
+  "^\\s+[✓√] ",
+  "^\\s+GET ",
+  "^\\s+POST ",
+  "^\\s+PUT ",
+  "^\\s+DELETE ",
+  "^\\s+PATCH ",
+]
+keep_lines_matching = [
+  "[✗✖×]",
+  "AssertionError",
+  "[┌┐└┘├┤┬┴┼│─]",
+  "detected",
+  "failure",
+  "^#\\s",
+]
+max_lines = 60
+replace_patterns = [
+  ["\\[\\d{3} [^\\]]+, [^\\]]+, \\d+m?s\\]", "[<resp>]"],
+]
+token_budget = 2500
+
+[[tests.newman]]
+name = "failures and summary table kept"
+input = """
+newman
+
+Collection
+
+→ Get User
+  GET https://api.example.com/users/1 [200 OK, 1.2kB, 120ms]
+  ✓  Status code is 200
+  ✗  Body has email field
+   1. expected { name: 'x' } to have property 'email'
+
+┌─────────────────────────┬────────────────────┬────────────────────┐
+│                         │           executed │             failed │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│              iterations │                  1 │                  0 │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│                requests │                  1 │                  0 │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│              assertions │                  2 │                  1 │
+└─────────────────────────┴────────────────────┴────────────────────┘
+"""
+expected = """  ✗  Body has email field
+┌─────────────────────────┬────────────────────┬────────────────────┐
+│                         │           executed │             failed │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│              iterations │                  1 │                  0 │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│                requests │                  1 │                  0 │
+├─────────────────────────┼────────────────────┼────────────────────┤
+│              assertions │                  2 │                  1 │
+└─────────────────────────┴────────────────────┴────────────────────┘"""
+
+[[tests.newman]]
+name = "all green keeps summary table"
+input = """
+newman
+
+→ Smoke
+  GET https://api.example.com/health [200 OK, 200B, 30ms]
+  ✓  Status code is 200
+
+┌─────────────────────────┬────────────────────┬────────────────────┐
+│              assertions │                  1 │                  0 │
+└─────────────────────────┴────────────────────┴────────────────────┘
+"""
+expected = """┌─────────────────────────┬────────────────────┬────────────────────┐
+│              assertions │                  1 │                  0 │
+└─────────────────────────┴────────────────────┴────────────────────┘"""

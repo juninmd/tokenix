@@ -1,0 +1,47 @@
+[filters.vagrant]
+description = "Compact vagrant up/provision output: keep result and errors"
+match_command = "^vagrant\\s+(up|provision|reload|halt|destroy)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^Bringing machine ",
+  "^==> [^:]+: (?:Importing|Matching|Setting|Clearing|Preparing|Forwarding|Booting|Waiting|Configuring|Checking|Mounting|Rsyncing|Running 'pre|Checking for)",
+  "^\\s*$",
+  "^\\s+[^:]+: \\d+%",
+]
+keep_lines_matching = [
+  "Machine booted and ready",
+  "Machine already",
+  "(?i)error",
+  "(?i)warning",
+  "not created",
+  "==> [^:]+: Running provisioner",
+  "is already running",
+  "failed",
+]
+max_lines = 50
+on_empty = "vagrant: ok"
+token_budget = 1500
+
+[[tests.vagrant]]
+name = "boot result kept, progress dropped"
+input = """
+Bringing machine 'default' up with 'virtualbox' provider...
+==> default: Importing base box 'ubuntu/focal64'...
+==> default: Matching MAC address for NAT networking...
+==> default: Booting VM...
+==> default: Waiting for machine to boot...
+==> default: Machine booted and ready!
+==> default: Running provisioner: shell...
+"""
+expected = """==> default: Machine booted and ready!
+==> default: Running provisioner: shell..."""
+
+[[tests.vagrant]]
+name = "provider error surfaced"
+input = """
+Bringing machine 'default' up with 'virtualbox' provider...
+==> default: Importing base box 'ubuntu/focal64'...
+There was an error while executing `VBoxManage`, a CLI used by Vagrant
+"""
+expected = """There was an error while executing `VBoxManage`, a CLI used by Vagrant"""

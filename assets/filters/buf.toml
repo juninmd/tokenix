@@ -1,0 +1,33 @@
+[filters.buf]
+description = "Compact buf lint/build/breaking output, keep diagnostics"
+match_command = "^buf\\s+(lint|build|breaking|generate|format)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "\\.proto:\\d+:\\d+:",
+  "^Failure",
+  "(?i)error",
+  "(?i)warning",
+  "breaking change",
+]
+max_lines = 60
+on_empty = "buf: ok"
+token_budget = 1500
+
+[[tests.buf]]
+name = "lint failures kept"
+input = """
+proto/user.proto:3:1:Files must have a package defined.
+proto/user.proto:8:5:Field name "userID" should be lower_snake_case.
+"""
+expected = """proto/user.proto:3:1:Files must have a package defined.
+proto/user.proto:8:5:Field name \"userID\" should be lower_snake_case."""
+
+[[tests.buf]]
+name = "clean lint collapses"
+input = """
+"""
+expected = "buf: ok"
