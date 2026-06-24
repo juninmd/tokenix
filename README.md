@@ -50,7 +50,7 @@ Run bare `tokenix` to open a terminal dashboard — eight tabs, zero flags. `←
 <td width="50%"><img src=".github/prints/gain.png" alt="Gain tab" /><br /><sub><b>Gain</b> — tokens saved with a reduction bar, split by source and by command/tool. <code>c</code> adds the ≈USD cost table · <code>a</code> all-projects · <code>r</code> refresh.</sub></td>
 </tr>
 <tr>
-<td><img src=".github/prints/filters.png" alt="Filters tab" /><br /><sub><b>Filters</b> — browse all 322 bundled filters by tool with a live <i>input → output</i> preview and a per-filter <code>X → Y tokens · % saved</code> gauge.</sub></td>
+<td><img src=".github/prints/filters.png" alt="Filters tab" /><br /><sub><b>Filters</b> — browse all 330 bundled filters by tool with a live <i>input → output</i> preview and a per-filter <code>X → Y tokens · % saved</code> gauge.</sub></td>
 <td><img src=".github/prints/secrets.png" alt="Secrets tab" /><br /><sub><b>Secrets</b> — credentials leaked across agent transcripts, grouped by rule and attributed to repo + branch. Starts scoped to the current repo; <code>g</code> toggles all repos. <code>v</code> reveal · <code>c</code> copy · <code>x</code> redact.</sub></td>
 </tr>
 <tr>
@@ -175,7 +175,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash **and PowerShell** commands before execution; thresholds tunable via `[hook]` in `.tokenix.toml` |
 | **Structural output compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, and ANSI/Emoji stripping |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
-| **Output filters** | 322 TOML output filters embedded in the binary (each homologated against 672 golden cases) — auto-applied to Bash/PowerShell output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, `apt`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`, `pulumi`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test`, `bru`, `ps`, and more |
+| **Output filters** | 330 TOML output filters embedded in the binary (each homologated against 688 golden cases) — auto-applied to Bash/PowerShell output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, `apt`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`, `pulumi`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test`, `bru`, `ps`, and more |
 | **Filter generation** | `tokenix filter generate` writes a TOML filter for a command; `tokenix filter record` captures real output for richer generation, with a per-command **token-economy preview** (raw→filtered tokens, % saved, compression bar) shown by `record stop`/`status` |
 | **GPU acceleration (opt-in)** | Build with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU; GPU is used by default at runtime with automatic CPU fallback, or force CPU with `--only-cpu` |
 | **Environment diagnostics** | `tokenix doctor` reports the compiled backend, detected GPU, CUDA/cuDNN status, model cache, and daemon |
@@ -665,7 +665,7 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
-3. **Bundled filters** — 322 TOML output filters shipped inside the binary (each homologated against 672 embedded golden cases), covering `uv`, `cargo build`/`cargo run`/`cargo audit`, `git`, `gradle`, `terraform plan`, `make`, `npm`/`npm audit`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`/`kubectl top`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, `apt`/`apt-get`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`/`mamba`, `pulumi up`/`preview`/`destroy`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test` (Karma), `bru` (Bruno), `ps`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 330 TOML output filters shipped inside the binary (each homologated against 688 embedded golden cases), covering `uv`, `cargo build`/`cargo run`/`cargo audit`, `git`, `gradle`, `terraform plan`, `make`, `npm`/`npm audit`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`/`kubectl top`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, `apt`/`apt-get`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`/`mamba`, `pulumi up`/`preview`/`destroy`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test` (Karma), `bru` (Bruno), `ps`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -733,7 +733,7 @@ src/
 └── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
 assets/
-└── filters/       322 TOML output filters (+672 golden cases), embedded in the binary via rust-embed
+└── filters/       330 TOML output filters (+688 golden cases), embedded in the binary via rust-embed
 ```
 
 ### GPU acceleration (opt-in)

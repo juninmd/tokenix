@@ -1,0 +1,32 @@
+[filters.sqlc]
+description = "Keep sqlc generate/compile diagnostics"
+match_command = "^sqlc\\s+(generate|compile|vet|diff)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  ":\\d+:\\d+:",
+  "(?i)error",
+  "(?i)warning",
+  "^# package",
+  "does not exist",
+]
+max_lines = 50
+on_empty = "sqlc: ok"
+token_budget = 1500
+
+[[tests.sqlc]]
+name = "query error surfaced"
+input = """
+# package db
+query/users.sql:10:1: column "emial" does not exist
+"""
+expected = """# package db
+query/users.sql:10:1: column \"emial\" does not exist"""
+
+[[tests.sqlc]]
+name = "clean generate collapses"
+input = """
+"""
+expected = "sqlc: ok"

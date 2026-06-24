@@ -1,0 +1,39 @@
+[filters.vale]
+description = "Keep vale prose-lint findings and the summary"
+match_command = "^vale\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^\\s*\\d+:\\d+\\s+(?:error|warning|suggestion)",
+  "^\\s*[✖✔×]",
+  "\\d+ error",
+  "\\d+ warning",
+  "\\d+ suggestion",
+  "^ \\S+\\.(?:md|rst|adoc|txt|html)\\s*$",
+]
+max_lines = 70
+token_budget = 2000
+
+[[tests.vale]]
+name = "findings and summary kept"
+input = """
+ README.md
+ 12:5   error      Did you really mean 'teh'?     Vale.Spelling
+ 20:1   warning    Try to avoid 'very'.           Vale.Avoid
+
+✖ 1 error, 1 warning and 0 suggestions in 1 file.
+"""
+expected = """ README.md
+ 12:5   error      Did you really mean 'teh'?     Vale.Spelling
+ 20:1   warning    Try to avoid 'very'.           Vale.Avoid
+✖ 1 error, 1 warning and 0 suggestions in 1 file."""
+
+[[tests.vale]]
+name = "clean run keeps zero summary"
+input = """
+✔ 0 errors, 0 warnings and 0 suggestions in 3 files.
+"""
+expected = """✔ 0 errors, 0 warnings and 0 suggestions in 3 files."""

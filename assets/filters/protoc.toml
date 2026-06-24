@@ -1,0 +1,32 @@
+[filters.protoc]
+description = "Keep protoc compile diagnostics"
+match_command = "^protoc\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  ":\\d+:\\d+:",
+  "(?i)error",
+  "(?i)warning",
+  "is not defined",
+  "Import .* was not found",
+]
+max_lines = 50
+on_empty = "protoc: ok"
+token_budget = 1500
+
+[[tests.protoc]]
+name = "syntax error surfaced"
+input = """
+proto/user.proto:3:1: Expected "required", "optional", or "repeated".
+proto/user.proto:8:5: "userID" is not defined.
+"""
+expected = """proto/user.proto:3:1: Expected \"required\", \"optional\", or \"repeated\".
+proto/user.proto:8:5: \"userID\" is not defined."""
+
+[[tests.protoc]]
+name = "clean compile collapses"
+input = """
+"""
+expected = "protoc: ok"

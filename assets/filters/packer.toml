@@ -1,0 +1,49 @@
+[filters.packer]
+description = "Compact packer build output: keep result, artifacts and errors"
+match_command = "^packer\\s+(build|validate)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^==> [^:]+: (?:Prevalidating|Creating|Launching|Waiting|Using|Adding|Stopping|Deleting|Terminating|Provisioning with)",
+  "^\\s+[^:]+: \\+ ",
+]
+keep_lines_matching = [
+  "finished after",
+  "AMIs were created",
+  "Builds finished",
+  "Build '.*' errored",
+  "==> [^:]+: Error",
+  "(?i)error",
+  "Image: ",
+  "^--> ",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.packer]]
+name = "build success and artifact kept"
+input = """
+==> amazon-ebs: Prevalidating any provided VPC information
+==> amazon-ebs: Creating temporary keypair
+==> amazon-ebs: Launching a source AWS instance
+==> amazon-ebs: Waiting for instance to become ready
+Build 'amazon-ebs' finished after 5 minutes 12 seconds.
+
+==> Builds finished. The artifacts of successful builds are:
+--> amazon-ebs: AMIs were created:
+us-east-1: ami-0abc123
+"""
+expected = """Build 'amazon-ebs' finished after 5 minutes 12 seconds.
+==> Builds finished. The artifacts of successful builds are:
+--> amazon-ebs: AMIs were created:"""
+
+[[tests.packer]]
+name = "build error surfaced"
+input = """
+==> amazon-ebs: Prevalidating any provided VPC information
+==> amazon-ebs: Error querying AMI: InvalidAMIID.NotFound
+Build 'amazon-ebs' errored after 3 seconds: unable to find AMI
+"""
+expected = """==> amazon-ebs: Error querying AMI: InvalidAMIID.NotFound
+Build 'amazon-ebs' errored after 3 seconds: unable to find AMI"""

@@ -1,0 +1,40 @@
+[filters.lerna]
+description = "Compact lerna output: drop notice/info chatter, keep success/errors"
+match_command = "\\blerna\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^lerna notice ",
+  "^lerna info ",
+  "^lerna verb ",
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^lerna success",
+  "^lerna ERR",
+  "^lerna WARN",
+  "(?i)error",
+  "failed",
+]
+max_lines = 50
+on_empty = "lerna: ok"
+token_budget = 1500
+
+[[tests.lerna]]
+name = "success kept, info dropped"
+input = """
+lerna notice cli v7.1.0
+lerna info Executing command in 5 packages: "npm run build"
+lerna info run Ran npm script 'build' in 'core' in 2.1s:
+lerna success run Ran npm script 'build' in 5 packages in 9.3s
+"""
+expected = """lerna success run Ran npm script 'build' in 5 packages in 9.3s"""
+
+[[tests.lerna]]
+name = "error surfaced"
+input = """
+lerna notice cli v7.1.0
+lerna info Executing command in 5 packages
+lerna ERR! npm run build exited 1 in 'web'
+"""
+expected = """lerna ERR! npm run build exited 1 in 'web'"""

@@ -1,0 +1,43 @@
+[filters.shfmt]
+description = "Keep shfmt diff/list output (files needing formatting)"
+match_command = "\\bshfmt\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+keep_lines_matching = [
+  "^---",
+  "^\\+\\+\\+",
+  "^@@",
+  "^[+-]",
+  "\\.sh$",
+  "\\.bash$",
+  "(?i)error",
+]
+max_lines = 80
+token_budget = 2000
+
+[[tests.shfmt]]
+name = "diff kept"
+input = """
+--- scripts/deploy.sh.orig
++++ scripts/deploy.sh
+@@ -1,4 +1,4 @@
+ #!/usr/bin/env bash
+-if [ "$x" = "1" ]; then
++if [ "$x" = "1" ]; then
+ 	echo ok
+ fi
+"""
+expected = """--- scripts/deploy.sh.orig
++++ scripts/deploy.sh
+@@ -1,4 +1,4 @@
+-if [ \"$x\" = \"1\" ]; then
++if [ \"$x\" = \"1\" ]; then"""
+
+[[tests.shfmt]]
+name = "list of files needing format"
+input = """
+scripts/deploy.sh
+scripts/build.sh
+"""
+expected = """scripts/deploy.sh
+scripts/build.sh"""

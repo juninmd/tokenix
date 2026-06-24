@@ -1,0 +1,37 @@
+[filters.kubeconform]
+description = "Keep kubeconform invalid/error results, drop valid lines"
+match_command = "\\b(?:kubeconform|kubeval)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  " is valid\\s*$",
+  "PASS\\b",
+]
+keep_lines_matching = [
+  "is invalid",
+  "(?i)error",
+  "failed",
+  "could not find schema",
+  "Invalid:",
+  "Valid:",
+]
+max_lines = 60
+on_empty = "kubeconform: all valid"
+token_budget = 2000
+
+[[tests.kubeconform]]
+name = "invalid manifest surfaced"
+input = """
+fixtures/deployment.yaml - Deployment app is valid
+fixtures/service.yaml - Service web is invalid: missing required field "port" in io.k8s.api.core.v1.ServicePort
+fixtures/configmap.yaml - ConfigMap cfg is valid
+"""
+expected = """fixtures/service.yaml - Service web is invalid: missing required field \"port\" in io.k8s.api.core.v1.ServicePort"""
+
+[[tests.kubeconform]]
+name = "all valid collapses"
+input = """
+fixtures/deployment.yaml - Deployment app is valid
+fixtures/service.yaml - Service web is valid
+"""
+expected = "kubeconform: all valid"

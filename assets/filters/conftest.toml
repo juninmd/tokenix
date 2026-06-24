@@ -1,0 +1,40 @@
+[filters.conftest]
+description = "Keep conftest (OPA) failures/warnings and the result summary"
+match_command = "^conftest\\s+(test|verify)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^PASS - ",
+]
+keep_lines_matching = [
+  "^FAIL - ",
+  "^WARN - ",
+  "exception",
+  "\\d+ tests?, \\d+ passed",
+  "failure",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "conftest: all passed"
+token_budget = 2000
+
+[[tests.conftest]]
+name = "failures kept, passes dropped"
+input = """
+PASS - deployment.yaml - main - good labels
+FAIL - deployment.yaml - main - containers must not run as root
+WARN - deployment.yaml - main - missing resource limits
+
+2 tests, 1 passed, 1 warning, 1 failure, 0 exceptions
+"""
+expected = """FAIL - deployment.yaml - main - containers must not run as root
+WARN - deployment.yaml - main - missing resource limits
+2 tests, 1 passed, 1 warning, 1 failure, 0 exceptions"""
+
+[[tests.conftest]]
+name = "all passed collapses"
+input = """
+PASS - deployment.yaml - main - good labels
+PASS - service.yaml - main - good labels
+"""
+expected = "conftest: all passed"
