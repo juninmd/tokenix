@@ -1,0 +1,48 @@
+[filters.detekt]
+description = "Compact detekt output: keep findings and debt summary"
+match_command = "\\bdetekt\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Ruleset: ",
+]
+keep_lines_matching = [
+  " - \\[.*\\] at ",
+  "\\.kts?:\\d+",
+  "\\d+ issues?",
+  "Overall debt",
+  "Build failed",
+  "(?i)error",
+]
+max_lines = 70
+token_budget = 2000
+
+[[tests.detekt]]
+name = "findings and debt kept"
+input = """
+Ruleset: complexity
+	LongMethod - [process] at /work/src/Foo.kt:10:5
+	ComplexCondition - [validate] at /work/src/Bar.kt:22:9
+Ruleset: style
+	MagicNumber - [calc] at /work/src/Baz.kt:5:18
+
+complexity: 2 issues
+style: 1 issue
+Overall debt: 1h 35min
+"""
+expected = """	LongMethod - [process] at /work/src/Foo.kt:10:5
+	ComplexCondition - [validate] at /work/src/Bar.kt:22:9
+	MagicNumber - [calc] at /work/src/Baz.kt:5:18
+complexity: 2 issues
+style: 1 issue
+Overall debt: 1h 35min"""
+
+[[tests.detekt]]
+name = "clean run keeps debt line"
+input = """
+Ruleset: complexity
+
+Overall debt: 0min
+"""
+expected = """Overall debt: 0min"""

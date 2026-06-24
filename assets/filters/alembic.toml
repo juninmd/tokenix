@@ -1,0 +1,41 @@
+[filters.alembic]
+description = "Compact alembic migration output, keep applied revisions and errors"
+match_command = "^alembic\\s+(upgrade|downgrade|revision|current|history|stamp)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "INFO  \\[alembic\\.runtime\\.migration\\] Context impl",
+  "INFO  \\[alembic\\.runtime\\.migration\\] Will assume",
+]
+keep_lines_matching = [
+  "Running upgrade",
+  "Running downgrade",
+  "Generating ",
+  "(?i)error",
+  "Target database is not up to date",
+  "Can't locate revision",
+  "FAILED",
+]
+max_lines = 50
+on_empty = "alembic: ok"
+token_budget = 1500
+
+[[tests.alembic]]
+name = "upgrade revisions kept, boilerplate dropped"
+input = """
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> a1b2c3, create users table
+INFO  [alembic.runtime.migration] Running upgrade a1b2c3 -> d4e5f6, add email index
+"""
+expected = """INFO  [alembic.runtime.migration] Running upgrade  -> a1b2c3, create users table
+INFO  [alembic.runtime.migration] Running upgrade a1b2c3 -> d4e5f6, add email index"""
+
+[[tests.alembic]]
+name = "missing revision error surfaced"
+input = """
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+ERROR [alembic.util.messaging] Can't locate revision identified by 'deadbeef'
+"""
+expected = """ERROR [alembic.util.messaging] Can't locate revision identified by 'deadbeef'"""

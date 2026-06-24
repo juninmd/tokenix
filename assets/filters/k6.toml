@@ -1,0 +1,60 @@
+[filters.k6]
+description = "Compact k6 load-test output: keep checks and the metrics summary"
+match_command = "^k6\\s+run\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s+execution: ",
+  "^\\s+script: ",
+  "^\\s+output: ",
+  "^\\s+scenarios: ",
+  "^\\s+default: ",
+  "^running \\(",
+  "^\\s+/\\\\\\s",
+  "^\\s+/  \\\\",
+]
+keep_lines_matching = [
+  "✓|✗",
+  "checks\\.*:",
+  "http_req_duration",
+  "http_req_failed",
+  "http_reqs",
+  "iterations\\.*:",
+  "level=error",
+  "data_received",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.k6]]
+name = "checks and metrics kept, banner dropped"
+input = """
+         /\\      |‾‾| /‾‾/   /‾‾/
+    /\\  /  \\     |  |/  /   /  /
+running (00m05.0s), 10/10 VUs, 100 complete and 0 interrupted iterations
+
+     ✓ status was 200
+     ✗ body contains token
+
+     checks.........................: 95.00% ✓ 190      ✗ 10
+     data_received..................: 1.2 MB 240 kB/s
+     http_req_duration..............: avg=120ms min=20ms med=110ms max=450ms
+     http_req_failed................: 0.00%  ✓ 0        ✗ 200
+     iterations.....................: 100    20/s
+"""
+expected = """     ✓ status was 200
+     ✗ body contains token
+     checks.........................: 95.00% ✓ 190      ✗ 10
+     data_received..................: 1.2 MB 240 kB/s
+     http_req_duration..............: avg=120ms min=20ms med=110ms max=450ms
+     http_req_failed................: 0.00%  ✓ 0        ✗ 200
+     iterations.....................: 100    20/s"""
+
+[[tests.k6]]
+name = "error level surfaced"
+input = """
+running (00m01.0s), 0/1 VUs, 0 complete and 0 interrupted iterations
+time="2024-06-23" level=error msg="dial tcp: connection refused"
+"""
+expected = """time=\"2024-06-23\" level=error msg=\"dial tcp: connection refused\""""

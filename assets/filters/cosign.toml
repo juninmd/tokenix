@@ -1,0 +1,46 @@
+[filters.cosign]
+description = "Compact cosign verify output: keep the verdict, drop the checklist & JSON"
+match_command = "^cosign\\s+(verify|verify-attestation|verify-blob)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^The following checks were performed",
+  "^\\s+- The ",
+  "^\\s+- Existence ",
+  "^\\s+- Any certificates",
+  "^\\[\\{",
+  "^\\{",
+]
+keep_lines_matching = [
+  "^Verification for ",
+  "verified",
+  "(?i)error",
+  "no matching signatures",
+  "no matching attestations",
+  "MANIFEST_UNKNOWN",
+  "failed to verify",
+]
+max_lines = 40
+token_budget = 1500
+
+[[tests.cosign]]
+name = "verification verdict kept, checklist & json dropped"
+input = """
+Verification for ghcr.io/org/app:1.0.0 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - Existence of the claims in the transparency log was verified offline
+  - The signatures were verified against the specified public key
+[{"critical":{"identity":{"docker-reference":"ghcr.io/org/app"}}}]
+"""
+expected = """Verification for ghcr.io/org/app:1.0.0 --"""
+
+[[tests.cosign]]
+name = "no signatures error surfaced"
+input = """
+Error: no matching signatures:
+main.go:74: error during command execution: no matching signatures
+"""
+expected = """Error: no matching signatures:
+main.go:74: error during command execution: no matching signatures"""

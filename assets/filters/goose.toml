@@ -1,0 +1,39 @@
+[filters.goose]
+description = "Compact goose DB migration output, keep results and status"
+match_command = "^goose\\s+(up|down|redo|status|version|create)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "OK\\s+\\d+",
+  "goose:",
+  "FAIL",
+  "(?i)error",
+  "Applied ",
+  "no migrations to run",
+]
+max_lines = 50
+on_empty = "goose: ok"
+token_budget = 1200
+
+[[tests.goose]]
+name = "applied migrations kept"
+input = """
+2024/06/23 12:00:00 OK   00001_init.sql (3.21ms)
+2024/06/23 12:00:00 OK   00002_add_users.sql (1.05ms)
+2024/06/23 12:00:00 goose: successfully migrated database to version: 2
+"""
+expected = """2024/06/23 12:00:00 OK   00001_init.sql (3.21ms)
+2024/06/23 12:00:00 OK   00002_add_users.sql (1.05ms)
+2024/06/23 12:00:00 goose: successfully migrated database to version: 2"""
+
+[[tests.goose]]
+name = "migration failure surfaced"
+input = """
+2024/06/23 12:00:00 OK   00001_init.sql (3.21ms)
+2024/06/23 12:00:00 FAIL 00002_add_users.sql (0.50ms): syntax error at or near "TABEL"
+"""
+expected = """2024/06/23 12:00:00 OK   00001_init.sql (3.21ms)
+2024/06/23 12:00:00 FAIL 00002_add_users.sql (0.50ms): syntax error at or near \"TABEL\""""

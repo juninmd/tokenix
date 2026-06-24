@@ -1,0 +1,56 @@
+[filters.nmap]
+description = "Compact nmap output: keep host reports, open ports and summary"
+match_command = "^(?:sudo\\s+)?nmap\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^Starting Nmap ",
+  "^\\s*$",
+  "^Not shown: ",
+  "^\\d+/\\w+\\s+closed",
+  "^\\d+/\\w+\\s+filtered",
+]
+keep_lines_matching = [
+  "Nmap scan report for",
+  "Host is up",
+  "Host seems down",
+  "^PORT\\s+STATE",
+  "^\\d+/\\w+\\s+open",
+  "^Nmap done:",
+  "0 hosts up",
+  "MAC Address",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.nmap]]
+name = "open ports kept, closed dropped"
+input = """
+Starting Nmap 7.94 ( https://nmap.org )
+Nmap scan report for example.com (93.184.216.34)
+Host is up (0.020s latency).
+Not shown: 998 closed ports
+PORT    STATE SERVICE
+22/tcp  open  ssh
+80/tcp  open  http
+443/tcp filtered https
+Nmap done: 1 IP address (1 host up) scanned in 2.51 seconds
+"""
+expected = """Nmap scan report for example.com (93.184.216.34)
+Host is up (0.020s latency).
+PORT    STATE SERVICE
+22/tcp  open  ssh
+80/tcp  open  http
+Nmap done: 1 IP address (1 host up) scanned in 2.51 seconds"""
+
+[[tests.nmap]]
+name = "host down kept"
+input = """
+Starting Nmap 7.94 ( https://nmap.org )
+Nmap scan report for 10.0.0.99
+Host seems down. If it is really up, but blocking our ping probes, try -Pn
+Nmap done: 1 IP address (0 hosts up) scanned in 3.02 seconds
+"""
+expected = """Nmap scan report for 10.0.0.99
+Host seems down. If it is really up, but blocking our ping probes, try -Pn
+Nmap done: 1 IP address (0 hosts up) scanned in 3.02 seconds"""

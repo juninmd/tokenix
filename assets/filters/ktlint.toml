@@ -1,0 +1,32 @@
+[filters.ktlint]
+description = "Keep ktlint lint violations, drop progress"
+match_command = "\\bktlint\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "\\.kts?:\\d+:\\d+:",
+  "(?i)error",
+  "(?i)warning",
+  "Summary",
+]
+max_lines = 60
+on_empty = "ktlint: ok"
+token_budget = 1500
+
+[[tests.ktlint]]
+name = "violations kept"
+input = """
+/work/src/Main.kt:10:1: Unexpected indentation (expected 4, actual 8) (standard:indent)
+/work/src/Util.kt:5:20: Missing newline before ")" (standard:parameter-list-wrapping)
+"""
+expected = """/work/src/Main.kt:10:1: Unexpected indentation (expected 4, actual 8) (standard:indent)
+/work/src/Util.kt:5:20: Missing newline before \")\" (standard:parameter-list-wrapping)"""
+
+[[tests.ktlint]]
+name = "clean run collapses"
+input = """
+"""
+expected = "ktlint: ok"
