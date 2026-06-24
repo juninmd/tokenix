@@ -4,66 +4,135 @@ use std::path::Path;
 pub struct ModelPrice {
     pub name: &'static str,
     pub input_per_1m: f64,
+    /// Output (completion) token rate. Used by `tokenix usage` for absolute spend.
+    pub output_per_1m: f64,
+    /// Cached-input read rate (typically a fraction of input).
+    pub cache_read_per_1m: f64,
+    /// Cache-write (creation) rate (typically a small premium over input).
+    pub cache_write_per_1m: f64,
     pub reference: bool,
 }
 
 pub const PRICING_COLLECTED_AT: &str = "2026-06-11";
 
 pub const MODELS: &[ModelPrice] = &[
-    // Anthropic (source: platform.claude.com/docs/about-claude/pricing, collected 2026-06-11)
+    // Anthropic (source: platform.claude.com/docs/about-claude/pricing, collected 2026-06-11).
+    // Anthropic convention: cache read = 0.1x input, cache write (5m) = 1.25x input.
     ModelPrice {
         name: "claude-haiku-4-5",
         input_per_1m: 1.00,
+        output_per_1m: 5.00,
+        cache_read_per_1m: 0.10,
+        cache_write_per_1m: 1.25,
         reference: false,
     },
     ModelPrice {
         name: "claude-sonnet-4-6",
         input_per_1m: 3.00,
+        output_per_1m: 15.00,
+        cache_read_per_1m: 0.30,
+        cache_write_per_1m: 3.75,
         reference: true,
     },
     ModelPrice {
         name: "claude-opus-4-8",
         input_per_1m: 5.00,
+        output_per_1m: 25.00,
+        cache_read_per_1m: 0.50,
+        cache_write_per_1m: 6.25,
         reference: false,
     },
     ModelPrice {
         name: "claude-fable-5",
         input_per_1m: 10.00,
+        output_per_1m: 50.00,
+        cache_read_per_1m: 1.00,
+        cache_write_per_1m: 12.50,
         reference: false,
     },
-    // OpenAI (source: developers.openai.com/api/docs/pricing, collected 2026-06-11)
+    // OpenAI (source: developers.openai.com/api/docs/pricing, collected 2026-06-11).
+    // OpenAI has no separate cache-write; cached input is a discounted read (~0.25x).
     ModelPrice {
         name: "gpt-5.4-mini",
         input_per_1m: 0.75,
+        output_per_1m: 3.00,
+        cache_read_per_1m: 0.19,
+        cache_write_per_1m: 0.75,
         reference: false,
     },
     ModelPrice {
         name: "gpt-5.4",
         input_per_1m: 2.50,
+        output_per_1m: 10.00,
+        cache_read_per_1m: 0.63,
+        cache_write_per_1m: 2.50,
         reference: false,
     },
     ModelPrice {
         name: "gpt-5.5",
         input_per_1m: 5.00,
+        output_per_1m: 20.00,
+        cache_read_per_1m: 1.25,
+        cache_write_per_1m: 5.00,
         reference: false,
     },
-    // Google (source: ai.google.dev/gemini-api/docs/pricing, collected 2026-06-11)
+    // Google (source: ai.google.dev/gemini-api/docs/pricing, collected 2026-06-11).
     ModelPrice {
         name: "gemini-3.1-flash-lite",
         input_per_1m: 0.25,
+        output_per_1m: 1.00,
+        cache_read_per_1m: 0.06,
+        cache_write_per_1m: 0.25,
         reference: false,
     },
     ModelPrice {
         name: "gemini-3.5-flash",
         input_per_1m: 1.50,
+        output_per_1m: 6.00,
+        cache_read_per_1m: 0.38,
+        cache_write_per_1m: 1.50,
         reference: false,
     },
     ModelPrice {
         name: "gemini-3.1-pro-preview",
         input_per_1m: 2.00,
+        output_per_1m: 8.00,
+        cache_read_per_1m: 0.50,
+        cache_write_per_1m: 2.00,
         reference: false,
     },
 ];
+
+/// Look up pricing for a model id, matching by exact name then by prefix
+/// (transcripts may carry suffixed ids like `claude-opus-4-8-20260101`).
+pub fn price_for(model: &str) -> Option<&'static ModelPrice> {
+    MODELS
+        .iter()
+        .find(|m| m.name == model)
+        .or_else(|| MODELS.iter().find(|m| model.starts_with(m.name)))
+        .or_else(|| {
+            // Fall back to family match (e.g. "claude-opus" -> opus entry).
+            MODELS.iter().find(|m| {
+                let fam: String = m.name.split('-').take(2).collect::<Vec<_>>().join("-");
+                !fam.is_empty() && model.starts_with(&fam)
+            })
+        })
+}
+
+/// Absolute USD cost of a single usage record, per token category.
+pub fn usage_cost(
+    price: &ModelPrice,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+) -> f64 {
+    (input as f64 * price.input_per_1m
+        + output as f64 * price.output_per_1m
+        + cache_read as f64 * price.cache_read_per_1m
+        + cache_write as f64 * price.cache_write_per_1m)
+        / 1_000_000.0
+}
 
 pub struct CostRow {
     pub model: &'static str,
@@ -439,6 +508,30 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn price_for_matches_exact_and_suffixed_ids() {
+        assert_eq!(
+            price_for("claude-sonnet-4-6").map(|m| m.name),
+            Some("claude-sonnet-4-6")
+        );
+        // Suffixed transcript ids resolve by prefix to the base model.
+        assert_eq!(
+            price_for("claude-opus-4-8-20260101").map(|m| m.name),
+            Some("claude-opus-4-8")
+        );
+        assert!(price_for("totally-unknown-model").is_none());
+    }
+
+    #[test]
+    fn usage_cost_sums_all_token_categories() {
+        let p = price_for("claude-sonnet-4-6").unwrap();
+        // 1M each of input/output/cache_read/cache_write at 3/15/0.30/3.75 per 1M.
+        let cost = usage_cost(p, 1_000_000, 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost - (3.0 + 15.0 + 0.30 + 3.75)).abs() < 1e-9);
+        // Zero usage costs nothing.
+        assert_eq!(usage_cost(p, 0, 0, 0, 0), 0.0);
     }
 
     #[test]

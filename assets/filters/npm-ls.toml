@@ -1,0 +1,29 @@
+[filters.npm-ls]
+description = "Compact `npm ls` / `npm list` dependency trees — drop blank lines and npm warn/notice noise, keep the tree."
+match_command = "^npm\\s+(ls|list)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^npm warn",
+  "^npm notice",
+]
+head_lines = 80
+truncate_lines_at = 140
+
+[[tests.npm-ls]]
+name = "tree kept, warn noise stripped"
+input = """
+myapp@1.0.0 /work/myapp
+├── express@4.18.2
+npm warn deprecated har-validator@5.1.5: this library is no longer supported
+└── jest@29.7.0
+"""
+expected = """myapp@1.0.0 /work/myapp
+├── express@4.18.2
+└── jest@29.7.0"""
+
+[[tests.npm-ls]]
+name = "errors are not stripped"
+input = "myapp@1.0.0 /work/myapp\nnpm error code ELSPROBLEMS\nnpm error missing: lodash@^4.0.0"
+expected = "myapp@1.0.0 /work/myapp\nnpm error code ELSPROBLEMS\nnpm error missing: lodash@^4.0.0"

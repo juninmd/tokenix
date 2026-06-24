@@ -42,7 +42,7 @@ Savings depend on codebase size, AI behavior, and file sizes. Run `tokenix gain`
 
 ## 🖥 Interactive Dashboard
 
-Run bare `tokenix` to open a terminal dashboard — eight tabs, zero flags. `←`/`→` switch tabs, `↑`/`↓` move, `q` quits. Piped or non-TTY falls back to `--help`.
+Run bare `tokenix` to open a terminal dashboard — ten tabs, zero flags. `←`/`→` switch tabs, `↑`/`↓` move, `q` quits. Piped or non-TTY falls back to `--help`.
 
 <table>
 <tr>
@@ -50,7 +50,13 @@ Run bare `tokenix` to open a terminal dashboard — eight tabs, zero flags. `←
 <td width="50%"><img src=".github/prints/gain.png" alt="Gain tab" /><br /><sub><b>Gain</b> — tokens saved with a reduction bar, split by source and by command/tool. <code>c</code> adds the ≈USD cost table · <code>a</code> all-projects · <code>r</code> refresh.</sub></td>
 </tr>
 <tr>
-<td><img src=".github/prints/filters.png" alt="Filters tab" /><br /><sub><b>Filters</b> — browse all 378 bundled filters by tool with a live <i>input → output</i> preview and a per-filter <code>X → Y tokens · % saved</code> gauge.</sub></td>
+<td colspan="2"><sub><b>Usage</b> — absolute token spend and ≈USD cost read from agent transcripts (the spend-side counterpart to Gain). <code>s</code> cycles the breakdown (daily · model · 5-hour blocks · project · session), <code>a</code> toggles this-repo vs all-projects, <code>r</code> refreshes. The active 5-hour block shows burn rate and a projected cost.</sub></td>
+</tr>
+<tr>
+<td colspan="2"><sub><b>Graph</b> — repo-wide symbol-graph overview: <i>god nodes</i> (most connected), <i>bottlenecks</i> (high fan-in / low fan-out), and <i>blast-radius leaders</i> (most transitive dependents). <code>r</code> refreshes.</sub></td>
+</tr>
+<tr>
+<td><img src=".github/prints/filters.png" alt="Filters tab" /><br /><sub><b>Filters</b> — browse all 386 bundled filters by tool with a live <i>input → output</i> preview and a per-filter <code>X → Y tokens · % saved</code> gauge.</sub></td>
 <td><img src=".github/prints/secrets.png" alt="Secrets tab" /><br /><sub><b>Secrets</b> — credentials leaked across agent transcripts, grouped by rule and attributed to repo + branch. Starts scoped to the current repo; <code>g</code> toggles all repos. <code>v</code> reveal · <code>c</code> copy · <code>x</code> redact.</sub></td>
 </tr>
 <tr>
@@ -164,6 +170,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **JSON output** | `--json` on `query`, `context`, `explore`, `read`, `symbols`, `callers`, `callees`, `deps` (+ `impact --format json`) for scripts and agent pipelines |
 | **PC-friendly indexing** | `tokenix index` runs at below-normal OS priority by default so long index runs never starve the machine (`--no-low-priority` opts out) |
 | **Interactive HTML/Mermaid graphs** | `tokenix impact --format html\|mermaid` exports vis.js / Mermaid flowcharts; `tokenix flow --format mermaid` traces call flow |
+| **Repo graph overview** | `tokenix graph` ranks god nodes, bottlenecks, and blast-radius leaders across the whole symbol graph (`--format text\|dot\|json`, `--top N`) |
 | **Cycle detection** | `tokenix cycles` finds circular dependencies via Tarjan's strongly-connected components algorithm, dropping same-name (homonym) false positives and annotating each node with `path:line` |
 | **Token map** | `tokenix tokenmap` shows a directory tree with token counts per file/folder |
 | **Preference memory** | `tokenix memory add/list` stores global and project preferences in editable Markdown; context/explore include saved preferences |
@@ -171,11 +178,11 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Legacy VB6 + SQL sources** | `.bas`/`.cls`/`.ctl`/`.frm`/`.vbp` and `.sql`/`.fnc`/`.trg`/`.pkg`/`.prc`/`.tab`/`.vw` indexed with symbol-aware heuristic chunking (`Sub`/`Function`/`Property`, `CREATE` objects); UTF-16 SQL files decoded via BOM; binary files (e.g. `.frx`) skipped by a NUL sniff |
 | **Symbol-aware chunking** | AST Tree-sitter parsers for Rust, Python, TypeScript, JavaScript, Go, C/C++ |
 | **Multi-agent safe index** | PID-based index lock prevents concurrent reindex; embeddings are committed per batch, so a killed index run resumes from the last completed batch |
-| **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads |
+| **Smart file reader** | Outlines large files; supports `--symbol` and `--lines` reads, plus `--mode full\|outline\|signatures\|diff\|density:X` (signatures-only, changed-hunks, or entropy-filtered reads) |
 | **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash **and PowerShell** commands before execution; thresholds tunable via `[hook]` in `.tokenix.toml` |
 | **Structural output compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, and ANSI/Emoji stripping |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
-| **Output filters** | 378 TOML output filters embedded in the binary (each homologated against 784 golden cases) — auto-applied to Bash/PowerShell output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, `apt`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`, `pulumi`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test`, `bru`, `ps`, and more |
+| **Output filters** | 386 TOML output filters embedded in the binary (each homologated against 800 golden cases) — auto-applied to Bash/PowerShell output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, `apt`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`, `pulumi`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test`, `bru`, `ps`, `cargo tree`, `npm ls`, `kubectl explain`, `lsof`, `ss`, `netstat`, `ip`, `systemctl list-*`, and more |
 | **Filter generation** | `tokenix filter generate` writes a TOML filter for a command; `tokenix filter record` captures real output for richer generation, with a per-command **token-economy preview** (raw→filtered tokens, % saved, compression bar) shown by `record stop`/`status` |
 | **GPU acceleration (opt-in)** | Build with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU; GPU is used by default at runtime with automatic CPU fallback, or force CPU with `--only-cpu` |
 | **Environment diagnostics** | `tokenix doctor` reports the compiled backend, detected GPU, CUDA/cuDNN status, model cache, and daemon |
@@ -184,6 +191,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Graceful fallback** | Exits `0` on errors — your AI session is never broken |
 | **Token budget** | Results fit within a configurable token budget (default `1200`) |
 | **Savings analytics** | `tokenix gain` — token summary, savings split by source (semantic index vs command filters), and by-tool histogram; `--cost-estimate` adds a per-model cost table (10 reference models across Anthropic / OpenAI / Google) |
+| **Spend analytics** | `tokenix usage` — absolute token spend and ≈USD cost read from agent transcripts, by `daily\|weekly\|monthly\|session\|model\|project\|blocks`; rolling 5-hour blocks with burn rate, month-end forecast, `--cost-mode auto\|calculate\|display`, `--statusline`, and `--json` |
 | **Slim MCP profile** | `tokenix mcp --profile slim` exposes 3 meta-tools instead of the full tool surface for hosts that support progressive discovery |
 | **MCP/prompt weight audit** | `tokenix prompt-audit --recommend --profile-impact` connects to configured MCP servers, tokenizes tool schemas, and shows full-vs-slim MCP savings |
 | **Session audit** | `tokenix session-audit --cache-hygiene` combines index freshness, hook history, MCP/tool weight, and prompt-cache stability risks |
@@ -271,6 +279,9 @@ and supports `plan`, `debug`, `audit`, `security`, and `review` modes. Use
 tokenix read src/auth/middleware.rs                           # symbol outline
 tokenix read src/auth/middleware.rs --symbol validate_token   # targeted
 tokenix read src/auth/middleware.rs --lines 45-80             # line range
+tokenix read src/auth/middleware.rs --mode signatures         # signatures only
+tokenix read src/auth/middleware.rs --mode diff               # outline + changed hunks
+tokenix read src/auth/middleware.rs --mode density:40         # keep ~40% highest-entropy lines
 ```
 
 ### 6. Symbol graph & maps
@@ -285,6 +296,8 @@ tokenix impact update_user --format html --output update_user.html   # vis.js gr
 tokenix deps src/indexer.rs                  # file-level import dependencies
 tokenix deps src/store.rs --reverse          # who imports this file
 tokenix deps src/daemon.rs --transitive      # follow the import chain
+tokenix graph                                # repo-wide hotspots / blast radius
+tokenix graph --format dot --top 20 -o graph.dot   # Graphviz of the top subgraph
 tokenix tokenmap                                                     # token tree
 tokenix rebuild-graph   # recompute relationships without re-embedding
 ```
@@ -302,6 +315,10 @@ tokenix callers run_hook --json
 tokenix gain                  # token summary + by-tool histogram
 tokenix gain --history        # include per-call history
 tokenix gain --cost-estimate  # add the per-model cost table
+tokenix usage                 # absolute spend (daily) + ≈USD cost
+tokenix usage model           # spend by model · also: weekly|monthly|session|project|blocks
+tokenix usage blocks          # rolling 5-hour billing blocks + burn rate
+tokenix usage --statusline    # compact one-liner for a status bar
 tokenix session-audit         # index + hook + MCP token-economy health
 ```
 
@@ -511,13 +528,14 @@ tokenix install-hook --tool all
 | `tokenix explore TEXT` | Graph-aware exploration: entry points, relationships, grouped source |
 | `tokenix query TEXT` | Semantic search over indexed chunks |
 | `tokenix grep PATTERN` | Exact regex/literal search over indexed content (no embedding) |
-| `tokenix read FILE` | Smart reader — outline for large files, full for small |
+| `tokenix read FILE` | Smart reader — outline for large files, full for small (`--symbol`, `--lines`, `--mode full\|outline\|signatures\|diff\|density:X`) |
 | `tokenix symbols QUERY` | Find indexed symbols by name or path (`--kind` filters by symbol type) |
 | `tokenix callers SYMBOL` | Show symbols that call/reference a symbol |
 | `tokenix callees SYMBOL` | Show symbols called/referenced by a symbol |
 | `tokenix deps FILE` | File-level import dependencies (`--reverse`, `--transitive`, `--json`) |
 | `tokenix impact SYMBOL` | Bidirectional impact graph (`--format html\|mermaid` for vis.js graph or Mermaid flowchart) |
 | `tokenix flow SYMBOL` | Forward call-flow trace from a symbol (`--depth`, `--format text\|mermaid`) |
+| `tokenix graph` | Repo-wide symbol-graph overview — god nodes, bottlenecks, blast-radius leaders (`--format text\|dot\|json`, `--top N`, `--output`) |
 | `tokenix pack` | Budgeted repo pack for non-hook AI tools (`--mode/--profile`, `--changed`, `--token-map`) |
 | `tokenix memory add TEXT` | Save a preference (`--global` or `--project`) for future context |
 | `tokenix memory list` | List global and project preferences |
@@ -528,7 +546,7 @@ tokenix install-hook --tool all
 
 | Command | Description |
 |---|---|
-| `tokenix` (no args) | Open the [interactive dashboard](#-interactive-dashboard) — Stats · Filters · Gain · Doctor · Tokenmap · Secrets · Egress tabs; piped/non-TTY falls back to help |
+| `tokenix` (no args) | Open the [interactive dashboard](#-interactive-dashboard) — Stats · Filters · Studio · Gain · Usage · Doctor · Tokenmap · Graph · Secrets · Egress tabs; piped/non-TTY falls back to help |
 | `tokenix filter` (no args) | Open the dashboard on the Filters tab; piped falls back to `filter list` |
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
@@ -539,6 +557,7 @@ tokenix install-hook --tool all
 | `tokenix stop` | Stop the background daemon |
 | `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |
 | `tokenix gain` | Token savings analytics with a by-source split — measured Read savings vs command filters; semantic Grep is neutral usage (`--cost-estimate` adds a per-model cost table) |
+| `tokenix usage` | Absolute token spend + ≈USD cost from agent transcripts (`daily\|weekly\|monthly\|session\|model\|project\|blocks`, `--since/--until`, `--all-projects`, `--cost-mode`, `--statusline`, `--json`) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix tokenmap` | Directory tree map with token counts, heaviest paths first, plus a top-10 files summary (`--format html` supported) |
 | `tokenix benchmark` | Reproducible token-savings and retrieval-quality benchmark — vanilla vs tokenix (`--json`) |
@@ -665,7 +684,7 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
-3. **Bundled filters** — 378 TOML output filters shipped inside the binary (each homologated against 784 embedded golden cases), covering `uv`, `cargo build`/`cargo run`/`cargo audit`, `git`, `gradle`, `terraform plan`, `make`, `npm`/`npm audit`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`/`kubectl top`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, `apt`/`apt-get`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`/`mamba`, `pulumi up`/`preview`/`destroy`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test` (Karma), `bru` (Bruno), `ps`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 386 TOML output filters shipped inside the binary (each homologated against 800 embedded golden cases), covering `uv`, `cargo build`/`cargo run`/`cargo audit`, `git`, `gradle`, `terraform plan`, `make`, `npm`/`npm audit`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`/`kubectl top`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, `apt`/`apt-get`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`/`mamba`, `pulumi up`/`preview`/`destroy`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test` (Karma), `bru` (Bruno), `ps`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -733,7 +752,7 @@ src/
 └── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
 assets/
-└── filters/       378 TOML output filters (+784 golden cases), embedded in the binary via rust-embed
+└── filters/       386 TOML output filters (+800 golden cases), embedded in the binary via rust-embed
 ```
 
 ### GPU acceleration (opt-in)

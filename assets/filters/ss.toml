@@ -1,0 +1,27 @@
+[filters.ss]
+description = "Compact `ss` socket statistics — drop blank lines, cap and truncate large connection tables."
+match_command = "^ss\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+head_lines = 60
+truncate_lines_at = 200
+
+[[tests.ss]]
+name = "keeps listening sockets, strips blanks"
+input = """
+Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port
+tcp   LISTEN 0      128    0.0.0.0:22         0.0.0.0:*
+
+tcp   LISTEN 0      511    127.0.0.1:6379     0.0.0.0:*
+"""
+expected = """Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port
+tcp   LISTEN 0      128    0.0.0.0:22         0.0.0.0:*
+tcp   LISTEN 0      511    127.0.0.1:6379     0.0.0.0:*"""
+
+[[tests.ss]]
+name = "summary line kept"
+input = "Total: 245\nTCP:   12 (estab 4, closed 2)"
+expected = "Total: 245\nTCP:   12 (estab 4, closed 2)"

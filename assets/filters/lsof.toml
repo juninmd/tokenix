@@ -1,0 +1,27 @@
+[filters.lsof]
+description = "Compact `lsof` open-file listings — drop blank lines, cap and truncate the typically huge table."
+match_command = "^lsof\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+head_lines = 80
+truncate_lines_at = 200
+
+[[tests.lsof]]
+name = "keeps table, strips blanks"
+input = """
+COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+nginx    1234 root   6u  IPv4  12345      0t0  TCP *:http (LISTEN)
+
+redis    5678 redis  6u  IPv4  67890      0t0  TCP localhost:6379 (LISTEN)
+"""
+expected = """COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+nginx    1234 root   6u  IPv4  12345      0t0  TCP *:http (LISTEN)
+redis    5678 redis  6u  IPv4  67890      0t0  TCP localhost:6379 (LISTEN)"""
+
+[[tests.lsof]]
+name = "single match kept"
+input = "COMMAND  PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\njava    9012 app  120u IPv6  24680      0t0  TCP *:8080 (LISTEN)"
+expected = "COMMAND  PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\njava    9012 app  120u IPv6  24680      0t0  TCP *:8080 (LISTEN)"

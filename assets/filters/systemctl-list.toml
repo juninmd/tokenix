@@ -1,0 +1,48 @@
+[filters.systemctl-list]
+description = "Compact `systemctl list-units` / `list-unit-files` / `list-timers` — keep the table, drop the legend footer and count lines."
+match_command = "^systemctl\\s+(list-units|list-unit-files|list-timers|list-sockets)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^LOAD\\s+=",
+  "^ACTIVE\\s+=",
+  "^SUB\\s+=",
+  "^Legend:",
+  "^\\d+ loaded units listed",
+  "^\\d+ unit files listed",
+  "^To show all installed unit files",
+]
+head_lines = 80
+truncate_lines_at = 160
+
+[[tests.systemctl-list]]
+name = "keeps unit table, strips legend footer"
+input = """
+UNIT                  LOAD   ACTIVE SUB     DESCRIPTION
+ssh.service           loaded active running OpenBSD Secure Shell server
+cron.service          loaded active running Regular background program
+
+LOAD   = Reflects whether the unit definition was properly loaded.
+ACTIVE = The high-level unit activation state.
+SUB    = The low-level unit activation state.
+
+Legend: the unit list is sorted by name.
+123 loaded units listed.
+"""
+expected = """UNIT                  LOAD   ACTIVE SUB     DESCRIPTION
+ssh.service           loaded active running OpenBSD Secure Shell server
+cron.service          loaded active running Regular background program"""
+
+[[tests.systemctl-list]]
+name = "unit-files table kept, footer stripped"
+input = """
+UNIT FILE                 STATE
+ssh.service               enabled
+cron.service              enabled
+
+245 unit files listed.
+"""
+expected = """UNIT FILE                 STATE
+ssh.service               enabled
+cron.service              enabled"""

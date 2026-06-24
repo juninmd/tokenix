@@ -1,0 +1,29 @@
+[filters.ip]
+description = "Compact `ip addr` / `ip route` / `ip link` output — drop blank lines, cap and truncate verbose interface dumps."
+match_command = "^ip\\s+(a|addr|address|r|route|l|link|n|neigh)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+head_lines = 60
+truncate_lines_at = 160
+
+[[tests.ip]]
+name = "keeps interface lines, strips blanks"
+input = """
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 state UNKNOWN
+    inet 127.0.0.1/8 scope host lo
+
+2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500 state UP
+    inet 10.0.0.5/24 scope global eth0
+"""
+expected = """1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 state UNKNOWN
+    inet 127.0.0.1/8 scope host lo
+2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500 state UP
+    inet 10.0.0.5/24 scope global eth0"""
+
+[[tests.ip]]
+name = "route table kept"
+input = "default via 10.0.0.1 dev eth0\n10.0.0.0/24 dev eth0 proto kernel scope link"
+expected = "default via 10.0.0.1 dev eth0\n10.0.0.0/24 dev eth0 proto kernel scope link"

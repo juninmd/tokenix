@@ -30,20 +30,24 @@ enum Cmd {
     Filters,
     Studio,
     Gain,
+    Usage,
     Doctor,
     Tokenmap,
+    Graph,
     Secrets,
     Egress,
 }
 
 impl Cmd {
-    const ALL: [Cmd; 8] = [
+    const ALL: [Cmd; 10] = [
         Cmd::Stats,
         Cmd::Filters,
         Cmd::Studio,
         Cmd::Gain,
+        Cmd::Usage,
         Cmd::Doctor,
         Cmd::Tokenmap,
+        Cmd::Graph,
         Cmd::Secrets,
         Cmd::Egress,
     ];
@@ -58,8 +62,10 @@ impl Cmd {
             Cmd::Filters => "Filters",
             Cmd::Studio => "Studio",
             Cmd::Gain => "Gain",
+            Cmd::Usage => "Usage",
             Cmd::Doctor => "Doctor",
             Cmd::Tokenmap => "Tokenmap",
+            Cmd::Graph => "Graph",
             Cmd::Secrets => "Secrets",
             Cmd::Egress => "Egress",
         }
@@ -217,6 +223,9 @@ struct Shell {
     /// Set to a base command to run `filter generate` in the foreground (mirrors
     /// `request_index`); consumed by the event loop after it drops the alt-screen.
     request_generate: Option<String>,
+    // Usage tab (spend analytics, dynamic argv) ---------------------------
+    usage_group: usize,
+    usage_global: bool,
     // Report / install pages ----------------------------------------------
     reports: HashMap<usize, String>,
     scroll: u16,
@@ -259,6 +268,8 @@ pub fn run() -> Result<()> {
         stats_sel: 0,
         stats_confirm: false,
         stats_msg: None,
+        usage_group: 0,
+        usage_global: false,
         gain_cache: None,
         gain_cost: false,
         gain_global: false,
@@ -404,6 +415,8 @@ impl Shell {
                     Cmd::Filters => self.key_filters(key.code),
                     Cmd::Studio => self.key_studio(key.code),
                     Cmd::Gain => self.key_gain(key.code),
+                    Cmd::Usage => self.key_usage(key.code),
+                    Cmd::Graph => self.key_graph(key.code),
                     Cmd::Secrets => self.key_secrets(key.code),
                     Cmd::Egress => self.key_egress(key.code),
                     _ => self.key_scroll(key.code),
@@ -455,13 +468,69 @@ impl Shell {
         };
     }
 
-    /// Lazily capture report output the first time its tab is shown.
+    /// Lazily capture report output the first time its tab is shown. Tabs with
+    /// state (Usage group/scope) build their argv dynamically.
     fn ensure_report(&mut self) {
+        let idx = self.cmd.index();
+        if let Some(args) = self.dyn_argv() {
+            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            self.reports.entry(idx).or_insert_with(|| capture(&refs));
+            return;
+        }
         let Some(argv) = self.cmd.argv() else {
             return;
         };
-        let idx = self.cmd.index();
         self.reports.entry(idx).or_insert_with(|| capture(argv));
+    }
+
+    /// Per-tab dynamic argv for report tabs whose output depends on UI state.
+    fn dyn_argv(&self) -> Option<Vec<String>> {
+        match self.cmd {
+            Cmd::Usage => {
+                let group =
+                    ["daily", "model", "blocks", "project", "session"][self.usage_group % 5];
+                let mut v = vec!["usage".to_string(), group.to_string()];
+                if self.usage_global {
+                    v.push("--all-projects".to_string());
+                }
+                Some(v)
+            }
+            Cmd::Graph => Some(vec![
+                "graph".to_string(),
+                "--top".to_string(),
+                "30".to_string(),
+            ]),
+            _ => None,
+        }
+    }
+
+    fn key_usage(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('s') => {
+                self.usage_group = (self.usage_group + 1) % 5;
+                self.reports.remove(&self.cmd.index());
+                self.scroll = 0;
+            }
+            KeyCode::Char('a') => {
+                self.usage_global = !self.usage_global;
+                self.reports.remove(&self.cmd.index());
+                self.scroll = 0;
+            }
+            KeyCode::Char('r') => {
+                self.reports.remove(&self.cmd.index());
+                self.scroll = 0;
+            }
+            _ => self.key_scroll(code),
+        }
+    }
+
+    fn key_graph(&mut self, code: KeyCode) {
+        if let KeyCode::Char('r') = code {
+            self.reports.remove(&self.cmd.index());
+            self.scroll = 0;
+        } else {
+            self.key_scroll(code);
+        }
     }
 
     /// Compute gain data the first time the Gain tab is shown (or after a toggle
@@ -2675,6 +2744,17 @@ impl Shell {
                 Cmd::Gain => {
                     "←→: tab · ↑↓: scroll · c: cost · a: all-projects · r: refresh · q: quit"
                         .to_string()
+                }
+                Cmd::Usage => format!(
+                    "←→: tab · ↑↓: scroll · s: group · a: {} · r: refresh · q: quit",
+                    if self.usage_global {
+                        "this repo"
+                    } else {
+                        "all projects"
+                    }
+                ),
+                Cmd::Graph => {
+                    "←→: tab · ↑↓: scroll · r: refresh · q: quit".to_string()
                 }
                 Cmd::Secrets if self.secrets.is_none() => {
                     "scanning… · ←→: tab · q: quit".to_string()

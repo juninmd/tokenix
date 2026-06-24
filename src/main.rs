@@ -21,8 +21,10 @@ mod query;
 mod recordings;
 mod secrets_scan;
 mod store;
+mod transcripts;
 mod tui;
 mod ui;
+mod usage;
 
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
@@ -336,6 +338,11 @@ enum Commands {
         symbol: Option<String>,
         #[arg(short, long, help = "Line range e.g. 10-50")]
         lines: Option<String>,
+        #[arg(
+            long,
+            help = "Read mode: full | outline | signatures | diff | density:X (e.g. density:40)"
+        )]
+        mode: Option<String>,
         #[arg(long, help = "Emit machine-readable JSON instead of text")]
         json: bool,
         #[arg(short, long, default_value = ".")]
@@ -424,6 +431,21 @@ enum Commands {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
+    /// Repo-wide symbol-graph overview: hotspots, bottlenecks, blast radius
+    Graph {
+        #[arg(
+            long,
+            help = "Output format: text | dot | json",
+            default_value = "text"
+        )]
+        format: String,
+        #[arg(long, default_value_t = 30, help = "How many top symbols to show")]
+        top: usize,
+        #[arg(short, long, help = "Write output to a file instead of stdout")]
+        output: Option<String>,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
     /// Detect circular dependencies in the symbol graph
     Cycles {
         #[arg(short, long, default_value = ".")]
@@ -447,6 +469,32 @@ enum Commands {
             help = "Aggregate savings across all indexed projects (ignores --path)"
         )]
         global: bool,
+    },
+    /// Show absolute token spend and USD cost from agent transcripts
+    Usage {
+        /// Breakdown dimension
+        #[arg(value_enum, default_value = "daily")]
+        group: usage::Group,
+        /// Only count records on/after this date (YYYY-MM-DD)
+        #[arg(long)]
+        since: Option<String>,
+        /// Only count records on/before this date (YYYY-MM-DD)
+        #[arg(long)]
+        until: Option<String>,
+        /// Aggregate across all projects (default: current repo only)
+        #[arg(long)]
+        all_projects: bool,
+        /// How to derive cost: auto | calculate | display
+        #[arg(long, value_enum, default_value = "auto")]
+        cost_mode: usage::CostMode,
+        /// Emit a compact one-line summary for a status bar hook
+        #[arg(long)]
+        statusline: bool,
+        /// Emit machine-readable JSON instead of a table
+        #[arg(long)]
+        json: bool,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
     },
     /// Pack focused repository context for AI tools that cannot call tokenix hooks
     Pack {
@@ -878,9 +926,17 @@ fn main() -> Result<()> {
             file,
             symbol,
             lines,
+            mode,
             json,
             path,
-        } => cmd_read(&file, symbol.as_deref(), lines.as_deref(), json, &path),
+        } => cmd_read(
+            &file,
+            symbol.as_deref(),
+            lines.as_deref(),
+            mode.as_deref(),
+            json,
+            &path,
+        ),
         Commands::Symbols {
             query,
             limit,
@@ -922,6 +978,12 @@ fn main() -> Result<()> {
             json,
             path,
         } => cmd_deps(&file, reverse, transitive, json, &path),
+        Commands::Graph {
+            format,
+            top,
+            output,
+            path,
+        } => cmd_graph(&format, top, output.as_deref(), &path),
         Commands::Cycles { path } => cmd_cycles(&path),
         Commands::RebuildGraph { path } => cmd_rebuild_graph(&path),
         Commands::Gain {
@@ -936,6 +998,25 @@ fn main() -> Result<()> {
                 cmd_gain(&path, history, cost_estimate)
             }
         }
+        Commands::Usage {
+            group,
+            since,
+            until,
+            all_projects,
+            cost_mode,
+            statusline,
+            json,
+            path,
+        } => usage::run(usage::Options {
+            group,
+            since,
+            until,
+            all_projects,
+            cost_mode,
+            statusline,
+            json,
+            path,
+        }),
         Commands::Pack {
             path,
             profile,
@@ -1743,6 +1824,28 @@ fn cmd_cycles(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn cmd_graph(format_str: &str, top: usize, output: Option<&str>, path: &Path) -> Result<()> {
+    if top == 0 {
+        anyhow::bail!("--top must be >= 1");
+    }
+    let conn = open_existing_index(path)?;
+    let edges = store::load_all_graph_edges(&conn)?;
+    let body = if format_str.eq_ignore_ascii_case("json") {
+        serde_json::to_string_pretty(&graph::repo_hotspots(&edges, top))?
+    } else if format_str.eq_ignore_ascii_case("dot") {
+        graph::format_edges_dot(&edges, top)
+    } else {
+        graph::format_repo_report(&edges, top)
+    };
+    if let Some(file) = output {
+        std::fs::write(file, &body)?;
+        println!("{} graph {} written to {}", "ok".green(), format_str, file);
+    } else {
+        println!("{body}");
+    }
+    Ok(())
+}
+
 fn cmd_rebuild_graph(path: &Path) -> Result<()> {
     let repo_root = find_repo_root(path);
     let conn = open_existing_index(path)?;
@@ -1814,6 +1917,7 @@ fn cmd_read(
     file: &str,
     symbol: Option<&str>,
     lines_range: Option<&str>,
+    mode: Option<&str>,
     json: bool,
     path: &Path,
 ) -> Result<()> {
@@ -1911,6 +2015,50 @@ fn cmd_read(
         return Ok(());
     }
 
+    if let Some(mode) = mode {
+        let m = mode.to_lowercase();
+        if m == "full" {
+            println!("{content}");
+        } else if m == "outline" {
+            println!("{}", chunker::generate_outline(&content, &rel));
+        } else if m == "signatures" {
+            let chunks = chunker::chunk_file(&rel, &content);
+            for c in &chunks {
+                let sig = c
+                    .content
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("")
+                    .trim_end();
+                println!("L{}: {}", c.start_line, sig);
+            }
+        } else if m == "diff" {
+            println!("{}", chunker::generate_outline(&content, &rel));
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo_root)
+                .args(["diff", "--", &rel])
+                .output();
+            match out {
+                Ok(o) if !o.stdout.is_empty() => {
+                    println!("\n# changed hunks");
+                    println!("{}", String::from_utf8_lossy(&o.stdout));
+                }
+                _ => println!("\n(no uncommitted changes)"),
+            }
+        } else if m == "density" || m.starts_with("density:") {
+            let frac = m
+                .strip_prefix("density:")
+                .and_then(|x| x.trim().parse::<f64>().ok())
+                .map(|p| (p / 100.0).clamp(0.05, 1.0))
+                .unwrap_or(0.40);
+            println!("{}", density_filter(&file_lines, frac));
+        } else {
+            anyhow::bail!("unknown --mode: {mode} (use full|outline|signatures|diff|density:X)");
+        }
+        return Ok(());
+    }
+
     if file_lines.len() >= 200 {
         println!("{}", chunker::generate_outline(&content, &rel));
         println!("\nUse --symbol <name> or --lines N-M to read specific parts.");
@@ -1918,6 +2066,69 @@ fn cmd_read(
         println!("{}", content);
     }
     Ok(())
+}
+
+/// Keep the highest-entropy lines until roughly `frac` of the file's tokens
+/// remain, preserving original order and collapsing dropped runs into `…`.
+/// Deterministic: ranks by Shannon byte-entropy, ties broken by line length.
+fn density_filter(lines: &[&str], frac: f64) -> String {
+    let total_tokens: usize = lines.iter().map(|l| chunker::count_tokens(l)).sum();
+    let budget = ((total_tokens as f64) * frac).ceil() as usize;
+
+    let mut ranked: Vec<usize> = (0..lines.len()).collect();
+    ranked.sort_by(|&a, &b| {
+        let ea = line_entropy(lines[a]);
+        let eb = line_entropy(lines[b]);
+        eb.partial_cmp(&ea)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(lines[b].len().cmp(&lines[a].len()))
+            .then(a.cmp(&b))
+    });
+
+    let mut keep = vec![false; lines.len()];
+    let mut used = 0usize;
+    for &i in &ranked {
+        if used >= budget {
+            break;
+        }
+        keep[i] = true;
+        used += chunker::count_tokens(lines[i]).max(1);
+    }
+
+    let mut out = String::new();
+    let mut gap = false;
+    for (i, line) in lines.iter().enumerate() {
+        if keep[i] {
+            out.push_str(line);
+            out.push('\n');
+            gap = false;
+        } else if !gap {
+            out.push_str("…\n");
+            gap = true;
+        }
+    }
+    out
+}
+
+/// Shannon entropy (bits) of a line's byte distribution.
+fn line_entropy(line: &str) -> f64 {
+    let bytes = line.trim().as_bytes();
+    if bytes.is_empty() {
+        return 0.0;
+    }
+    let mut counts = [0u32; 256];
+    for &b in bytes {
+        counts[b as usize] += 1;
+    }
+    let len = bytes.len() as f64;
+    counts
+        .iter()
+        .filter(|&&c| c > 0)
+        .map(|&c| {
+            let p = c as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
 }
 
 fn cmd_generate_ignores(path: &Path) -> Result<()> {
