@@ -1,0 +1,29 @@
+[filters.cargo-tree]
+description = "Compact `cargo tree` dependency trees — drop blank lines, cap deep output, truncate long lines."
+match_command = "^cargo\\s+tree\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+head_lines = 80
+truncate_lines_at = 140
+
+[[tests.cargo-tree]]
+name = "keeps tree, strips blank lines"
+input = """
+myapp v0.1.0 (/work/myapp)
+├── serde v1.0.0
+
+└── tokio v1.0.0
+    └── bytes v1.0.0
+"""
+expected = """myapp v0.1.0 (/work/myapp)
+├── serde v1.0.0
+└── tokio v1.0.0
+    └── bytes v1.0.0"""
+
+[[tests.cargo-tree]]
+name = "dedup markers preserved"
+input = "myapp v0.1.0\n├── serde v1.0.0 (*)\n└── serde_json v1.0.0"
+expected = "myapp v0.1.0\n├── serde v1.0.0 (*)\n└── serde_json v1.0.0"

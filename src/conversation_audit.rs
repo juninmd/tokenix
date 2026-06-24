@@ -10,7 +10,6 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 use crate::chunker::count_tokens;
 use crate::filters;
@@ -177,7 +176,7 @@ fn audit(agent: Agent, min_chars: usize, limit: usize) -> Result<Report> {
         if !root.exists() {
             continue;
         }
-        for path in transcript_files(&root, agent_key) {
+        for path in crate::transcripts::transcript_files(&root, agent_key) {
             scanned_files += 1;
             scan_jsonl_file(&path, agent_key, min_chars, &filters, &mut findings);
             scan_text_file(&path, agent_key, min_chars, &filters, &mut findings);
@@ -203,37 +202,14 @@ fn audit(agent: Agent, min_chars: usize, limit: usize) -> Result<Report> {
 }
 
 fn roots(home: &Path, agent: Agent) -> Vec<(&'static str, PathBuf)> {
-    let mut out = Vec::new();
-    if matches!(agent, Agent::All | Agent::Claude) {
-        out.push(("claude", home.join(".claude").join("projects")));
-    }
-    if matches!(agent, Agent::All | Agent::Codex) {
-        out.push(("codex", home.join(".codex").join("sessions")));
-    }
-    if matches!(agent, Agent::All | Agent::Copilot) {
-        out.push(("copilot", home.join(".copilot").join("session-state")));
-        out.push(("copilot", home.join(".copilot").join("logs")));
-    }
-    if matches!(agent, Agent::All | Agent::OpenAi) {
-        out.push(("openai", home.join(".openai")));
-    }
-    out
-}
-
-fn transcript_files(root: &Path, agent: &str) -> Vec<PathBuf> {
-    WalkDir::new(root)
+    crate::transcripts::roots(home)
         .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter_map(|e| {
-            let p = e.into_path();
-            let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
-            let name = p.file_name().and_then(|x| x.to_str()).unwrap_or("");
-            let keep = matches!(ext, "jsonl" | "json" | "log" | "txt")
-                && !(agent == "copilot"
-                    && p.components().any(|c| c.as_os_str() == "pkg")
-                    && !name.contains("session"));
-            keep.then_some(p)
+        .filter(|(key, _)| match agent {
+            Agent::All => true,
+            Agent::Claude => *key == "claude",
+            Agent::Codex => *key == "codex",
+            Agent::Copilot => *key == "copilot",
+            Agent::OpenAi => *key == "openai",
         })
         .collect()
 }

@@ -1,0 +1,27 @@
+[filters.netstat]
+description = "Compact `netstat` output — drop blank lines, cap and truncate large connection/route tables."
+match_command = "^netstat\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+head_lines = 80
+truncate_lines_at = 200
+
+[[tests.netstat]]
+name = "keeps connections, strips blanks"
+input = """
+Proto Recv-Q Send-Q Local Address    Foreign Address   State
+tcp        0      0 127.0.0.1:5432   0.0.0.0:*         LISTEN
+
+tcp        0      0 10.0.0.5:443     10.0.0.9:51000    ESTABLISHED
+"""
+expected = """Proto Recv-Q Send-Q Local Address    Foreign Address   State
+tcp        0      0 127.0.0.1:5432   0.0.0.0:*         LISTEN
+tcp        0      0 10.0.0.5:443     10.0.0.9:51000    ESTABLISHED"""
+
+[[tests.netstat]]
+name = "header banner kept"
+input = "Active Internet connections (servers and established)\nProto Recv-Q Send-Q Local Address Foreign Address State"
+expected = "Active Internet connections (servers and established)\nProto Recv-Q Send-Q Local Address Foreign Address State"

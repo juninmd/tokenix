@@ -1,0 +1,34 @@
+[filters.kubectl-explain]
+description = "Compact `kubectl explain` schema docs — drop blank lines and cap the long DESCRIPTION/FIELDS prose."
+match_command = "^kubectl\\s+explain\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+head_lines = 50
+truncate_lines_at = 160
+
+[[tests.kubectl-explain]]
+name = "keeps schema header and fields, strips blanks"
+input = """
+KIND:     Pod
+VERSION:  v1
+
+RESOURCE: spec <Object>
+
+FIELDS:
+   containers <[]Object> -required-
+   nodeName <string>
+"""
+expected = """KIND:     Pod
+VERSION:  v1
+RESOURCE: spec <Object>
+FIELDS:
+   containers <[]Object> -required-
+   nodeName <string>"""
+
+[[tests.kubectl-explain]]
+name = "single field kept"
+input = "KIND:     Deployment\nVERSION:  apps/v1"
+expected = "KIND:     Deployment\nVERSION:  apps/v1"

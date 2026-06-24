@@ -491,6 +491,167 @@ pub fn format_relations(relations: &[GraphRelation], title: &str) -> String {
     out
 }
 
+/// A repo-wide graph hotspot: a symbol ranked by its connectivity and the
+/// number of symbols transitively affected if it changes (blast radius).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Hotspot {
+    pub name: String,
+    pub path: String,
+    pub in_degree: usize,
+    pub out_degree: usize,
+    /// Transitive dependents — how many symbols are affected by a change here.
+    pub blast: usize,
+}
+
+/// Rank the most-connected symbols across the whole symbol graph. Blast radius
+/// (transitive dependents) is computed only for the strongest degree candidates
+/// to keep this bounded on large graphs.
+pub fn repo_hotspots(edges: &[store::GraphEdgeRow], top: usize) -> Vec<Hotspot> {
+    let mut label: HashMap<i64, (String, String)> = HashMap::new();
+    let mut indeg: HashMap<i64, usize> = HashMap::new();
+    let mut outdeg: HashMap<i64, usize> = HashMap::new();
+    // Reverse adjacency: callee -> callers, for blast-radius traversal.
+    let mut dependents: HashMap<i64, Vec<i64>> = HashMap::new();
+
+    for (cid, cname, cpath, eid, ename, epath) in edges {
+        label
+            .entry(*cid)
+            .or_insert_with(|| (cname.clone(), cpath.clone()));
+        label
+            .entry(*eid)
+            .or_insert_with(|| (ename.clone(), epath.clone()));
+        *outdeg.entry(*cid).or_default() += 1;
+        *indeg.entry(*eid).or_default() += 1;
+        dependents.entry(*eid).or_default().push(*cid);
+    }
+
+    // Rank by degree first; only the strongest candidates get a blast walk.
+    let mut by_degree: Vec<i64> = label.keys().copied().collect();
+    by_degree.sort_by(|a, b| {
+        let da = indeg.get(a).unwrap_or(&0) + outdeg.get(a).unwrap_or(&0);
+        let db = indeg.get(b).unwrap_or(&0) + outdeg.get(b).unwrap_or(&0);
+        db.cmp(&da)
+    });
+
+    let candidate_cap = (top * 3).max(top);
+    by_degree
+        .into_iter()
+        .filter(|id| !is_trivial_symbol(&label[id].0))
+        .take(candidate_cap)
+        .map(|id| {
+            let (name, path) = label[&id].clone();
+            Hotspot {
+                name,
+                path,
+                in_degree: *indeg.get(&id).unwrap_or(&0),
+                out_degree: *outdeg.get(&id).unwrap_or(&0),
+                blast: transitive_dependents(id, &dependents),
+            }
+        })
+        .collect()
+}
+
+/// Drop graph-extraction noise (single-letter bindings, `_`, language keywords)
+/// so the hotspot report surfaces meaningful symbols.
+fn is_trivial_symbol(name: &str) -> bool {
+    name.len() <= 2 || name.chars().all(|c| c == '_') || KEYWORDS.contains(&name)
+}
+
+/// BFS count of unique nodes reachable from `start` over the reverse-edge map.
+fn transitive_dependents(start: i64, dependents: &HashMap<i64, Vec<i64>>) -> usize {
+    let mut seen = HashSet::new();
+    let mut frontier = vec![start];
+    while let Some(node) = frontier.pop() {
+        if let Some(callers) = dependents.get(&node) {
+            for &c in callers {
+                if seen.insert(c) {
+                    frontier.push(c);
+                }
+            }
+        }
+    }
+    seen.len()
+}
+
+/// Render a compact repo-wide graph report: god nodes, bottlenecks, and
+/// blast-radius leaders. Inspired by knowledge-graph overviews but built from
+/// tokenix's own symbol graph.
+pub fn format_repo_report(edges: &[store::GraphEdgeRow], top: usize) -> String {
+    if edges.is_empty() {
+        return "No symbol-graph edges found. Run `tokenix index` first.".to_string();
+    }
+    let node_count = {
+        let mut s = HashSet::new();
+        for (cid, _, _, eid, _, _) in edges {
+            s.insert(*cid);
+            s.insert(*eid);
+        }
+        s.len()
+    };
+    let spots = repo_hotspots(edges, top);
+
+    let mut out = format!(
+        "# Repo graph — {} symbols, {} edges\n",
+        node_count,
+        edges.len()
+    );
+
+    out.push_str("\n## God nodes (most connected)\n");
+    let mut god = spots.clone();
+    god.sort_by_key(|h| std::cmp::Reverse(h.in_degree + h.out_degree));
+    for h in god.iter().take(top) {
+        out.push_str(&format!(
+            "- {} (↑{} ↓{})  {}\n",
+            h.name, h.in_degree, h.out_degree, h.path
+        ));
+    }
+
+    out.push_str("\n## Bottlenecks (high fan-in, low fan-out)\n");
+    let mut neck = spots.clone();
+    neck.sort_by(|a, b| {
+        let sa = a.in_degree as i64 - a.out_degree as i64;
+        let sb = b.in_degree as i64 - b.out_degree as i64;
+        sb.cmp(&sa)
+    });
+    for h in neck.iter().filter(|h| h.in_degree > h.out_degree).take(top) {
+        out.push_str(&format!(
+            "- {} (↑{} ↓{})  {}\n",
+            h.name, h.in_degree, h.out_degree, h.path
+        ));
+    }
+
+    out.push_str("\n## Blast-radius leaders (most transitive dependents)\n");
+    let mut blast = spots;
+    blast.sort_by_key(|h| std::cmp::Reverse(h.blast));
+    for h in blast.iter().take(top) {
+        out.push_str(&format!(
+            "- {} → {} dependents  {}\n",
+            h.name, h.blast, h.path
+        ));
+    }
+
+    out
+}
+
+/// Render the most-connected subgraph as Graphviz DOT. Only edges whose both
+/// endpoints are among the top hotspots are emitted, keeping the diagram legible.
+pub fn format_edges_dot(edges: &[store::GraphEdgeRow], top: usize) -> String {
+    let spots = repo_hotspots(edges, top);
+    let keep: HashSet<String> = spots.iter().take(top).map(|h| h.name.clone()).collect();
+    let mut out = String::from("digraph tokenix {\n  rankdir=LR;\n  node [shape=box];\n");
+    let mut seen = HashSet::new();
+    for (_, cname, _, _, ename, _) in edges {
+        if keep.contains(cname) && keep.contains(ename) {
+            let line = format!("  {:?} -> {:?};\n", cname, ename);
+            if seen.insert(line.clone()) {
+                out.push_str(&line);
+            }
+        }
+    }
+    out.push_str("}\n");
+    out
+}
+
 /// Format graph relations as a Mermaid flowchart diagram.
 pub fn format_relations_mermaid(relations: &[GraphRelation], title: &str) -> String {
     if relations.is_empty() {
@@ -1569,5 +1730,40 @@ mod tests {
             detect_cycles(&edges).is_empty(),
             "homonym SCC should be dropped"
         );
+    }
+
+    #[test]
+    fn repo_hotspots_ranks_by_degree_and_blast() {
+        // hub is called by three callers; chain a->b->hub gives hub 2 transitive
+        // dependents through b plus the direct callers.
+        let edges = vec![
+            edge(1, "caller_one", "src/a.rs:1", 4, "hub", "src/hub.rs:1"),
+            edge(2, "caller_two", "src/b.rs:1", 4, "hub", "src/hub.rs:1"),
+            edge(3, "caller_three", "src/c.rs:1", 4, "hub", "src/hub.rs:1"),
+        ];
+        let spots = repo_hotspots(&edges, 10);
+        let hub = spots.iter().find(|h| h.name == "hub").expect("hub present");
+        assert_eq!(hub.in_degree, 3);
+        assert_eq!(hub.out_degree, 0);
+        assert_eq!(hub.blast, 3, "three transitive dependents");
+
+        // Trivial single-letter / keyword symbols are filtered out of ranking.
+        let noisy = vec![edge(1, "e", "src/a.rs:1", 2, "fn", "src/b.rs:1")];
+        assert!(repo_hotspots(&noisy, 10).is_empty());
+    }
+
+    #[test]
+    fn format_edges_dot_emits_only_top_subgraph() {
+        let edges = vec![edge(
+            1,
+            "alpha_fn",
+            "src/a.rs:1",
+            2,
+            "beta_fn",
+            "src/b.rs:1",
+        )];
+        let dot = format_edges_dot(&edges, 10);
+        assert!(dot.starts_with("digraph tokenix {"));
+        assert!(dot.contains("\"alpha_fn\" -> \"beta_fn\";"));
     }
 }
