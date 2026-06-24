@@ -1,7 +1,6 @@
 [filters.ktlint]
 description = "Keep ktlint lint violations, drop progress"
 match_command = "\\bktlint\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

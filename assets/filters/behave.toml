@@ -1,0 +1,58 @@
+[filters.behave]
+description = "Compact behave (BDD) output: keep failing steps and the totals"
+match_command = "^behave\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+keep_lines_matching = [
+  "\\d+ features? passed",
+  "\\d+ scenarios? passed",
+  "\\d+ steps? passed",
+  "^Failing scenarios:",
+  "\\.feature:\\d+",
+  "AssertionError",
+  "Traceback",
+  "^\\s+Assert",
+  "(?i)error",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.behave]]
+name = "totals and failing scenarios kept"
+input = """
+Feature: Login
+
+  Scenario: valid credentials
+    Given a registered user
+    When they submit valid credentials
+    Then they reach the dashboard
+
+Failing scenarios:
+  features/login.feature:12  Login with bad password
+
+2 features passed, 0 failed, 0 skipped
+5 scenarios passed, 1 failed, 0 skipped
+17 steps passed, 1 failed, 0 skipped, 0 undefined
+"""
+expected = """Failing scenarios:
+  features/login.feature:12  Login with bad password
+2 features passed, 0 failed, 0 skipped
+5 scenarios passed, 1 failed, 0 skipped
+17 steps passed, 1 failed, 0 skipped, 0 undefined"""
+
+[[tests.behave]]
+name = "all green keeps totals"
+input = """
+Feature: Smoke
+
+  Scenario: home loads
+    Given the app is running
+    Then home renders
+
+1 feature passed, 0 failed, 0 skipped
+1 scenario passed, 0 failed, 0 skipped
+2 steps passed, 0 failed, 0 skipped, 0 undefined
+"""
+expected = """1 feature passed, 0 failed, 0 skipped
+1 scenario passed, 0 failed, 0 skipped
+2 steps passed, 0 failed, 0 skipped, 0 undefined"""

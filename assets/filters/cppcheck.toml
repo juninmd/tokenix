@@ -1,0 +1,37 @@
+[filters.cppcheck]
+description = "Keep cppcheck diagnostics, drop per-file progress"
+match_command = "\\bcppcheck\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Checking ",
+  "^\\d+/\\d+ files checked",
+]
+keep_lines_matching = [
+  ":\\d+:\\d+: (?:error|warning|style|performance|portability|information):",
+  "\\(error\\)",
+  "\\(warning\\)",
+  "Cppcheck cannot find",
+  "^nofile",
+]
+max_lines = 60
+on_empty = "cppcheck: ok"
+token_budget = 2000
+
+[[tests.cppcheck]]
+name = "diagnostics kept, progress dropped"
+input = """
+Checking src/main.c ...
+src/main.c:10:5: error: Array 'a[10]' accessed at index 10, which is out of bounds. [arrayIndexOutOfBounds]
+Checking src/util.c ...
+src/util.c:22:9: warning: Possible null pointer dereference: p [nullPointer]
+"""
+expected = """src/main.c:10:5: error: Array 'a[10]' accessed at index 10, which is out of bounds. [arrayIndexOutOfBounds]
+src/util.c:22:9: warning: Possible null pointer dereference: p [nullPointer]"""
+
+[[tests.cppcheck]]
+name = "clean run collapses"
+input = """
+Checking src/main.c ...
+"""
+expected = "cppcheck: ok"

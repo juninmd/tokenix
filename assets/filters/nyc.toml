@@ -1,0 +1,47 @@
+[filters.nyc]
+description = "Compact nyc/istanbul coverage summary"
+match_command = "\\bnyc\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^=+ Coverage summary =+",
+  "^=+$",
+  "^-+$",
+]
+keep_lines_matching = [
+  "^(?:Statements|Branches|Functions|Lines)\\s*:",
+  "^File\\s*\\|",
+  "^\\S.*\\|\\s*\\d+(?:\\.\\d+)?\\s*\\|",
+  "^All files",
+  "(?i)error",
+]
+max_lines = 60
+token_budget = 1500
+
+[[tests.nyc]]
+name = "coverage summary kept"
+input = """
+=============================== Coverage summary ===============================
+Statements   : 85.5% ( 171/200 )
+Branches     : 70.0% ( 14/20 )
+Functions    : 90.0% ( 18/20 )
+Lines        : 85.5% ( 171/200 )
+================================================================================
+"""
+expected = """Statements   : 85.5% ( 171/200 )
+Branches     : 70.0% ( 14/20 )
+Functions    : 90.0% ( 18/20 )
+Lines        : 85.5% ( 171/200 )"""
+
+[[tests.nyc]]
+name = "per-file table kept"
+input = """
+----------|---------|----------|---------|---------|
+File      | % Stmts | % Branch | % Funcs | % Lines |
+----------|---------|----------|---------|---------|
+All files |   85.5  |    70    |   90    |  85.5   |
+----------|---------|----------|---------|---------|
+"""
+expected = """File      | % Stmts | % Branch | % Funcs | % Lines |
+All files |   85.5  |    70    |   90    |  85.5   |"""

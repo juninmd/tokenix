@@ -1,7 +1,6 @@
 [filters.alembic]
 description = "Compact alembic migration output, keep applied revisions and errors"
 match_command = "^alembic\\s+(upgrade|downgrade|revision|current|history|stamp)\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

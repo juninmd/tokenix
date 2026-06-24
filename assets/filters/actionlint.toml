@@ -1,0 +1,36 @@
+[filters.actionlint]
+description = "Keep actionlint diagnostics, drop snippet context"
+match_command = "\\bactionlint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\|",
+  "^\\s*\\d+ \\|",
+  "^\\s*\\^~+",
+]
+keep_lines_matching = [
+  "\\.ya?ml:\\d+:\\d+:",
+  "(?i)error",
+  "(?i)warning",
+]
+max_lines = 60
+on_empty = "actionlint: ok"
+token_budget = 1500
+
+[[tests.actionlint]]
+name = "diagnostics kept, snippet dropped"
+input = """
+.github/workflows/ci.yml:12:9: shellcheck reported issue in this script: SC2086 [shellcheck]
+   |
+12 |         run: echo $VAR
+   |              ^~~~~~~~~
+.github/workflows/ci.yml:20:5: "runs-on" section is missing [syntax-check]
+"""
+expected = """.github/workflows/ci.yml:12:9: shellcheck reported issue in this script: SC2086 [shellcheck]
+.github/workflows/ci.yml:20:5: \"runs-on\" section is missing [syntax-check]"""
+
+[[tests.actionlint]]
+name = "clean run collapses"
+input = """
+"""
+expected = "actionlint: ok"

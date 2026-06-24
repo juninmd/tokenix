@@ -1,0 +1,40 @@
+[filters.cspell]
+description = "Keep cspell unknown-word findings and the summary"
+match_command = "\\bcspell\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\d+/\\d+ \\S.*\\d+\\.\\d+ms\\s*$",
+]
+keep_lines_matching = [
+  "Unknown word",
+  "Forbidden word",
+  "Issues found",
+  "Files checked",
+  "(?i)error",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.cspell]]
+name = "unknown words kept, progress dropped"
+input = """
+1/3 ./README.md 12.34ms
+./README.md:5:10 - Unknown word (teh)
+2/3 ./src/app.ts 8.10ms
+./src/app.ts:20:4 - Unknown word (recieve)
+3/3 ./docs/guide.md 4.55ms
+CSpell: Files checked: 3, Issues found: 2 in 2 files.
+"""
+expected = """./README.md:5:10 - Unknown word (teh)
+./src/app.ts:20:4 - Unknown word (recieve)
+CSpell: Files checked: 3, Issues found: 2 in 2 files."""
+
+[[tests.cspell]]
+name = "clean run keeps summary"
+input = """
+1/1 ./README.md 3.21ms
+CSpell: Files checked: 1, Issues found: 0 in 0 files.
+"""
+expected = """CSpell: Files checked: 1, Issues found: 0 in 0 files."""

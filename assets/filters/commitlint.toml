@@ -1,0 +1,38 @@
+[filters.commitlint]
+description = "Keep commitlint problems and the result line"
+match_command = "\\bcommitlint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "[✖✗×⚠]",
+  "problems",
+  "warnings",
+  "^⧗\\s+input:",
+  "may not be empty",
+  "(?i)error",
+]
+max_lines = 40
+on_empty = "commitlint: ok"
+token_budget = 1200
+
+[[tests.commitlint]]
+name = "problems kept"
+input = """
+⧗   input: bad commit message
+✖   subject may not be empty [subject-empty]
+✖   type may not be empty [type-empty]
+
+✖   found 2 problems, 0 warnings
+"""
+expected = """⧗   input: bad commit message
+✖   subject may not be empty [subject-empty]
+✖   type may not be empty [type-empty]
+✖   found 2 problems, 0 warnings"""
+
+[[tests.commitlint]]
+name = "clean message collapses"
+input = """
+"""
+expected = "commitlint: ok"

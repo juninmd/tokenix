@@ -1,7 +1,6 @@
 [filters.vagrant]
 description = "Compact vagrant up/provision output: keep result and errors"
 match_command = "^vagrant\\s+(up|provision|reload|halt|destroy)\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^Bringing machine ",

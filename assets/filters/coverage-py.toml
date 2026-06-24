@@ -1,0 +1,43 @@
+[filters.coverage-py]
+description = "Compact coverage.py report: keep TOTAL and partial-coverage rows"
+match_command = "^coverage\\s+(report|run|html|xml)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^-{3,}",
+  "^\\S+\\s+\\d+\\s+0\\s+100%\\s*$",
+]
+keep_lines_matching = [
+  "^TOTAL",
+  "^Name\\s+Stmts",
+  "^\\S+\\s+\\d+\\s+\\d+\\s+\\d+%",
+  "(?i)error",
+  "No data to report",
+  "Wrote ",
+]
+max_lines = 70
+token_budget = 2000
+
+[[tests.coverage-py]]
+name = "partial rows and total kept, full-cover rows dropped"
+input = """
+Name                Stmts   Miss  Cover
+----------------------------------------
+app/__init__.py         5      0   100%
+app/main.py            50      8    84%
+app/util.py            30      5    83%
+----------------------------------------
+TOTAL                  85     13    85%
+"""
+expected = """Name                Stmts   Miss  Cover
+app/main.py            50      8    84%
+app/util.py            30      5    83%
+TOTAL                  85     13    85%"""
+
+[[tests.coverage-py]]
+name = "no data surfaced"
+input = """
+No data to report.
+"""
+expected = """No data to report."""
