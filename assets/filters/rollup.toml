@@ -1,0 +1,40 @@
+[filters.rollup]
+description = "Compact rollup output: keep created bundles, warnings and errors"
+match_command = "\\brollup\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\S+ → \\S+\\.\\.\\.$",
+  "^\\(!\\) Some chunks are larger",
+]
+keep_lines_matching = [
+  "^created ",
+  "^\\[!\\]",
+  "RollupError",
+  "Error:",
+  "(?i)warning",
+  "Could not resolve",
+  "is not exported",
+]
+max_lines = 50
+replace_patterns = [
+  ["in \\d+(?:\\.\\d+)?m?s", "in <duration>"],
+]
+token_budget = 1500
+
+[[tests.rollup]]
+name = "created bundle kept"
+input = """
+src/main.js → dist/bundle.js...
+created dist/bundle.js in 1.2s
+"""
+expected = """created dist/bundle.js in <duration>"""
+
+[[tests.rollup]]
+name = "resolve error surfaced"
+input = """
+src/main.js → dist/bundle.js...
+[!] RollupError: Could not resolve './missing' from src/main.js
+"""
+expected = """[!] RollupError: Could not resolve './missing' from src/main.js"""

@@ -1,0 +1,49 @@
+[filters.esbuild]
+description = "Compact esbuild output: keep errors/warnings and done summary"
+match_command = "\\besbuild\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s+\\S+\\s+\\d+(?:\\.\\d+)?\\s*(?:b|kb|mb|gb)\\s*$",
+  "^\\s+\\.\\.\\.\\s*$",
+]
+keep_lines_matching = [
+  "\\[ERROR\\]",
+  "\\[WARNING\\]",
+  "^\\d+ error",
+  "^\\d+ warning",
+  "Done in",
+  "^✘",
+  "^▲",
+  "Could not resolve",
+]
+max_lines = 50
+replace_patterns = [
+  ["Done in \\d+m?s", "Done in <duration>"],
+]
+token_budget = 1500
+
+[[tests.esbuild]]
+name = "resolve error surfaced"
+input = """
+✘ [ERROR] Could not resolve "./missing"
+
+    src/app.ts:1:20:
+      1 │ import x from "./missing"
+        ╵                     ~~~~~~~~~~~
+
+1 error
+"""
+expected = """✘ [ERROR] Could not resolve "./missing"
+1 error"""
+
+[[tests.esbuild]]
+name = "clean build keeps done"
+input = """
+  dist/app.js   1.2mb
+  dist/app.css  45kb
+
+⚡ Done in 23ms
+"""
+expected = """⚡ Done in <duration>"""

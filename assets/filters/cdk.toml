@@ -1,0 +1,62 @@
+[filters.cdk]
+description = "Compact aws-cdk diff/deploy output: keep resource changes & outputs"
+match_command = "^(?:cdk|cdklocal)\\s+(diff|deploy|destroy|synth)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  ": deploying\\.\\.\\.",
+  ": creating CloudFormation changeset",
+  ": building assets",
+  ": checking if the stack",
+  "^Synthesizing",
+  "^Bundling asset",
+  "^\\s*\\d+/\\d+ \\| ",
+]
+keep_lines_matching = [
+  "\\[[+~\\-]\\]",
+  "^Stack ",
+  "^Resources$",
+  "^Outputs:",
+  "^\\S+\\.\\S+ = ",
+  "✅|❌|⚠️|🛑",
+  "(?i)\\bfail",
+  "(?i)\\berror",
+  "There were no differences",
+]
+max_lines = 60
+token_budget = 2500
+
+[[tests.cdk]]
+name = "diff resource changes kept"
+input = """
+Stack MyStack
+Resources
+[+] AWS::S3::Bucket Bucket bucket123ABC
+[~] AWS::Lambda::Function Fn FnDEF456
+ └─ [~] Runtime
+     ├─ [-] nodejs16.x
+     └─ [+] nodejs20.x
+Synthesizing
+"""
+expected = """Stack MyStack
+Resources
+[+] AWS::S3::Bucket Bucket bucket123ABC
+[~] AWS::Lambda::Function Fn FnDEF456
+ └─ [~] Runtime
+     ├─ [-] nodejs16.x
+     └─ [+] nodejs20.x"""
+
+[[tests.cdk]]
+name = "deploy outputs kept"
+input = """
+MyStack: deploying...
+MyStack: creating CloudFormation changeset...
+ ✅  MyStack
+
+Outputs:
+MyStack.ApiUrl = https://abc123.execute-api.us-east-1.amazonaws.com/prod/
+"""
+expected = """ ✅  MyStack
+Outputs:
+MyStack.ApiUrl = https://abc123.execute-api.us-east-1.amazonaws.com/prod/"""

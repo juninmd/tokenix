@@ -1,0 +1,60 @@
+[filters.webpack]
+description = "Compact webpack output: drop asset/module lists, keep result & errors"
+match_command = "\\bwebpack\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^asset ",
+  "^assets by ",
+  "^orphan modules ",
+  "^cacheable modules ",
+  "^runtime modules ",
+  "^modules by ",
+  "^\\s*\\./",
+  "^\\s+\\d+ (?:bytes|KiB|MiB) ",
+  "\\[built\\]",
+  "\\[code generated\\]",
+  "^chunk ",
+  "^\\s*\\+ \\d+ (?:modules|assets)",
+]
+keep_lines_matching = [
+  "compiled successfully",
+  "compiled with \\d+ error",
+  "compiled with \\d+ warning",
+  "^ERROR in",
+  "^WARNING in",
+  "Module not found",
+  "^\\s+@ ",
+]
+max_lines = 60
+replace_patterns = [
+  ["in \\d+ ms", "in <duration>"],
+]
+token_budget = 2000
+
+[[tests.webpack]]
+name = "success kept, asset list dropped"
+input = """
+asset main.js 1.2 MiB [emitted] (name: main)
+asset index.html 512 bytes [emitted]
+orphan modules 1.2 KiB [orphan] 5 modules
+./src/index.js 2 KiB [built] [code generated]
+cacheable modules 1.5 MiB
+webpack 5.89.0 compiled successfully in 3421 ms
+"""
+expected = """webpack 5.89.0 compiled successfully in <duration>"""
+
+[[tests.webpack]]
+name = "module-not-found error surfaced"
+input = """
+asset main.js 1.2 MiB [emitted] (name: main)
+ERROR in ./src/index.js 5:0-30
+Module not found: Error: Can't resolve './missing' in '/work/src'
+ @ ./src/app.js 2:0-25
+webpack 5.89.0 compiled with 1 error in 1200 ms
+"""
+expected = """ERROR in ./src/index.js 5:0-30
+Module not found: Error: Can't resolve './missing' in '/work/src'
+ @ ./src/app.js 2:0-25
+webpack 5.89.0 compiled with 1 error in <duration>"""

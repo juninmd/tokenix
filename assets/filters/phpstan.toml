@@ -1,0 +1,48 @@
+[filters.phpstan]
+description = "Compact PHPStan output: keep error rows and the result line"
+match_command = "\\b(?:phpstan|vendor/bin/phpstan)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*-{3,}",
+  "^\\s*={3,}",
+  "^\\s*\\d+/\\d+ \\[",
+]
+keep_lines_matching = [
+  "\\[OK\\]",
+  "\\[ERROR\\]",
+  "Found \\d+ error",
+  "No errors",
+  "^\\s+Line\\b",
+  "^\\s+\\d+\\s+[A-Za-z]",
+  "^\\s+\\S+\\.php",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.phpstan]]
+name = "error rows and summary kept"
+input = """
+ ------ -----------------------------------------------
+  Line   src/Foo.php
+ ------ -----------------------------------------------
+  12     Method App\\Foo::bar() has no return type
+  20     Access to undefined property App\\Foo::$baz
+ ------ -----------------------------------------------
+
+ [ERROR] Found 2 errors
+"""
+expected = """  Line   src/Foo.php
+  12     Method App\\Foo::bar() has no return type
+  20     Access to undefined property App\\Foo::$baz
+ [ERROR] Found 2 errors"""
+
+[[tests.phpstan]]
+name = "clean run keeps OK"
+input = """
+ 12/12 [============================] 100%
+
+ [OK] No errors
+"""
+expected = """ [OK] No errors"""

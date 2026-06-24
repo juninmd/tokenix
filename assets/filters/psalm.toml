@@ -1,0 +1,48 @@
+[filters.psalm]
+description = "Compact Psalm output: keep issue lines and the result summary"
+match_command = "\\b(?:psalm|vendor/bin/psalm)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^-{3,}",
+  "^Target PHP version",
+  "^Scanning files",
+  "^Analyzing files",
+  "^\\s*░+",
+  "^Checks took ",
+  "^Psalm was able to infer",
+]
+keep_lines_matching = [
+  "^ERROR:",
+  "^INFO:",
+  "errors? found",
+  "No errors found",
+  "^\\S+:\\d+:\\d+",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.psalm]]
+name = "issues kept, scan chatter dropped"
+input = """
+Target PHP version: 8.3
+Scanning files...
+Analyzing files...
+ERROR: PossiblyNullReference - src/Foo.php:12:7 - Cannot call method on possibly null value
+ERROR: InvalidReturnType - src/Bar.php:8:5 - The declared return type is incorrect
+------------------------------
+2 errors found
+"""
+expected = """ERROR: PossiblyNullReference - src/Foo.php:12:7 - Cannot call method on possibly null value
+ERROR: InvalidReturnType - src/Bar.php:8:5 - The declared return type is incorrect
+2 errors found"""
+
+[[tests.psalm]]
+name = "clean run summary"
+input = """
+Scanning files...
+Analyzing files...
+No errors found!
+"""
+expected = """No errors found!"""

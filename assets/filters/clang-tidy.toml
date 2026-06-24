@@ -1,0 +1,39 @@
+[filters.clang-tidy]
+description = "Keep clang-tidy diagnostics, drop source context and code echo"
+match_command = "\\bclang-tidy\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+keep_lines_matching = [
+  ":\\d+:\\d+: (?:warning|error|note):",
+  "warnings? generated",
+  "errors? generated",
+  "Suppressed \\d+ warning",
+  "^error:",
+  "Use -header-filter",
+]
+max_lines = 60
+token_budget = 2500
+
+[[tests.clang-tidy]]
+name = "diagnostics kept, code echo dropped"
+input = """
+1234 warnings generated.
+src/foo.cpp:10:5: warning: use auto when initializing with a cast [modernize-use-auto]
+    int x = static_cast<int>(y);
+        ^
+src/foo.cpp:25:9: error: use of undeclared identifier 'bar'
+    return bar();
+           ^
+Suppressed 1200 warnings (1190 in non-user code).
+"""
+expected = """1234 warnings generated.
+src/foo.cpp:10:5: warning: use auto when initializing with a cast [modernize-use-auto]
+src/foo.cpp:25:9: error: use of undeclared identifier 'bar'
+Suppressed 1200 warnings (1190 in non-user code)."""
+
+[[tests.clang-tidy]]
+name = "clean run keeps only the counter"
+input = """
+0 warnings generated.
+"""
+expected = """0 warnings generated."""

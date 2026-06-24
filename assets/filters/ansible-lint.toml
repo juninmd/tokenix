@@ -1,0 +1,50 @@
+[filters.ansible-lint]
+description = "Compact ansible-lint output: keep violations and the summary"
+match_command = "^ansible-lint\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Examining ",
+  "^Loading ",
+  "^\\s*#\\s",
+]
+keep_lines_matching = [
+  "Failed:",
+  "Passed:",
+  "violation",
+  "^\\S+\\[\\S+\\]:",
+  "^[a-z][a-z0-9_.-]*: [A-Z]",
+  "\\.ya?ml:\\d+",
+  "^WARNING",
+  "^ERROR",
+  "^Rule ",
+]
+max_lines = 60
+token_budget = 2000
+
+[[tests.ansible-lint]]
+name = "violations and summary kept"
+input = """
+WARNING  Listing 2 violation(s) that are fatal
+yaml[line-length]: Line too long (160 > 120 characters)
+playbook.yml:12
+risky-file-permissions: File permissions unset or incorrect
+roles/web/tasks/main.yml:8
+
+Failed: 2 failure(s), 0 warning(s) on 5 files.
+"""
+expected = """WARNING  Listing 2 violation(s) that are fatal
+yaml[line-length]: Line too long (160 > 120 characters)
+playbook.yml:12
+risky-file-permissions: File permissions unset or incorrect
+roles/web/tasks/main.yml:8
+Failed: 2 failure(s), 0 warning(s) on 5 files."""
+
+[[tests.ansible-lint]]
+name = "clean run passes summary"
+input = """
+Examining playbook.yml of type playbook
+Passed: 0 failure(s), 0 warning(s) on 5 files.
+"""
+expected = """Passed: 0 failure(s), 0 warning(s) on 5 files."""
