@@ -1,0 +1,32 @@
+[filters.isort]
+description = "Keep isort import-order violations"
+match_command = "^isort\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^ERROR:",
+  "incorrectly sorted",
+  "would reformat",
+  "Fixing ",
+  "(?i)error",
+]
+max_lines = 50
+on_empty = "isort: ok"
+token_budget = 1500
+
+[[tests.isort]]
+name = "unsorted imports surfaced"
+input = """
+ERROR: /app/foo.py Imports are incorrectly sorted and/or formatted.
+ERROR: /app/bar.py Imports are incorrectly sorted and/or formatted.
+"""
+expected = """ERROR: /app/foo.py Imports are incorrectly sorted and/or formatted.
+ERROR: /app/bar.py Imports are incorrectly sorted and/or formatted."""
+
+[[tests.isort]]
+name = "clean run collapses"
+input = """
+"""
+expected = "isort: ok"

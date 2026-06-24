@@ -1,0 +1,34 @@
+[filters.pmd]
+description = "Keep PMD static-analysis violations"
+match_command = "^pmd\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[INFO\\]",
+]
+keep_lines_matching = [
+  ":\\d+:?\\s",
+  "(?i)error",
+  "\\[WARN\\]",
+  "violation",
+]
+max_lines = 70
+on_empty = "pmd: no violations"
+token_budget = 2500
+
+[[tests.pmd]]
+name = "violations kept"
+input = """
+[INFO] Loading rulesets
+/src/Foo.java:10:	UnusedLocalVariable: Avoid unused local variables such as 'x'.
+/src/Bar.java:22:	EmptyCatchBlock: Avoid empty catch blocks.
+"""
+expected = """/src/Foo.java:10:	UnusedLocalVariable: Avoid unused local variables such as 'x'.
+/src/Bar.java:22:	EmptyCatchBlock: Avoid empty catch blocks."""
+
+[[tests.pmd]]
+name = "clean run collapses"
+input = """
+[INFO] Loading rulesets
+"""
+expected = "pmd: no violations"

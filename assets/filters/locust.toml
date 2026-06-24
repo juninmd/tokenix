@@ -1,0 +1,44 @@
+[filters.locust]
+description = "Compact locust load-test output: keep the stats table and failures"
+match_command = "^locust\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[\\d{4}-\\d{2}-\\d{2}.*\\] .*/INFO/",
+  "^\\s*-{3,}",
+]
+keep_lines_matching = [
+  "^Type\\s+Name",
+  "^\\S+\\s+\\S+.*\\d+\\(\\d+",
+  "Aggregated",
+  "# fails",
+  "(?i)error",
+  "Response time percentiles",
+]
+max_lines = 70
+token_budget = 2500
+
+[[tests.locust]]
+name = "stats table kept, logs dropped"
+input = """
+[2026-06-24 01:00:00,000] host/INFO/locust.main: Starting Locust 2.0
+Type     Name        # reqs    # fails  |  Avg   Min   Max
+--------|-----------|---------|---------|-------|-----|-----
+GET      /            100      2(2.00%)    120    20    450
+POST     /login        50      0(0.00%)     80    30    200
+--------|-----------|---------|---------|-------|-----|-----
+         Aggregated   150      2(1.33%)    107    20    450
+"""
+expected = """Type     Name        # reqs    # fails  |  Avg   Min   Max
+GET      /            100      2(2.00%)    120    20    450
+POST     /login        50      0(0.00%)     80    30    200
+         Aggregated   150      2(1.33%)    107    20    450"""
+
+[[tests.locust]]
+name = "startup error surfaced"
+input = """
+[2026-06-24 01:00:00,000] host/INFO/locust.main: Starting Locust 2.0
+[2026-06-24 01:00:01,000] host/ERROR/locust.main: Could not find any locustfile
+"""
+expected = """[2026-06-24 01:00:01,000] host/ERROR/locust.main: Could not find any locustfile"""

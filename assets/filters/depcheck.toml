@@ -1,0 +1,42 @@
+[filters.depcheck]
+description = "Keep depcheck unused/missing dependency findings"
+match_command = "^depcheck\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Unused ",
+  "^Missing ",
+  "^\\* ",
+  "(?i)error",
+]
+max_lines = 70
+token_budget = 2000
+
+[[tests.depcheck]]
+name = "unused and missing kept"
+input = """
+Unused dependencies
+* lodash
+* moment
+Unused devDependencies
+* jest
+Missing dependencies
+* react: ./src/app.js
+"""
+expected = """Unused dependencies
+* lodash
+* moment
+Unused devDependencies
+* jest
+Missing dependencies
+* react: ./src/app.js"""
+
+[[tests.depcheck]]
+name = "clean run collapses"
+input = """
+No depcheck issue
+"""
+expected = """No depcheck issue"""

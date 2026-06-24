@@ -1,0 +1,45 @@
+[filters.sonar-scanner]
+description = "Compact sonar-scanner output: keep gate status, result and errors"
+match_command = "\\bsonar-scanner\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\d{2}:\\d{2}:\\d{2}\\.\\d+ ",
+]
+keep_lines_matching = [
+  "EXECUTION SUCCESS",
+  "EXECUTION FAILURE",
+  "QUALITY GATE STATUS",
+  "^ERROR",
+  "Analysis report",
+  "(?i)\\bfailed\\b",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.sonar-scanner]]
+name = "gate status and result kept"
+input = """
+INFO: Scanner configuration file: /opt/sonar/conf.properties
+INFO: Project root configuration file: /work/sonar-project.properties
+INFO: Analysis report uploaded in 120ms
+INFO: QUALITY GATE STATUS: PASSED - View details on https://sonar/dashboard
+INFO: Analysis total time: 12.345 s
+INFO: EXECUTION SUCCESS
+"""
+expected = """INFO: Analysis report uploaded in 120ms
+INFO: QUALITY GATE STATUS: PASSED - View details on https://sonar/dashboard
+INFO: EXECUTION SUCCESS"""
+
+[[tests.sonar-scanner]]
+name = "execution failure surfaced"
+input = """
+INFO: Scanner configuration file: /opt/sonar/conf.properties
+ERROR: Error during SonarScanner execution
+ERROR: Project not found
+INFO: EXECUTION FAILURE
+"""
+expected = """ERROR: Error during SonarScanner execution
+ERROR: Project not found
+INFO: EXECUTION FAILURE"""

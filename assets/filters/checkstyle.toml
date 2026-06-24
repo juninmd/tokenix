@@ -1,0 +1,38 @@
+[filters.checkstyle]
+description = "Keep checkstyle errors/warnings, drop audit banners"
+match_command = "\\bcheckstyle\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Starting audit\\.\\.\\.",
+  "^Audit done\\.",
+  "^\\[INFO\\]",
+]
+keep_lines_matching = [
+  "^\\[ERROR\\]",
+  "^\\[WARN\\]",
+  ":\\d+:\\d*:",
+  "(?i)error",
+  "violation",
+]
+max_lines = 70
+token_budget = 2500
+
+[[tests.checkstyle]]
+name = "violations kept, audit lines dropped"
+input = """
+Starting audit...
+[ERROR] /src/Foo.java:10:5: Missing a Javadoc comment. [JavadocMethod]
+[WARN] /src/Bar.java:22: Line is longer than 100 characters. [LineLength]
+Audit done.
+"""
+expected = """[ERROR] /src/Foo.java:10:5: Missing a Javadoc comment. [JavadocMethod]
+[WARN] /src/Bar.java:22: Line is longer than 100 characters. [LineLength]"""
+
+[[tests.checkstyle]]
+name = "clean audit passes through empty"
+input = """
+Starting audit...
+Audit done.
+"""
+expected = ""

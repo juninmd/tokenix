@@ -1,0 +1,32 @@
+[filters.vulture]
+description = "Keep vulture dead-code findings"
+match_command = "^vulture\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  ":\\d+: unused",
+  ":\\d+: unreachable",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "vulture: no dead code"
+token_budget = 1500
+
+[[tests.vulture]]
+name = "dead code findings kept"
+input = """
+app.py:10: unused variable 'x' (60% confidence)
+app.py:25: unused function 'helper' (90% confidence)
+utils.py:5: unreachable code after 'return' (100% confidence)
+"""
+expected = """app.py:10: unused variable 'x' (60% confidence)
+app.py:25: unused function 'helper' (90% confidence)
+utils.py:5: unreachable code after 'return' (100% confidence)"""
+
+[[tests.vulture]]
+name = "clean run collapses"
+input = """
+"""
+expected = "vulture: no dead code"

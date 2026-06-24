@@ -1,0 +1,45 @@
+[filters.semantic-release]
+description = "Compact semantic-release output: keep version/publish result and errors"
+match_command = "\\bsemantic-release\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Running semantic-release version",
+  "Loading version",
+  "Found git version",
+  "Allowed branches",
+  "Start step",
+  "Completed step",
+  "Verify ",
+]
+keep_lines_matching = [
+  "Published release",
+  "next release version",
+  "There (?:is|are) no relevant changes",
+  "no new version is released",
+  "(?i)error",
+  "✖|ERR",
+  "Created tag",
+]
+max_lines = 50
+token_budget = 1500
+
+[[tests.semantic-release]]
+name = "publish result kept, progress dropped"
+input = """
+[semantic-release] › ℹ  Running semantic-release version 22.0.0
+[semantic-release] › ℹ  Loading version from package.json
+[semantic-release] › ℹ  The next release version is 1.2.3
+[semantic-release] › ✔  Published release 1.2.3 on default channel
+"""
+expected = """[semantic-release] › ℹ  The next release version is 1.2.3
+[semantic-release] › ✔  Published release 1.2.3 on default channel"""
+
+[[tests.semantic-release]]
+name = "no release needed kept"
+input = """
+[semantic-release] › ℹ  Running semantic-release version 22.0.0
+[semantic-release] › ℹ  There are no relevant changes, so no new version is released.
+"""
+expected = """[semantic-release] › ℹ  There are no relevant changes, so no new version is released."""
