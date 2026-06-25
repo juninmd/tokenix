@@ -1,0 +1,50 @@
+[filters.argocd]
+description = "Keep argocd app sync/health status and errors, drop verbose resource tree"
+match_command = "^argocd\\b"
+strip_ansi = true
+keep_lines_matching = [
+  "^Name:",
+  "^Project:",
+  "^Namespace:",
+  "Sync Status:",
+  "Health Status:",
+  "^Phase:",
+  "^Message:",
+  "OutOfSync",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 40
+on_empty = "argocd: ok"
+
+[[tests.argocd]]
+name = "status fields kept, resource tree dropped"
+input = """
+Name:               myapp
+Project:            default
+Server:             https://kubernetes.default.svc
+Namespace:          prod
+URL:                https://argocd.example.com/applications/myapp
+Sync Status:        Synced to main (abc1234)
+Health Status:      Healthy
+
+GROUP  KIND        NAMESPACE  NAME  STATUS  HEALTH
+apps   Deployment  prod       web   Synced  Healthy
+       Service     prod       web   Synced  Healthy
+"""
+expected = """Name:               myapp
+Project:            default
+Namespace:          prod
+Sync Status:        Synced to main (abc1234)
+Health Status:      Healthy"""
+
+[[tests.argocd]]
+name = "out of sync kept"
+input = """
+Name:               myapp
+Sync Status:        OutOfSync from main
+Health Status:      Degraded
+"""
+expected = """Name:               myapp
+Sync Status:        OutOfSync from main
+Health Status:      Degraded"""

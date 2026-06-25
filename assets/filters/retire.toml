@@ -1,0 +1,29 @@
+[filters.retire]
+description = "Keep retire.js vulnerability findings, collapse clean runs"
+match_command = "^retire\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "has known vulnerabilities",
+  "CVE-",
+  "↳",
+  "severity:",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "retire: no known vulnerabilities"
+
+[[tests.retire]]
+name = "findings kept"
+input = """
+public/js/app.js
+ ↳ jquery 1.8.0 has known vulnerabilities: severity: medium; CVE-2011-4969
+"""
+expected = " ↳ jquery 1.8.0 has known vulnerabilities: severity: medium; CVE-2011-4969"
+
+[[tests.retire]]
+name = "clean run collapses"
+input = ""
+expected = "retire: no known vulnerabilities"

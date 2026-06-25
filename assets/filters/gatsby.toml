@@ -1,0 +1,39 @@
+[filters.gatsby]
+description = "Keep gatsby build success/warning/result lines, drop info progress"
+match_command = "^(npx\\s+)?gatsby\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^info ",
+  "^verbose ",
+  "^\\s*⠋",
+]
+keep_lines_matching = [
+  "^success ",
+  "^warning ",
+  "Done building",
+  "(?i)error",
+  "(?i)failed",
+]
+max_lines = 80
+on_empty = "gatsby: build done"
+
+[[tests.gatsby]]
+name = "success and result kept, info dropped"
+input = """
+info Building production JavaScript and CSS bundles
+success Building production JavaScript and CSS bundles - 12.345s
+warning Browserslist: caniuse-lite is outdated
+Done building in 45.678 sec
+"""
+expected = """success Building production JavaScript and CSS bundles - 12.345s
+warning Browserslist: caniuse-lite is outdated
+Done building in 45.678 sec"""
+
+[[tests.gatsby]]
+name = "build failure kept"
+input = """
+info Building production JavaScript and CSS bundles
+failed Building production JavaScript and CSS bundles - 5.000s
+"""
+expected = "failed Building production JavaScript and CSS bundles - 5.000s"

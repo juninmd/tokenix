@@ -1,0 +1,55 @@
+[filters.kics]
+description = "Keep kics severity summary and results, drop scan progress"
+match_command = "^kics\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Scanning with",
+  "Preparing Scan Assets",
+  "Executing queries:",
+]
+keep_lines_matching = [
+  "^(HIGH|MEDIUM|LOW|INFO|CRITICAL):",
+  "Results Summary",
+  "Files scanned",
+  "Queries failed",
+  "Total .* Results",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "kics: no findings"
+
+[[tests.kics]]
+name = "summary kept, progress dropped"
+input = """
+Scanning with Keeping you (KICS) v1.7.0
+Preparing Scan Assets: Done
+Executing queries: 100.00%
+
+Files scanned: 10
+Queries failed to execute: 0
+
+Results Summary:
+CRITICAL: 0
+HIGH: 2
+MEDIUM: 3
+LOW: 1
+INFO: 0
+"""
+expected = """Files scanned: 10
+Queries failed to execute: 0
+Results Summary:
+CRITICAL: 0
+HIGH: 2
+MEDIUM: 3
+LOW: 1
+INFO: 0"""
+
+[[tests.kics]]
+name = "clean scan collapses"
+input = """
+Scanning with Keeping you (KICS) v1.7.0
+Preparing Scan Assets: Done
+Executing queries: 100.00%
+"""
+expected = "kics: no findings"

@@ -1,0 +1,32 @@
+[filters.jsonlint]
+description = "Keep jsonlint parse errors, collapse valid files"
+match_command = "^(npx\\s+)?jsonlint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Error",
+  "Parse error",
+  "on line \\d+",
+  "Expecting ",
+  "(?i)error",
+]
+max_lines = 40
+on_empty = "jsonlint: valid"
+
+[[tests.jsonlint]]
+name = "parse error kept"
+input = """
+Error: Parse error on line 3:
+...  "name": "x"  "age": 5 ...
+-----------------^
+Expecting 'EOF', '}', ',', ']', got 'STRING'
+"""
+expected = """Error: Parse error on line 3:
+Expecting 'EOF', '}', ',', ']', got 'STRING'"""
+
+[[tests.jsonlint]]
+name = "valid file collapses"
+input = ""
+expected = "jsonlint: valid"

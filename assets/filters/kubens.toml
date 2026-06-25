@@ -1,0 +1,29 @@
+[filters.kubens]
+description = "Bound kubens namespace list and keep switch confirmation"
+match_command = "^(kubens|kubectx)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Active namespace",
+  "^Switched to ",
+  "^\\S",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "kubens: ok"
+
+[[tests.kubens]]
+name = "switch confirmation kept"
+input = """
+Active namespace is "production".
+"""
+expected = "Active namespace is \"production\"."
+
+[[tests.kubens]]
+name = "switched context kept"
+input = """
+Switched to context "prod-cluster".
+"""
+expected = "Switched to context \"prod-cluster\"."

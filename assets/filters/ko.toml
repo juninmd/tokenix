@@ -1,0 +1,37 @@
+[filters.ko]
+description = "Keep ko published image references and errors, drop build progress"
+match_command = "^ko\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\d{4}/\\d{2}/\\d{2} .* Building ",
+  "^\\d{4}/\\d{2}/\\d{2} .* Publishing ",
+  "^\\d{4}/\\d{2}/\\d{2} .* pushing ",
+]
+keep_lines_matching = [
+  "@sha256:",
+  "Published ",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 40
+on_empty = "ko: published"
+
+[[tests.ko]]
+name = "published refs kept"
+input = """
+2024/06/01 12:00:00 Building github.com/org/app for linux/amd64
+2024/06/01 12:00:05 Publishing ko.local/app:latest
+2024/06/01 12:00:06 Published ko.local/app@sha256:abc123
+ko.local/app@sha256:abc123def456
+"""
+expected = """2024/06/01 12:00:06 Published ko.local/app@sha256:abc123
+ko.local/app@sha256:abc123def456"""
+
+[[tests.ko]]
+name = "build error kept"
+input = """
+2024/06/01 12:00:00 Building github.com/org/app for linux/amd64
+error: go build failed: exit status 2
+"""
+expected = "error: go build failed: exit status 2"

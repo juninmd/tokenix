@@ -1,0 +1,36 @@
+[filters.xo]
+description = "Compact XO lint output, keep findings and totals"
+match_command = "^(npx\\s+)?xo\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^\\s*✖",
+  "^\\s*\\S+:\\d+:\\d+",
+  "^\\s+\\d+:\\d+",
+  "\\b(error|warning)\\b",
+  "problems?\\b",
+  "(?i)error",
+]
+max_lines = 100
+
+[[tests.xo]]
+name = "findings kept"
+input = """
+  src/app.js:10:1
+  ✖  10:1  'x' is not defined  no-undef
+  ✖  15:3  Missing semicolon   semi
+
+  2 problems (2 errors, 0 warnings)
+"""
+expected = """  src/app.js:10:1
+  ✖  10:1  'x' is not defined  no-undef
+  ✖  15:3  Missing semicolon   semi
+  2 problems (2 errors, 0 warnings)"""
+
+[[tests.xo]]
+name = "clean run stays empty"
+input = ""
+expected = ""

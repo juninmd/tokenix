@@ -1,0 +1,36 @@
+[filters.nbconvert]
+description = "Keep jupyter nbconvert output-written lines and errors"
+match_command = "^jupyter\\s+nbconvert\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Making directory",
+]
+keep_lines_matching = [
+  "Writing \\d+ bytes",
+  "Converting notebook",
+  "(?i)error",
+  "(?i)exception",
+  "(?i)traceback",
+]
+max_lines = 40
+on_empty = "nbconvert: done"
+
+[[tests.nbconvert]]
+name = "written output kept"
+input = """
+[NbConvertApp] Converting notebook analysis.ipynb to html
+[NbConvertApp] Making directory output
+[NbConvertApp] Writing 124356 bytes to output/analysis.html
+"""
+expected = """[NbConvertApp] Converting notebook analysis.ipynb to html
+[NbConvertApp] Writing 124356 bytes to output/analysis.html"""
+
+[[tests.nbconvert]]
+name = "execution error kept"
+input = """
+[NbConvertApp] Converting notebook analysis.ipynb to html
+nbclient.exceptions.CellExecutionError: NameError: name 'foo' is not defined
+"""
+expected = """[NbConvertApp] Converting notebook analysis.ipynb to html
+nbclient.exceptions.CellExecutionError: NameError: name 'foo' is not defined"""

@@ -1,0 +1,39 @@
+[filters.prowler]
+description = "Keep prowler FAIL findings and severity, drop PASS checks"
+match_command = "^prowler\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*PASS ",
+  "^\\s*\\[PASS\\]",
+]
+keep_lines_matching = [
+  "FAIL",
+  "CRITICAL",
+  "HIGH",
+  "MEDIUM",
+  "Findings",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "prowler: no failed checks"
+token_budget = 2000
+
+[[tests.prowler]]
+name = "failed checks kept"
+input = """
+PASS us-east-1 iam_root_mfa_enabled
+FAIL us-east-1 s3_bucket_public_access [HIGH] Bucket is public
+PASS us-east-1 ec2_ebs_encryption
+FAIL us-east-1 rds_no_public_access [CRITICAL] RDS publicly accessible
+"""
+expected = """FAIL us-east-1 s3_bucket_public_access [HIGH] Bucket is public
+FAIL us-east-1 rds_no_public_access [CRITICAL] RDS publicly accessible"""
+
+[[tests.prowler]]
+name = "all pass collapses"
+input = """
+PASS us-east-1 iam_root_mfa_enabled
+PASS us-east-1 ec2_ebs_encryption
+"""
+expected = "prowler: no failed checks"

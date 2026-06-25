@@ -1,0 +1,52 @@
+[filters.serverless]
+description = "Keep serverless deploy endpoints/functions/result, drop upload progress"
+match_command = "^(serverless|sls)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Packaging ",
+  "Uploading ",
+  "Validating template",
+  "Retrieving CloudFormation",
+]
+keep_lines_matching = [
+  "Service deployed",
+  "endpoint",
+  "^endpoints:",
+  "^functions:",
+  "^\\s{2,}\\w+:",
+  "GET - ",
+  "POST - ",
+  "deployment bucket",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 80
+on_empty = "serverless: deployed"
+
+[[tests.serverless]]
+name = "endpoints and functions kept"
+input = """
+Deploying myservice to stage dev (us-east-1)
+Packaging service...
+Uploading service.zip file to S3 (2 MB)
+✔ Service deployed to stack myservice-dev (112s)
+
+endpoints:
+  GET - https://abc.execute-api.us-east-1.amazonaws.com/dev/hello
+functions:
+  hello: myservice-dev-hello (1.2 MB)
+"""
+expected = """✔ Service deployed to stack myservice-dev (112s)
+endpoints:
+  GET - https://abc.execute-api.us-east-1.amazonaws.com/dev/hello
+functions:
+  hello: myservice-dev-hello (1.2 MB)"""
+
+[[tests.serverless]]
+name = "deploy error kept"
+input = """
+Packaging service...
+Error: The security token included in the request is invalid
+"""
+expected = "Error: The security token included in the request is invalid"

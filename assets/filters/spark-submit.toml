@@ -1,0 +1,37 @@
+[filters.spark-submit]
+description = "Keep spark-submit errors/warnings and final status, drop INFO log spam"
+match_command = "^spark-submit\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  " ERROR ",
+  " WARN ",
+  "Exception",
+  "final status:",
+  "final app status",
+  "(?i)failed",
+]
+max_lines = 80
+on_empty = "spark-submit: completed"
+token_budget = 2000
+
+[[tests.spark-submit]]
+name = "errors and final status kept"
+input = """
+24/06/01 12:00:00 INFO SparkContext: Running Spark version 3.5.0
+24/06/01 12:00:01 INFO Client: Submitting application
+24/06/01 12:00:30 ERROR TaskSetManager: Task 3 failed 4 times
+24/06/01 12:00:31 INFO Client: final status: FAILED
+"""
+expected = """24/06/01 12:00:30 ERROR TaskSetManager: Task 3 failed 4 times
+24/06/01 12:00:31 INFO Client: final status: FAILED"""
+
+[[tests.spark-submit]]
+name = "clean run collapses"
+input = """
+24/06/01 12:00:00 INFO SparkContext: Running Spark version 3.5.0
+24/06/01 12:00:01 INFO Client: Submitting application
+"""
+expected = "spark-submit: completed"

@@ -1,0 +1,37 @@
+[filters.swag]
+description = "Keep swag generation result and errors, drop per-file progress"
+match_command = "^swag\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Generating ",
+]
+keep_lines_matching = [
+  "create docs.go",
+  "create swagger.json",
+  "create swagger.yaml",
+  "(?i)error",
+  "(?i)fail",
+  "cannot ",
+]
+max_lines = 40
+on_empty = "swag: docs generated"
+
+[[tests.swag]]
+name = "doc artifacts kept"
+input = """
+2024/06/01 12:00:00 Generate swagger docs....
+2024/06/01 12:00:00 Generating model.User
+2024/06/01 12:00:00 create docs.go at docs/docs.go
+2024/06/01 12:00:00 create swagger.json at docs/swagger.json
+"""
+expected = """2024/06/01 12:00:00 create docs.go at docs/docs.go
+2024/06/01 12:00:00 create swagger.json at docs/swagger.json"""
+
+[[tests.swag]]
+name = "parse error kept"
+input = """
+2024/06/01 12:00:00 Generate swagger docs....
+2024/06/01 12:00:00 cannot find type definition: User
+"""
+expected = "2024/06/01 12:00:00 cannot find type definition: User"

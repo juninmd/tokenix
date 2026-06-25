@@ -1,0 +1,46 @@
+[filters.tsup]
+description = "Keep tsup build outputs and result, drop per-chunk noise"
+match_command = "^(npx\\s+)?tsup\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "CLI Building entry",
+  "CLI Using ",
+  "CLI Target:",
+  "CLI tsup ",
+]
+keep_lines_matching = [
+  "Build success",
+  "Build start",
+  "dist/",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "tsup: build done"
+
+[[tests.tsup]]
+name = "build outputs and result kept"
+input = """
+CLI Building entry: src/index.ts
+CLI Using tsconfig: tsconfig.json
+CLI tsup v8.0.0
+ESM dist/index.mjs 1.20 KB
+CJS dist/index.js 1.45 KB
+ESM ⚡️ Build success in 320ms
+DTS dist/index.d.ts 0.50 KB
+DTS ⚡️ Build success in 1200ms
+"""
+expected = """ESM dist/index.mjs 1.20 KB
+CJS dist/index.js 1.45 KB
+ESM ⚡️ Build success in 320ms
+DTS dist/index.d.ts 0.50 KB
+DTS ⚡️ Build success in 1200ms"""
+
+[[tests.tsup]]
+name = "build error kept"
+input = """
+CLI Building entry: src/index.ts
+X [ERROR] Could not resolve "./missing"
+"""
+expected = """X [ERROR] Could not resolve "./missing\""""

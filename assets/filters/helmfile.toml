@@ -1,0 +1,46 @@
+[filters.helmfile]
+description = "Keep helmfile apply/sync release results and diffs, drop progress noise"
+match_command = "^helmfile\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Adding repo ",
+  "^Updating repo ",
+  "^Building dependency ",
+  "^Comparing release",
+]
+keep_lines_matching = [
+  "^Upgrading release",
+  "^Listing releases",
+  "^Affected releases",
+  "has been (upgraded|installed|uninstalled)",
+  "STATUS: deployed",
+  "^UPDATED RELEASES",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 80
+on_empty = "helmfile: no changes"
+
+[[tests.helmfile]]
+name = "release results kept"
+input = """
+Adding repo stable https://charts.example.com
+Updating repo
+Comparing release=web, chart=stable/web
+Upgrading release=web, chart=stable/web
+Release "web" has been upgraded. Happy Helming!
+STATUS: deployed
+"""
+expected = """Upgrading release=web, chart=stable/web
+Release "web" has been upgraded. Happy Helming!
+STATUS: deployed"""
+
+[[tests.helmfile]]
+name = "no-op sync collapses"
+input = """
+Adding repo stable https://charts.example.com
+Updating repo
+Comparing release=web, chart=stable/web
+"""
+expected = "helmfile: no changes"

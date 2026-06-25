@@ -1,0 +1,51 @@
+[filters.docker-scout]
+description = "Keep docker scout vulnerability counts and findings, drop indexing checkmarks"
+match_command = "^docker\\s+scout\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "✓ Image stored",
+  "✓ Indexed ",
+  "✓ Pulled",
+]
+keep_lines_matching = [
+  "✗ ",
+  "vulnerabilit",
+  "CRITICAL",
+  "HIGH",
+  "MEDIUM",
+  "LOW",
+  "CVE-",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "docker scout: no vulnerabilities"
+token_budget = 2000
+
+[[tests.docker-scout]]
+name = "vulnerability summary kept"
+input = """
+    ✓ Image stored for indexing
+    ✓ Indexed 234 packages
+    ✗ Detected 5 vulnerable packages with a total of 12 vulnerabilities
+
+5 vulnerabilities found in 5 packages
+  CRITICAL  0
+  HIGH      2
+  MEDIUM    3
+  LOW       7
+"""
+expected = """    ✗ Detected 5 vulnerable packages with a total of 12 vulnerabilities
+5 vulnerabilities found in 5 packages
+  CRITICAL  0
+  HIGH      2
+  MEDIUM    3
+  LOW       7"""
+
+[[tests.docker-scout]]
+name = "clean image collapses"
+input = """
+    ✓ Image stored for indexing
+    ✓ Indexed 234 packages
+"""
+expected = "docker scout: no vulnerabilities"

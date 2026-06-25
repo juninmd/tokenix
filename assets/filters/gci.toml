@@ -1,0 +1,31 @@
+[filters.gci]
+description = "Keep gci import-order diffs/changed files, collapse clean runs"
+match_command = "^gci\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "\\.go$",
+  "^---",
+  "^\\+\\+\\+",
+  "^@@",
+  "would be skipped|wrong",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "gci: imports ordered"
+
+[[tests.gci]]
+name = "changed files kept"
+input = """
+src/app.go
+src/handler.go
+"""
+expected = """src/app.go
+src/handler.go"""
+
+[[tests.gci]]
+name = "clean run collapses"
+input = ""
+expected = "gci: imports ordered"

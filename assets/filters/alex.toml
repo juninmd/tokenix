@@ -1,0 +1,33 @@
+[filters.alex]
+description = "Keep alex insensitive-language warnings and totals, drop filenames"
+match_command = "^(npx\\s+)?alex\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "\\d+:\\d+(-\\d+:\\d+)?\\s+(warning|error)",
+  "✖",
+  "problems?\\b",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "alex: no issues"
+
+[[tests.alex]]
+name = "warnings and total kept"
+input = """
+README.md
+  5:10-5:18  warning  `master` may be insensitive, use `main`  master  retext-equality
+
+✖ 1 warning
+"""
+expected = """  5:10-5:18  warning  `master` may be insensitive, use `main`  master  retext-equality
+✖ 1 warning"""
+
+[[tests.alex]]
+name = "clean run collapses"
+input = """
+README.md
+"""
+expected = "alex: no issues"

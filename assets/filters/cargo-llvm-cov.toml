@@ -1,0 +1,41 @@
+[filters.cargo-llvm-cov]
+description = "Keep llvm-cov header and TOTAL coverage line, drop per-file rows and separators"
+match_command = "^cargo\\s+llvm-cov\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^-+$",
+  "^\\s*Compiling",
+  "^\\s*Finished",
+  "^\\s*Running",
+]
+keep_lines_matching = [
+  "^Filename",
+  "^TOTAL",
+  "(?i)error",
+]
+max_lines = 20
+on_empty = "cargo-llvm-cov: no coverage table"
+
+[[tests.cargo-llvm-cov]]
+name = "header and total kept, per-file rows dropped"
+input = """
+   Compiling app v0.1.0
+    Finished test profile in 3.2s
+Filename                  Regions   Missed Regions   Cover   Functions   Missed Functions   Executed   Lines   Missed Lines   Cover
+-----------------------------------------------------------------------------------------------------------------------------------
+src/main.rs                    12                3  75.00%           4                  1     75.00%      40              8  80.00%
+src/lib.rs                     20                0 100.00%           6                  0    100.00%      55              0 100.00%
+-----------------------------------------------------------------------------------------------------------------------------------
+TOTAL                          32                3  90.62%          10                  1     90.00%      95              8  91.57%
+"""
+expected = """Filename                  Regions   Missed Regions   Cover   Functions   Missed Functions   Executed   Lines   Missed Lines   Cover
+TOTAL                          32                3  90.62%          10                  1     90.00%      95              8  91.57%"""
+
+[[tests.cargo-llvm-cov]]
+name = "no table collapses"
+input = """
+   Compiling app v0.1.0
+    Finished test profile in 3.2s
+"""
+expected = "cargo-llvm-cov: no coverage table"

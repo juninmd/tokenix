@@ -1,0 +1,35 @@
+[filters.htmlhint]
+description = "Keep htmlhint error locations and scan summary, drop code snippets"
+match_command = "^(npx\\s+)?htmlhint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "Scanned ",
+  "\\(.*\\)\\s*$",
+  "L\\d+ \\|",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "htmlhint: no errors"
+
+[[tests.htmlhint]]
+name = "errors and summary kept"
+input = """
+   index.html
+      L5 |<div><span></div>
+                       ^ Tag must be paired (tag-pair)
+
+   Scanned 1 files, found 1 errors in 12 ms
+"""
+expected = """      L5 |<div><span></div>
+                       ^ Tag must be paired (tag-pair)
+   Scanned 1 files, found 1 errors in 12 ms"""
+
+[[tests.htmlhint]]
+name = "clean scan collapses"
+input = """
+   index.html
+"""
+expected = "htmlhint: no errors"

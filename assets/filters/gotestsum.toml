@@ -1,0 +1,39 @@
+[filters.gotestsum]
+description = "Keep gotestsum failures and DONE summary, drop passing packages"
+match_command = "^gotestsum\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^✓",
+  "^∅",
+]
+keep_lines_matching = [
+  "^✖",
+  "^DONE",
+  "FAIL",
+  "failure",
+  "(?i)error",
+  "--- FAIL",
+]
+max_lines = 80
+on_empty = "gotestsum: all tests passed"
+
+[[tests.gotestsum]]
+name = "failures and summary kept"
+input = """
+✓  pkg/foo (cached)
+✓  pkg/baz (0.2s)
+✖  pkg/bar (0.5s)
+
+DONE 42 tests, 1 failure in 2.345s
+"""
+expected = """✖  pkg/bar (0.5s)
+DONE 42 tests, 1 failure in 2.345s"""
+
+[[tests.gotestsum]]
+name = "all pass collapses"
+input = """
+✓  pkg/foo (cached)
+✓  pkg/baz (0.2s)
+"""
+expected = "gotestsum: all tests passed"

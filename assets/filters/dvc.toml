@@ -1,0 +1,42 @@
+[filters.dvc]
+description = "Keep dvc stage runs and errors, drop skip/git-hint noise"
+match_command = "^dvc\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "didn't change, skipping",
+  "To track the changes with git",
+  "^\\s*git add ",
+  "Use `dvc push`",
+]
+keep_lines_matching = [
+  "Running stage",
+  "Updating lock file",
+  "added",
+  "modified",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 80
+on_empty = "dvc: up to date"
+
+[[tests.dvc]]
+name = "stage runs kept, skips dropped"
+input = """
+Stage 'prepare' didn't change, skipping
+Running stage 'train':
+Updating lock file 'dvc.lock'
+
+To track the changes with git, run:
+    git add dvc.lock
+"""
+expected = """Running stage 'train':
+Updating lock file 'dvc.lock'"""
+
+[[tests.dvc]]
+name = "all up to date collapses"
+input = """
+Stage 'prepare' didn't change, skipping
+Stage 'train' didn't change, skipping
+"""
+expected = "dvc: up to date"

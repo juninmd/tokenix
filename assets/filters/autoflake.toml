@@ -1,0 +1,42 @@
+[filters.autoflake]
+description = "Keep autoflake changed-file lines and diffs, collapse clean runs"
+match_command = "^autoflake\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Fixing ",
+  "^---",
+  "^\\+\\+\\+",
+  "^@@",
+  "^[+-][^+-]",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "autoflake: nothing to fix"
+
+[[tests.autoflake]]
+name = "fix diff kept"
+input = """
+Fixing src/app.py
+
+--- original/src/app.py
++++ fixed/src/app.py
+@@ -1,4 +1,2 @@
+ import os
+-import sys
+-import json
+ print(os.getcwd())
+"""
+expected = """Fixing src/app.py
+--- original/src/app.py
++++ fixed/src/app.py
+@@ -1,4 +1,2 @@
+-import sys
+-import json"""
+
+[[tests.autoflake]]
+name = "clean run collapses"
+input = ""
+expected = "autoflake: nothing to fix"

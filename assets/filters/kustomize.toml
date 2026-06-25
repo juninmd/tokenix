@@ -1,0 +1,41 @@
+[filters.kustomize]
+description = "Summarize kustomize build YAML to resource kind+name per document"
+match_command = "^kustomize\\s+build\\b"
+strip_ansi = true
+keep_lines_matching = [
+  "^kind:",
+  "^  name:",
+  "^---",
+  "(?i)error",
+]
+max_lines = 120
+on_empty = "kustomize: no resources"
+token_budget = 2000
+
+[[tests.kustomize]]
+name = "resources summarized to kind+name"
+input = """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    app: web
+spec:
+  replicas: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-svc
+"""
+expected = """kind: Deployment
+  name: web
+---
+kind: Service
+  name: web-svc"""
+
+[[tests.kustomize]]
+name = "empty build collapses"
+input = ""
+expected = "kustomize: no resources"

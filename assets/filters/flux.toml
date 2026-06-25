@@ -1,0 +1,39 @@
+[filters.flux]
+description = "Keep flux get/reconcile status rows, drop blanks"
+match_command = "^flux\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^► ",
+  "^✔ no",
+]
+keep_lines_matching = [
+  "^NAME\\b",
+  "True",
+  "False",
+  "Applied revision",
+  "reconciliation",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "flux: nothing to report"
+
+[[tests.flux]]
+name = "status rows kept"
+input = """
+NAME    READY   MESSAGE                         REVISION       SUSPENDED
+app     True    Applied revision: main@sha1:ab  main@sha1:ab   False
+infra   False   building artifact               main@sha1:cd   False
+"""
+expected = """NAME    READY   MESSAGE                         REVISION       SUSPENDED
+app     True    Applied revision: main@sha1:ab  main@sha1:ab   False
+infra   False   building artifact               main@sha1:cd   False"""
+
+[[tests.flux]]
+name = "reconcile progress collapses"
+input = """
+► annotating GitRepository app in flux-system namespace
+✔ no changes detected
+"""
+expected = "flux: nothing to report"

@@ -1,0 +1,33 @@
+[filters.dart-test]
+description = "Keep dart test final result and failures, drop passing tick lines"
+match_command = "^dart\\s+test\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\d\\d:\\d\\d \\+\\d+: .*[^!]$",
+]
+keep_lines_matching = [
+  "All tests passed",
+  "Some tests failed",
+  "-\\d+:",
+  "\\[E\\]",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "dart test: passed"
+
+[[tests.dart-test]]
+name = "failure result kept"
+input = """
+00:01 +1: test one
+00:02 +9 -1: Some tests failed.
+"""
+expected = "00:02 +9 -1: Some tests failed."
+
+[[tests.dart-test]]
+name = "all pass kept"
+input = """
+00:01 +1: test one
+00:02 +10: All tests passed!
+"""
+expected = "00:02 +10: All tests passed!"

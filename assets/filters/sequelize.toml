@@ -1,0 +1,40 @@
+[filters.sequelize]
+description = "Keep sequelize-cli migration steps and errors, drop loaded-config noise"
+match_command = "^(npx\\s+)?sequelize(-cli)?\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Loaded configuration",
+  "^Using environment",
+  "^Sequelize CLI ",
+  "No migrations were executed",
+]
+keep_lines_matching = [
+  ": migrating",
+  ": migrated",
+  ": reverting",
+  ": reverted",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "sequelize: nothing to migrate"
+
+[[tests.sequelize]]
+name = "migration steps kept"
+input = """
+Sequelize CLI [Node: 20.0.0, CLI: 6.6.0]
+Loaded configuration file "config/config.json".
+
+== 20240101120000-create-users: migrating =======
+== 20240101120000-create-users: migrated (0.025s)
+"""
+expected = """== 20240101120000-create-users: migrating =======
+== 20240101120000-create-users: migrated (0.025s)"""
+
+[[tests.sequelize]]
+name = "nothing pending collapses"
+input = """
+Sequelize CLI [Node: 20.0.0, CLI: 6.6.0]
+No migrations were executed, database schema was already up to date.
+"""
+expected = "sequelize: nothing to migrate"

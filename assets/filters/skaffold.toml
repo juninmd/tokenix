@@ -1,0 +1,48 @@
+[filters.skaffold]
+description = "Keep skaffold build/deploy results, drop progress and tag generation"
+match_command = "^skaffold\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Generating tags",
+  "^Checking cache",
+  "^Starting build",
+  "^Build \\[",
+  "^Building \\[",
+  "^\\s*-->",
+]
+keep_lines_matching = [
+  "Successfully built",
+  "Tags used in deployment",
+  "Deploy completed",
+  "Starting deploy",
+  "deployed",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "skaffold: done"
+
+[[tests.skaffold]]
+name = "build and deploy results kept"
+input = """
+Generating tags...
+Checking cache...
+Building [app]...
+Successfully built abc123def456
+Tags used in deployment:
+Starting deploy...
+Deploy completed in 2.3s
+"""
+expected = """Successfully built abc123def456
+Tags used in deployment:
+Starting deploy...
+Deploy completed in 2.3s"""
+
+[[tests.skaffold]]
+name = "build failure kept"
+input = """
+Building [app]...
+ERROR building app: exit status 1
+"""
+expected = "ERROR building app: exit status 1"

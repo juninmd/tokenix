@@ -1,0 +1,34 @@
+[filters.c8]
+description = "Keep c8 coverage table rows with uncovered lines and the All-files summary"
+match_command = "^(npx\\s+)?c8\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^-+\\|",
+  "^\\s*-+$",
+]
+keep_lines_matching = [
+  "% Stmts",
+  "All files",
+  "(?i)error",
+]
+max_lines = 120
+on_empty = "c8: coverage collected"
+
+[[tests.c8]]
+name = "summary and header kept"
+input = """
+----------|---------|----------|---------|---------|-------------------
+File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+----------|---------|----------|---------|---------|-------------------
+All files |   85.71 |    66.66 |     100 |   85.71 |
+ app.js   |   85.71 |    66.66 |     100 |   85.71 | 12-14
+----------|---------|----------|---------|---------|-------------------
+"""
+expected = """File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+All files |   85.71 |    66.66 |     100 |   85.71 |"""
+
+[[tests.c8]]
+name = "no table collapses"
+input = ""
+expected = "c8: coverage collected"

@@ -1,0 +1,34 @@
+[filters.dbmate]
+description = "Keep dbmate applied/rolled-back migrations and errors"
+match_command = "^dbmate\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Applying:",
+  "^Applied:",
+  "^Rolling back:",
+  "^Rolled back:",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "dbmate: no pending migrations"
+
+[[tests.dbmate]]
+name = "applied migrations kept"
+input = """
+Applying: 20240101120000_create_users.sql
+Applied: 20240101120000_create_users.sql
+Applying: 20240102120000_add_index.sql
+Applied: 20240102120000_add_index.sql
+"""
+expected = """Applying: 20240101120000_create_users.sql
+Applied: 20240101120000_create_users.sql
+Applying: 20240102120000_add_index.sql
+Applied: 20240102120000_add_index.sql"""
+
+[[tests.dbmate]]
+name = "no pending collapses"
+input = ""
+expected = "dbmate: no pending migrations"

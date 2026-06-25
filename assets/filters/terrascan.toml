@@ -1,0 +1,53 @@
+[filters.terrascan]
+description = "Keep terrascan violations and scan summary, drop decoration"
+match_command = "^terrascan\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*-+\\s*$",
+]
+keep_lines_matching = [
+  "Description",
+  "^\\s*File",
+  "Severity",
+  "Violated Policies",
+  "Policies Validated",
+  "^\\s*(Low|Medium|High)\\b",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "terrascan: no violations"
+token_budget = 2000
+
+[[tests.terrascan]]
+name = "violations and summary kept"
+input = """
+Violation Details -
+
+	Description    :  S3 bucket Access is not restricted
+	File           :  main.tf
+	Severity       :  HIGH
+
+Scan Summary -
+
+	Policies Validated : 100
+	Violated Policies  : 1
+	Low                : 0
+	Medium             : 0
+	High               : 1
+"""
+expected = """	Description    :  S3 bucket Access is not restricted
+	File           :  main.tf
+	Severity       :  HIGH
+	Policies Validated : 100
+	Violated Policies  : 1
+	Low                : 0
+	Medium             : 0
+	High               : 1"""
+
+[[tests.terrascan]]
+name = "clean scan collapses"
+input = """
+Scan Summary -
+"""
+expected = "terrascan: no violations"

@@ -1,0 +1,44 @@
+[filters.rclone]
+description = "Keep rclone final transfer stats and errors, drop interim progress"
+match_command = "^rclone\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Transferring:",
+  "^\\s*\\* ",
+]
+keep_lines_matching = [
+  "^Transferred:",
+  "^Errors:",
+  "^Checks:",
+  "^Elapsed time:",
+  "^Deleted:",
+  "(?i)error",
+]
+max_lines = 40
+on_empty = "rclone: done"
+
+[[tests.rclone]]
+name = "final stats kept, interim dropped"
+input = """
+Transferring:
+ *      bigfile.dat:  50% /10M, 1M/s, ETA 5s
+
+Transferred:   	   10 MiB / 10 MiB, 100%, 2 MiB/s, ETA 0s
+Errors:                 0
+Checks:                 5 / 5, 100%
+Elapsed time:         2.3s
+"""
+expected = """Transferred:   	   10 MiB / 10 MiB, 100%, 2 MiB/s, ETA 0s
+Errors:                 0
+Checks:                 5 / 5, 100%
+Elapsed time:         2.3s"""
+
+[[tests.rclone]]
+name = "transfer error kept"
+input = """
+Errors:                 1 (retrying may help)
+2024/06/01 ERROR : bigfile.dat: Failed to copy: permission denied
+"""
+expected = """Errors:                 1 (retrying may help)
+2024/06/01 ERROR : bigfile.dat: Failed to copy: permission denied"""

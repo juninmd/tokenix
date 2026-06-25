@@ -1,0 +1,42 @@
+[filters.nuclei]
+description = "Keep nuclei findings, drop banner and progress"
+match_command = "^nuclei\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*__",
+  "projectdiscovery.io",
+  "\\[INF\\]",
+  "\\[WRN\\] ",
+]
+keep_lines_matching = [
+  "\\[critical\\]",
+  "\\[high\\]",
+  "\\[medium\\]",
+  "\\[low\\]",
+  "\\[CVE-",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "nuclei: no findings"
+token_budget = 2000
+
+[[tests.nuclei]]
+name = "findings kept, banner dropped"
+input = """
+                     __     _
+   ____  __  _______/ /__  (_)
+projectdiscovery.io
+[INF] Templates loaded: 5000
+[CVE-2021-1234] [http] [critical] https://target/path
+[exposed-panel] [http] [info] https://target/admin
+"""
+expected = "[CVE-2021-1234] [http] [critical] https://target/path"
+
+[[tests.nuclei]]
+name = "clean scan collapses"
+input = """
+[INF] Templates loaded: 5000
+[INF] No results found
+"""
+expected = "nuclei: no findings"

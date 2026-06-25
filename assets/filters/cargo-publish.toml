@@ -1,0 +1,44 @@
+[filters.cargo-publish]
+description = "Keep cargo publish package/upload steps and errors, drop compile noise"
+match_command = "^cargo\\s+publish\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Compiling ",
+  "^\\s*Updating crates.io index",
+  "^\\s*Downloading ",
+  "^\\s*Downloaded ",
+]
+keep_lines_matching = [
+  "Packaging ",
+  "Verifying ",
+  "Uploading ",
+  "Uploaded ",
+  "Finished ",
+  "(?i)error",
+  "(?i)warning",
+]
+max_lines = 40
+on_empty = "cargo publish: ok"
+
+[[tests.cargo-publish]]
+name = "package and upload steps kept"
+input = """
+    Updating crates.io index
+   Packaging mycrate v0.1.0
+   Verifying mycrate v0.1.0
+   Compiling mycrate v0.1.0
+    Uploading mycrate v0.1.0
+"""
+expected = """   Packaging mycrate v0.1.0
+   Verifying mycrate v0.1.0
+    Uploading mycrate v0.1.0"""
+
+[[tests.cargo-publish]]
+name = "error kept"
+input = """
+   Packaging mycrate v0.1.0
+error: failed to verify package tarball
+"""
+expected = """   Packaging mycrate v0.1.0
+error: failed to verify package tarball"""

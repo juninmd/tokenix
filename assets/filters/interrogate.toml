@@ -1,0 +1,40 @@
+[filters.interrogate]
+description = "Keep interrogate docstring-coverage result and per-file gaps, drop table borders"
+match_command = "^interrogate\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*[-=|]+\\s*$",
+  "^\\|-+",
+]
+keep_lines_matching = [
+  "RESULT:",
+  "PASSED",
+  "FAILED",
+  "TOTAL",
+  "(?i)error",
+]
+max_lines = 40
+on_empty = "interrogate: ok"
+
+[[tests.interrogate]]
+name = "result and total kept"
+input = """
+==================== Coverage for /app ====================
+------------------------------------- Summary --------------------------------
+| Name          | Total | Miss | Cover |
+|---------------|-------|------|-------|
+| app.py        |    10 |    1 |   90% |
+| TOTAL         |    10 |    1 | 90.0% |
+------------------------------------------------------------------------------
+RESULT: PASSED (minimum: 80.0%, actual: 90.0%)
+"""
+expected = """| TOTAL         |    10 |    1 | 90.0% |
+RESULT: PASSED (minimum: 80.0%, actual: 90.0%)"""
+
+[[tests.interrogate]]
+name = "below threshold kept"
+input = """
+RESULT: FAILED (minimum: 80.0%, actual: 55.0%)
+"""
+expected = "RESULT: FAILED (minimum: 80.0%, actual: 55.0%)"

@@ -1,0 +1,43 @@
+[filters.restic]
+description = "Keep restic backup summary and snapshot id, drop scan progress"
+match_command = "^restic\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[\\d+:\\d+\\] ",
+  "scan finished",
+]
+keep_lines_matching = [
+  "^Files:",
+  "^Dirs:",
+  "^Added to the repo",
+  "snapshot \\w+ saved",
+  "processed ",
+  "(?i)error",
+  "(?i)fatal",
+]
+max_lines = 40
+on_empty = "restic: done"
+
+[[tests.restic]]
+name = "backup summary kept"
+input = """
+[0:00] 100.00%  10 / 10 files
+Files:          10 new,     0 changed,     0 unmodified
+Dirs:            2 new,     0 changed,     0 unmodified
+Added to the repo: 1.234 MiB
+processed 10 files, 5.678 MiB in 0:02
+snapshot ab12cd34 saved
+"""
+expected = """Files:          10 new,     0 changed,     0 unmodified
+Dirs:            2 new,     0 changed,     0 unmodified
+Added to the repo: 1.234 MiB
+processed 10 files, 5.678 MiB in 0:02
+snapshot ab12cd34 saved"""
+
+[[tests.restic]]
+name = "fatal error kept"
+input = """
+Fatal: unable to open repository at /backup: no such file
+"""
+expected = "Fatal: unable to open repository at /backup: no such file"

@@ -1,0 +1,42 @@
+[filters.scorecard]
+description = "Keep OSSF scorecard aggregate score and per-check scores, drop details"
+match_command = "^scorecard\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^-+$",
+  "^\\|-",
+  "Starting [Ss]corecard",
+  "^GITHUB_AUTH_TOKEN",
+]
+keep_lines_matching = [
+  "Aggregate score",
+  "^\\|",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "scorecard: no score"
+
+[[tests.scorecard]]
+name = "scores kept, details dropped"
+input = """
+Starting [scorecard] version 4.13.1
+
+Aggregate score: 7.2 / 10
+
+Check scores:
+|---------|----------------|----------------------|
+| SCORE   | NAME           | REASON               |
+|---------|----------------|----------------------|
+| 10 / 10 | Binary-Artifacts | no binaries found  |
+| 5 / 10  | Branch-Protection | branch not protected |
+"""
+expected = """Aggregate score: 7.2 / 10
+| SCORE   | NAME           | REASON               |
+| 10 / 10 | Binary-Artifacts | no binaries found  |
+| 5 / 10  | Branch-Protection | branch not protected |"""
+
+[[tests.scorecard]]
+name = "no output collapses"
+input = ""
+expected = "scorecard: no score"

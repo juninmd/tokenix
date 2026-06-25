@@ -1,0 +1,34 @@
+[filters.cargo-fix]
+description = "Keep cargo fix applied-fix lines and warnings, drop compile noise"
+match_command = "^cargo\\s+fix\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Checking ",
+  "^\\s*Compiling ",
+  "^\\s*Finished ",
+]
+keep_lines_matching = [
+  "Fixed ",
+  "(?i)error",
+  "(?i)warning",
+]
+max_lines = 60
+on_empty = "cargo fix: no changes"
+
+[[tests.cargo-fix]]
+name = "applied fixes kept"
+input = """
+    Checking app v0.1.0
+       Fixed src/main.rs (2 fixes)
+    Finished dev profile in 1.2s
+"""
+expected = "       Fixed src/main.rs (2 fixes)"
+
+[[tests.cargo-fix]]
+name = "nothing to fix collapses"
+input = """
+    Checking app v0.1.0
+    Finished dev profile in 1.2s
+"""
+expected = "cargo fix: no changes"

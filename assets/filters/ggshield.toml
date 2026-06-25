@@ -1,0 +1,39 @@
+[filters.ggshield]
+description = "Keep ggshield secret-incident summary and locations, collapse clean scans"
+match_command = "^ggshield\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Scanning ",
+  "No secrets have been found",
+]
+keep_lines_matching = [
+  "(?i)secret",
+  "(?i)incident",
+  "^>\\s",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "ggshield: no secrets found"
+token_budget = 2000
+
+[[tests.ggshield]]
+name = "incidents kept"
+input = """
+Scanning commits...
+
+secrets-found: 2
+> src/config.py: 1 incident
+> .env: 1 incident
+"""
+expected = """secrets-found: 2
+> src/config.py: 1 incident
+> .env: 1 incident"""
+
+[[tests.ggshield]]
+name = "clean scan collapses"
+input = """
+Scanning commits...
+No secrets have been found
+"""
+expected = "ggshield: no secrets found"

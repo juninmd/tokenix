@@ -1,0 +1,38 @@
+[filters.dart-analyze]
+description = "Keep dart analyze findings and issue count, collapse clean runs"
+match_command = "^dart\\s+analyze\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Analyzing ",
+  "No issues found",
+]
+keep_lines_matching = [
+  "•",
+  "issues? found",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "dart analyze: no issues"
+
+[[tests.dart-analyze]]
+name = "findings and count kept"
+input = """
+Analyzing project...
+
+  info • Unused import • lib/main.dart:3:8 • unused_import
+  warning • Dead code • lib/util.dart:12:1 • dead_code
+
+2 issues found.
+"""
+expected = """  info • Unused import • lib/main.dart:3:8 • unused_import
+  warning • Dead code • lib/util.dart:12:1 • dead_code
+2 issues found."""
+
+[[tests.dart-analyze]]
+name = "clean run collapses"
+input = """
+Analyzing project...
+No issues found!
+"""
+expected = "dart analyze: no issues"

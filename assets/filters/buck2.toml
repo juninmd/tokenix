@@ -1,0 +1,41 @@
+[filters.buck2]
+description = "Keep buck2 build result and job summary, drop per-action progress"
+match_command = "^buck2\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Action ",
+  "^\\s*Cache ",
+  "^Watchman",
+]
+keep_lines_matching = [
+  "BUILD SUCCEEDED",
+  "BUILD FAILED",
+  "Jobs completed",
+  "Time elapsed",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "buck2: build done"
+
+[[tests.buck2]]
+name = "result and summary kept"
+input = """
+Watchman fresh instance
+Action: compile //app:lib
+Jobs completed: 120. Time elapsed: 12.3s.
+BUILD SUCCEEDED
+"""
+expected = """Jobs completed: 120. Time elapsed: 12.3s.
+BUILD SUCCEEDED"""
+
+[[tests.buck2]]
+name = "build failure kept"
+input = """
+Action: compile //app:lib
+BUILD FAILED
+Caused by: compilation error in app/lib.rs
+"""
+expected = """BUILD FAILED
+Caused by: compilation error in app/lib.rs"""

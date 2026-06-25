@@ -1,0 +1,41 @@
+[filters.publint]
+description = "Keep publint errors/warnings/suggestions, collapse clean packages"
+match_command = "^(npx\\s+)?publint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Linting ",
+]
+keep_lines_matching = [
+  "^Errors:",
+  "^Warnings:",
+  "^Suggestions:",
+  "^\\s*\\d+\\.",
+  "All good",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "publint: all good"
+
+[[tests.publint]]
+name = "errors and suggestions kept"
+input = """
+Linting mypackage
+
+Errors:
+1. pkg.main is mjs/index.js but the file does not exist.
+
+Suggestions:
+1. pkg.exports should be defined.
+"""
+expected = """Errors:
+1. pkg.main is mjs/index.js but the file does not exist.
+Suggestions:
+1. pkg.exports should be defined."""
+
+[[tests.publint]]
+name = "clean package collapses"
+input = """
+Linting mypackage
+"""
+expected = "publint: all good"

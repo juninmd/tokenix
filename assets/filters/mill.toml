@@ -1,0 +1,37 @@
+[filters.mill]
+description = "Keep mill task failures and totals, drop per-step compile progress"
+match_command = "^(\\./)?mill\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[\\d+/\\d+\\] \\w+\\.(compile|resolve)",
+]
+keep_lines_matching = [
+  "targets? failed",
+  "\\d+ tests? failed",
+  "failed",
+  "BUILD ",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "mill: ok"
+
+[[tests.mill]]
+name = "failure kept, compile steps dropped"
+input = """
+[1/100] app.compile
+[50/100] app.test.compile
+[100/100] app.test
+1 targets failed
+app.test scala.AssertionError
+"""
+expected = """1 targets failed
+app.test scala.AssertionError"""
+
+[[tests.mill]]
+name = "clean build collapses"
+input = """
+[1/100] app.compile
+[100/100] app.test.compile
+"""
+expected = "mill: ok"

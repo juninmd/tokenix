@@ -1,0 +1,36 @@
+[filters.go-install]
+description = "Surface go install errors, collapse silent success"
+match_command = "^go\\s+install\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^go: downloading ",
+  "^go: extracting ",
+  "^go: found ",
+]
+keep_lines_matching = [
+  "\\.go:\\d+:\\d+:",
+  "cannot find package",
+  "no required module",
+  "(?i)error",
+  "(?i)fatal",
+]
+max_lines = 60
+on_empty = "go install: ok"
+
+[[tests.go-install]]
+name = "download noise collapses on success"
+input = """
+go: downloading github.com/spf13/cobra v1.8.0
+go: downloading github.com/spf13/pflag v1.0.5
+"""
+expected = "go install: ok"
+
+[[tests.go-install]]
+name = "build error kept"
+input = """
+go: downloading github.com/x/y v1.0.0
+# github.com/x/y
+../y/main.go:5:2: undefined: Bar
+"""
+expected = "../y/main.go:5:2: undefined: Bar"

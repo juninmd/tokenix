@@ -1,0 +1,35 @@
+[filters.typos]
+description = "Keep typos findings (word + location), drop source-context rendering"
+match_command = "^typos\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*\\|",
+  "^\\s*\\d+\\s*\\|",
+  "\\^\\^",
+]
+keep_lines_matching = [
+  "should be",
+  "^\\s*-->",
+  "(?i)^error",
+]
+max_lines = 100
+on_empty = "typos: no typos found"
+
+[[tests.typos]]
+name = "finding word and location kept, context dropped"
+input = """
+error: `recieved` should be `received`
+  --> ./src/api/handlers.js:15:10
+   |
+15 |     recieved = true
+   |     ^^^^^^^^
+   |
+"""
+expected = """error: `recieved` should be `received`
+  --> ./src/api/handlers.js:15:10"""
+
+[[tests.typos]]
+name = "clean run collapses"
+input = ""
+expected = "typos: no typos found"

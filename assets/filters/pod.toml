@@ -1,0 +1,40 @@
+[filters.pod]
+description = "Keep CocoaPods install result and errors, drop per-pod install lines"
+match_command = "^pod\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Installing ",
+  "^Using ",
+  "^Analyzing dependencies",
+  "^Downloading dependencies",
+  "^Generating Pods project",
+]
+keep_lines_matching = [
+  "Pod installation complete",
+  "dependencies from the Podfile",
+  "(?i)error",
+  "(?i)\\[!\\]",
+]
+max_lines = 60
+on_empty = "pod: done"
+
+[[tests.pod]]
+name = "install result kept, per-pod lines dropped"
+input = """
+Analyzing dependencies
+Downloading dependencies
+Installing AFNetworking (4.0.1)
+Installing Alamofire (5.8.0)
+Generating Pods project
+Pod installation complete! There are 2 dependencies from the Podfile and 2 total pods installed.
+"""
+expected = "Pod installation complete! There are 2 dependencies from the Podfile and 2 total pods installed."
+
+[[tests.pod]]
+name = "error kept"
+input = """
+Analyzing dependencies
+[!] Unable to find a specification for `MissingPod`
+"""
+expected = "[!] Unable to find a specification for `MissingPod`"

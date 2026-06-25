@@ -1,0 +1,41 @@
+[filters.podman]
+description = "Keep podman ps/images/inspect table rows, drop blanks"
+match_command = "^podman\\s+(ps|images|image\\s+ls|container\\s+ls|inspect|pull|push)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Copying blob",
+  "Copying config",
+  "Writing manifest",
+]
+keep_lines_matching = [
+  "^CONTAINER ID",
+  "^REPOSITORY",
+  "^IMAGE ID",
+  "^[0-9a-f]{12}\\b",
+  "Storing signatures",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "podman: ok"
+
+[[tests.podman]]
+name = "ps table rows kept"
+input = """
+CONTAINER ID  IMAGE                 COMMAND     STATUS         NAMES
+a1b2c3d4e5f6  docker.io/app:latest  /entry.sh   Up 2 minutes   web
+b2c3d4e5f6a7  docker.io/db:15       postgres    Up 5 minutes   db
+"""
+expected = """CONTAINER ID  IMAGE                 COMMAND     STATUS         NAMES
+a1b2c3d4e5f6  docker.io/app:latest  /entry.sh   Up 2 minutes   web
+b2c3d4e5f6a7  docker.io/db:15       postgres    Up 5 minutes   db"""
+
+[[tests.podman]]
+name = "pull progress collapses"
+input = """
+Copying blob sha256:abc done
+Copying config sha256:def done
+Writing manifest to image destination
+Storing signatures
+"""
+expected = "Storing signatures"

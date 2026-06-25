@@ -1,0 +1,41 @@
+[filters.pg_dump]
+description = "Surface pg_dump errors/warnings, collapse silent SQL dump"
+match_command = "^pg_dump\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^--",
+  "^SET ",
+  "^SELECT pg_catalog",
+]
+keep_lines_matching = [
+  "pg_dump: error",
+  "pg_dump: warning",
+  "(?i)error:",
+  "(?i)fatal:",
+  "permission denied",
+]
+max_lines = 60
+on_empty = "pg_dump: dump complete"
+
+[[tests.pg_dump]]
+name = "errors surfaced"
+input = """
+--
+-- PostgreSQL database dump
+--
+SET statement_timeout = 0;
+pg_dump: error: connection to server failed: FATAL: role "x" does not exist
+"""
+expected = """pg_dump: error: connection to server failed: FATAL: role "x" does not exist"""
+
+[[tests.pg_dump]]
+name = "clean dump collapses"
+input = """
+--
+-- PostgreSQL database dump
+--
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+"""
+expected = "pg_dump: dump complete"

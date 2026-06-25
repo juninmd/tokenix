@@ -1,0 +1,30 @@
+[filters.standard]
+description = "Compact StandardJS lint output, keep findings"
+match_command = "^(npx\\s+)?standard\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^standard: Use JavaScript Standard Style",
+  "^standard: Run `standard --fix`",
+]
+keep_lines_matching = [
+  ":\\d+:\\d+:",
+  "(?i)error",
+]
+max_lines = 100
+
+[[tests.standard]]
+name = "findings kept, banner dropped"
+input = """
+standard: Use JavaScript Standard Style (https://standardjs.com)
+  /src/app.js:10:1: 'x' is not defined. (no-undef)
+  /src/app.js:15:20: Missing semicolon. (semi)
+"""
+expected = """  /src/app.js:10:1: 'x' is not defined. (no-undef)
+  /src/app.js:15:20: Missing semicolon. (semi)"""
+
+[[tests.standard]]
+name = "clean run stays empty"
+input = ""
+expected = ""

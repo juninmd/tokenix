@@ -1,0 +1,44 @@
+[filters.kube-score]
+description = "Keep kube-score critical/warning checks, drop OK checks and decoration"
+match_command = "^kube-score\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "\\[OK\\]",
+]
+keep_lines_matching = [
+  "\\[CRITICAL\\]",
+  "\\[WARNING\\]",
+  "·",
+  "apps/v1",
+  "v1/",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "kube-score: all checks ok"
+
+[[tests.kube-score]]
+name = "critical and warning checks kept, ok dropped"
+input = """
+apps/v1/Deployment web
+
+    [OK] Container Image Pull Policy
+    [CRITICAL] Container Resources
+        · web -> CPU limit is not set
+    [WARNING] Pod NetworkPolicy
+        · The pod does not have a matching NetworkPolicy
+"""
+expected = """apps/v1/Deployment web
+    [CRITICAL] Container Resources
+        · web -> CPU limit is not set
+    [WARNING] Pod NetworkPolicy
+        · The pod does not have a matching NetworkPolicy"""
+
+[[tests.kube-score]]
+name = "all ok collapses"
+input = """
+apps/v1/Deployment web
+    [OK] Container Resources
+    [OK] Pod NetworkPolicy
+"""
+expected = "apps/v1/Deployment web"

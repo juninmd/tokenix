@@ -1,0 +1,44 @@
+[filters.twine]
+description = "Keep twine uploaded artifacts and view URL, drop progress bars"
+match_command = "^twine\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Uploading distributions",
+  "%\\s*[━─=]+",
+  "[━─]{3,}",
+]
+keep_lines_matching = [
+  "^Uploading \\S+\\.(whl|tar\\.gz)",
+  "View at:",
+  "^https?://",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 40
+on_empty = "twine: uploaded"
+
+[[tests.twine]]
+name = "uploaded files and url kept"
+input = """
+Uploading distributions to https://upload.pypi.org/legacy/
+Uploading mypackage-1.0.0-py3-none-any.whl
+100% ━━━━━━━━━━━━ 12.3/12.3 kB • 00:01
+Uploading mypackage-1.0.0.tar.gz
+100% ━━━━━━━━━━━━ 10.1/10.1 kB • 00:00
+
+View at:
+https://pypi.org/project/mypackage/1.0.0/
+"""
+expected = """Uploading mypackage-1.0.0-py3-none-any.whl
+Uploading mypackage-1.0.0.tar.gz
+View at:
+https://pypi.org/project/mypackage/1.0.0/"""
+
+[[tests.twine]]
+name = "auth error kept"
+input = """
+Uploading distributions to https://upload.pypi.org/legacy/
+HTTPError: 403 Forbidden: Invalid or non-existent authentication
+"""
+expected = "HTTPError: 403 Forbidden: Invalid or non-existent authentication"

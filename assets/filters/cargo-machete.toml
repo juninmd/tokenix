@@ -1,0 +1,41 @@
+[filters.cargo-machete]
+description = "Keep cargo-machete unused-dependency findings, collapse clean runs"
+match_command = "^cargo\\s+machete\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^If you believe",
+  "^Use ",
+  "didn't find any unused",
+]
+keep_lines_matching = [
+  "unused dependencies",
+  "Cargo.toml:",
+  "^\\t",
+  "^  ",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "cargo-machete: no unused dependencies"
+
+[[tests.cargo-machete]]
+name = "unused deps kept"
+input = """
+cargo-machete found the following unused dependencies in /repo:
+crate-a -- /repo/Cargo.toml:
+	serde
+	regex
+
+If you believe these are false positives, ...
+"""
+expected = """cargo-machete found the following unused dependencies in /repo:
+crate-a -- /repo/Cargo.toml:
+	serde
+	regex"""
+
+[[tests.cargo-machete]]
+name = "clean run collapses"
+input = """
+cargo-machete didn't find any unused dependencies. Good job!
+"""
+expected = "cargo-machete: no unused dependencies"

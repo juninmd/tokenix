@@ -1,0 +1,44 @@
+[filters.podman-build]
+description = "Keep podman build STEP/COMMIT lines and errors, drop layer noise"
+match_command = "^podman\\s+build\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^--> ",
+  "Copying blob",
+  "Copying config",
+]
+keep_lines_matching = [
+  "^STEP ",
+  "^COMMIT ",
+  "Successfully tagged",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "podman build: ok"
+
+[[tests.podman-build]]
+name = "step and commit kept"
+input = """
+STEP 1/3: FROM alpine:3.19
+STEP 2/3: RUN apk add curl
+--> a1b2c3d
+STEP 3/3: CMD ["/app"]
+COMMIT app:latest
+Successfully tagged localhost/app:latest
+"""
+expected = """STEP 1/3: FROM alpine:3.19
+STEP 2/3: RUN apk add curl
+STEP 3/3: CMD ["/app"]
+COMMIT app:latest
+Successfully tagged localhost/app:latest"""
+
+[[tests.podman-build]]
+name = "build error kept"
+input = """
+STEP 2/3: RUN false
+Error: building at STEP "RUN false": exit status 1
+"""
+expected = """STEP 2/3: RUN false
+Error: building at STEP "RUN false": exit status 1"""

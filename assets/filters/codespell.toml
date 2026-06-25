@@ -1,0 +1,27 @@
+[filters.codespell]
+description = "Keep codespell misspelling findings (file:line + correction), drop noise"
+match_command = "^codespell\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "==>",
+  "(?i)error",
+]
+max_lines = 120
+on_empty = "codespell: no misspellings found"
+
+[[tests.codespell]]
+name = "findings kept"
+input = """
+./README.md:12: comparsion ==> comparison
+./src/app.py:45: recieve ==> receive
+"""
+expected = """./README.md:12: comparsion ==> comparison
+./src/app.py:45: recieve ==> receive"""
+
+[[tests.codespell]]
+name = "clean run collapses"
+input = ""
+expected = "codespell: no misspellings found"

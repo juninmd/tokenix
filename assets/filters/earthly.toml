@@ -1,0 +1,41 @@
+[filters.earthly]
+description = "Keep earthly result banner and output artifacts, drop per-step logs"
+match_command = "^earthly\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "\\|\\s+--> ",
+  "\\|\\s+RUN ",
+  "\\|\\s+COPY ",
+]
+keep_lines_matching = [
+  "=== SUCCESS ===",
+  "=== FAILURE ===",
+  "Image .* output as",
+  "Artifact .* output as",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "earthly: done"
+
+[[tests.earthly]]
+name = "result and artifacts kept"
+input = """
++build | --> RUN go build
++build | RUN go build ./...
++build | Image +build output as docker.io/app:latest
+=========================== SUCCESS ===========================
+"""
+expected = """+build | Image +build output as docker.io/app:latest
+=========================== SUCCESS ==========================="""
+
+[[tests.earthly]]
+name = "failure kept"
+input = """
++build | --> RUN go build
+=========================== FAILURE ===========================
+Error: build target +build failed
+"""
+expected = """=========================== FAILURE ===========================
+Error: build target +build failed"""

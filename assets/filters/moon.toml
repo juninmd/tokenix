@@ -1,0 +1,41 @@
+[filters.moon]
+description = "Keep moon task summary and failures, drop per-task progress bars"
+match_command = "^moon\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^▪+ ",
+  "^\\s*▪+ ",
+]
+keep_lines_matching = [
+  "^Tasks:",
+  "^\\s*Time:",
+  "completed",
+  "failed",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "moon: done"
+
+[[tests.moon]]
+name = "summary kept, task bars dropped"
+input = """
+▪▪▪▪ app:build (1.2s)
+▪▪▪▪ app:test (0.8s)
+
+Tasks: 2 completed
+ Time: 2.5s
+"""
+expected = """Tasks: 2 completed
+ Time: 2.5s"""
+
+[[tests.moon]]
+name = "failure kept"
+input = """
+▪▪▪▪ app:build (1.2s)
+
+Tasks: 1 completed, 1 failed
+ Time: 2.5s
+"""
+expected = """Tasks: 1 completed, 1 failed
+ Time: 2.5s"""

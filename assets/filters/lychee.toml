@@ -1,0 +1,45 @@
+[filters.lychee]
+description = "Keep lychee broken-link errors and the run summary, drop per-OK link lines"
+match_command = "^lychee\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[200\\]",
+  "^\\s*\\[200\\]",
+]
+keep_lines_matching = [
+  "\\[ERROR\\]",
+  "Total",
+  "Errors",
+  "Excluded",
+  "✅",
+  "🚫",
+  "OK",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "lychee: all links ok"
+token_budget = 2000
+
+[[tests.lychee]]
+name = "summary kept, ok links dropped"
+input = """
+[200] http://localhost:1234/a/
+[200] http://localhost:1234/b/
+[ERROR] https://example.com/dead | Failed: Network error
+🔍 99 Total (in 0s)
+✅ 98 OK
+🚫 1 Errors
+"""
+expected = """[ERROR] https://example.com/dead | Failed: Network error
+🔍 99 Total (in 0s)
+✅ 98 OK
+🚫 1 Errors"""
+
+[[tests.lychee]]
+name = "all-ok run collapses"
+input = """
+[200] http://localhost:1234/a/
+[200] http://localhost:1234/b/
+"""
+expected = "lychee: all links ok"

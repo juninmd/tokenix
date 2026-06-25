@@ -1,0 +1,35 @@
+[filters.istioctl]
+description = "Keep istioctl analyze findings, collapse clean analysis"
+match_command = "^istioctl\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^✔ No validation issues",
+]
+keep_lines_matching = [
+  "^Error ",
+  "^Warning ",
+  "^Info ",
+  "\\[IST[0-9]+\\]",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "istioctl: no issues found"
+
+[[tests.istioctl]]
+name = "analyze findings kept"
+input = """
+Error [IST0101] (Gateway my-gw) Referenced selector not found: "app=missing"
+Warning [IST0118] (Service web) Port name http-web is invalid
+Info [IST0102] (Namespace default) The namespace is not enabled for Istio injection
+"""
+expected = """Error [IST0101] (Gateway my-gw) Referenced selector not found: "app=missing"
+Warning [IST0118] (Service web) Port name http-web is invalid
+Info [IST0102] (Namespace default) The namespace is not enabled for Istio injection"""
+
+[[tests.istioctl]]
+name = "clean analysis collapses"
+input = """
+✔ No validation issues found when analyzing namespace: default.
+"""
+expected = "istioctl: no issues found"

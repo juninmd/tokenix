@@ -1,0 +1,37 @@
+[filters.changeset]
+description = "Keep changeset bump/status lines, drop blanks"
+match_command = "^(npx\\s+)?changeset\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "🦋",
+  "(?i)bump",
+  "(?i)release",
+  "(?i)major|minor|patch",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "changeset: no changes"
+
+[[tests.changeset]]
+name = "bump plan kept"
+input = """
+🦋  info Bumping the following packages
+
+🦋  major
+🦋    - my-pkg
+🦋  patch
+🦋    - my-utils
+"""
+expected = """🦋  info Bumping the following packages
+🦋  major
+🦋    - my-pkg
+🦋  patch
+🦋    - my-utils"""
+
+[[tests.changeset]]
+name = "no changesets collapses"
+input = ""
+expected = "changeset: no changes"

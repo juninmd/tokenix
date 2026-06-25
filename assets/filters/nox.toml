@@ -1,0 +1,44 @@
+[filters.nox]
+description = "Keep nox session start/result lines and the multi-session summary, drop inner command echoes"
+match_command = "^nox\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Creating virtualenv",
+  "Re-using existing virtualenv",
+]
+keep_lines_matching = [
+  "Running session",
+  "was successful",
+  "Ran multiple sessions",
+  "nox > \\*",
+  "(?i)\\bfailed\\b",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "nox: done"
+
+[[tests.nox]]
+name = "session results kept, inner echoes dropped"
+input = """
+nox > Running session lint
+nox > Creating virtualenv using python3.10 in .nox/lint
+nox > python -m pip install flake8
+nox > flake8 example.py
+nox > Session lint was successful.
+nox > Ran multiple sessions:
+nox > * lint: success
+"""
+expected = """nox > Running session lint
+nox > Session lint was successful.
+nox > Ran multiple sessions:
+nox > * lint: success"""
+
+[[tests.nox]]
+name = "failed session kept"
+input = """
+nox > Running session tests
+nox > Session tests failed.
+"""
+expected = """nox > Running session tests
+nox > Session tests failed."""

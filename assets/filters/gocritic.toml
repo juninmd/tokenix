@@ -1,0 +1,27 @@
+[filters.gocritic]
+description = "Keep gocritic findings, collapse clean runs"
+match_command = "^gocritic\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "\\.go:\\d+:\\d+:",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "gocritic: no issues"
+
+[[tests.gocritic]]
+name = "findings kept"
+input = """
+main.go:10:5: ifElseChain: rewrite if-else to switch statement
+util.go:22:1: commentFormatting: put a space between // and comment text
+"""
+expected = """main.go:10:5: ifElseChain: rewrite if-else to switch statement
+util.go:22:1: commentFormatting: put a space between // and comment text"""
+
+[[tests.gocritic]]
+name = "clean run collapses"
+input = ""
+expected = "gocritic: no issues"

@@ -1,0 +1,37 @@
+[filters.airflow]
+description = "Keep airflow task state transitions and errors, drop INFO setup logs"
+match_command = "^airflow\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "Marking task as SUCCESS",
+  "Marking task as FAILED",
+  "Task exited with return code",
+  "(?i)error",
+  "(?i)exception",
+  "(?i)traceback",
+]
+max_lines = 80
+on_empty = "airflow: task done"
+token_budget = 2000
+
+[[tests.airflow]]
+name = "task state and error kept"
+input = """
+[2024-06-01 12:00:00] INFO - Executing task on 2024-06-01
+[2024-06-01 12:00:01] INFO - Started process to run task
+[2024-06-01 12:00:05] ERROR - Task failed with exception
+[2024-06-01 12:00:05] INFO - Marking task as FAILED
+"""
+expected = """[2024-06-01 12:00:05] ERROR - Task failed with exception
+[2024-06-01 12:00:05] INFO - Marking task as FAILED"""
+
+[[tests.airflow]]
+name = "clean run collapses"
+input = """
+[2024-06-01 12:00:00] INFO - Executing task on 2024-06-01
+[2024-06-01 12:00:01] INFO - Started process to run task
+"""
+expected = "airflow: task done"

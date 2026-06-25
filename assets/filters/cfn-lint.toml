@@ -1,0 +1,33 @@
+[filters.cfn-lint]
+description = "Keep cfn-lint findings (rule code + location), drop blanks"
+match_command = "^cfn-lint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^[EW][0-9]{4}",
+  "^[a-zA-Z0-9_./-]+:[0-9]+:[0-9]+",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "cfn-lint: no issues"
+
+[[tests.cfn-lint]]
+name = "findings kept"
+input = """
+W3010 Don't hardcode us-east-1a in Availability Zones
+template.yaml:5:7
+
+E3012 Property Resources/Bucket/Properties/VersioningConfiguration should be an object
+template.yaml:12:9
+"""
+expected = """W3010 Don't hardcode us-east-1a in Availability Zones
+template.yaml:5:7
+E3012 Property Resources/Bucket/Properties/VersioningConfiguration should be an object
+template.yaml:12:9"""
+
+[[tests.cfn-lint]]
+name = "clean template collapses"
+input = ""
+expected = "cfn-lint: no issues"
