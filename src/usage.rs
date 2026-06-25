@@ -490,9 +490,9 @@ fn report_blocks(records: &[Record], opts: &Options) -> Result<()> {
 }
 
 fn floor_hour(ts: DateTime<Local>) -> DateTime<Local> {
-    Local
-        .with_ymd_and_hms(ts.year(), ts.month(), ts.day(), ts.hour(), 0, 0)
-        .single()
+    ts.with_minute(0)
+        .and_then(|t| t.with_second(0))
+        .and_then(|t| t.with_nanosecond(0))
         .unwrap_or(ts)
 }
 
@@ -590,8 +590,8 @@ fn print_statusline(records: &[Record], mode: CostMode) {
 }
 
 fn short(s: &str) -> String {
-    if s.len() > 20 {
-        format!("{}…", &s[..19])
+    if s.chars().count() > 20 {
+        format!("{}…", s.chars().take(19).collect::<String>())
     } else {
         s.to_string()
     }
