@@ -490,9 +490,9 @@ fn report_blocks(records: &[Record], opts: &Options) -> Result<()> {
 }
 
 fn floor_hour(ts: DateTime<Local>) -> DateTime<Local> {
-    ts.with_minute(0)
-        .and_then(|t| t.with_second(0))
-        .and_then(|t| t.with_nanosecond(0))
+    Local
+        .with_ymd_and_hms(ts.year(), ts.month(), ts.day(), ts.hour(), 0, 0)
+        .single()
         .unwrap_or(ts)
 }
 
