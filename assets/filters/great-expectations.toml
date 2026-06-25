@@ -1,0 +1,37 @@
+[filters.great-expectations]
+description = "Keep Great Expectations validation result and failed expectations"
+match_command = "^great_expectations\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Calculating Metrics",
+  "^Using ",
+]
+keep_lines_matching = [
+  "Validation succeeded",
+  "Validation failed",
+  "expectation",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "great-expectations: done"
+
+[[tests.great-expectations]]
+name = "validation result kept"
+input = """
+Using v3 (Batch Request) API
+Calculating Metrics: 100%|██████| 25/25
+
+Validation failed!
+2 of 25 expectations were not met.
+"""
+expected = """Validation failed!
+2 of 25 expectations were not met."""
+
+[[tests.great-expectations]]
+name = "success kept"
+input = """
+Calculating Metrics: 100%|██████| 25/25
+Validation succeeded!
+"""
+expected = "Validation succeeded!"

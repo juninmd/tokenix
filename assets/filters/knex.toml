@@ -1,0 +1,35 @@
+[filters.knex]
+description = "Keep knex migration batch results and errors"
+match_command = "^(npx\\s+)?knex\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Using environment",
+  "^Requiring external",
+]
+keep_lines_matching = [
+  "^Batch ",
+  "Already up to date",
+  "ran successfully",
+  "migration",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "knex: up to date"
+
+[[tests.knex]]
+name = "batch result kept"
+input = """
+Using environment: development
+Requiring external module ts-node/register
+
+Batch 1 run: 2 migrations
+"""
+expected = "Batch 1 run: 2 migrations"
+
+[[tests.knex]]
+name = "up to date collapses"
+input = """
+Using environment: development
+"""
+expected = "knex: up to date"

@@ -1,0 +1,38 @@
+[filters.dagger]
+description = "Keep dagger pipeline results and errors, drop per-step spinners"
+match_command = "^dagger\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*●",
+  "^\\s*▶",
+  "CACHED",
+]
+keep_lines_matching = [
+  "✔",
+  "✗",
+  "✘",
+  "completed",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 80
+on_empty = "dagger: pipeline complete"
+
+[[tests.dagger]]
+name = "results kept, steps dropped"
+input = """
+● connect
+▶ exec go build
+✔ build pipeline (2.3s)
+✗ test pipeline (1.1s)
+"""
+expected = """✔ build pipeline (2.3s)
+✗ test pipeline (1.1s)"""
+
+[[tests.dagger]]
+name = "all pass kept"
+input = """
+✔ build pipeline (2.3s)
+"""
+expected = "✔ build pipeline (2.3s)"

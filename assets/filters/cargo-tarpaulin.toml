@@ -1,0 +1,40 @@
+[filters.cargo-tarpaulin]
+description = "Keep tarpaulin coverage percentage and uncovered files, drop per-line trace"
+match_command = "^cargo\\s+tarpaulin\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Compiling ",
+  "^\\s*Finished ",
+  "^\\s*Running ",
+  "^\\|\\| Uncovered Line",
+]
+keep_lines_matching = [
+  "% coverage",
+  "lines covered",
+  "^\\|\\| Tested/Total",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "cargo-tarpaulin: coverage collected"
+
+[[tests.cargo-tarpaulin]]
+name = "coverage summary kept"
+input = """
+   Compiling app v0.1.0
+|| Tested/Total Lines:
+|| src/main.rs: 10/12
+|| src/lib.rs: 50/58
+||
+85.71% coverage, 60/70 lines covered
+"""
+expected = """|| Tested/Total Lines:
+85.71% coverage, 60/70 lines covered"""
+
+[[tests.cargo-tarpaulin]]
+name = "no coverage collapses"
+input = """
+   Compiling app v0.1.0
+   Finished test profile
+"""
+expected = "cargo-tarpaulin: coverage collected"

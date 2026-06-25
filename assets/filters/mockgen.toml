@@ -1,0 +1,28 @@
+[filters.mockgen]
+description = "Surface mockgen errors, collapse silent success"
+match_command = "^mockgen\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "(?i)error",
+  "(?i)fail",
+  "cannot ",
+  "no such",
+  "loading ",
+]
+max_lines = 40
+on_empty = "mockgen: generated"
+
+[[tests.mockgen]]
+name = "error kept"
+input = """
+2024/06/01 mockgen: Loading input failed: cannot find package "./missing"
+"""
+expected = """2024/06/01 mockgen: Loading input failed: cannot find package "./missing\""""
+
+[[tests.mockgen]]
+name = "silent success collapses"
+input = ""
+expected = "mockgen: generated"

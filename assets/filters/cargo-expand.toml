@@ -1,0 +1,33 @@
+[filters.cargo-expand]
+description = "Bound cargo expand macro output, surface compile errors"
+match_command = "^cargo\\s+expand\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Checking ",
+  "^\\s*Compiling ",
+  "^\\s*Finished ",
+]
+max_lines = 150
+on_empty = "cargo expand: no output"
+token_budget = 2500
+
+[[tests.cargo-expand]]
+name = "expanded code bounded, build lines dropped"
+input = """
+    Checking app v0.1.0
+    Finished dev profile
+#![feature(prelude_import)]
+fn main() {
+    { ::std::io::_print(format_args!("hi\\n")); };
+}
+"""
+expected = """#![feature(prelude_import)]
+fn main() {
+    { ::std::io::_print(format_args!("hi\\n")); };
+}"""
+
+[[tests.cargo-expand]]
+name = "empty collapses"
+input = ""
+expected = "cargo expand: no output"

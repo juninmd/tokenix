@@ -1,0 +1,42 @@
+[filters.cargo-udeps]
+description = "Keep cargo-udeps unused-dependency report, collapse clean runs"
+match_command = "^cargo\\s+udeps\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Checking ",
+  "^\\s*Compiling ",
+  "^\\s*Finished ",
+]
+keep_lines_matching = [
+  "unused dependencies",
+  "^\\s*dependencies",
+  "^\\s*\"",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "cargo-udeps: no unused dependencies"
+
+[[tests.cargo-udeps]]
+name = "unused deps kept"
+input = """
+    Checking app v0.1.0
+unused dependencies:
+`app v0.1.0`
+    dependencies
+        "regex"
+        "lazy_static"
+"""
+expected = """unused dependencies:
+    dependencies
+        "regex"
+        "lazy_static\""""
+
+[[tests.cargo-udeps]]
+name = "clean run collapses"
+input = """
+    Checking app v0.1.0
+    Finished dev profile
+All deps seem to have been used.
+"""
+expected = "cargo-udeps: no unused dependencies"

@@ -1,0 +1,28 @@
+[filters.pipdeptree]
+description = "Bound pipdeptree dependency tree, keep conflict warnings"
+match_command = "^pipdeptree\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+max_lines = 120
+on_empty = "pipdeptree: no dependencies"
+token_budget = 2000
+
+[[tests.pipdeptree]]
+name = "tree kept and bounded"
+input = """
+flask==3.0.0
+├── blinker [required: >=1.6.2, installed: 1.7.0]
+├── click [required: >=8.1.3, installed: 8.1.7]
+└── jinja2 [required: >=3.1.2, installed: 3.1.3]
+"""
+expected = """flask==3.0.0
+├── blinker [required: >=1.6.2, installed: 1.7.0]
+├── click [required: >=8.1.3, installed: 8.1.7]
+└── jinja2 [required: >=3.1.2, installed: 3.1.3]"""
+
+[[tests.pipdeptree]]
+name = "empty collapses"
+input = ""
+expected = "pipdeptree: no dependencies"

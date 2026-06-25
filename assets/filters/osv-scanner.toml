@@ -1,0 +1,42 @@
+[filters.osv-scanner]
+description = "Keep OSV-Scanner vulnerability rows and the severity summary, drop box borders"
+match_command = "^osv-scanner\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "OSV URL",
+  "Scanning dir",
+  "Scanned .* file",
+]
+keep_lines_matching = [
+  "osv\\.dev",
+  "known vulnerabilit",
+  "can be fixed",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "osv-scanner: no vulnerabilities found"
+token_budget = 2000
+
+[[tests.osv-scanner]]
+name = "vuln rows and summary kept, borders dropped"
+input = """
+╭─────────────────────────────────────┬──────┬───────────┬──────────────────────────┬───────────────┬─────────┬────────────────────╮
+│ OSV URL                             │ CVSS │ ECOSYSTEM │  PACKAGE                 │ FIXED VERSION │ VERSION │ SOURCE             │
+├─────────────────────────────────────┼──────┼───────────┼──────────────────────────┼───────────────┼─────────┼────────────────────┤
+│ https://osv.dev/GHSA-c3h9-896r-86jm │ 8.6  │ Go        │ github.com/gogo/protobuf │ 1.3.2         │ 1.3.1   │ path/to/go.mod     │
+╰─────────────────────────────────────┴──────┴───────────┴──────────────────────────┴───────────────┴─────────┴────────────────────╯
+Total 2 packages affected by 2 known vulnerabilities (1 Critical, 1 High, 0 Medium, 0 Low, 0 Unknown) from 2 ecosystems.
+1 vulnerability can be fixed.
+"""
+expected = """│ https://osv.dev/GHSA-c3h9-896r-86jm │ 8.6  │ Go        │ github.com/gogo/protobuf │ 1.3.2         │ 1.3.1   │ path/to/go.mod     │
+Total 2 packages affected by 2 known vulnerabilities (1 Critical, 1 High, 0 Medium, 0 Low, 0 Unknown) from 2 ecosystems.
+1 vulnerability can be fixed."""
+
+[[tests.osv-scanner]]
+name = "clean scan collapses"
+input = """
+Scanned /app/go.mod file and found 12 packages
+No issues found
+"""
+expected = "osv-scanner: no vulnerabilities found"

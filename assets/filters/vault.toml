@@ -1,0 +1,37 @@
+[filters.vault]
+description = "Keep vault status/secret key-value rows and errors, drop blanks"
+match_command = "^vault\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^-+\\s+-+$",
+]
+keep_lines_matching = [
+  "^Key\\s+Value",
+  "^\\S.*\\s{2,}\\S",
+  "Success!",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "vault: ok"
+
+[[tests.vault]]
+name = "status rows kept"
+input = """
+Key             Value
+---             -----
+Seal Type       shamir
+Sealed          false
+Total Shares    5
+"""
+expected = """Key             Value
+Seal Type       shamir
+Sealed          false
+Total Shares    5"""
+
+[[tests.vault]]
+name = "error kept"
+input = """
+Error checking seal status: connection refused
+"""
+expected = "Error checking seal status: connection refused"

@@ -1,0 +1,38 @@
+[filters.ginkgo]
+description = "Keep ginkgo run totals and failures, drop dots and per-spec noise"
+match_command = "^ginkgo\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^[•.]+$",
+  "^Will run ",
+]
+keep_lines_matching = [
+  "^Ran \\d+ of \\d+ Specs",
+  "SUCCESS!",
+  "FAIL!",
+  "Passed \\|",
+  "\\[FAILED\\]",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "ginkgo: specs passed"
+
+[[tests.ginkgo]]
+name = "totals kept"
+input = """
+••••••••••
+Ran 10 of 10 Specs in 2.345 seconds
+SUCCESS! -- 10 Passed | 0 Failed | 0 Pending | 0 Skipped
+"""
+expected = """Ran 10 of 10 Specs in 2.345 seconds
+SUCCESS! -- 10 Passed | 0 Failed | 0 Pending | 0 Skipped"""
+
+[[tests.ginkgo]]
+name = "failure kept"
+input = """
+Ran 10 of 10 Specs in 2.345 seconds
+FAIL! -- 9 Passed | 1 Failed | 0 Pending | 0 Skipped
+"""
+expected = """Ran 10 of 10 Specs in 2.345 seconds
+FAIL! -- 9 Passed | 1 Failed | 0 Pending | 0 Skipped"""

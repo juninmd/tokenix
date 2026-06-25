@@ -1,0 +1,28 @@
+[filters.goimports]
+description = "Keep goimports -l file list and errors, collapse clean runs"
+match_command = "^goimports\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "\\.go$",
+  "\\.go:\\d+:",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "goimports: all formatted"
+
+[[tests.goimports]]
+name = "unformatted files listed"
+input = """
+src/app.go
+src/handler.go
+"""
+expected = """src/app.go
+src/handler.go"""
+
+[[tests.goimports]]
+name = "clean run collapses"
+input = ""
+expected = "goimports: all formatted"

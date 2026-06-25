@@ -1,0 +1,37 @@
+[filters.wdio]
+description = "Keep WebdriverIO spec results and failures, drop passing test lines"
+match_command = "^(npx\\s+)?wdio\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*✓",
+  "^\\s*green ",
+]
+keep_lines_matching = [
+  "^\\s*✖",
+  "Spec Files:",
+  "\\bfailed\\b",
+  "\\bFailed\\b",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "wdio: all specs passed"
+
+[[tests.wdio]]
+name = "failures and spec summary kept"
+input = """
+   ✓ should load the page
+   ✖ should submit the form
+
+Spec Files: 1 passed, 1 failed, 2 total (100% completed)
+"""
+expected = """   ✖ should submit the form
+Spec Files: 1 passed, 1 failed, 2 total (100% completed)"""
+
+[[tests.wdio]]
+name = "all pass collapses"
+input = """
+   ✓ should load the page
+   ✓ should submit the form
+"""
+expected = "wdio: all specs passed"

@@ -1,0 +1,39 @@
+[filters.atlas]
+description = "Keep atlas migration version/status and errors, drop raw SQL"
+match_command = "^atlas\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*-> ",
+  "No migration files",
+]
+keep_lines_matching = [
+  "Migrating to version",
+  "migrating version",
+  "^\\s*-- ok",
+  "Current version",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "atlas: schema up to date"
+
+[[tests.atlas]]
+name = "migration steps kept, sql dropped"
+input = """
+Migrating to version 20240101 (1 migrations in total):
+
+  -- migrating version 20240101
+    -> CREATE TABLE users (id int primary key);
+    -> CREATE INDEX idx ON users (id);
+  -- ok (12.3ms)
+"""
+expected = """Migrating to version 20240101 (1 migrations in total):
+  -- migrating version 20240101
+  -- ok (12.3ms)"""
+
+[[tests.atlas]]
+name = "up to date collapses"
+input = """
+No migration files to execute
+"""
+expected = "atlas: schema up to date"

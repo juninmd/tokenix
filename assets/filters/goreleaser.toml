@@ -1,0 +1,41 @@
+[filters.goreleaser]
+description = "Keep goreleaser result and errors, drop routine build bullets"
+match_command = "^goreleaser\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "•\\s+loading",
+  "•\\s+getting",
+  "•\\s+setting",
+  "•\\s+writing",
+  "•\\s+cleaning",
+]
+keep_lines_matching = [
+  "release succeeded",
+  "release failed",
+  "build succeeded",
+  "published",
+  "took",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "goreleaser: done"
+
+[[tests.goreleaser]]
+name = "result kept, routine bullets dropped"
+input = """
+  • loading config file       file=.goreleaser.yaml
+  • cleaning dist
+  • building binaries
+  • release succeeded after 32.10s
+"""
+expected = """  • release succeeded after 32.10s"""
+
+[[tests.goreleaser]]
+name = "failure kept"
+input = """
+  • loading config file       file=.goreleaser.yaml
+  ⨯ release failed after 5.00s     error=git is in a dirty state
+"""
+expected = "  ⨯ release failed after 5.00s     error=git is in a dirty state"

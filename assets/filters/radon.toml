@@ -1,0 +1,35 @@
+[filters.radon]
+description = "Keep radon complexity grades C/D/E/F (worst offenders), drop A/B and files with no flags"
+match_command = "^radon\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "- [AB]$",
+]
+keep_lines_matching = [
+  "- [C-F]$",
+  "Average complexity",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "radon: no high-complexity blocks"
+
+[[tests.radon]]
+name = "high-complexity blocks kept, A/B dropped"
+input = """
+src/app.py
+    F 12:0 process - C
+    M 40:4 Handler.run - A
+    F 60:0 validate - E
+"""
+expected = """    F 12:0 process - C
+    F 60:0 validate - E"""
+
+[[tests.radon]]
+name = "all simple collapses"
+input = """
+src/app.py
+    F 12:0 process - A
+    M 40:4 Handler.run - B
+"""
+expected = "radon: no high-complexity blocks"

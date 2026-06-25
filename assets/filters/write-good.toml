@@ -1,0 +1,29 @@
+[filters.write-good]
+description = "Keep write-good suggestions, collapse clean prose"
+match_command = "^(npx\\s+)?write-good\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "on line \\d+",
+  "weasel word",
+  "passive voice",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "write-good: no suggestions"
+
+[[tests.write-good]]
+name = "suggestions kept"
+input = """
+"very" is a weasel word on line 5 at column 10
+"was written" may be passive voice on line 8 at column 3
+"""
+expected = """"very" is a weasel word on line 5 at column 10
+"was written" may be passive voice on line 8 at column 3"""
+
+[[tests.write-good]]
+name = "clean prose collapses"
+input = ""
+expected = "write-good: no suggestions"

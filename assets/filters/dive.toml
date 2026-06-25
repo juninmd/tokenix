@@ -1,0 +1,41 @@
+[filters.dive]
+description = "Keep dive image efficiency results, drop layer-by-layer detail"
+match_command = "^dive\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^\\s*efficiency:",
+  "WastedBytes|wastedBytes|WastedPercent",
+  "^\\s*Result:",
+  "image source bytes",
+  "PASS",
+  "FAIL",
+  "(?i)error",
+]
+max_lines = 40
+on_empty = "dive: analysis complete"
+
+[[tests.dive]]
+name = "efficiency summary kept"
+input = """
+  efficiency: 98.7531 %
+  wastedBytes: 1421850 bytes (1.4 MB)
+  userWastedPercent: 12.3401 %
+Inefficient Files:
+Count  Wasted Space  File Path
+   2         1.4 MB  /var/cache/apt/archives
+Result:PASS [Total:3] [Passed:3] [Failed:0]
+"""
+expected = """  efficiency: 98.7531 %
+  wastedBytes: 1421850 bytes (1.4 MB)
+  userWastedPercent: 12.3401 %
+Result:PASS [Total:3] [Passed:3] [Failed:0]"""
+
+[[tests.dive]]
+name = "ci fail kept"
+input = """
+Result:FAIL [Total:3] [Passed:2] [Failed:1]
+"""
+expected = "Result:FAIL [Total:3] [Passed:2] [Failed:1]"

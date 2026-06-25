@@ -1,0 +1,36 @@
+[filters.flutter-build]
+description = "Keep flutter build result artifact and errors, drop Gradle/Xcode progress"
+match_command = "^flutter\\s+build\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Running Gradle task",
+  "^\\s*Running ",
+  "^\\s*Resolving dependencies",
+]
+keep_lines_matching = [
+  "✓ Built",
+  "Built build/",
+  "(?i)error",
+  "(?i)fail",
+  "(?i)exception",
+]
+max_lines = 60
+on_empty = "flutter build: done"
+
+[[tests.flutter-build]]
+name = "built artifact kept"
+input = """
+Running Gradle task 'assembleRelease'...
+Resolving dependencies...
+✓ Built build/app/outputs/flutter-apk/app-release.apk (12.3MB)
+"""
+expected = "✓ Built build/app/outputs/flutter-apk/app-release.apk (12.3MB)"
+
+[[tests.flutter-build]]
+name = "build failure kept"
+input = """
+Running Gradle task 'assembleRelease'...
+FAILURE: Build failed with an exception.
+"""
+expected = "FAILURE: Build failed with an exception."

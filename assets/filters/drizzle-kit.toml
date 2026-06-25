@@ -1,0 +1,37 @@
+[filters.drizzle-kit]
+description = "Keep drizzle-kit migration/generate results and errors"
+match_command = "^(npx\\s+)?drizzle-kit\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Reading config",
+  "^Reading schema",
+]
+keep_lines_matching = [
+  "migration file",
+  "changes? applied",
+  "No schema changes",
+  "✓",
+  "tables?",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "drizzle-kit: no changes"
+
+[[tests.drizzle-kit]]
+name = "generated migration kept"
+input = """
+Reading config file '/app/drizzle.config.ts'
+Reading schema files...
+
+[✓] Your SQL migration file ➜ drizzle/0000_cool_name.sql
+"""
+expected = "[✓] Your SQL migration file ➜ drizzle/0000_cool_name.sql"
+
+[[tests.drizzle-kit]]
+name = "no changes collapses"
+input = """
+Reading config file '/app/drizzle.config.ts'
+Reading schema files...
+"""
+expected = "drizzle-kit: no changes"

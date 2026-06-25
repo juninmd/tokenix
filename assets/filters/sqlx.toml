@@ -1,0 +1,30 @@
+[filters.sqlx]
+description = "Keep sqlx migrate applied/reverted lines and errors"
+match_command = "^sqlx\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Applied ",
+  "^Reverted ",
+  "^Skipped ",
+  "no migrations",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "sqlx: no pending migrations"
+
+[[tests.sqlx]]
+name = "applied migrations kept"
+input = """
+Applied 20240101120000/migrate create users (1.234ms)
+Applied 20240102120000/migrate add index (0.876ms)
+"""
+expected = """Applied 20240101120000/migrate create users (1.234ms)
+Applied 20240102120000/migrate add index (0.876ms)"""
+
+[[tests.sqlx]]
+name = "nothing pending collapses"
+input = ""
+expected = "sqlx: no pending migrations"

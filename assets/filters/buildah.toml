@@ -1,0 +1,42 @@
+[filters.buildah]
+description = "Keep buildah build STEP/COMMIT lines and errors, drop layer noise"
+match_command = "^buildah\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^--> ",
+  "Copying blob",
+  "Copying config",
+]
+keep_lines_matching = [
+  "^STEP ",
+  "^COMMIT ",
+  "Successfully tagged",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "buildah: ok"
+
+[[tests.buildah]]
+name = "step and commit kept"
+input = """
+STEP 1/2: FROM alpine
+STEP 2/2: RUN apk add curl
+--> a1b2c3d
+COMMIT app
+Successfully tagged localhost/app:latest
+"""
+expected = """STEP 1/2: FROM alpine
+STEP 2/2: RUN apk add curl
+COMMIT app
+Successfully tagged localhost/app:latest"""
+
+[[tests.buildah]]
+name = "error kept"
+input = """
+STEP 2/2: RUN false
+error building at STEP "RUN false": exit status 1
+"""
+expected = """STEP 2/2: RUN false
+error building at STEP "RUN false": exit status 1"""

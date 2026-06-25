@@ -1,0 +1,32 @@
+[filters.taplo]
+description = "Keep taplo TOML errors/warnings and locations, collapse clean files"
+match_command = "^taplo\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^error",
+  "^warning",
+  "┌─",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "taplo: ok"
+
+[[tests.taplo]]
+name = "syntax error kept"
+input = """
+error: expected `=`, `.`
+  ┌─ config.toml:3:5
+  │
+3 │ key value
+  │     ^^^^^
+"""
+expected = """error: expected `=`, `.`
+  ┌─ config.toml:3:5"""
+
+[[tests.taplo]]
+name = "clean file collapses"
+input = ""
+expected = "taplo: ok"

@@ -1,0 +1,36 @@
+[filters.mlflow]
+description = "Keep mlflow run result and errors, drop INFO setup logs"
+match_command = "^mlflow\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "mlflow.projects.utils",
+  "=== Creating ",
+  "=== Fetching ",
+]
+keep_lines_matching = [
+  "=== Run .* succeeded ===",
+  "=== Run .* failed ===",
+  "succeeded",
+  "failed",
+  "(?i)error",
+  "(?i)exception",
+]
+max_lines = 60
+on_empty = "mlflow: done"
+
+[[tests.mlflow]]
+name = "run result kept"
+input = """
+2024/06/01 12:00:00 INFO mlflow.projects.utils: === Fetching project ===
+2024/06/01 12:00:05 INFO mlflow.projects: === Run (ID 'abc123') succeeded ===
+"""
+expected = "2024/06/01 12:00:05 INFO mlflow.projects: === Run (ID 'abc123') succeeded ==="
+
+[[tests.mlflow]]
+name = "run failure kept"
+input = """
+2024/06/01 12:00:00 INFO mlflow.projects.utils: === Fetching project ===
+2024/06/01 12:00:05 ERROR mlflow.cli: === Run (ID 'abc123') failed ===
+"""
+expected = "2024/06/01 12:00:05 ERROR mlflow.cli: === Run (ID 'abc123') failed ==="

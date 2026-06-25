@@ -1,0 +1,36 @@
+[filters.cargo-add]
+description = "Keep cargo add dependency lines, drop index update and feature dumps"
+match_command = "^cargo\\s+add\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Updating crates.io index",
+  "^\\s*Features:",
+  "^\\s*[-+] ",
+]
+keep_lines_matching = [
+  "Adding ",
+  "(?i)error",
+  "(?i)warning",
+]
+max_lines = 40
+on_empty = "cargo add: ok"
+
+[[tests.cargo-add]]
+name = "added deps kept, feature dump dropped"
+input = """
+    Updating crates.io index
+      Adding serde v1.0.197 to dependencies
+             Features:
+             + derive
+             - alloc
+"""
+expected = "      Adding serde v1.0.197 to dependencies"
+
+[[tests.cargo-add]]
+name = "error kept"
+input = """
+    Updating crates.io index
+error: the crate `nonexistent` could not be found
+"""
+expected = "error: the crate `nonexistent` could not be found"

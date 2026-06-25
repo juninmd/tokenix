@@ -1,0 +1,37 @@
+[filters.tap]
+description = "Keep TAP failures and summary, drop passing assertions"
+match_command = "^(npx\\s+)?tap\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^ok \\d",
+  "^\\s*ok \\d",
+]
+keep_lines_matching = [
+  "^not ok",
+  "^\\s*not ok",
+  "^# (failed|pass|fail|tests)",
+  "^1\\.\\.\\d",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "tap: all tests passed"
+
+[[tests.tap]]
+name = "failures and summary kept"
+input = """
+ok 1 - test one
+not ok 2 - test two
+ok 3 - test three
+# failed 1 of 3 tests
+"""
+expected = """not ok 2 - test two
+# failed 1 of 3 tests"""
+
+[[tests.tap]]
+name = "all pass collapses"
+input = """
+ok 1 - test one
+ok 2 - test two
+"""
+expected = "tap: all tests passed"

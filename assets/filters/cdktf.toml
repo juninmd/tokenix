@@ -1,0 +1,41 @@
+[filters.cdktf]
+description = "Keep cdktf apply/deploy summary and resource changes, drop progress spinners"
+match_command = "^cdktf\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Refreshing state",
+  "Still creating",
+  "Still modifying",
+]
+keep_lines_matching = [
+  "Apply complete",
+  "Plan:",
+  "will be created",
+  "will be destroyed",
+  "will be updated",
+  "Creation complete",
+  "Destruction complete",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 80
+on_empty = "cdktf: no changes"
+
+[[tests.cdktf]]
+name = "apply summary kept"
+input = """
+Refreshing state...
+aws_s3_bucket.data: Still creating... [10s elapsed]
+aws_s3_bucket.data: Creation complete after 12s
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+"""
+expected = """aws_s3_bucket.data: Creation complete after 12s
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed."""
+
+[[tests.cdktf]]
+name = "no-op apply collapses"
+input = """
+Refreshing state...
+"""
+expected = "cdktf: no changes"

@@ -1,0 +1,40 @@
+[filters.attw]
+description = "Keep are-the-types-wrong problem rows, drop OK rows and box borders"
+match_command = "^(npx\\s+)?attw\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^[┌├└╭╞╰][─┬┼┴┄]+",
+  "🟢",
+]
+keep_lines_matching = [
+  "💥",
+  "❌",
+  "⚠️",
+  "Masquerading",
+  "no problems found",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "attw: no problems found"
+
+[[tests.attw]]
+name = "problem rows kept, ok rows dropped"
+input = """
+mypackage v1.0.0
+
+┌───────────────────┬──────────────────────┐
+│ node10            │ 🟢                   │
+├───────────────────┼──────────────────────┤
+│ node16 (from CJS) │ 💥 Masquerading as ESM │
+└───────────────────┴──────────────────────┘
+"""
+expected = """│ node16 (from CJS) │ 💥 Masquerading as ESM │"""
+
+[[tests.attw]]
+name = "clean package collapses"
+input = """
+mypackage v1.0.0
+🟢 No problems found
+"""
+expected = "attw: no problems found"

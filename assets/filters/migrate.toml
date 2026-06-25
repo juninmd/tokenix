@@ -1,0 +1,31 @@
+[filters.migrate]
+description = "Keep golang-migrate applied versions and errors"
+match_command = "^migrate\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^\\d+/[uvd] ",
+  "no change",
+  "Dirty database",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "migrate: no change"
+
+[[tests.migrate]]
+name = "applied versions kept"
+input = """
+20240101120000/u create_users (12.3ms)
+20240102120000/u add_index (8.1ms)
+"""
+expected = """20240101120000/u create_users (12.3ms)
+20240102120000/u add_index (8.1ms)"""
+
+[[tests.migrate]]
+name = "dirty database kept"
+input = """
+error: Dirty database version 20240101120000. Fix and force version.
+"""
+expected = "error: Dirty database version 20240101120000. Fix and force version."

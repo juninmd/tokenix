@@ -1,0 +1,28 @@
+[filters.protolint]
+description = "Keep protolint findings, collapse clean protos"
+match_command = "^protolint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "\\.proto:\\d+:\\d+\\]",
+  "\\.proto:\\d+:\\d+:",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "protolint: no issues"
+
+[[tests.protolint]]
+name = "findings kept"
+input = """
+[proto/user.proto:10:1] EnumField name "active" must be CONSTANT_CASE
+[proto/user.proto:15:3] Field "userId" must be lower_snake_case
+"""
+expected = """[proto/user.proto:10:1] EnumField name "active" must be CONSTANT_CASE
+[proto/user.proto:15:3] Field "userId" must be lower_snake_case"""
+
+[[tests.protolint]]
+name = "clean proto collapses"
+input = ""
+expected = "protolint: no issues"

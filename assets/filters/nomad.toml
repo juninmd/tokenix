@@ -1,0 +1,38 @@
+[filters.nomad]
+description = "Keep nomad job status key fields and errors, drop blanks"
+match_command = "^nomad\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^\\w[\\w ]*=",
+  "^ID\\s",
+  "Status",
+  "running",
+  "failed",
+  "dead",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "nomad: ok"
+
+[[tests.nomad]]
+name = "job status fields kept"
+input = """
+ID            = web
+Name          = web
+Status        = running
+Type          = service
+Priority      = 50
+"""
+expected = """ID            = web
+Name          = web
+Status        = running
+Type          = service
+Priority      = 50"""
+
+[[tests.nomad]]
+name = "no output collapses"
+input = ""
+expected = "nomad: ok"

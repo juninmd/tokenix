@@ -1,0 +1,35 @@
+[filters.consul]
+description = "Keep consul members/status rows and errors, drop blanks"
+match_command = "^consul\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Node\\s",
+  "alive",
+  "failed",
+  "left",
+  "Synced",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "consul: ok"
+
+[[tests.consul]]
+name = "members kept"
+input = """
+Node    Address          Status  Type    Build   Protocol
+node1   10.0.0.1:8301    alive   server  1.17.0  2
+node2   10.0.0.2:8301    alive   client  1.17.0  2
+node3   10.0.0.3:8301    failed  client  1.17.0  2
+"""
+expected = """Node    Address          Status  Type    Build   Protocol
+node1   10.0.0.1:8301    alive   server  1.17.0  2
+node2   10.0.0.2:8301    alive   client  1.17.0  2
+node3   10.0.0.3:8301    failed  client  1.17.0  2"""
+
+[[tests.consul]]
+name = "no output collapses"
+input = ""
+expected = "consul: ok"

@@ -1,0 +1,40 @@
+[filters.expo]
+description = "Keep expo/eas build results and errors, drop bundling progress"
+match_command = "^(npx\\s+)?(expo|eas)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Bundling ",
+  "^\\s*Starting ",
+  "^\\s*Waiting ",
+]
+keep_lines_matching = [
+  "✔",
+  "✓",
+  "✖",
+  "Build finished",
+  "Exported",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "expo: done"
+
+[[tests.expo]]
+name = "build result kept"
+input = """
+Starting Metro Bundler
+Bundling index.js 100%
+✔ Exported bundle to dist/
+✓ Build finished
+"""
+expected = """✔ Exported bundle to dist/
+✓ Build finished"""
+
+[[tests.expo]]
+name = "build error kept"
+input = """
+Bundling index.js 100%
+✖ Build failed: Gradle build failed
+"""
+expected = "✖ Build failed: Gradle build failed"

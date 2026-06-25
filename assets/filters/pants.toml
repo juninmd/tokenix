@@ -1,0 +1,38 @@
+[filters.pants]
+description = "Keep pants results and failures, drop per-target INFO progress"
+match_command = "^(\\./)?pants\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "\\[INFO\\] Completed:",
+  "\\[INFO\\] Initializing",
+]
+keep_lines_matching = [
+  "✓",
+  "✕",
+  "✗",
+  "passed",
+  "FAILURE",
+  "failed",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "pants: ok"
+
+[[tests.pants]]
+name = "results kept, info dropped"
+input = """
+17:23:45.12 [INFO] Initializing scheduler...
+17:23:46.00 [INFO] Completed: Building app
+✓ app/tests:tests passed.
+✕ app/lib:lint failed.
+"""
+expected = """✓ app/tests:tests passed.
+✕ app/lib:lint failed."""
+
+[[tests.pants]]
+name = "all pass kept"
+input = """
+✓ app/tests:tests passed.
+"""
+expected = "✓ app/tests:tests passed."

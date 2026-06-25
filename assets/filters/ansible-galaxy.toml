@@ -1,0 +1,38 @@
+[filters.ansible-galaxy]
+description = "Keep ansible-galaxy install results and errors, drop download progress"
+match_command = "^ansible-galaxy\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^- downloading ",
+  "^Starting galaxy",
+  "^Process install",
+]
+keep_lines_matching = [
+  "was installed successfully",
+  "is already installed",
+  "(?i)error",
+  "(?i)\\[warning\\]",
+]
+max_lines = 80
+on_empty = "ansible-galaxy: nothing installed"
+
+[[tests.ansible-galaxy]]
+name = "install results kept"
+input = """
+Starting galaxy role install process
+- downloading role 'nginx', owned by geerlingguy
+- geerlingguy.nginx (3.1.4) was installed successfully
+- downloading role 'postgresql'
+- geerlingguy.postgresql (3.4.0) was installed successfully
+"""
+expected = """- geerlingguy.nginx (3.1.4) was installed successfully
+- geerlingguy.postgresql (3.4.0) was installed successfully"""
+
+[[tests.ansible-galaxy]]
+name = "install error kept"
+input = """
+Starting galaxy role install process
+ERROR! - the role 'missing.role' was not found
+"""
+expected = "ERROR! - the role 'missing.role' was not found"

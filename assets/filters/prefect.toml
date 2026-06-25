@@ -1,0 +1,36 @@
+[filters.prefect]
+description = "Keep prefect flow/task final states and errors, drop routine INFO"
+match_command = "^prefect\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Created task run",
+  "Executing ",
+]
+keep_lines_matching = [
+  "Finished in state",
+  "Completed\\(",
+  "Failed\\(",
+  "Crashed\\(",
+  "(?i)error",
+  "(?i)exception",
+]
+max_lines = 80
+on_empty = "prefect: flow done"
+
+[[tests.prefect]]
+name = "final state kept"
+input = """
+12:00:00.000 | INFO | Created task run 'load-0' for task 'load'
+12:00:01.000 | INFO | Executing 'load-0'
+12:00:02.000 | INFO | Finished in state Completed()
+"""
+expected = "12:00:02.000 | INFO | Finished in state Completed()"
+
+[[tests.prefect]]
+name = "failed state kept"
+input = """
+12:00:01.000 | INFO | Executing 'load-0'
+12:00:02.000 | ERROR | Finished in state Failed('Task run encountered an exception')
+"""
+expected = "12:00:02.000 | ERROR | Finished in state Failed('Task run encountered an exception')"

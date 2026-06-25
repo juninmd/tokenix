@@ -1,0 +1,44 @@
+[filters.size-limit]
+description = "Keep size-limit package size/limit/time lines, drop decoration"
+match_command = "^(npx\\s+)?size-limit\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "(?i)size",
+  "(?i)limit",
+  "(?i)loading time",
+  "(?i)running time",
+  "(?i)total time",
+  "(?i)error",
+]
+max_lines = 40
+on_empty = "size-limit: ok"
+
+[[tests.size-limit]]
+name = "size report kept"
+input = """
+  Package size: 10.5 kB
+  Size limit:   12 kB
+
+  Loading time: 210 ms
+  Running time: 80 ms
+  Total time:   290 ms
+"""
+expected = """  Package size: 10.5 kB
+  Size limit:   12 kB
+  Loading time: 210 ms
+  Running time: 80 ms
+  Total time:   290 ms"""
+
+[[tests.size-limit]]
+name = "over limit kept"
+input = """
+  Package size: 15 kB
+  Size limit:   12 kB
+  Error: exceeds limit
+"""
+expected = """  Package size: 15 kB
+  Size limit:   12 kB
+  Error: exceeds limit"""

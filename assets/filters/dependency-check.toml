@@ -1,0 +1,40 @@
+[filters.dependency-check]
+description = "Keep OWASP dependency-check vulnerable dependencies and CVEs"
+match_command = "^dependency-check(\\.sh|\\.bat)?\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "Checking for updates",
+  "Download Started",
+  "Download Complete",
+  "Analysis Started",
+]
+keep_lines_matching = [
+  "known vulnerabilit",
+  "CVE-",
+  "\\): (CVE|GHSA)",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "dependency-check: no known vulnerabilities"
+token_budget = 2000
+
+[[tests.dependency-check]]
+name = "vulnerable deps kept"
+input = """
+Checking for updates
+Analysis Started
+One or more dependencies were identified with known vulnerabilities in the project:
+
+log4j-core-2.14.1.jar (pkg:maven/org.apache.logging.log4j) : CVE-2021-44228, CVE-2021-45046
+"""
+expected = """One or more dependencies were identified with known vulnerabilities in the project:
+log4j-core-2.14.1.jar (pkg:maven/org.apache.logging.log4j) : CVE-2021-44228, CVE-2021-45046"""
+
+[[tests.dependency-check]]
+name = "clean scan collapses"
+input = """
+Checking for updates
+Analysis Started
+"""
+expected = "dependency-check: no known vulnerabilities"

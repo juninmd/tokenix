@@ -1,0 +1,27 @@
+[filters.proselint]
+description = "Keep proselint findings, collapse clean prose"
+match_command = "^proselint\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  ":\\d+:\\d+:",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "proselint: no issues"
+
+[[tests.proselint]]
+name = "findings kept"
+input = """
+README.md:10:3: typography.symbols.curly_quotes Use curly quotes
+README.md:22:1: leonard.exclamation.30ppm More than 30 ppm of exclamations
+"""
+expected = """README.md:10:3: typography.symbols.curly_quotes Use curly quotes
+README.md:22:1: leonard.exclamation.30ppm More than 30 ppm of exclamations"""
+
+[[tests.proselint]]
+name = "clean prose collapses"
+input = ""
+expected = "proselint: no issues"

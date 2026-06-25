@@ -1,0 +1,38 @@
+[filters.nerdctl]
+description = "Keep nerdctl table rows and results, drop layer download progress"
+match_command = "^nerdctl\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*[0-9a-f]{12}:\\s+(downloading|extracting|waiting)",
+  "elapsed:",
+  "total:",
+]
+keep_lines_matching = [
+  "^CONTAINER ID",
+  "^REPOSITORY",
+  "^IMAGE ID",
+  "^[0-9a-f]{12}\\b",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "nerdctl: ok"
+
+[[tests.nerdctl]]
+name = "ps rows kept, progress dropped"
+input = """
+a1b2c3d4e5f6:    downloading  |++++++++| 12.0 MiB/12.0 MiB
+elapsed: 1.2 s    total:  12.0 M
+CONTAINER ID  IMAGE         STATUS    NAMES
+a1b2c3d4e5f6  app:latest    Up 1m     web
+"""
+expected = """CONTAINER ID  IMAGE         STATUS    NAMES
+a1b2c3d4e5f6  app:latest    Up 1m     web"""
+
+[[tests.nerdctl]]
+name = "run error kept"
+input = """
+FATA[0000] error: image not found
+"""
+expected = "FATA[0000] error: image not found"

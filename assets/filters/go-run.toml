@@ -1,0 +1,36 @@
+[filters.go-run]
+description = "Bound go run program output, surface compile errors and panics"
+match_command = "^go\\s+run\\b"
+strip_ansi = true
+passthrough_when_emptied = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "\\.go:\\d+:\\d+:",
+  "^panic:",
+  "^goroutine ",
+  "cannot find package",
+  "undefined:",
+  "(?i)error",
+  "(?i)fatal",
+]
+max_lines = 80
+token_budget = 2000
+
+[[tests.go-run]]
+name = "compile error surfaced"
+input = """
+# command-line-arguments
+./main.go:10:6: undefined: foo
+"""
+expected = """./main.go:10:6: undefined: foo"""
+
+[[tests.go-run]]
+name = "clean program output passes through bounded"
+input = """
+hello world
+done
+"""
+expected = """hello world
+done"""

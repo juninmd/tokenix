@@ -1,0 +1,37 @@
+[filters.kube-linter]
+description = "Keep kube-linter findings and error count, drop banner"
+match_command = "^kube-linter\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^KubeLinter ",
+]
+keep_lines_matching = [
+  "\\(check:",
+  "^Error: found",
+  "lint errors",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "kube-linter: no lint errors"
+
+[[tests.kube-linter]]
+name = "findings and count kept"
+input = """
+KubeLinter 0.6.0
+
+web.yaml: (object: <no namespace>/web apps/v1, Kind=Deployment) container "web" does not have a read-only root file system (check: no-read-only-root-fs)
+web.yaml: (object: <no namespace>/web apps/v1, Kind=Deployment) container "web" has cpu limit 0 (check: unset-cpu-requirements)
+
+Error: found 2 lint errors
+"""
+expected = """web.yaml: (object: <no namespace>/web apps/v1, Kind=Deployment) container "web" does not have a read-only root file system (check: no-read-only-root-fs)
+web.yaml: (object: <no namespace>/web apps/v1, Kind=Deployment) container "web" has cpu limit 0 (check: unset-cpu-requirements)
+Error: found 2 lint errors"""
+
+[[tests.kube-linter]]
+name = "no findings collapses"
+input = """
+KubeLinter 0.6.0
+"""
+expected = "kube-linter: no lint errors"

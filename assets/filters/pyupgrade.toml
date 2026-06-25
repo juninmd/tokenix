@@ -1,0 +1,27 @@
+[filters.pyupgrade]
+description = "Keep pyupgrade rewritten-file lines, collapse no-op runs"
+match_command = "^pyupgrade\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Rewriting ",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "pyupgrade: no changes"
+
+[[tests.pyupgrade]]
+name = "rewritten files kept"
+input = """
+Rewriting src/app.py
+Rewriting src/utils.py
+"""
+expected = """Rewriting src/app.py
+Rewriting src/utils.py"""
+
+[[tests.pyupgrade]]
+name = "no changes collapses"
+input = ""
+expected = "pyupgrade: no changes"

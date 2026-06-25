@@ -1,0 +1,42 @@
+[filters.infracost]
+description = "Keep infracost project totals and cost lines, drop sub-resource detail"
+match_command = "^infracost\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*├─",
+  "^\\s*└─",
+]
+keep_lines_matching = [
+  "OVERALL TOTAL",
+  "Monthly Cost",
+  "^\\s*Project:",
+  "Total Monthly Cost",
+  "\\$[0-9]",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "infracost: no cost data"
+
+[[tests.infracost]]
+name = "totals kept, sub-resources dropped"
+input = """
+ Project: org/repo
+
+ Name                  Monthly Qty  Unit   Monthly Cost
+ aws_instance.web
+ └─ Instance usage     730          hours  $69.35
+ ├─ root_block_device                      $5.27
+
+ OVERALL TOTAL                             $74.62
+"""
+expected = """ Project: org/repo
+ Name                  Monthly Qty  Unit   Monthly Cost
+ OVERALL TOTAL                             $74.62"""
+
+[[tests.infracost]]
+name = "no resources collapses"
+input = """
+ Project: org/repo
+"""
+expected = """ Project: org/repo"""

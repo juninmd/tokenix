@@ -1,0 +1,44 @@
+[filters.terraform-docs]
+description = "Keep terraform-docs generated tables and headings, drop blanks"
+match_command = "^terraform-docs\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^#",
+  "^\\|",
+  "(?i)error",
+]
+max_lines = 120
+on_empty = "terraform-docs: no content"
+token_budget = 2000
+
+[[tests.terraform-docs]]
+name = "markdown tables and headings kept"
+input = """
+## Inputs
+
+| Name | Description | Type | Default | Required |
+|------|-------------|------|---------|----------|
+| region | AWS region | string | "us-east-1" | no |
+
+## Outputs
+
+| Name | Description |
+|------|-------------|
+| vpc_id | The VPC id |
+"""
+expected = """## Inputs
+| Name | Description | Type | Default | Required |
+|------|-------------|------|---------|----------|
+| region | AWS region | string | "us-east-1" | no |
+## Outputs
+| Name | Description |
+|------|-------------|
+| vpc_id | The VPC id |"""
+
+[[tests.terraform-docs]]
+name = "no content collapses"
+input = ""
+expected = "terraform-docs: no content"

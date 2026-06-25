@@ -1,0 +1,48 @@
+[filters.hugo]
+description = "Keep Hugo build stats table and total time, drop banner and separators"
+match_command = "^hugo\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Start building sites",
+  "^hugo v",
+  "^Built in",
+  "^[-+\\s]+$",
+  "WARN.*found no layout",
+]
+keep_lines_matching = [
+  "\\|",
+  "^Total in",
+  "(?i)error",
+  "(?i)^warn",
+]
+max_lines = 60
+on_empty = "hugo: built (no stats)"
+
+[[tests.hugo]]
+name = "stats table and total kept, banner dropped"
+input = """
+Start building sites …
+hugo v0.120.0+extended linux/amd64
+
+                   | EN
+-------------------+-----
+  Pages            | 22
+  Static files     | 12
+  Aliases          |  4
+
+Total in 18 ms
+"""
+expected = """                   | EN
+  Pages            | 22
+  Static files     | 12
+  Aliases          |  4
+Total in 18 ms"""
+
+[[tests.hugo]]
+name = "bare success collapses"
+input = """
+Start building sites …
+hugo v0.120.0+extended linux/amd64
+"""
+expected = "hugo: built (no stats)"

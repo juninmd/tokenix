@@ -1,0 +1,36 @@
+[filters.cargo-outdated]
+description = "Keep cargo-outdated table rows, collapse all-up-to-date"
+match_command = "^cargo\\s+outdated\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^-+$",
+  "^=+$",
+  "All dependencies are up to date",
+]
+keep_lines_matching = [
+  "^Name\\s",
+  "^\\S+\\s+\\d",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "cargo-outdated: all up to date"
+
+[[tests.cargo-outdated]]
+name = "outdated rows kept"
+input = """
+Name   Project  Compat  Latest   Kind    Platform
+----   -------  ------  ------   ----    --------
+serde  1.0.150  1.0.197 1.0.197  Normal  ---
+tokio  1.20.0   1.36.0  1.36.0   Normal  ---
+"""
+expected = """Name   Project  Compat  Latest   Kind    Platform
+serde  1.0.150  1.0.197 1.0.197  Normal  ---
+tokio  1.20.0   1.36.0  1.36.0   Normal  ---"""
+
+[[tests.cargo-outdated]]
+name = "up to date collapses"
+input = """
+All dependencies are up to date, yay!
+"""
+expected = "cargo-outdated: all up to date"

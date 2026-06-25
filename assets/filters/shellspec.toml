@@ -1,0 +1,33 @@
+[filters.shellspec]
+description = "Keep shellspec failures and example/failure counts, drop dots"
+match_command = "^shellspec\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^[.]+$",
+]
+keep_lines_matching = [
+  "Examples:",
+  "Failures:",
+  "^\\s*\\d+\\)",
+  "expected",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "shellspec: all examples passed"
+
+[[tests.shellspec]]
+name = "failure summary kept"
+input = """
+....F.
+
+Examples: 6, Failures: 1
+"""
+expected = "Examples: 6, Failures: 1"
+
+[[tests.shellspec]]
+name = "all pass collapses"
+input = """
+......
+"""
+expected = "shellspec: all examples passed"

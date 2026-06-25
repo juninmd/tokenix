@@ -1,0 +1,40 @@
+[filters.astro]
+description = "Keep astro build totals and errors, drop per-page generated lines"
+match_command = "^(npx\\s+)?astro\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "▶ ",
+  "└─ ",
+  "^\\s*generating ",
+]
+keep_lines_matching = [
+  "page\\(s\\) built",
+  "Complete!",
+  "Server built",
+  "built in",
+  "(?i)error",
+  "(?i)fail",
+]
+max_lines = 60
+on_empty = "astro: build done"
+
+[[tests.astro]]
+name = "build totals kept, per-page dropped"
+input = """
+12:00:00 [build] Building static entrypoints...
+▶ src/pages/index.astro
+└─ /index.html (+12ms)
+12:00:01 [build] 10 page(s) built in 1.23s
+12:00:01 [build] Complete!
+"""
+expected = """12:00:01 [build] 10 page(s) built in 1.23s
+12:00:01 [build] Complete!"""
+
+[[tests.astro]]
+name = "build error kept"
+input = """
+▶ src/pages/index.astro
+[ERROR] Could not resolve "./missing"
+"""
+expected = """[ERROR] Could not resolve "./missing\""""

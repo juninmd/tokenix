@@ -1,0 +1,35 @@
+[filters.kafka-topics]
+description = "Keep kafka-topics descriptions and errors, drop blanks"
+match_command = "^kafka-topics(\\.sh)?\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^Topic:",
+  "^\\s*Topic:",
+  "Partition:",
+  "Created topic",
+  "(?i)error",
+  "(?i)exception",
+]
+max_lines = 80
+on_empty = "kafka-topics: ok"
+
+[[tests.kafka-topics]]
+name = "topic description kept"
+input = """
+Topic: orders	PartitionCount: 3	ReplicationFactor: 2	Configs: retention.ms=604800000
+	Topic: orders	Partition: 0	Leader: 1	Replicas: 1,2	Isr: 1,2
+	Topic: orders	Partition: 1	Leader: 2	Replicas: 2,3	Isr: 2,3
+"""
+expected = """Topic: orders	PartitionCount: 3	ReplicationFactor: 2	Configs: retention.ms=604800000
+	Topic: orders	Partition: 0	Leader: 1	Replicas: 1,2	Isr: 1,2
+	Topic: orders	Partition: 1	Leader: 2	Replicas: 2,3	Isr: 2,3"""
+
+[[tests.kafka-topics]]
+name = "created topic kept"
+input = """
+Created topic orders.
+"""
+expected = "Created topic orders."

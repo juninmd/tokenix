@@ -1,0 +1,27 @@
+[filters.refurb]
+description = "Keep refurb suggestions (FURB codes), drop blanks"
+match_command = "^refurb\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "\\[FURB[0-9]+\\]",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "refurb: no suggestions"
+
+[[tests.refurb]]
+name = "suggestions kept"
+input = """
+src/app.py:10:5 [FURB109]: Replace `in (x, y)` with `in {x, y}`
+src/app.py:22:1 [FURB104]: Replace `os.getcwd()` with `Path.cwd()`
+"""
+expected = """src/app.py:10:5 [FURB109]: Replace `in (x, y)` with `in {x, y}`
+src/app.py:22:1 [FURB104]: Replace `os.getcwd()` with `Path.cwd()`"""
+
+[[tests.refurb]]
+name = "clean run collapses"
+input = ""
+expected = "refurb: no suggestions"

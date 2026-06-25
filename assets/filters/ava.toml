@@ -1,0 +1,38 @@
+[filters.ava]
+description = "Keep AVA failures and result counts, drop passing test lines"
+match_command = "^(npx\\s+)?ava\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*✔",
+]
+keep_lines_matching = [
+  "✖",
+  "tests? (passed|failed)",
+  "Rejected promise",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "ava: all tests passed"
+
+[[tests.ava]]
+name = "failures and counts kept"
+input = """
+  ✔ passes test one
+  ✔ passes test two
+  ✖ fails test three
+
+  2 tests passed
+  1 test failed
+"""
+expected = """  ✖ fails test three
+  2 tests passed
+  1 test failed"""
+
+[[tests.ava]]
+name = "all pass collapses"
+input = """
+  ✔ passes test one
+  ✔ passes test two
+"""
+expected = "ava: all tests passed"

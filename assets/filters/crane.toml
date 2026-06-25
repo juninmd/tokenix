@@ -1,0 +1,27 @@
+[filters.crane]
+description = "Keep crane digests/tags/manifests output, drop blanks"
+match_command = "^crane\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+max_lines = 60
+on_empty = "crane: ok"
+
+[[tests.crane]]
+name = "tags listed"
+input = """
+latest
+v1.2.3
+v1.2.4
+"""
+expected = """latest
+v1.2.3
+v1.2.4"""
+
+[[tests.crane]]
+name = "digest kept"
+input = """
+sha256:abc123def4567890abc123def4567890abc123def4567890abc123def4567890
+"""
+expected = "sha256:abc123def4567890abc123def4567890abc123def4567890abc123def4567890"

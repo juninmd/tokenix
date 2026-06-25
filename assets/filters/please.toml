@@ -1,0 +1,37 @@
+[filters.please]
+description = "Keep please (plz) build result and failures, drop per-target progress"
+match_command = "^(plz|please)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Building ",
+  "^\\s*Parsing ",
+]
+keep_lines_matching = [
+  "Build finished",
+  "targets? failed",
+  "Some targets failed",
+  "failed",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "please: build done"
+
+[[tests.please]]
+name = "result kept"
+input = """
+Parsing //src:all
+Building //src:lib
+Build finished; total time 12s, incrementality 50.0%, 20 targets built.
+"""
+expected = "Build finished; total time 12s, incrementality 50.0%, 20 targets built."
+
+[[tests.please]]
+name = "failure kept"
+input = """
+Building //src:lib
+//src:lib failed: compile error
+Some targets failed
+"""
+expected = """//src:lib failed: compile error
+Some targets failed"""

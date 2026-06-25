@@ -1,0 +1,33 @@
+[filters.doctl]
+description = "Keep doctl resource table rows and errors, drop blanks"
+match_command = "^doctl\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  "^ID\\s",
+  "^Name\\s",
+  "^\\w",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "doctl: no resources"
+
+[[tests.doctl]]
+name = "droplet table kept"
+input = """
+ID           Name        Public IPv4     Status
+123456789    web-1       203.0.113.10    active
+987654321    db-1        203.0.113.20    active
+"""
+expected = """ID           Name        Public IPv4     Status
+123456789    web-1       203.0.113.10    active
+987654321    db-1        203.0.113.20    active"""
+
+[[tests.doctl]]
+name = "auth error kept"
+input = """
+Error: Unable to authenticate you
+"""
+expected = "Error: Unable to authenticate you"

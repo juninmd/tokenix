@@ -1,0 +1,51 @@
+[filters.sam]
+description = "Keep AWS SAM build/deploy results and stack outputs, drop event stream noise"
+match_command = "^sam\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*-+\\s*$",
+  "CREATE_IN_PROGRESS",
+  "UPDATE_IN_PROGRESS",
+  "DELETE_IN_PROGRESS",
+]
+keep_lines_matching = [
+  "Build Succeeded",
+  "Build Failed",
+  "Successfully created/updated stack",
+  "CREATE_COMPLETE",
+  "UPDATE_COMPLETE",
+  "ROLLBACK",
+  "FAILED",
+  "Outputs",
+  "(?i)error",
+]
+max_lines = 80
+on_empty = "sam: done"
+
+[[tests.sam]]
+name = "build and deploy results kept"
+input = """
+Building codeuri: hello_world runtime: python3.12
+
+Build Succeeded
+
+CloudFormation events from stack operations
+ResourceStatus  ResourceType  LogicalResourceId
+CREATE_IN_PROGRESS  AWS::Lambda::Function  HelloWorldFunction
+CREATE_COMPLETE  AWS::Lambda::Function  HelloWorldFunction
+
+Successfully created/updated stack - my-app in us-east-1
+"""
+expected = """Build Succeeded
+CREATE_COMPLETE  AWS::Lambda::Function  HelloWorldFunction
+Successfully created/updated stack - my-app in us-east-1"""
+
+[[tests.sam]]
+name = "build failure kept"
+input = """
+Build Failed
+Error: PythonPipBuilder:ResolveDependencies - {pkg}
+"""
+expected = """Build Failed
+Error: PythonPipBuilder:ResolveDependencies - {pkg}"""

@@ -1,0 +1,50 @@
+[filters.hyperfine]
+description = "Keep hyperfine mean timings and comparison summary, drop range/warmup detail"
+match_command = "^hyperfine\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*Range \\(min",
+  "^\\s*Warning:",
+]
+keep_lines_matching = [
+  "^Benchmark \\d",
+  "Time \\(mean",
+  "^Summary",
+  "ran",
+  "faster",
+  "(?i)error",
+]
+max_lines = 60
+on_empty = "hyperfine: benchmark done"
+
+[[tests.hyperfine]]
+name = "means and summary kept"
+input = """
+Benchmark 1: grep foo
+  Time (mean ± σ):       5.2 ms ±   0.3 ms
+  Range (min … max):     4.8 ms …   6.1 ms
+
+Benchmark 2: rg foo
+  Time (mean ± σ):       1.1 ms ±   0.1 ms
+  Range (min … max):     0.9 ms …   1.4 ms
+
+Summary
+  'rg foo' ran 4.73 ± 0.45 times faster than 'grep foo'
+"""
+expected = """Benchmark 1: grep foo
+  Time (mean ± σ):       5.2 ms ±   0.3 ms
+Benchmark 2: rg foo
+  Time (mean ± σ):       1.1 ms ±   0.1 ms
+Summary
+  'rg foo' ran 4.73 ± 0.45 times faster than 'grep foo'"""
+
+[[tests.hyperfine]]
+name = "single benchmark kept"
+input = """
+Benchmark 1: ls
+  Time (mean ± σ):       2.0 ms ±   0.2 ms
+  Range (min … max):     1.7 ms …   2.5 ms
+"""
+expected = """Benchmark 1: ls
+  Time (mean ± σ):       2.0 ms ±   0.2 ms"""

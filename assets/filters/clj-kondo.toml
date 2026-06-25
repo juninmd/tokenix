@@ -1,0 +1,34 @@
+[filters.clj-kondo]
+description = "Keep clj-kondo warnings/errors and the linting summary line"
+match_command = "^clj-kondo\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+keep_lines_matching = [
+  ": warning:",
+  ": error:",
+  "^linting took",
+  "(?i)\\berror\\b",
+]
+max_lines = 120
+on_empty = "clj-kondo: clean"
+
+[[tests.clj-kondo]]
+name = "findings and summary kept, blanks dropped"
+input = """
+/tmp/example.cljc:1:14: warning: Expected: number, received: string.
+
+/tmp/example.cljc:1:26: warning: Expected: number, received: keyword.
+
+linting took 16ms, errors: 0, warnings: 2
+"""
+expected = """/tmp/example.cljc:1:14: warning: Expected: number, received: string.
+/tmp/example.cljc:1:26: warning: Expected: number, received: keyword.
+linting took 16ms, errors: 0, warnings: 2"""
+
+[[tests.clj-kondo]]
+name = "no findings collapses"
+input = """
+"""
+expected = "clj-kondo: clean"

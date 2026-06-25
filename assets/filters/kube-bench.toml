@@ -1,0 +1,46 @@
+[filters.kube-bench]
+description = "Keep kube-bench FAIL/WARN checks and summary, drop PASS/INFO"
+match_command = "^kube-bench\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[PASS\\]",
+  "^\\[INFO\\]",
+]
+keep_lines_matching = [
+  "^\\[FAIL\\]",
+  "^\\[WARN\\]",
+  "checks (PASS|FAIL|WARN|INFO)",
+  "== Summary",
+  "(?i)error",
+]
+max_lines = 100
+on_empty = "kube-bench: all checks passed"
+
+[[tests.kube-bench]]
+name = "fail/warn and summary kept"
+input = """
+[INFO] 1 Master Node Security Configuration
+[PASS] 1.1.1 Ensure that the API server pod spec file permissions
+[FAIL] 1.1.2 Ensure that the etcd data dir ownership
+[WARN] 1.1.3 Ensure that the controller manager
+
+== Summary ==
+50 checks PASS
+3 checks FAIL
+2 checks WARN
+"""
+expected = """[FAIL] 1.1.2 Ensure that the etcd data dir ownership
+[WARN] 1.1.3 Ensure that the controller manager
+== Summary ==
+50 checks PASS
+3 checks FAIL
+2 checks WARN"""
+
+[[tests.kube-bench]]
+name = "all pass collapses"
+input = """
+[INFO] 1 Master Node Security Configuration
+[PASS] 1.1.1 Ensure permissions
+"""
+expected = "kube-bench: all checks passed"

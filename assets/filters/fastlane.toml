@@ -1,0 +1,39 @@
+[filters.fastlane]
+description = "Keep fastlane result and summary table, drop per-step timestamps"
+match_command = "^fastlane\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\[\\d\\d:\\d\\d:\\d\\d\\]: \\$",
+  "^\\[\\d\\d:\\d\\d:\\d\\d\\]: Driving",
+]
+keep_lines_matching = [
+  "finished successfully",
+  "fastlane finished",
+  "Successfully",
+  "error",
+  "failed",
+  "\\| fastlane",
+  "(?i)exception",
+]
+max_lines = 60
+on_empty = "fastlane: done"
+
+[[tests.fastlane]]
+name = "success result kept"
+input = """
+[12:00:00]: Driving the lane 'ios release'
+[12:00:01]: $ xcodebuild ...
+[12:00:30]: Successfully uploaded the new binary
+fastlane.tools finished successfully
+"""
+expected = """[12:00:30]: Successfully uploaded the new binary
+fastlane.tools finished successfully"""
+
+[[tests.fastlane]]
+name = "failure kept"
+input = """
+[12:00:00]: Driving the lane 'ios release'
+[12:00:10]: Build failed with error code 65
+"""
+expected = "[12:00:10]: Build failed with error code 65"
