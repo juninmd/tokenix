@@ -12,12 +12,17 @@ if [[ "$TOKENIX" != /* ]] && { [[ "$TOKENIX" == */* ]] || ! command -v "$TOKENIX
   TOKENIX="$(pwd)/$TOKENIX"
 fi
 TMPDIR_ROOT=$(mktemp -d)
-trap 'rm -rf "$TMPDIR_ROOT"' EXIT
+ORIGINAL_PWD=$(pwd)
+cleanup() {
+  cd "$ORIGINAL_PWD" 2>/dev/null || cd /tmp 2>/dev/null || true
+  rm -rf "$TMPDIR_ROOT" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 PASS=0; FAIL=0
 _c() { printf "\033[%sm%s\033[0m\n" "$1" "$2"; }
 pass() { PASS=$((PASS+1)); _c "32" "  PASS  $1"; }
-fail() { FAIL=$((FAIL+1)); _c "31" "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"; }
+fail() { FAIL=$((FAIL+1)); _c "31" "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"; return 0; }
 section() { echo; _c "1;34" "==> $1"; }
 
 # ── Test repo ──────────────────────────────────────────────────────────────
@@ -140,12 +145,14 @@ git init -q
 git config user.email "t@t"
 git config user.name "T"
 
-# Install Copilot hooks (local so .github/hooks/hooks.json is created)
-"$TOKENIX" install-hook --tool copilot --local 2>&1 | grep -q "Copilot" && {
+# Install Copilot hooks (local so .github/hooks/hooks.json is created). The
+# durable contract is command success plus the documented hooks file shape.
+INSTALL_OUT=$("$TOKENIX" install-hook --tool copilot --local 2>&1); CODE=$?
+if [ "$CODE" = "0" ]; then
   pass "install-hook --tool copilot succeeds"
-} || {
-  fail "install-hook did not mention Copilot"
-}
+else
+  fail "install-hook --tool copilot failed (code=$CODE)" "out: $INSTALL_OUT"
+fi
 
 # Verify hooks.json exists with correct structure
 if [ -f ".github/hooks/hooks.json" ]; then

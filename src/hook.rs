@@ -404,6 +404,14 @@ fn release_embed_slot() {
     }
 }
 
+fn index_has_embeddings(repo_root: &Path) -> bool {
+    let Some(conn) = crate::store::open_db(repo_root, false).ok().flatten() else {
+        return false;
+    };
+    conn.query_row("SELECT 1 FROM embeddings LIMIT 1", [], |_| Ok(()))
+        .is_ok()
+}
+
 fn daemon_search_with_hook_timeout(
     repo_root: &Path,
     pattern: &str,
@@ -453,6 +461,14 @@ fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
             false,
             String::new(),
             format!("lexical query: '{}'", pattern),
+        );
+    }
+
+    if !index_has_embeddings(repo_root) {
+        return (
+            false,
+            String::new(),
+            "semantic index has no embeddings".to_string(),
         );
     }
 

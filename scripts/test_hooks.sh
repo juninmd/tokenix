@@ -20,13 +20,18 @@ if [[ "$TOKENIX" != /* ]] && { [[ "$TOKENIX" == */* ]] || ! command -v "$TOKENIX
   TOKENIX="$(pwd)/$TOKENIX"
 fi
 TMPDIR_ROOT=$(mktemp -d)
-trap 'rm -rf "$TMPDIR_ROOT"' EXIT
+ORIGINAL_PWD=$(pwd)
+cleanup() {
+  cd "$ORIGINAL_PWD" 2>/dev/null || cd /tmp 2>/dev/null || true
+  rm -rf "$TMPDIR_ROOT" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 # ── helpers ────────────────────────────────────────────────────────────────
 PASS=0; FAIL=0
 _c() { printf "\033[%sm%s\033[0m\n" "$1" "$2"; }
 pass() { PASS=$((PASS+1)); _c "32" "  PASS  $1"; }
-fail() { FAIL=$((FAIL+1)); _c "31" "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"; }
+fail() { FAIL=$((FAIL+1)); _c "31" "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"; return 0; }
 section() { echo; _c "1;34" "==> $1"; }
 
 # Run hook/hook-post, capture stdout+stderr+exit

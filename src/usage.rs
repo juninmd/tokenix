@@ -6,7 +6,7 @@
 //! by day/week/month/session/model/project, plus rolling 5-hour billing blocks.
 
 use anyhow::Result;
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Timelike};
 use colored::Colorize;
 use serde::Serialize;
 use serde_json::Value;
