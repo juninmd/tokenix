@@ -1,0 +1,12 @@
+# OSV exceptions consumed by OpenSSF Scorecard's Vulnerabilities check.
+# Keep this file next to Cargo.lock; OSV config does not propagate directories.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0119"
+ignoreUntil = 2026-10-01
+reason = "number_prefix is an unmaintained transitive dependency from fastembed -> hf-hub -> indicatif; no reachable patched version yet. Review quarterly or remove when upstream drops it."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+ignoreUntil = 2026-10-01
+reason = "paste is an unmaintained transitive proc-macro from tokenizers/fastembed/image; no reachable patched version yet. Review quarterly or remove when upstream drops it."

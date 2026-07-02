@@ -221,6 +221,7 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -325,6 +326,7 @@ jobs:
     # Creating the GitHub Release + tag needs write to repo contents.
     permissions:
       contents: write
+      attestations: read
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -347,6 +349,20 @@ jobs:
           cd artifacts
           sha256sum * > sha256sums.txt
           cat sha256sums.txt
+
+      - name: Download SLSA provenance bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          for file in tokenix-*; do
+            digest="$(sha256sum "$file" | cut -d' ' -f1)"
+            gh attestation download "$file" \
+              --repo "$GITHUB_REPOSITORY" \
+              --predicate-type https://slsa.dev/provenance/v1
+            mv "sha256:${digest}.jsonl" "${file}.intoto.jsonl"
+            test -s "${file}.intoto.jsonl"
+          done
 
       - name: Extract changelog entry
         id: changelog
@@ -384,6 +400,7 @@ jobs:
             artifacts/tokenix-windows-x86_64.exe
             artifacts/tokenix-windows-x86_64-directml.exe
             artifacts/sha256sums.txt
+            artifacts/*.intoto.jsonl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

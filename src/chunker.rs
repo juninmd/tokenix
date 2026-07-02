@@ -359,7 +359,13 @@ fn enforce_token_cap(chunks: Vec<Chunk>) -> Vec<Chunk> {
         while start < len {
             let mut end = (start + max_chars).min(len);
             while end < len && !content.is_char_boundary(end) {
-                end += 1;
+                end -= 1;
+            }
+            if end == start {
+                end = (start + max_chars).min(len);
+                while end < len && !content.is_char_boundary(end) {
+                    end += 1;
+                }
             }
             let piece = &content[start..end];
             out.push(Chunk {
@@ -1211,13 +1217,29 @@ mod tests {
         assert!(chunks.len() > 1, "oversized chunk must be split");
         for c in &chunks {
             assert!(
-                c.token_count <= MAX_CHUNK_TOKENS + 1,
+                c.token_count <= MAX_CHUNK_TOKENS,
                 "every chunk must respect the token cap, got {}",
                 c.token_count
             );
         }
         let rejoined: String = chunks.iter().map(|c| c.content.as_str()).collect();
         assert_eq!(rejoined, content, "no content may be lost when splitting");
+    }
+
+    #[test]
+    fn giant_utf8_single_line_respects_hard_token_cap() {
+        let payload = "é".repeat(MAX_CHUNK_TOKENS * 4 + 7);
+        let chunks = chunk_file("notes.txt", &payload);
+
+        assert!(chunks.len() > 1, "oversized UTF-8 input must split");
+        assert!(
+            chunks.iter().all(|c| c.token_count <= MAX_CHUNK_TOKENS),
+            "all chunks must stay within the hard cap: {:?}",
+            chunks.iter().map(|c| c.token_count).collect::<Vec<_>>()
+        );
+
+        let rejoined: String = chunks.iter().map(|c| c.content.as_str()).collect();
+        assert_eq!(rejoined, payload, "UTF-8 split must preserve content");
     }
 
     #[test]

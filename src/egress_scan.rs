@@ -299,11 +299,12 @@ fn scan_content(content: &str, rules: &[Rule]) -> Vec<RawMatch> {
 
 fn normalize_host(raw: &str) -> String {
     let trimmed = trim_target(raw);
-    let without_scheme = trimmed
+    let normalized = trimmed.to_ascii_lowercase();
+    let without_scheme = normalized
         .strip_prefix("https://")
-        .or_else(|| trimmed.strip_prefix("http://"))
-        .or_else(|| trimmed.strip_prefix("ssh://"))
-        .unwrap_or(trimmed);
+        .or_else(|| normalized.strip_prefix("http://"))
+        .or_else(|| normalized.strip_prefix("ssh://"))
+        .unwrap_or(&normalized);
     let host = without_scheme
         .split(['/', ':', '?', '#'])
         .next()
@@ -884,6 +885,17 @@ mod tests {
     }
 
     #[test]
+    fn test_host_normalization_is_case_insensitive() {
+        let content = "POST https://WWW.API.EXAMPLE.COM/v1";
+        let rules = test_rules();
+        let hits = scan_content(content, &rules);
+        assert!(
+            hits.iter().any(|h| h.host == "api.example.com"),
+            "should lowercase hosts and strip www., got: {hits:?}"
+        );
+    }
+
+    #[test]
     fn test_host_reputation_matches_subdomains_and_prefers_dangerous() {
         let reputation = HostReputation {
             safe: HashSet::from(["example.com".to_string(), "dual.test".to_string()]),
@@ -900,6 +912,18 @@ mod tests {
         assert!(matches!(
             reputation.verdict("dual.test"),
             HostVerdict::Dangerous
+        ));
+    }
+
+    #[test]
+    fn test_host_reputation_accepts_mixed_case_input() {
+        let reputation = HostReputation {
+            safe: HashSet::from(["api.example.com".to_string()]),
+            dangerous: HashSet::new(),
+        };
+        assert!(matches!(
+            reputation.verdict(&normalize_host("HTTPS://API.EXAMPLE.COM/v1")),
+            HostVerdict::Safe
         ));
     }
 }
