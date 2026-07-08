@@ -1050,7 +1050,7 @@ fn strip_subcommand_global_opts(argv: &[String]) -> Vec<String> {
         } else if a.len() >= 2 && a.starts_with('-') {
             if let Some((key, _)) = a.split_once('=') {
                 if valued.contains(&key) {
-                    i += 1; // -chdir=dir
+                    i += 1; // -opt=value
                     continue;
                 }
             }
@@ -2213,11 +2213,13 @@ on_empty = "empty filter output"
         assert_eq!(eff("cargo +nightly test"), "cargo test");
         // terraform / tofu `-chdir=DIR` global flag precedes the subcommand.
         assert_eq!(eff("terraform -chdir=./infra apply"), "terraform apply");
+        assert_eq!(eff("terraform -chdir ./infra apply"), "terraform apply");
         assert_eq!(
             eff("terraform -chdir=/a/b plan -out=p"),
             "terraform plan -out=p"
         );
         assert_eq!(eff("tofu -chdir=. init"), "tofu init");
+        assert_eq!(eff("kubectl -n=prod get pods"), "kubectl get pods");
         // Subcommand-less or unknown tools are untouched.
         assert_eq!(eff("git status"), "git status");
         assert_eq!(eff("ls -la"), "ls -la");
