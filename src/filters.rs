@@ -2273,6 +2273,34 @@ on_empty = "empty filter output"
     }
 
     #[test]
+    fn bundled_filters_route_new_targets() {
+        let filters = load_bundled_filters();
+        let desc = |cmd: &str| {
+            find_filter(cmd, &filters)
+                .and_then(|f| f.description.clone())
+                .unwrap_or_default()
+                .to_lowercase()
+        };
+        // real-world command forms (global flags / cd prefix) must reach the new filters
+        assert!(
+            desc("git -C /repo add .").contains("line-ending"),
+            "git add"
+        );
+        assert!(
+            desc("cd repo && git commit -m x").contains("file-mode"),
+            "git commit"
+        );
+        assert!(
+            desc("pnpm --filter @x/y remove hono").contains("remove"),
+            "pnpm remove"
+        );
+        assert!(
+            desc("Get-CimInstance Win32_Service").contains("ciminstance"),
+            "get-ciminstance"
+        );
+    }
+
+    #[test]
     fn apply_filter_match_output_unless_guards_errors() {
         let f = FilterDef {
             description: None,

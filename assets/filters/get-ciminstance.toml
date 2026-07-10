@@ -1,0 +1,33 @@
+[filters.get-ciminstance]
+description = "Compact PowerShell Get-CimInstance/Get-WmiObject table output"
+match_command = "^(Get-CimInstance|gcim|Get-WmiObject|gwmi)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+# PS formats CIM/WMI queries as tables padded to the host width, so each row
+# carries a long tail of trailing spaces; truncate_lines_at trims that and
+# max_lines caps large process/service enumerations.
+strip_lines_matching = [
+  "^\\s*$"
+]
+truncate_lines_at = 160
+max_lines = 40
+token_budget = 1500
+
+[[tests.get-ciminstance]]
+name = "service table preserved and compacted"
+input = """
+Name                           DisplayName                          State   StartName
+----                           -----------                          -----   ---------
+Dhcp                           DHCP Client                          Running LocalSystem
+Dnscache                       DNS Client                           Running NetworkService
+"""
+expected = """Name                           DisplayName                          State   StartName
+----                           -----------                          -----   ---------
+Dhcp                           DHCP Client                          Running LocalSystem
+Dnscache                       DNS Client                           Running NetworkService"""
+
+[[tests.get-ciminstance]]
+name = "empty result"
+input = """
+"""
+expected = ""

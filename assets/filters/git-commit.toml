@@ -1,0 +1,41 @@
+[filters.git-commit]
+description = "Collapse git commit file-mode list, keep the summary line"
+match_command = "^git\\s+commit\\b"
+strip_ansi = true
+passthrough_when_emptied = true
+# Keep the `[branch hash] message` header and the `N files changed` summary; drop
+# the per-file `create/delete mode`, rename/copy/rewrite lines and Windows
+# CRLF/LF warnings. Errors (`fatal:`, `error:`) are untouched.
+strip_lines_matching = [
+  "^\\s*$",
+  "^ (create|delete) mode ",
+  "^ rename ",
+  "^ copy ",
+  "^ rewrite ",
+  "^ mode change ",
+  "^warning:.*(LF will be replaced by CRLF|CRLF will be replaced by LF)",
+]
+max_lines = 40
+
+[[tests.git-commit]]
+name = "large commit collapses file list"
+input = """
+[main 302befd] feat: dockerize bff/web and add ghcr publish workflow
+ 46 files changed, 2920 insertions(+), 551 deletions(-)
+ create mode 100644 .dockerignore
+ create mode 100644 .github/workflows/docker-publish.yml
+ delete mode 100644 old.txt
+ rename src/{a.ts => b.ts} (98%)
+"""
+expected = """[main 302befd] feat: dockerize bff/web and add ghcr publish workflow
+ 46 files changed, 2920 insertions(+), 551 deletions(-)"""
+
+[[tests.git-commit]]
+name = "crlf warning stripped keep header"
+input = """
+warning: in the working copy of 'src/ai.ts', LF will be replaced by CRLF the next time Git touches it
+[main a1b2c3d] fix: tidy imports
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+"""
+expected = """[main a1b2c3d] fix: tidy imports
+ 1 file changed, 2 insertions(+), 2 deletions(-)"""
