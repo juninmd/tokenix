@@ -1,6 +1,6 @@
 [filters.get-ciminstance]
 description = "Compact PowerShell Get-CimInstance/Get-WmiObject table output"
-match_command = "^(Get-CimInstance|gcim|Get-WmiObject|gwmi)\\b"
+match_command = "(?i)^(get-ciminstance|gcim|get-wmiobject|gwmi)\\b"
 passthrough_when_emptied = true
 strip_ansi = true
 # PS formats CIM/WMI queries as tables padded to the host width, so each row
