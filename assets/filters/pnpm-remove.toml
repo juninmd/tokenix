@@ -1,0 +1,53 @@
+[filters.pnpm-remove]
+description = "Compact pnpm remove/update/prune output"
+# pnpm-install covers install/add/i/in; the mutating siblings emit the same
+# `Progress: resolved …` spinner spam. `pnpm --filter X remove …` reaches here
+# after global-flag stripping (strip_subcommand_global_opts).
+match_command = "^pnpm\\s+(remove|rm|uninstall|un|update|up|upgrade|dedupe|prune)\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]",
+  "Progress:",
+  "│",
+  "Fetched",
+  "Resolving",
+  "Extracting",
+  "Checking",
+  "up to date",
+  "packages in",
+  "WARN.*Lockfile only",
+  "WARN.*deprecated"
+]
+max_lines = 40
+
+[[tests.pnpm-remove]]
+name = "remove drops progress spam"
+input = """
+ WARN  `node_modules` is present. Lockfile only installation will make it out-of-date
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Progress: resolved 171, reused 0, downloaded 0, added 0
+Progress: resolved 308, reused 308, downloaded 0, added 0
+
+Packages: -4
+Done in 1.2s
+"""
+expected = """Packages: -4
+Done in 1.2s"""
+
+[[tests.pnpm-remove]]
+name = "update keeps result summary"
+input = """
+Progress: resolved 900, reused 900, downloaded 0, added 0
+
+dependencies:
+- lodash 4.17.20
++ lodash 4.17.21
+
+Done in 3.4s
+"""
+expected = """dependencies:
+- lodash 4.17.20
++ lodash 4.17.21
+Done in 3.4s"""

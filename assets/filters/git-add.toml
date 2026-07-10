@@ -1,0 +1,30 @@
+[filters.git-add]
+description = "Drop noisy CRLF/LF line-ending warnings from git add"
+match_command = "^git\\s+add\\b"
+strip_ansi = true
+# `git add` is silent on success; on Windows it emits one line-ending warning per
+# file (`warning: ... LF will be replaced by CRLF ...`) — pure noise. Real errors
+# (`fatal:`, `error:`) are not stripped, so they still surface. No
+# passthrough_when_emptied: an all-warnings run should collapse to nothing.
+strip_lines_matching = [
+  "^\\s*$",
+  "^warning:.*(LF will be replaced by CRLF|CRLF will be replaced by LF)",
+]
+max_lines = 40
+
+[[tests.git-add]]
+name = "line-ending warnings collapse to nothing"
+input = """
+warning: in the working copy of 'public/index.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/ai.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/crawlers/demo.ts', LF will be replaced by CRLF the next time Git touches it
+"""
+expected = ""
+
+[[tests.git-add]]
+name = "real error survives"
+input = """
+warning: in the working copy of 'src/ai.ts', LF will be replaced by CRLF the next time Git touches it
+fatal: pathspec 'does-not-exist.ts' did not match any files
+"""
+expected = """fatal: pathspec 'does-not-exist.ts' did not match any files"""
