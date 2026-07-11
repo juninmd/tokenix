@@ -1,0 +1,36 @@
+[filters.get-content]
+description = "Cap unbounded PowerShell Get-Content full-file dumps"
+match_command = "^(Get-Content|gc)\\b"
+# Already-bounded reads (-Tail/-TotalCount/-Head/-Raw) mean the agent
+# already sliced its own output — leave those alone; only compress
+# unbounded full dumps.
+skip_when_matches = "(?i)-Tail\\b|-TotalCount\\b|-Head\\b|-Raw\\b"
+passthrough_when_emptied = true
+strip_ansi = true
+# Unlike most filters, a Get-Content cut can make the agent believe it read
+# the whole file when it only saw a slice — always flag it.
+notify_on_truncate = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+truncate_lines_at = 300
+max_lines = 500
+token_budget = 4000
+
+[[tests.get-content]]
+name = "trailing whitespace and blank runs collapse"
+input = """
+line one
+line two
+
+line three
+"""
+expected = """line one
+line two
+line three"""
+
+[[tests.get-content]]
+name = "empty file"
+input = """
+"""
+expected = ""
