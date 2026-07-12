@@ -21,6 +21,22 @@ pub struct FilterDef {
     #[allow(dead_code)]
     pub description: Option<String>,
     pub match_command: String,
+    /// When set, this filter is skipped (candidate falls through to the next
+    /// filter or raw passthrough) if the matched candidate ALSO matches this
+    /// regex. Use for commands where certain flags mean the agent already
+    /// bounded its own output (e.g. `Get-Content -Tail`) and further
+    /// compression would be redundant or could clip output the agent
+    /// explicitly asked for. Only sees the matched segment/candidate text,
+    /// not cross-segment context (e.g. a stripped-off pipe target).
+    #[serde(default)]
+    pub skip_when_matches: Option<String>,
+    /// When true, a `max_lines`/`head_lines`/`tail_lines`/`truncate_lines_at`
+    /// cut that actually drops content appends a `[... N ... ]` marker, so
+    /// the agent knows it saw a partial view. Off by default — most bundled
+    /// filters compress noise the agent doesn't need to know was cut; opt in
+    /// per-filter where a silent cut could mislead (e.g. full-file reads).
+    #[serde(default)]
+    pub notify_on_truncate: bool,
     #[serde(default)]
     pub strip_ansi: bool,
     #[serde(default)]
@@ -519,6 +535,15 @@ pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a Filter
                     // JSON bypass: if command asks for JSON output, but filter does not support summarizing JSON, bypass
                     if has_json && f.summarize_json.is_none() {
                         continue;
+                    }
+                    // Per-filter skip: candidate matches a form the filter opts out of
+                    // (e.g. already-bounded reads via -Tail, or piped into another command).
+                    if let Some(skip) = &f.skip_when_matches {
+                        if let Ok(skip_re) = Regex::new(skip) {
+                            if skip_re.is_match(candidate) {
+                                continue;
+                            }
+                        }
                     }
                     let pattern_len = f.match_command.len();
                     if pattern_len > max_len {
@@ -1310,15 +1335,34 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
         lines = apply_summarize_json(lines, summarize);
     }
 
-    let lines = apply_sizing(lines, f);
+    let (mut lines, omitted_by_sizing) = apply_sizing(lines, f);
+    if f.notify_on_truncate && omitted_by_sizing > 0 {
+        lines.push(format!(
+            "[... {omitted_by_sizing} lines omitted (line limit) ...]"
+        ));
+    }
 
     // NEW: token_budget - hard token limit with smart truncation
     let mut result = if let Some(max_len) = f.truncate_lines_at {
-        lines
+        let mut truncated_line_count = 0usize;
+        let joined = lines
             .iter()
-            .map(|l| truncate_at_char_boundary(l, max_len))
+            .map(|l| {
+                let t = truncate_at_char_boundary(l, max_len);
+                if t.len() < l.len() {
+                    truncated_line_count += 1;
+                }
+                t
+            })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        if f.notify_on_truncate && truncated_line_count > 0 {
+            format!(
+                "{joined}\n[... {truncated_line_count} line(s) truncated to {max_len} chars ...]"
+            )
+        } else {
+            joined
+        }
     } else {
         lines.join("\n")
     };
@@ -1777,7 +1821,8 @@ fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-fn apply_sizing(mut lines: Vec<String>, f: &FilterDef) -> Vec<String> {
+fn apply_sizing(mut lines: Vec<String>, f: &FilterDef) -> (Vec<String>, usize) {
+    let original_len = lines.len();
     if let Some(head) = f.head_lines {
         lines.truncate(head);
     } else if let Some(tail) = f.tail_lines {
@@ -1788,7 +1833,8 @@ fn apply_sizing(mut lines: Vec<String>, f: &FilterDef) -> Vec<String> {
     } else if let Some(max) = f.max_lines {
         lines.truncate(max);
     }
-    lines
+    let omitted = original_len - lines.len();
+    (lines, omitted)
 }
 
 /// Generate the TOML prompt to send to an AI CLI for filter creation.
@@ -2024,6 +2070,8 @@ on_empty = "empty filter output"
         let f = FilterDef {
             description: None,
             match_command: ".*".to_string(),
+            skip_when_matches: None,
+            notify_on_truncate: false,
             strip_ansi: false,
             strip_lines_matching: vec![],
             keep_lines_matching: vec![],
@@ -2052,6 +2100,8 @@ on_empty = "empty filter output"
         let mut f = FilterDef {
             description: None,
             match_command: ".*".to_string(),
+            skip_when_matches: None,
+            notify_on_truncate: false,
             strip_ansi: false,
             strip_lines_matching: vec![],
             keep_lines_matching: vec![],
@@ -2125,6 +2175,8 @@ on_empty = "empty filter output"
         let f = FilterDef {
             description: None,
             match_command: "^gitleaks\\b".to_string(),
+            skip_when_matches: None,
+            notify_on_truncate: false,
             strip_ansi: false,
             strip_lines_matching: vec![],
             keep_lines_matching: vec![],
@@ -2155,6 +2207,8 @@ on_empty = "empty filter output"
         let f_cat = FilterDef {
             description: None,
             match_command: "^cat\\b".to_string(),
+            skip_when_matches: None,
+            notify_on_truncate: false,
             strip_ansi: false,
             strip_lines_matching: vec![],
             keep_lines_matching: vec![],
@@ -2176,6 +2230,8 @@ on_empty = "empty filter output"
         let f_gitleaks = FilterDef {
             description: None,
             match_command: "^gitleaks\\b".to_string(),
+            skip_when_matches: None,
+            notify_on_truncate: false,
             strip_ansi: false,
             strip_lines_matching: vec![],
             keep_lines_matching: vec![],
@@ -2197,6 +2253,39 @@ on_empty = "empty filter output"
         let filters2 = [f_cat, f_gitleaks];
         let matched = find_filter("cat x | gitleaks detect", &filters2).unwrap();
         assert_eq!(matched.match_command, "^gitleaks\\b");
+    }
+
+    #[test]
+    fn skip_when_matches_bypasses_already_bounded_reads() {
+        let f = FilterDef {
+            description: None,
+            match_command: "^(Get-Content|gc)\\b".to_string(),
+            skip_when_matches: Some("(?i)-Tail\\b|-TotalCount\\b|-Head\\b|-Raw\\b".to_string()),
+            notify_on_truncate: false,
+            strip_ansi: false,
+            strip_lines_matching: vec![],
+            keep_lines_matching: vec![],
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            on_empty: None,
+            passthrough_when_emptied: false,
+            match_output: vec![],
+            truncate_lines_at: None,
+            filter_stderr: false,
+            replace_patterns: vec![],
+            extract_sections: vec![],
+            semantic_filter: None,
+            deduplicate_blocks: None,
+            summarize_json: None,
+            token_budget: None,
+        };
+        let filters = [f];
+        // Unbounded full dump: filter applies.
+        assert!(find_filter("Get-Content large.log", &filters).is_some());
+        // Agent already sliced its own read: filter steps aside.
+        assert!(find_filter("Get-Content large.log -Tail 20", &filters).is_none());
+        assert!(find_filter("Get-Content large.log -TotalCount 50", &filters).is_none());
     }
 
     #[test]
@@ -2249,6 +2338,8 @@ on_empty = "empty filter output"
         let f = FilterDef {
             description: None,
             match_command: "^git\\s+add\\b".to_string(),
+            skip_when_matches: None,
+            notify_on_truncate: false,
             strip_ansi: false,
             strip_lines_matching: vec![],
             keep_lines_matching: vec![],
@@ -2305,6 +2396,8 @@ on_empty = "empty filter output"
         let f = FilterDef {
             description: None,
             match_command: ".*".to_string(),
+            skip_when_matches: None,
+            notify_on_truncate: false,
             strip_ansi: false,
             strip_lines_matching: vec![],
             keep_lines_matching: vec![],
@@ -2340,6 +2433,8 @@ on_empty = "empty filter output"
         FilterDef {
             description: None,
             match_command: ".*".to_string(),
+            skip_when_matches: None,
+            notify_on_truncate: false,
             strip_ansi: false,
             strip_lines_matching: vec![],
             keep_lines_matching: vec![],
@@ -2406,6 +2501,30 @@ on_empty = "empty filter output"
         both.head_lines = Some(1);
         both.tail_lines = Some(2);
         assert_eq!(apply_filter(input, &both), "l1");
+    }
+
+    #[test]
+    fn notify_on_truncate_is_opt_in_per_filter() {
+        let input = "l1\nl2\nl3\nl4\nl5\n";
+        let mut silent = base_filter();
+        silent.max_lines = Some(2);
+        assert_eq!(apply_filter(input, &silent), "l1\nl2");
+
+        let mut noisy = base_filter();
+        noisy.max_lines = Some(2);
+        noisy.notify_on_truncate = true;
+        assert_eq!(
+            apply_filter(input, &noisy),
+            "l1\nl2\n[... 3 lines omitted (line limit) ...]"
+        );
+
+        let mut noisy_chars = base_filter();
+        noisy_chars.truncate_lines_at = Some(4);
+        noisy_chars.notify_on_truncate = true;
+        assert_eq!(
+            apply_filter("café\nação\n", &noisy_chars),
+            "caf\naç\n[... 2 line(s) truncated to 4 chars ...]"
+        );
     }
 
     #[test]
@@ -3152,6 +3271,8 @@ on_empty = "empty filter output"
             FilterDef {
                 description: None,
                 match_command: "^cargo\\s+test\\b".to_string(),
+                skip_when_matches: None,
+                notify_on_truncate: false,
                 strip_ansi: false,
                 strip_lines_matching: vec![],
                 keep_lines_matching: vec![],
@@ -3173,6 +3294,8 @@ on_empty = "empty filter output"
             FilterDef {
                 description: None,
                 match_command: "^docker\\s+build\\b".to_string(),
+                skip_when_matches: None,
+                notify_on_truncate: false,
                 strip_ansi: false,
                 strip_lines_matching: vec![],
                 keep_lines_matching: vec![],
@@ -3194,6 +3317,8 @@ on_empty = "empty filter output"
             FilterDef {
                 description: None,
                 match_command: "^git\\s+diff\\b".to_string(),
+                skip_when_matches: None,
+                notify_on_truncate: false,
                 strip_ansi: false,
                 strip_lines_matching: vec![],
                 keep_lines_matching: vec![],
@@ -3215,6 +3340,8 @@ on_empty = "empty filter output"
             FilterDef {
                 description: None,
                 match_command: "^git\\s+log\\b".to_string(),
+                skip_when_matches: None,
+                notify_on_truncate: false,
                 strip_ansi: false,
                 strip_lines_matching: vec![],
                 keep_lines_matching: vec![],
@@ -3236,6 +3363,8 @@ on_empty = "empty filter output"
             FilterDef {
                 description: None,
                 match_command: "^kubectl\\s+get\\b".to_string(),
+                skip_when_matches: None,
+                notify_on_truncate: false,
                 strip_ansi: false,
                 strip_lines_matching: vec![],
                 keep_lines_matching: vec![],
@@ -3262,6 +3391,8 @@ on_empty = "empty filter output"
             FilterDef {
                 description: None,
                 match_command: "^pytest\\b".to_string(),
+                skip_when_matches: None,
+                notify_on_truncate: false,
                 strip_ansi: false,
                 strip_lines_matching: vec![],
                 keep_lines_matching: vec![],
@@ -3283,6 +3414,8 @@ on_empty = "empty filter output"
             FilterDef {
                 description: None,
                 match_command: "^git\\b".to_string(),
+                skip_when_matches: None,
+                notify_on_truncate: false,
                 strip_ansi: false,
                 strip_lines_matching: vec![],
                 keep_lines_matching: vec![],
@@ -3304,6 +3437,8 @@ on_empty = "empty filter output"
             FilterDef {
                 description: None,
                 match_command: "^git\\s+branch\\b".to_string(),
+                skip_when_matches: None,
+                notify_on_truncate: false,
                 strip_ansi: false,
                 strip_lines_matching: vec![],
                 keep_lines_matching: vec![],
@@ -3325,6 +3460,8 @@ on_empty = "empty filter output"
             FilterDef {
                 description: None,
                 match_command: "^eslint\\b".to_string(),
+                skip_when_matches: None,
+                notify_on_truncate: false,
                 strip_ansi: false,
                 strip_lines_matching: vec![],
                 keep_lines_matching: vec![],

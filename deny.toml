@@ -48,9 +48,8 @@ allow = [
   "CC0-1.0",
   "CDLA-Permissive-2.0",
   "BSL-1.0",
-  "Zlib",
-  "OpenSSL",
-]
+   "Zlib",
+ ]
 
 # `ring` ships no SPDX `license` field (only a LICENSE file), so it reads as
 # "Unlicensed". Clarify it to its real composite license. The file hash pins the
