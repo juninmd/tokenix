@@ -2034,7 +2034,7 @@ fn apply_category_caps(lines: Vec<String>, caps: &[CategoryCap]) -> Vec<String> 
             )
         })
         .collect();
-    markers.sort_by(|a, b| b.0.cmp(&a.0));
+    markers.sort_by_key(|b| std::cmp::Reverse(b.0));
     for (pos, text) in markers {
         out.insert(pos.min(out.len()), text);
     }

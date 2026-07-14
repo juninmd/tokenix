@@ -5,6 +5,7 @@ mod cmd_filter;
 mod compress;
 mod conversation_audit;
 mod daemon;
+mod discover;
 mod doctor;
 mod egress_scan;
 mod embed;
@@ -466,6 +467,11 @@ enum Commands {
         cost_estimate: bool,
         #[arg(
             long,
+            help = "Price savings against your OWN transcript spend mix (real $ saved)"
+        )]
+        economics: bool,
+        #[arg(
+            long,
             help = "Aggregate savings across all indexed projects (ignores --path)"
         )]
         global: bool,
@@ -640,6 +646,22 @@ enum Commands {
         /// Check prompt-cache hygiene inputs such as MCP churn and hook/index freshness
         #[arg(long)]
         cache_hygiene: bool,
+    },
+    /// Scan agent transcripts for missed savings: replay the current filters
+    /// over historical command outputs and rank recoverable + uncovered waste
+    Discover {
+        /// Which agent's transcript history to scan
+        #[arg(long, value_enum, default_value = "all")]
+        agent: ConversationAgent,
+        /// Max rows per section
+        #[arg(long, default_value_t = 15)]
+        top: usize,
+        /// Only scan transcripts modified in the last N days (0 = no limit)
+        #[arg(long, default_value_t = 30)]
+        since_days: u64,
+        /// Emit machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
     },
     /// Audit local AI conversation histories for token-waste patterns
     ConversationAudit {
@@ -1006,12 +1028,13 @@ fn main() -> Result<()> {
             path,
             history,
             cost_estimate,
+            economics,
             global,
         } => {
             if global {
-                cmd_gain_global(history, cost_estimate)
+                cmd_gain_global(history, cost_estimate, economics)
             } else {
-                cmd_gain(&path, history, cost_estimate)
+                cmd_gain(&path, history, cost_estimate, economics)
             }
         }
         Commands::Usage {
@@ -1134,6 +1157,17 @@ fn main() -> Result<()> {
             json,
             cache_hygiene,
         } => cmd_session_audit(&path, json, cache_hygiene),
+        Commands::Discover {
+            agent,
+            top,
+            since_days,
+            json,
+        } => discover::run(discover::Options {
+            agent: agent.to_audit_agent(),
+            top,
+            json,
+            since_days,
+        }),
         Commands::ConversationAudit {
             agent,
             min_chars,
@@ -2186,7 +2220,42 @@ fn cmd_generate_ignores(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
+/// Render the `gain --economics` section: real $ saved priced against the
+/// user's own transcript spend mix (vs the list-price hypotheticals of
+/// --cost-estimate).
+fn print_economics_section(tokens_saved: i64) {
+    println!();
+    println!(
+        "  {}",
+        "ECONOMICS  (priced against YOUR spend)".bold().underline()
+    );
+    match gain::economics(tokens_saved) {
+        Some(eco) => {
+            println!(
+                "  saved ≈ {}  ·  {} of your actual spend (${:.2})",
+                format!("${:.2}", eco.saved_usd).green().bold(),
+                format!("{:.1}%", eco.pct_of_spend).green(),
+                eco.spend_usd
+            );
+            println!(
+                "  {}",
+                format!(
+                    "  {} tokens saved vs {} consumed — cost-per-token derived from your \
+                     transcripts' input/output/cache mix, not list prices",
+                    format_num(eco.saved_tokens),
+                    format_num(eco.total_tokens as i64)
+                )
+                .dimmed()
+            );
+        }
+        None => println!(
+            "  {}",
+            "No transcript usage found to price against (see `tokenix usage`).".dimmed()
+        ),
+    }
+}
+
+fn cmd_gain(path: &Path, history: bool, cost_estimate: bool, economics: bool) -> Result<()> {
     let repo_root = find_repo_root(path);
     let stats = gain::compute_gain(&repo_root);
 
@@ -2330,6 +2399,10 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool) -> Result<()> {
         );
     }
 
+    if economics {
+        print_economics_section(stats.tokens_saved);
+    }
+
     // ── by tool / by phase ────────────────────────────────────────────────────
     if !stats.by_tool.is_empty() {
         println!();
@@ -2471,7 +2544,7 @@ fn print_by_command(by_command: &[(String, usize, i64)], tokens_saved: i64) {
     }
 }
 
-fn cmd_gain_global(history: bool, cost_estimate: bool) -> Result<()> {
+fn cmd_gain_global(history: bool, cost_estimate: bool, economics: bool) -> Result<()> {
     let global = gain::compute_global_gain();
     let stats = &global.aggregate;
 
@@ -2572,6 +2645,10 @@ fn cmd_gain_global(history: bool, cost_estimate: bool) -> Result<()> {
             "  {}",
             "Run with --cost-estimate to show the per-model cost table.".dimmed()
         );
+    }
+
+    if economics {
+        print_economics_section(stats.tokens_saved);
     }
 
     // ── by tool ───────────────────────────────────────────────────────────────

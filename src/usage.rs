@@ -101,6 +101,49 @@ struct Row {
     cost_usd: f64,
 }
 
+/// Aggregate spend mix across all projects' transcripts — the raw material
+/// for `gain --economics` (pricing measured savings against the user's OWN
+/// cost-per-token instead of list-price hypotheticals).
+pub struct SpendMix {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub cost_usd: f64,
+}
+
+pub fn spend_mix() -> Option<SpendMix> {
+    let opts = Options {
+        group: Group::Model,
+        since: None,
+        until: None,
+        all_projects: true,
+        cost_mode: CostMode::Auto,
+        statusline: false,
+        json: false,
+        path: PathBuf::from("."),
+    };
+    let records = collect_records(&opts).ok()?;
+    if records.is_empty() {
+        return None;
+    }
+    let mut mix = SpendMix {
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        cost_usd: 0.0,
+    };
+    for r in &records {
+        mix.input += r.input;
+        mix.output += r.output;
+        mix.cache_read += r.cache_read;
+        mix.cache_write += r.cache_write;
+        mix.cost_usd += r.cost(CostMode::Auto);
+    }
+    Some(mix)
+}
+
 pub fn run(opts: Options) -> Result<()> {
     let records = collect_records(&opts)?;
 
