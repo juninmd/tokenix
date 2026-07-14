@@ -7,9 +7,6 @@ strip_lines_matching = [
   "^\\s*$",
   "^\\.",
   "^\\*",
-  "^\\s*\\d+ examples?",
-  "^\\s*\\d+ failures?",
-  "^\\s*\\d+ pending",
   "^\\s*Finished in",
   "^\\s*Randomized with seed",
 ]
@@ -21,6 +18,7 @@ keep_lines_matching = [
   "expect",
   "expected",
   "received",
+  "got:",
   "backtrace",
   "NoMethodError",
   "ArgumentError",
@@ -28,13 +26,16 @@ keep_lines_matching = [
   "Summary",
   "examples?",
   "failures?",
-  "pending"
+  "pending",
+  "^\\s*\\d+\\) ",
+  "^\\s*# \\./",
+  "^rspec \\./",
 ]
 max_lines = 50
 
 
 [[tests.rspec]]
-name = "failures shown"
+name = "failure keeps test name, expected/got, backtrace and summary"
 input = """
 ..F..
 
@@ -42,14 +43,39 @@ Failures:
 
   1) User#name returns the name
      Failure/Error: expect(user.name).to eq("John")
+
        expected: "John"
             got: "Jane"
+
+       (compared using ==)
      # ./spec/models/user_spec.rb:10:in `block (2 levels) in <top (required)>'
 
 Finished in 0.5 seconds
 5 examples, 1 failure
+
+Failed examples:
+
+rspec ./spec/models/user_spec.rb:10 # User#name returns the name
 """
-expected = "Failures:\n     Failure/Error: expect(user.name).to eq(\"John\")\n       expected: \"John\""
+expected = """Failures:
+  1) User#name returns the name
+     Failure/Error: expect(user.name).to eq("John")
+       expected: "John"
+            got: "Jane"
+     # ./spec/models/user_spec.rb:10:in `block (2 levels) in <top (required)>'
+5 examples, 1 failure
+Failed examples:
+rspec ./spec/models/user_spec.rb:10 # User#name returns the name"""
+
+[[tests.rspec]]
+name = "green run keeps summary line"
+input = """
+.....
+
+Finished in 0.03 seconds (files took 0.2 seconds to load)
+5 examples, 0 failures
+"""
+expected = "5 examples, 0 failures"
 
 [[tests.rspec]]
 name = "silent success stays empty"

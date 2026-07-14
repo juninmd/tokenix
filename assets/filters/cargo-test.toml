@@ -6,23 +6,14 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Compiling",
+  "^\\s*Downloading",
+  "^\\s*Downloaded",
   "^\\s*Running unittests",
   "^\\s*Running tests/",
   "^\\s*Doc-tests",
   "^\\s*Finished",
   "^\\s*running \\d+ test",
-]
-keep_lines_matching = [
-  "test result:",
-  "FAILED",
-  "PASSED",
-  "error\\[",
-  "warning:",
-  "thread.*panicked",
-  "panicked at",
-  "assert",
-  "diff",
-  "left / right",
+  "^test .+ \\.\\.\\. ok$",
 ]
 max_lines = 60
 replace_patterns = [
@@ -30,16 +21,12 @@ replace_patterns = [
   ["\\d+\\.\\d+s", "<duration>"],
   ["thread '([^']+)' panicked at", "panic in $1"],
 ]
-extract_sections = [
-  { start_pattern = "---- .+ stdout ----", end_pattern = "^\\s*$", include_markers = true, max_matches = 5 },
-  { start_pattern = "failures:", end_pattern = "^\\s*$", include_markers = true, max_matches = 1 },
-]
 deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
 token_budget = 3000
 
 
 [[tests.cargo-test]]
-name = "test failure shown"
+name = "panic payload with left/right values survives"
 input = """
    Compiling my-crate v0.1.0
     Finished test [unoptimized + debuginfo] target(s) in 2.3s
@@ -50,13 +37,44 @@ test test_add ... ok
 test test_fail ... FAILED
 
 failures:
+
+---- test_fail stdout ----
+thread 'test_fail' panicked at src/lib.rs:10:5:
+assertion `left == right` failed
+  left: 3
+ right: 4
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+failures:
     test_fail
 
 test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
 """
-expected = """
-test test_fail ... FAILED
+expected = """test test_fail ... FAILED
+failures:
+---- test_fail stdout ----
+panic in test_fail src/lib.rs:10:5:
+assertion `left == right` failed
+  left: 3
+ right: 4
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+failures:
+    test_fail
 test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"""
+
+[[tests.cargo-test]]
+name = "all green keeps only the result line"
+input = """
+    Finished test [unoptimized + debuginfo] target(s) in 0.5s
+     Running unittests src/lib.rs (target/debug/deps/my_crate-abc123)
+
+running 2 tests
+test test_add ... ok
+test test_sub ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+"""
+expected = """test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in <duration>"""
 
 [[tests.cargo-test]]
 name = "silent success stays empty"

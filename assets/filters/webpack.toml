@@ -25,7 +25,13 @@ keep_lines_matching = [
   "^ERROR in",
   "^WARNING in",
   "Module not found",
+  "Module build failed",
   "^\\s+@ ",
+  "\\[tsl\\]",
+  "^\\s*TS\\d+:",
+  "Error:",
+  "^\\s*>?\\s*\\d+ \\|",
+  "^\\s*\\|",
 ]
 max_lines = 60
 replace_patterns = [
@@ -44,6 +50,30 @@ cacheable modules 1.5 MiB
 webpack 5.89.0 compiled successfully in 3421 ms
 """
 expected = """webpack 5.89.0 compiled successfully in <duration>"""
+
+[[tests.webpack]]
+name = "loader failure keeps message, code frame and caret"
+input = """
+asset main.js 1.2 MiB [emitted] (name: main)
+ERROR in ./src/index.js
+Module build failed (from ./node_modules/babel-loader/lib/index.js):
+SyntaxError: /work/src/index.js: Unexpected token (5:10)
+
+  4 |   const a = 1;
+> 5 |   const = 5;
+    |         ^
+  6 |   return a;
+
+webpack 5.89.0 compiled with 1 error in 900 ms
+"""
+expected = """ERROR in ./src/index.js
+Module build failed (from ./node_modules/babel-loader/lib/index.js):
+SyntaxError: /work/src/index.js: Unexpected token (5:10)
+  4 |   const a = 1;
+> 5 |   const = 5;
+    |         ^
+  6 |   return a;
+webpack 5.89.0 compiled with 1 error in <duration>"""
 
 [[tests.webpack]]
 name = "module-not-found error surfaced"

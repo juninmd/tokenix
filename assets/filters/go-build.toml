@@ -1,28 +1,31 @@
 [filters.go-build]
-description = "Compact go build output"
+description = "Compact go build output — success is silent, keep compile errors verbatim"
 match_command = "^go\\s+build\\b"
 passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
-  "^\\s*$",
-  "^# "
-]
-keep_lines_matching = [
-  "error:",
-  "warning:",
-  "undefined:",
-  "cannot find package"
+  "^\\s*$"
 ]
 max_lines = 40
 
 
 [[tests.go-build]]
-name = "build error shown"
+name = "build errors keep all shapes and continuations"
 input = """
 # github.com/user/project
 ./main.go:10:5: undefined: foo
+./main.go:12:2: cannot use x (variable of type string) as int value in argument to Add
+	have (string)
+	want (int)
+./util.go:3:8: "fmt" imported and not used
 """
-expected = "./main.go:10:5: undefined: foo"
+expected = """
+# github.com/user/project
+./main.go:10:5: undefined: foo
+./main.go:12:2: cannot use x (variable of type string) as int value in argument to Add
+	have (string)
+	want (int)
+./util.go:3:8: "fmt" imported and not used"""
 
 [[tests.go-build]]
 name = "silent success stays empty"

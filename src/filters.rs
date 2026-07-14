@@ -505,6 +505,38 @@ pub fn semantic_filter_issues(f: &FilterDef) -> Vec<String> {
     issues
 }
 
+/// Process-wide compiled-regex cache. The hook is a short-lived process that
+/// evaluates hundreds of `match_command` patterns against a handful of
+/// candidate strings — each pattern must compile at most once per process,
+/// not once per (pattern × candidate) pair.
+fn cached_regex(pattern: &str) -> Option<Regex> {
+    use std::sync::{OnceLock, RwLock};
+    static CACHE: OnceLock<RwLock<HashMap<String, Option<Regex>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Some(hit) = cache.read().ok().and_then(|c| c.get(pattern).cloned()) {
+        return hit;
+    }
+    let compiled = Regex::new(pattern).ok();
+    if let Ok(mut c) = cache.write() {
+        c.insert(pattern.to_string(), compiled.clone());
+    }
+    compiled
+}
+
+/// Literal start-anchor of a pattern (`^cargo\s+test` → `cargo`) when the
+/// pattern begins with `^` followed by a plain literal. Cheap NECESSARY
+/// condition: a candidate that doesn't start with the literal can never match
+/// the anchored regex, so its compilation is skipped entirely. Patterns with
+/// any other shape (groups, `(?i)`, `\b...`) return None and are always
+/// evaluated — the prefilter can only skip work, never change results.
+fn literal_anchor(pattern: &str) -> Option<&str> {
+    let rest = pattern.strip_prefix('^')?;
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '+' | '-')))
+        .unwrap_or(rest.len());
+    (end >= 2).then(|| &rest[..end])
+}
+
 pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a FilterDef> {
     let effective = get_effective_command(cmd);
     let tokens = tokenize_command(&effective);
@@ -648,7 +680,15 @@ pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a Filter
         let mut max_len = 0;
 
         for f in filters {
-            if let Ok(re) = Regex::new(&f.match_command) {
+            // Hot-path prefilter: skip compiling patterns whose literal
+            // `^prefix` can't match this candidate (the common case — one
+            // command vs hundreds of tool-anchored patterns).
+            if let Some(prefix) = literal_anchor(&f.match_command) {
+                if !candidate.starts_with(prefix) {
+                    continue;
+                }
+            }
+            if let Some(re) = cached_regex(&f.match_command) {
                 if re.is_match(candidate) {
                     // JSON bypass: if command asks for JSON output, but filter does not support summarizing JSON, bypass
                     if has_json && f.summarize_json.is_none() {
@@ -657,7 +697,7 @@ pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a Filter
                     // Per-filter skip: candidate matches a form the filter opts out of
                     // (e.g. already-bounded reads via -Tail, or piped into another command).
                     if let Some(skip) = &f.skip_when_matches {
-                        if let Ok(skip_re) = Regex::new(skip) {
+                        if let Some(skip_re) = cached_regex(skip) {
                             if skip_re.is_match(candidate) {
                                 continue;
                             }
@@ -3155,6 +3195,55 @@ keep_lines_matchin = ["oops"]
             apply_filter("noise\nBUILD SUCCESSFUL in 2s\nmore noise\n", &f),
             "ok"
         );
+    }
+
+    #[test]
+    fn literal_anchor_extracts_only_plain_prefixes() {
+        assert_eq!(literal_anchor("^cargo\\s+test\\b"), Some("cargo"));
+        assert_eq!(literal_anchor("^gt\\s+submit\\b"), Some("gt"));
+        assert_eq!(literal_anchor("^dotnet\\s+build"), Some("dotnet"));
+        // Groups, alternations, escapes and unanchored patterns must never
+        // yield a prefix — they go through full regex evaluation.
+        assert_eq!(literal_anchor("^(npx\\s+)?alex\\b"), None);
+        assert_eq!(literal_anchor("^(Get-Content|gc)\\b"), None);
+        assert_eq!(literal_anchor("\\b(?:phpunit|pest)\\b"), None);
+        assert_eq!(literal_anchor("^\\.?/gradlew"), None);
+        // Single-char anchors are too weak to be worth the skip.
+        assert_eq!(literal_anchor("^x\\b"), None);
+    }
+
+    #[test]
+    #[ignore = "manual benchmark: cargo test --release hook_lookup_bench -- --ignored --nocapture"]
+    fn hook_lookup_bench() {
+        let filters = load_bundled_filters();
+        let commands = [
+            "git status",
+            "cargo test --quiet 2>&1 | Select-Object -Last 5",
+            "cd /app && npm install --no-audit",
+            "Get-Content src/main.rs",
+            "some-unknown-tool --flag value",
+        ];
+        // Warm the compile cache the way a long-lived process would…
+        for cmd in &commands {
+            let _ = find_filter(cmd, &filters);
+        }
+        let iterations = 200;
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            for cmd in &commands {
+                let _ = find_filter(cmd, &filters);
+            }
+        }
+        let per_call = start.elapsed() / (iterations * commands.len() as u32);
+        println!(
+            "find_filter warm per-call: {per_call:?} over {} filters",
+            filters.len()
+        );
+
+        // …and measure the cold path (fresh process cost) as a single pass.
+        let cold = std::time::Instant::now();
+        let _ = find_filter("terraform plan -out tf.plan", &filters);
+        println!("find_filter cold first-call: {:?}", cold.elapsed());
     }
 
     #[test]

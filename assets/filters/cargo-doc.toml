@@ -6,12 +6,11 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Documenting",
-  "^\\s*Finished"
-]
-keep_lines_matching = [
-  "error:",
-  "warning:",
-  "note:"
+  "^\\s*Compiling",
+  "^\\s*Checking",
+  "^\\s*Fresh",
+  "^\\s*Downloading",
+  "^\\s*Downloaded"
 ]
 max_lines = 50
 
@@ -21,20 +20,27 @@ input = """
 Documenting my-crate v0.1.0
 Finished dev [unoptimized + debuginfo] target(s) in 2.3s
 """
-expected = '''
-Documenting my-crate v0.1.0
-Finished dev [unoptimized + debuginfo] target(s) in 2.3s'''
+expected = "Finished dev [unoptimized + debuginfo] target(s) in 2.3s"
 
 [[tests.cargo-doc]]
-name = "warning shown"
+name = "warning block survives"
 input = """
 Documenting my-crate v0.1.0
-warning: missing documentation for crate
- --> src/lib.rs:1:1
+warning: unresolved link to `Missing`
+ --> src/lib.rs:4:6
   |
-1 | // crate
-  | ^
+4 | /// [Missing]
+  |      ^^^^^^^ no item named `Missing` in scope
+  |
+  = note: `#[warn(rustdoc::broken_intra_doc_links)]` on by default
 
 Finished dev [unoptimized + debuginfo] target(s) in 2.3s
 """
-expected = "warning: missing documentation for crate"
+expected = """warning: unresolved link to `Missing`
+ --> src/lib.rs:4:6
+  |
+4 | /// [Missing]
+  |      ^^^^^^^ no item named `Missing` in scope
+  |
+  = note: `#[warn(rustdoc::broken_intra_doc_links)]` on by default
+Finished dev [unoptimized + debuginfo] target(s) in 2.3s"""

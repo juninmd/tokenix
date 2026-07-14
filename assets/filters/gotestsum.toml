@@ -14,20 +14,28 @@ keep_lines_matching = [
   "failure",
   "(?i)error",
   "--- FAIL",
+  "\\.go:\\d+",
+  "panic:",
+  "^goroutine \\d+",
 ]
 max_lines = 80
 on_empty = "gotestsum: all tests passed"
 
 [[tests.gotestsum]]
-name = "failures and summary kept"
+name = "failures keep assertion payload and summary"
 input = """
 ✓  pkg/foo (cached)
 ✓  pkg/baz (0.2s)
 ✖  pkg/bar (0.5s)
 
+=== FAIL: pkg/bar TestAdd (0.00s)
+    main_test.go:15: expected 3, got 4
+
 DONE 42 tests, 1 failure in 2.345s
 """
 expected = """✖  pkg/bar (0.5s)
+=== FAIL: pkg/bar TestAdd (0.00s)
+    main_test.go:15: expected 3, got 4
 DONE 42 tests, 1 failure in 2.345s"""
 
 [[tests.gotestsum]]

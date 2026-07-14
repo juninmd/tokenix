@@ -1,36 +1,50 @@
 [filters.govulncheck]
-description = "Compact govulncheck output"
+description = "Compact govulncheck output — collapse clean scans, keep vulnerability detail verbatim"
 match_command = "^govulncheck\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^\\s*No vulnerabilities found"
-]
-keep_lines_matching = [
-  "Vulnerability",
-  "CVE-",
-  "GHSA-",
-  "Found "
+  "^\\s*No vulnerabilities found",
+  "^\\s*Scanning your code",
+  "^\\s*Using go",
+  "^=== (Symbol|Package|Module) Results ===",
+  "^\\s*For details, see https://pkg.go.dev/golang.org/x/vuln",
+  "^\\s*Fetching vulnerabilities",
 ]
 max_lines = 50
+on_empty = "govulncheck: no vulnerabilities"
 
 [[tests.govulncheck]]
-name = "clean"
+name = "clean scan collapses"
 input = """
+Scanning your code and 42 packages across 7 dependent modules for known vulnerabilities...
+
+=== Symbol Results ===
+
 No vulnerabilities found.
 """
-expected = '''
-No vulnerabilities found.'''
+expected = "govulncheck: no vulnerabilities"
 
 [[tests.govulncheck]]
-name = "vulnerability shown"
+name = "vulnerability keeps module, versions and traces"
 input = """
-Vulnerability #1: GO-2024-1234
-  Module: github.com/example/module
-  Version: v1.2.3
-  CVE: CVE-2024-12345
+Scanning your code and 42 packages across 7 dependent modules for known vulnerabilities...
+
+Vulnerability #1: GO-2024-2687
+    HTTP/2 CONTINUATION flood in net/http
+  More info: https://pkg.go.dev/vuln/GO-2024-2687
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.19.0
+    Fixed in: golang.org/x/net@v0.23.0
+    Example traces found:
+      #1: main.go:15:8: app.Run calls http2.Server.ServeConn
 """
 expected = """
-Vulnerability #1: GO-2024-1234
-  CVE: CVE-2024-12345"""
+Vulnerability #1: GO-2024-2687
+    HTTP/2 CONTINUATION flood in net/http
+  More info: https://pkg.go.dev/vuln/GO-2024-2687
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.19.0
+    Fixed in: golang.org/x/net@v0.23.0
+    Example traces found:
+      #1: main.go:15:8: app.Run calls http2.Server.ServeConn"""

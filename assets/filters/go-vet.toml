@@ -7,7 +7,8 @@ strip_lines_matching = [
   "^\\s*$"
 ]
 keep_lines_matching = [
-  "^\\w+\\.go:\\d+:\\d+:",
+  "\\.go:\\d+:\\d+:",
+  "^# ",
   "error:",
   "warning:"
 ]
@@ -15,14 +16,16 @@ max_lines = 50
 
 
 [[tests.go-vet]]
-name = "issues shown"
+name = "issues shown with package header and relative paths"
 input = """
-main.go:10:5: loop condition never evaluates to false
-utils.go:15:1: unreachable code
+# github.com/user/project
+./main.go:10:5: loop condition never evaluates to false
+pkg/utils/utils.go:15:1: unreachable code
 """
 expected = """
-main.go:10:5: loop condition never evaluates to false
-utils.go:15:1: unreachable code"""
+# github.com/user/project
+./main.go:10:5: loop condition never evaluates to false
+pkg/utils/utils.go:15:1: unreachable code"""
 
 [[tests.go-vet]]
 name = "silent success stays empty"

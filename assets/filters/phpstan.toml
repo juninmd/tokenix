@@ -17,25 +17,35 @@ keep_lines_matching = [
   "^\\s+Line\\b",
   "^\\s+\\d+\\s+[A-Za-z]",
   "^\\s+\\S+\\.php",
+  "^\\s+[🪪💡]",
+  "^\\s{9,}\\S",
 ]
 max_lines = 60
 token_budget = 2000
 
 [[tests.phpstan]]
-name = "error rows and summary kept"
+name = "error rows, wrapped message and identifier rows kept"
 input = """
  ------ -----------------------------------------------
   Line   src/Foo.php
  ------ -----------------------------------------------
   12     Method App\\Foo::bar() has no return type
-  20     Access to undefined property App\\Foo::$baz
+         🪪  missingType.return
+  20     Parameter #1 $items of method App\\Foo::sum() expects
+         array<int>, array<string> given.
+         🪪  argument.type
+         💡 Change the parameter type or cast the values.
  ------ -----------------------------------------------
 
  [ERROR] Found 2 errors
 """
 expected = """  Line   src/Foo.php
   12     Method App\\Foo::bar() has no return type
-  20     Access to undefined property App\\Foo::$baz
+         🪪  missingType.return
+  20     Parameter #1 $items of method App\\Foo::sum() expects
+         array<int>, array<string> given.
+         🪪  argument.type
+         💡 Change the parameter type or cast the values.
  [ERROR] Found 2 errors"""
 
 [[tests.phpstan]]

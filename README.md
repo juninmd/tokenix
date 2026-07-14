@@ -687,7 +687,7 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control. **Trust-gated**: skipped until you approve them with `tokenix trust` (SHA-256 pinned; any edit revokes trust) — a cloned repository must not silently control what your agent sees.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
-3. **Bundled filters** — 528 TOML output filters shipped inside the binary (each homologated against 1124 embedded golden cases), covering `uv`, `cargo build`/`cargo run`/`cargo audit`, `git`, `gradle`, `terraform plan`, `make`, `npm`/`npm audit`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`/`kubectl top`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, `apt`/`apt-get`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`/`mamba`, `pulumi up`/`preview`/`destroy`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test` (Karma), `bru` (Bruno), `ps`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 528 TOML output filters shipped inside the binary (each homologated against 1146 embedded golden cases), covering `uv`, `cargo build`/`cargo run`/`cargo audit`, `git`, `gradle`, `terraform plan`, `make`, `npm`/`npm audit`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`/`kubectl top`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, `apt`/`apt-get`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`/`mamba`, `pulumi up`/`preview`/`destroy`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test` (Karma), `bru` (Bruno), `ps`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -725,7 +725,7 @@ Engine invariants:
 - **Exit-code aware** — `tokenix run` passes the command's real exit status into filtering: on nonzero exit, success sentinels are suppressed (text heuristics alone miss quiet failures) and the filter's `on_failure` policy applies.
 - **Failure tee** — when a failed command's compressed view dropped content, the full raw output is saved under `~/.tokenix/tee/` (20 files, 1 MB cap, disable with `TOKENIX_TEE=0`) and the output ends with `[full output: <path>]`, so recovery is a targeted Read instead of a full re-run.
 - **Fail loudly** — filter files reject unknown fields (a typo'd key prints a warning instead of silently disabling the filter). Validate your own filters anytime with `tokenix filter verify`.
-- **Escape hatch** — prefix any command with `TOKENIX_DISABLED=1` to skip the rewrite for that command only (logged, so overuse is visible).
+- **Escape hatch** — prefix any command with `TOKENIX_DISABLED=1` to skip the rewrite for that command only. Bypasses are logged and `tokenix gain` warns when ≥10% of commands dodge the filter.
 
 ### AI-assisted filter generation
 
@@ -765,7 +765,7 @@ src/
 └── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
 assets/
-└── filters/       528 TOML output filters (+1124 golden cases), embedded in the binary via rust-embed
+└── filters/       528 TOML output filters (+1146 golden cases), embedded in the binary via rust-embed
 ```
 
 ### GPU acceleration (opt-in)

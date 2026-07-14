@@ -15,6 +15,12 @@ keep_lines_matching = [
   "^\\S.*\\|\\s*\\d+(?:\\.\\d+)?\\s*\\|",
   "^All files",
   "(?i)error",
+  "(?i)fail",
+  "\\d+ (?:passing|pending)",
+  "^\\s*\\d+\\) ",
+  "^\\s+at ",
+  "not ok",
+  "expected",
 ]
 max_lines = 60
 token_budget = 1500
@@ -33,6 +39,38 @@ expected = """Statements   : 85.5% ( 171/200 )
 Branches     : 70.0% ( 14/20 )
 Functions    : 90.0% ( 18/20 )
 Lines        : 85.5% ( 171/200 )"""
+
+[[tests.nyc]]
+name = "wrapped test-runner failure detail survives"
+input = """
+  Array
+    ✓ should return -1 when not present
+    1) should return index when present
+
+  1 passing (12ms)
+  1 failing
+
+  1) Array
+         should return index when present:
+
+      AssertionError: expected -1 to equal 0
+
+      at Context.<anonymous> (test/array.test.js:8:16)
+
+----------|---------|----------|---------|---------|
+File      | % Stmts | % Branch | % Funcs | % Lines |
+----------|---------|----------|---------|---------|
+All files |   85.5  |    70    |   90    |  85.5   |
+----------|---------|----------|---------|---------|
+"""
+expected = """    1) should return index when present
+  1 passing (12ms)
+  1 failing
+  1) Array
+      AssertionError: expected -1 to equal 0
+      at Context.<anonymous> (test/array.test.js:8:16)
+File      | % Stmts | % Branch | % Funcs | % Lines |
+All files |   85.5  |    70    |   90    |  85.5   |"""
 
 [[tests.nyc]]
 name = "per-file table kept"

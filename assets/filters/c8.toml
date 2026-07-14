@@ -11,22 +11,70 @@ keep_lines_matching = [
   "% Stmts",
   "All files",
   "(?i)error",
+  "\\|\\s*[\\d,-]+\\s*$",
+  "^\\s*\\d+\\) ",
+  "^\\s+at ",
+  "\\+ expected",
+  "^\\s*[-+]\\d",
+  "(?i)assert",
+  "(?i)fail",
+  "\\d+ (passing|pending|failing)",
+  "[✗✖]",
 ]
 max_lines = 120
 on_empty = "c8: coverage collected"
 
 [[tests.c8]]
-name = "summary and header kept"
+name = "summary, header, and uncovered rows kept"
 input = """
 ----------|---------|----------|---------|---------|-------------------
 File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
 ----------|---------|----------|---------|---------|-------------------
 All files |   85.71 |    66.66 |     100 |   85.71 |
  app.js   |   85.71 |    66.66 |     100 |   85.71 | 12-14
+ util.js  |     100 |      100 |     100 |     100 |
 ----------|---------|----------|---------|---------|-------------------
 """
 expected = """File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
-All files |   85.71 |    66.66 |     100 |   85.71 |"""
+All files |   85.71 |    66.66 |     100 |   85.71 |
+ app.js   |   85.71 |    66.66 |     100 |   85.71 | 12-14"""
+
+[[tests.c8]]
+name = "wrapped test-runner failure payload survives"
+input = """
+  add
+    1) adds numbers
+
+  0 passing (5ms)
+  1 failing
+
+  1) add
+       adds numbers:
+
+      AssertionError [ERR_ASSERTION]: 3 == 4
+      + expected - actual
+
+      -3
+      +4
+
+      at Context.<anonymous> (test/add.test.js:5:12)
+----------|---------|----------|---------|---------|-------------------
+File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+----------|---------|----------|---------|---------|-------------------
+All files |      80 |       50 |     100 |      80 |
+----------|---------|----------|---------|---------|-------------------
+"""
+expected = """    1) adds numbers
+  0 passing (5ms)
+  1 failing
+  1) add
+      AssertionError [ERR_ASSERTION]: 3 == 4
+      + expected - actual
+      -3
+      +4
+      at Context.<anonymous> (test/add.test.js:5:12)
+File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+All files |      80 |       50 |     100 |      80 |"""
 
 [[tests.c8]]
 name = "no table collapses"

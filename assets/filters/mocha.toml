@@ -14,7 +14,11 @@ keep_lines_matching = [
   "AssertionError",
   "Error:",
   "Expected",
+  "expected",
   "[✗✖×] ",
+  "^\\s+at ",
+  "^\\s+[-+]",
+  "^\\s{5,}.*:$",
 ]
 max_lines = 60
 replace_patterns = [
@@ -34,20 +38,34 @@ input = """
 expected = """  2 passing (<duration>)"""
 
 [[tests.mocha]]
-name = "failure detail and summary kept"
+name = "failure keeps test path, diff, and stack location"
 input = """
   Array
     ✓ should return -1 when not present
-    1) #indexOf() returns wrong value
+    1) should return index when present
 
   1 passing (12ms)
   1 failing
 
-  1) Array #indexOf() returns wrong value:
-     AssertionError: expected -1 to equal 0
+  1) Array
+       #indexOf()
+         should return index when present:
+
+      AssertionError: expected -1 to equal 0
+      + expected - actual
+
+      -[-1]
+      +[0]
+
+      at Context.<anonymous> (test/array.test.js:8:16)
 """
-expected = """    1) #indexOf() returns wrong value
+expected = """    1) should return index when present
   1 passing (<duration>)
   1 failing
-  1) Array #indexOf() returns wrong value:
-     AssertionError: expected -1 to equal 0"""
+  1) Array
+         should return index when present:
+      AssertionError: expected -1 to equal 0
+      + expected - actual
+      -[-1]
+      +[0]
+      at Context.<anonymous> (test/array.test.js:8:16)"""

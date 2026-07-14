@@ -12,6 +12,9 @@ keep_lines_matching = [
   "\\[E\\]",
   "^\\s+Expected:",
   "^\\s+Actual:",
+  "^\\s+Which:",
+  "^\\s+package:",
+  "^\\s+\\S+\\.dart[ :]\\d",
   " -\\d+:",
   "(?i)error",
   "FAILED",
@@ -30,16 +33,24 @@ input = """
 expected = """00:02 +5: All tests passed!"""
 
 [[tests.flutter-test]]
-name = "failure detail kept"
+name = "failure detail kept with matcher detail and stack frames"
 input = """
 00:00 +0: loading test/auth_test.dart
 00:01 +4: AuthService login succeeds
 00:03 +5 -1: AuthService login fails on bad creds [E]
   Expected: <true>
     Actual: <false>
+     Which: is not <true>
+
+  package:matcher                                  expect
+  test/auth_test.dart 21:7                         main.<fn>
+
 00:04 +11 -1: Some tests failed.
 """
 expected = """00:03 +5 -1: AuthService login fails on bad creds [E]
   Expected: <true>
     Actual: <false>
+     Which: is not <true>
+  package:matcher                                  expect
+  test/auth_test.dart 21:7                         main.<fn>
 00:04 +11 -1: Some tests failed."""

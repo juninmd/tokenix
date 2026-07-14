@@ -14,6 +14,14 @@ keep_lines_matching = [
   "Passed \\|",
   "\\[FAILED\\]",
   "(?i)error",
+  "\\[FAIL\\]",
+  "--- FAIL",
+  "^FAIL\\s*$",
+  "^Summarizing \\d+",
+  "^\\s+<",
+  "^\\s*to ",
+  "^\\s*Expected",
+  "\\.go:\\d+",
 ]
 max_lines = 80
 on_empty = "ginkgo: specs passed"
@@ -29,10 +37,39 @@ expected = """Ran 10 of 10 Specs in 2.345 seconds
 SUCCESS! -- 10 Passed | 0 Failed | 0 Pending | 0 Skipped"""
 
 [[tests.ginkgo]]
-name = "failure kept"
+name = "failure keeps assertion values, location and summary"
 input = """
+••••
+• [FAILED] [0.002 seconds]
+Books when loaded [It] extracts the author
+/work/books/books_test.go:24
+
+  [FAILED] Expected
+      <string>: John
+  to equal
+      <string>: Jane
+  In [It] at: /work/books/books_test.go:26
+
+Summarizing 1 Failure:
+  [FAIL] Books when loaded [It] extracts the author
+  /work/books/books_test.go:26
+
 Ran 10 of 10 Specs in 2.345 seconds
 FAIL! -- 9 Passed | 1 Failed | 0 Pending | 0 Skipped
+--- FAIL: TestBooks (0.01s)
+FAIL
 """
-expected = """Ran 10 of 10 Specs in 2.345 seconds
-FAIL! -- 9 Passed | 1 Failed | 0 Pending | 0 Skipped"""
+expected = """• [FAILED] [0.002 seconds]
+/work/books/books_test.go:24
+  [FAILED] Expected
+      <string>: John
+  to equal
+      <string>: Jane
+  In [It] at: /work/books/books_test.go:26
+Summarizing 1 Failure:
+  [FAIL] Books when loaded [It] extracts the author
+  /work/books/books_test.go:26
+Ran 10 of 10 Specs in 2.345 seconds
+FAIL! -- 9 Passed | 1 Failed | 0 Pending | 0 Skipped
+--- FAIL: TestBooks (0.01s)
+FAIL"""

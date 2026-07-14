@@ -20,22 +20,26 @@ keep_lines_matching = [
   "BUILD FAILURE",
   "Compilation failure",
   "Test failures",
-  "There are test failures"
+  "There are test failures",
+  "^\\s+(?:symbol|location|required|found|reason):",
+  "^[\\w.]*(?:Exception|Error)(?::|$)",
+  "^Caused by:",
+  "^\\s*(?:expected|but was)\\s*:"
 ]
 max_lines = 60
 
 
 [[tests.maven-build]]
-name = "build failure shown"
+name = "build failure keeps javac symbol/location continuations"
 command = "mvn verify"
 input = """
 [INFO] Scanning for projects...
-[INFO] 
+[INFO]
 [INFO] --- maven-compiler-plugin:3.8.1:compile (default-compile) @ my-project ---
 [INFO] Changes detected - recompiling the module!
 [INFO] Compiling 15 source files to /project/target/classes
 [INFO] -------------------------------------------------------------
-[ERROR] COMPILATION ERROR : 
+[ERROR] COMPILATION ERROR :
 [INFO] -------------------------------------------------------------
 [ERROR] /project/src/main/java/com/example/Main.java:[10,5] cannot find symbol
   symbol:   variable foo
@@ -47,8 +51,10 @@ input = """
 [INFO] ------------------------------------------------------------------------
 """
 expected = """
-[ERROR] COMPILATION ERROR : 
+[ERROR] COMPILATION ERROR :
 [ERROR] /project/src/main/java/com/example/Main.java:[10,5] cannot find symbol
+  symbol:   variable foo
+  location: class com.example.Main
 [INFO] BUILD FAILURE"""
 
 [[tests.maven-build]]

@@ -14,9 +14,44 @@ keep_lines_matching = [
   "lines covered",
   "^\\|\\| Tested/Total",
   "(?i)error",
+  "FAILED",
+  "panicked",
+  "assert",
+  "^\\s*left:",
+  "^\\s*right:",
+  "test result:",
+  "^failures:",
+  "^---- ",
 ]
 max_lines = 60
 on_empty = "cargo-tarpaulin: coverage collected"
+
+[[tests.cargo-tarpaulin]]
+name = "test failure payload survives"
+input = """
+   Compiling app v0.1.0
+running 2 tests
+test tests::ok_case ... ok
+test tests::bad_case ... FAILED
+---- tests::bad_case stdout ----
+thread 'tests::bad_case' panicked at src/lib.rs:10:5:
+assertion `left == right` failed
+  left: 3
+ right: 4
+failures:
+    tests::bad_case
+test result: FAILED. 1 passed; 1 failed; 0 ignored
+Error: "Test failed during run"
+"""
+expected = """test tests::bad_case ... FAILED
+---- tests::bad_case stdout ----
+thread 'tests::bad_case' panicked at src/lib.rs:10:5:
+assertion `left == right` failed
+  left: 3
+ right: 4
+failures:
+test result: FAILED. 1 passed; 1 failed; 0 ignored
+Error: "Test failed during run\""""
 
 [[tests.cargo-tarpaulin]]
 name = "coverage summary kept"

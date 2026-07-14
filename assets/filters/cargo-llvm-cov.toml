@@ -13,9 +13,46 @@ keep_lines_matching = [
   "^Filename",
   "^TOTAL",
   "(?i)error",
+  "FAILED",
+  "panicked",
+  "assert",
+  "^\\s*left:",
+  "^\\s*right:",
+  "test result:",
+  "^failures:",
+  "^---- ",
 ]
-max_lines = 20
+max_lines = 40
 on_empty = "cargo-llvm-cov: no coverage table"
+
+[[tests.cargo-llvm-cov]]
+name = "test failure payload survives"
+input = """
+   Compiling app v0.1.0
+    Finished test profile in 3.2s
+     Running unittests src/lib.rs
+running 2 tests
+test tests::ok_case ... ok
+test tests::bad_case ... FAILED
+---- tests::bad_case stdout ----
+thread 'tests::bad_case' panicked at src/lib.rs:10:5:
+assertion `left == right` failed
+  left: 3
+ right: 4
+failures:
+    tests::bad_case
+test result: FAILED. 1 passed; 1 failed; 0 ignored
+error: test failed, to rerun pass `--lib`
+"""
+expected = """test tests::bad_case ... FAILED
+---- tests::bad_case stdout ----
+thread 'tests::bad_case' panicked at src/lib.rs:10:5:
+assertion `left == right` failed
+  left: 3
+ right: 4
+failures:
+test result: FAILED. 1 passed; 1 failed; 0 ignored
+error: test failed, to rerun pass `--lib`"""
 
 [[tests.cargo-llvm-cov]]
 name = "header and total kept, per-file rows dropped"

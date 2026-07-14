@@ -192,6 +192,8 @@ pub struct GainStats {
     pub by_command: Vec<(String, usize, i64)>,
     /// Total semantic-search queries answered by the index (Read outlines + Grep).
     pub indexed_queries: usize,
+    /// Commands that skipped filtering via the TOKENIX_DISABLED escape hatch.
+    pub bypassed: usize,
 }
 
 /// Aggregate stats across all projects, with per-project breakdown.
@@ -234,6 +236,7 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         .collect();
     let passed_events: Vec<_> = events.iter().filter(|e| e.action == "pass").collect();
 
+    let bypassed = events.iter().filter(|e| e.action == "bypassed").count();
     let tokens_saved: i64 = intercepted_events.iter().map(|e| e.saved_tokens).sum();
     let tokens_used: i64 = intercepted_events.iter().map(|e| e.actual_tokens).sum();
     let tokens_original: i64 = intercepted_events.iter().map(|e| e.original_estimate).sum();
@@ -321,6 +324,7 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         by_phase,
         by_command,
         indexed_queries,
+        bypassed,
     }
 }
 

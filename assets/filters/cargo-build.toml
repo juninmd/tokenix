@@ -6,13 +6,9 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Compiling",
-  "^\\s*Fresh"
-]
-keep_lines_matching = [
-  "error\\[",
-  "warning:",
-  "note:",
-  "^\\s*Finished"
+  "^\\s*Fresh",
+  "^\\s*Downloading",
+  "^\\s*Downloaded"
 ]
 max_lines = 80
 
@@ -40,5 +36,10 @@ warning: unused import: `std::io::Write`
     Finished dev [unoptimized + debuginfo] target(s) in 1.2s
 """
 expected = """warning: unused import: `std::io::Write`
+ --> src/main.rs:5:5
+  |
+5 | use std::io::Write;
+  |     ^^^^^^^^^^^^^^
+  |
   = note: `#[warn(unused_imports)]` on by default
     Finished dev [unoptimized + debuginfo] target(s) in 1.2s"""

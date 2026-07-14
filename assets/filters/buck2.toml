@@ -4,17 +4,13 @@ match_command = "^buck2\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^\\s*Action ",
+  "^\\s*Action: ",
   "^\\s*Cache ",
   "^Watchman",
-]
-keep_lines_matching = [
-  "BUILD SUCCEEDED",
-  "BUILD FAILED",
-  "Jobs completed",
-  "Time elapsed",
-  "(?i)error",
-  "(?i)fail",
+  "^Buck UI:",
+  "^Network:",
+  "^\\s*Downloaded \\d+",
+  "^File changed:",
 ]
 max_lines = 60
 on_empty = "buck2: build done"
@@ -23,7 +19,9 @@ on_empty = "buck2: build done"
 name = "result and summary kept"
 input = """
 Watchman fresh instance
+Buck UI: https://app.buck2.re/builds/0000
 Action: compile //app:lib
+Network: Up: 0B  Down: 1.2MiB
 Jobs completed: 120. Time elapsed: 12.3s.
 BUILD SUCCEEDED
 """
@@ -31,11 +29,27 @@ expected = """Jobs completed: 120. Time elapsed: 12.3s.
 BUILD SUCCEEDED"""
 
 [[tests.buck2]]
-name = "build failure kept"
+name = "build failure keeps compiler stderr continuation"
 input = """
 Action: compile //app:lib
+Action failed: root//app:lib (rustc app/lib.rs)
+Remote command returned non-zero exit code 1
+stderr:
+error[E0308]: mismatched types
+ --> app/lib.rs:5:5
+  |
+5 |     "x"
+  |     ^^^ expected `i32`, found `&str`
 BUILD FAILED
-Caused by: compilation error in app/lib.rs
+Failed to build 'root//app:lib'
 """
-expected = """BUILD FAILED
-Caused by: compilation error in app/lib.rs"""
+expected = """Action failed: root//app:lib (rustc app/lib.rs)
+Remote command returned non-zero exit code 1
+stderr:
+error[E0308]: mismatched types
+ --> app/lib.rs:5:5
+  |
+5 |     "x"
+  |     ^^^ expected `i32`, found `&str`
+BUILD FAILED
+Failed to build 'root//app:lib'"""

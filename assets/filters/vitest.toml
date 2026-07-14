@@ -6,38 +6,77 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*PASS\\s+",
-  "^\\s*Test Files\\s+",
-  "^\\s*Tests\\s+",
-  "^\\s*Time\\s+"
+  "^\\s*Test Files\\s+\\d+ passed",
+  "^\\s*Tests\\s+\\d+ passed",
+  "^\\s*Time\\s+",
+  "^\\s*Start at\\s+",
+  "^\\s*Duration\\s+"
 ]
 keep_lines_matching = [
   "FAIL",
+  "failed",
   "× ",
   "AssertionError",
   "Error:",
   "TypeError:",
   "ReferenceError:",
-  "SyntaxError:"
+  "SyntaxError:",
+  "→ ",
+  "Expected",
+  "Received",
+  "^\\s*[-+] ",
+  "^\\s*❯ ",
+  "^\\s*>?\\s*\\d+\\|",
+  "^\\s*\\|"
 ]
 max_lines = 80
 
 
 [[tests.vitest]]
-name = "failure shown"
+name = "failure keeps diff, code frame, caret and summary"
 input = """
- FAIL  src/utils.test.ts [ src/utils.test.ts ]
- × add › should add two numbers
-   AssertionError: expected 4 toBe 3
-   => 12 |   expect(add(1, 2)).toBe(3);
-        |             ^
+ ❯ src/utils.test.ts (5 tests | 1 failed)
+   × add › should add two numbers 12ms
+     → expected 4 to be 3
 
- Test Files  1 failed (2)
- Tests  1 failed (5)
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/utils.test.ts > add > should add two numbers
+AssertionError: expected 4 to be 3
+
+- Expected
++ Received
+
+- 3
++ 4
+
+ ❯ src/utils.test.ts:12:29
+     11|   test('should add', () => {
+     12|     expect(add(1, 2)).toBe(3)
+       |                       ^
+     13|   })
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 4 passed (5)
+   Duration  1.2s
 """
 expected = """
- FAIL  src/utils.test.ts [ src/utils.test.ts ]
- × add › should add two numbers
-   AssertionError: expected 4 toBe 3"""
+ ❯ src/utils.test.ts (5 tests | 1 failed)
+   × add › should add two numbers 12ms
+     → expected 4 to be 3
+ FAIL  src/utils.test.ts > add > should add two numbers
+AssertionError: expected 4 to be 3
+- Expected
++ Received
+- 3
++ 4
+ ❯ src/utils.test.ts:12:29
+     11|   test('should add', () => {
+     12|     expect(add(1, 2)).toBe(3)
+       |                       ^
+     13|   })
+ Test Files  1 failed (1)
+      Tests  1 failed | 4 passed (5)"""
 
 [[tests.vitest]]
 name = "silent success stays empty"

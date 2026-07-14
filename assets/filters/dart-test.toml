@@ -12,17 +12,37 @@ keep_lines_matching = [
   "-\\d+:",
   "\\[E\\]",
   "(?i)error",
+  "^\\s+Expected:",
+  "^\\s+Actual:",
+  "^\\s+Which:",
+  "^\\s+Exception:",
+  "^\\s+package:",
+  "^\\s+\\S+\\.dart[ :]\\d",
 ]
 max_lines = 80
 on_empty = "dart test: passed"
 
 [[tests.dart-test]]
-name = "failure result kept"
+name = "failure keeps assertion payload and stack frames"
 input = """
-00:01 +1: test one
-00:02 +9 -1: Some tests failed.
+00:01 +1: test/calc_test.dart: adds numbers
+00:02 +1 -1: test/calc_test.dart: subtracts numbers [E]
+  Expected: <3>
+    Actual: <4>
+     Which: is not <3>
+
+  package:matcher                       expect
+  test/calc_test.dart 12:5              main.<fn>
+
+00:02 +1 -1: Some tests failed.
 """
-expected = "00:02 +9 -1: Some tests failed."
+expected = """00:02 +1 -1: test/calc_test.dart: subtracts numbers [E]
+  Expected: <3>
+    Actual: <4>
+     Which: is not <3>
+  package:matcher                       expect
+  test/calc_test.dart 12:5              main.<fn>
+00:02 +1 -1: Some tests failed."""
 
 [[tests.dart-test]]
 name = "all pass kept"

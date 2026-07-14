@@ -1,5 +1,5 @@
 [filters.gatsby]
-description = "Keep gatsby build success/warning/result lines, drop info progress"
+description = "Keep gatsby build success/warning/error detail, drop info progress"
 match_command = "^(npx\\s+)?gatsby\\b"
 strip_ansi = true
 strip_lines_matching = [
@@ -7,13 +7,6 @@ strip_lines_matching = [
   "^info ",
   "^verbose ",
   "^\\s*⠋",
-]
-keep_lines_matching = [
-  "^success ",
-  "^warning ",
-  "Done building",
-  "(?i)error",
-  "(?i)failed",
 ]
 max_lines = 80
 on_empty = "gatsby: build done"
@@ -31,9 +24,21 @@ warning Browserslist: caniuse-lite is outdated
 Done building in 45.678 sec"""
 
 [[tests.gatsby]]
-name = "build failure kept"
+name = "build failure keeps error body and file line"
 input = """
 info Building production JavaScript and CSS bundles
 failed Building production JavaScript and CSS bundles - 5.000s
+
+ ERROR #98123  WEBPACK
+
+Generating production JavaScript bundle failed
+
+Can't resolve './missing' in '/site/src/pages'
+
+File: src/pages/index.js:2:1
 """
-expected = "failed Building production JavaScript and CSS bundles - 5.000s"
+expected = """failed Building production JavaScript and CSS bundles - 5.000s
+ ERROR #98123  WEBPACK
+Generating production JavaScript bundle failed
+Can't resolve './missing' in '/site/src/pages'
+File: src/pages/index.js:2:1"""

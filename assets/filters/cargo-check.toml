@@ -6,19 +6,15 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Checking",
-  "^\\s*Finished",
-  "^\\s*Fresh"
-]
-keep_lines_matching = [
-  "error\\[",
-  "warning:",
-  "note:"
+  "^\\s*Fresh",
+  "^\\s*Downloading",
+  "^\\s*Downloaded"
 ]
 max_lines = 60
 
 
 [[tests.cargo-check]]
-name = "warnings shown"
+name = "full diagnostic block shown"
 input = """
 Checking my-crate v0.1.0
 warning: unused variable: `x`
@@ -32,7 +28,13 @@ warning: unused variable: `x`
 Finished dev [unoptimized + debuginfo] target(s) in 0.5s
 """
 expected = """warning: unused variable: `x`
-  = note: `#[warn(unused_variables)]` on by default"""
+ --> src/main.rs:10:9
+  |
+10 |     let x = 5;
+  |         ^^ help: if this is intentional, prefix with underscore: `_x`
+  |
+  = note: `#[warn(unused_variables)]` on by default
+Finished dev [unoptimized + debuginfo] target(s) in 0.5s"""
 
 [[tests.cargo-check]]
 name = "silent success stays empty"

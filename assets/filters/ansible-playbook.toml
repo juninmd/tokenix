@@ -19,7 +19,12 @@ keep_lines_matching = [
   "ERROR",
   "unreachable",
   "failed=",
-  "MSG:"
+  "MSG:",
+  "\"msg\"\\s*:|^\\s*msg:",
+  "\"stderr(_lines)?\"\\s*:|^\\s*stderr(_lines)?:",
+  "\"stdout(_lines)?\"\\s*:|^\\s*stdout(_lines)?:",
+  "\"reason\"\\s*:|^\\s*reason:",
+  "\"rc\"\\s*:|^\\s*rc:"
 ]
 max_lines = 50
 
@@ -37,6 +42,28 @@ web1                   : ok=1    changed=0    unreachable=0    failed=1    skipp
 """
 expected = '''
 fatal: [web1]: FAILED! => {"msg": "Failed to install nginx: apt update failed"}
+web1                   : ok=1    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0'''
+
+[[tests.ansible-playbook]]
+name = "pretty-printed failure payload survives"
+input = """
+PLAY [webservers] ************************************************************
+
+TASK [Install nginx] *********************************************************
+fatal: [web1]: FAILED! => {
+    "changed": false,
+    "msg": "No package matching 'nginxx' is available",
+    "rc": 100,
+    "stderr": "E: Unable to locate package nginxx"
+}
+
+PLAY RECAP *******************************************************************
+web1                   : ok=1    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0
+"""
+expected = '''fatal: [web1]: FAILED! => {
+    "msg": "No package matching 'nginxx' is available",
+    "rc": 100,
+    "stderr": "E: Unable to locate package nginxx"
 web1                   : ok=1    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0'''
 
 [[tests.ansible-playbook]]

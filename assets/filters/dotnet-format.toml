@@ -21,6 +21,7 @@ keep_lines_matching = [
   "FAILED",
   "warning:",
   "Warning:",
+  ": (error|warning) ",
 ]
 max_lines = 30
 
@@ -30,6 +31,17 @@ input = """
 warning: IDE0005 Using directive is unnecessary
 """
 expected = "warning: IDE0005 Using directive is unnecessary"
+
+[[tests.dotnet-format]]
+name = "verify-no-changes diagnostics kept"
+input = """
+Formatting code files in workspace '/app/app.sln'.
+/app/Program.cs(10,13): error WHITESPACE: Fix whitespace formatting. Replace 4 characters with '\\n'.
+/app/Util.cs(3,1): warning IDE0005: Using directive is unnecessary.
+Formatted 2 of 14 files.
+"""
+expected = """/app/Program.cs(10,13): error WHITESPACE: Fix whitespace formatting. Replace 4 characters with '\\n'.
+/app/Util.cs(3,1): warning IDE0005: Using directive is unnecessary."""
 
 [[tests.dotnet-format]]
 name = "silent success stays empty"

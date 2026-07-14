@@ -6,13 +6,9 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Checking",
-  "^\\s*Finished",
-  "^\\s*Fresh"
-]
-keep_lines_matching = [
-  "warning:",
-  "error:",
-  "note:"
+  "^\\s*Fresh",
+  "^\\s*Downloading",
+  "^\\s*Downloaded"
 ]
 max_lines = 80
 
@@ -22,9 +18,7 @@ input = """
 Checking my-crate v0.1.0
 Finished dev [unoptimized + debuginfo] target(s) in 0.5s
 """
-expected = '''
-Checking my-crate v0.1.0
-Finished dev [unoptimized + debuginfo] target(s) in 0.5s'''
+expected = "Finished dev [unoptimized + debuginfo] target(s) in 0.5s"
 
 [[tests.cargo-clippy]]
 name = "warnings shown"
@@ -49,7 +43,19 @@ warning: this `if` can be removed
 
 Finished dev [unoptimized + debuginfo] target(s) in 0.5s
 """
-expected = """
-warning: unused import: `std::io::Write`
+expected = """warning: unused import: `std::io::Write`
+ --> src/main.rs:5:5
+  |
+5 | use std::io::Write;
+  |     ^^^^^^^^^^^^^^
+  |
   = note: `#[warn(unused_imports)]` on by default
-warning: this `if` can be removed"""
+  = help: remove the import
+warning: this `if` can be removed
+ --> src/main.rs:10:5
+  |
+10 |     if true {
+  |     ^^^^^^^
+  |
+  = help: remove the `if` block
+Finished dev [unoptimized + debuginfo] target(s) in 0.5s"""
