@@ -15,6 +15,7 @@ keep_lines_matching = [
   "Artifact .* output as",
   "(?i)error",
   "(?i)fail",
+  "\\*failed\\*",
 ]
 max_lines = 60
 on_empty = "earthly: done"
@@ -31,11 +32,18 @@ expected = """+build | Image +build output as docker.io/app:latest
 =========================== SUCCESS ==========================="""
 
 [[tests.earthly]]
-name = "failure kept"
+name = "failure keeps failed-target recap output"
 input = """
-+build | --> RUN go build
++build | --> RUN go build ./...
+Repeating the output of the command that caused the failure
++build *failed* | --> RUN go build ./...
++build *failed* | ./main.go:10:5: undefined: foo
++build *failed* | ERROR: command exited with code 1
 =========================== FAILURE ===========================
 Error: build target +build failed
 """
-expected = """=========================== FAILURE ===========================
+expected = """Repeating the output of the command that caused the failure
++build *failed* | ./main.go:10:5: undefined: foo
++build *failed* | ERROR: command exited with code 1
+=========================== FAILURE ===========================
 Error: build target +build failed"""

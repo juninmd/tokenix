@@ -2,15 +2,13 @@
 description = "Keep scons result and errors, drop per-file compile commands"
 match_command = "^scons\\b"
 strip_ansi = true
+# Strip-only: success output is scons status lines plus compile-command noise;
+# on failure the compiler diagnostic (snippet, caret, notes) must survive
+# intact, so no keep whitelist.
 strip_lines_matching = [
   "^\\s*$",
-  "^(gcc|g\\+\\+|cc|clang) ",
+  "^(gcc|g\\+\\+|cc|clang|clang\\+\\+) ",
   "^Compiling ",
-]
-keep_lines_matching = [
-  "^scons: ",
-  "(?i)error",
-  "(?i)fail",
 ]
 max_lines = 60
 on_empty = "scons: done"
@@ -29,12 +27,17 @@ scons: Building targets ...
 scons: done building targets."""
 
 [[tests.scons]]
-name = "build error kept"
+name = "build error keeps snippet and caret continuations"
 input = """
 scons: Building targets ...
-app.c:5:1: error: expected ';'
+gcc -o app.o -c app.c
+app.c:5:1: error: expected ';' before 'return'
+    int x = 5
+    ^
 scons: building terminated because of errors.
 """
 expected = """scons: Building targets ...
-app.c:5:1: error: expected ';'
+app.c:5:1: error: expected ';' before 'return'
+    int x = 5
+    ^
 scons: building terminated because of errors."""

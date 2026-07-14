@@ -5,27 +5,48 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*✔",
-]
-keep_lines_matching = [
-  "✖",
-  "tests? (passed|failed)",
-  "Rejected promise",
-  "(?i)error",
+  "^\\s*─+\\s*$",
 ]
 max_lines = 80
 on_empty = "ava: all tests passed"
 
 [[tests.ava]]
-name = "failures and counts kept"
+name = "failure detail block survives"
 input = """
   ✔ passes test one
   ✔ passes test two
   ✖ fails test three
 
+  fails test three
+
+  test.js:12
+
+   11:   const result = add(1, 2);
+   12:   t.is(result, 4);
+   13: });
+
+  Difference (- actual, + expected):
+
+  - 3
+  + 4
+
+  › file://test.js:12:5
+
+  ─
+
   2 tests passed
   1 test failed
 """
 expected = """  ✖ fails test three
+  fails test three
+  test.js:12
+   11:   const result = add(1, 2);
+   12:   t.is(result, 4);
+   13: });
+  Difference (- actual, + expected):
+  - 3
+  + 4
+  › file://test.js:12:5
   2 tests passed
   1 test failed"""
 

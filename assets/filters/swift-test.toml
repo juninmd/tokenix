@@ -3,26 +3,28 @@ description = "Compact swift test output"
 match_command = "^swift\\s+test\\b"
 passthrough_when_emptied = true
 strip_ansi = true
+# Only started/passed lines are stripped: failed Test Case/Suite lines and
+# the Executed summary with failures are the diagnostic, not noise.
 strip_lines_matching = [
   "^\\s*$",
-  "^\\s*Test Suite ",
-  "^\\s*Test Case ",
+  "^\\s*Test Suite .* (?:started|passed)",
+  "^\\s*Test Case .* (?:started|passed)",
   "^\\s*passed",
-  "^\\s*Test Suite.*passed",
-  "^\\s*Executed "
+  "^\\s*Executed \\d+ tests?, with 0 failures"
 ]
 keep_lines_matching = [
   "failed",
   "FAILED",
   "error:",
   "XCTAssert",
-  "XCTFail"
+  "XCTFail",
+  "^\\s*Executed "
 ]
 max_lines = 60
 
 
 [[tests.swift-test]]
-name = "failure shown"
+name = "failure keeps failing test name, assertion and summary"
 input = """
 Test Suite 'All tests' started at 2024-01-15 10:30:00.123
 Test Suite 'MyPackageTests' started at 2024-01-15 10:30:00.124
@@ -32,7 +34,10 @@ Test Case '-[MyPackageTests testAdd]' failed (0.001 seconds).
 Test Suite 'MyPackageTests' failed at 2024-01-15 10:30:00.126
 	Executed 2 tests, with 1 failure (1 unexpected) in 0.002 seconds
 """
-expected = "	MyPackageTests.swift:15: XCTAssertEqual failed: (\"4\") is not equal to (\"3\")"
+expected = """Test Case '-[MyPackageTests testAdd]' failed (0.001 seconds).
+	MyPackageTests.swift:15: XCTAssertEqual failed: ("4") is not equal to ("3")
+Test Suite 'MyPackageTests' failed at 2024-01-15 10:30:00.126
+	Executed 2 tests, with 1 failure (1 unexpected) in 0.002 seconds"""
 
 [[tests.swift-test]]
 name = "silent success stays empty"

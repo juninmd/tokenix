@@ -7,23 +7,14 @@ strip_lines_matching = [
   "^\\s*$",
   "^Loading:",
   "^Analyzing:",
-  "^\\[\\d+ / \\d+\\]",
+  "^\\[[\\d,]+ / [\\d,]+\\]",
   "^INFO: Analyzed ",
   "^INFO: Found ",
   "^\\s*Fetching ",
   "^Computing main repo",
   "^INFO: From ",
-]
-keep_lines_matching = [
-  "^ERROR:",
-  "^FAILED",
-  "FAIL:",
-  "^INFO: Build completed",
-  "Executed \\d+ out of",
-  "(?i)\\bpassed\\b",
-  "no tests",
-  "^Target ",
-  "actions? completed",
+  "^Starting local Bazel server",
+  "^INFO: Invocation ID",
 ]
 max_lines = 50
 replace_patterns = [
@@ -49,12 +40,25 @@ Executed 1 out of 1 test: 1 test passes.
 INFO: Build completed successfully, 5678 total actions"""
 
 [[tests.bazel]]
-name = "build error surfaced"
+name = "compiler diagnostics and test FAILED lines survive"
 input = """
 Loading:
 Analyzing: 1 target (3 packages loaded)
-ERROR: /work/src/BUILD:12:11: Compiling src/main.cc failed: undeclared inclusion(s)
+[12 / 40] Compiling src/main.cc
+ERROR: /work/src/BUILD:12:11: Compiling src/main.cc failed: (Exit 1): gcc failed: error executing command
+src/main.cc:5:10: fatal error: missing.h: No such file or directory
+    5 | #include "missing.h"
+      |          ^~~~~~~~~~~
+compilation terminated.
+//src:app_test                                          FAILED in 0.3s
+  /home/user/.cache/bazel/testlogs/src/app_test/test.log
 FAILED: Build did NOT complete successfully
 """
-expected = """ERROR: /work/src/BUILD:12:11: Compiling src/main.cc failed: undeclared inclusion(s)
+expected = """ERROR: /work/src/BUILD:12:11: Compiling src/main.cc failed: (Exit 1): gcc failed: error executing command
+src/main.cc:5:10: fatal error: missing.h: No such file or directory
+    5 | #include "missing.h"
+      |          ^~~~~~~~~~~
+compilation terminated.
+//src:app_test                                          FAILED in <duration>
+  /home/user/.cache/bazel/testlogs/src/app_test/test.log
 FAILED: Build did NOT complete successfully"""

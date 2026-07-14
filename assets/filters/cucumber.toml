@@ -11,19 +11,27 @@ keep_lines_matching = [
   "(?i)error",
   "expected",
   "\\(::",
+  "^\\s*got:",
+  "\\.rb:\\d+",
+  "^\\s+at ",
+  "[✗✖]",
+  "^\\s+[-+]\\S",
 ]
 max_lines = 60
 token_budget = 2000
 
 [[tests.cucumber]]
-name = "totals and failing scenarios kept"
+name = "assertion values and step stack kept"
 input = """
 Feature: Login
 
   Scenario: valid login
     Given a registered user
     When they log in
-    Then they see the dashboard
+      expected: "Dashboard"
+           got: "Welcome" (RSpec::Expectations::ExpectationNotMetError)
+      ./features/step_definitions/login_steps.rb:10:in `match_page'
+      features/login.feature:12:in `When they log in'
 
 Failing Scenarios:
 cucumber features/login.feature:12
@@ -31,7 +39,11 @@ cucumber features/login.feature:12
 2 scenarios (1 failed, 1 passed)
 10 steps (1 failed, 9 passed)
 """
-expected = """Failing Scenarios:
+expected = """      expected: "Dashboard"
+           got: "Welcome" (RSpec::Expectations::ExpectationNotMetError)
+      ./features/step_definitions/login_steps.rb:10:in `match_page'
+      features/login.feature:12:in `When they log in'
+Failing Scenarios:
 cucumber features/login.feature:12
 2 scenarios (1 failed, 1 passed)
 10 steps (1 failed, 9 passed)"""

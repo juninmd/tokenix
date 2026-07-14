@@ -1,5 +1,5 @@
 [filters.go-install]
-description = "Surface go install errors, collapse silent success"
+description = "Surface go install errors verbatim, collapse download noise and silent success"
 match_command = "^go\\s+install\\b"
 strip_ansi = true
 strip_lines_matching = [
@@ -7,13 +7,6 @@ strip_lines_matching = [
   "^go: downloading ",
   "^go: extracting ",
   "^go: found ",
-]
-keep_lines_matching = [
-  "\\.go:\\d+:\\d+:",
-  "cannot find package",
-  "no required module",
-  "(?i)error",
-  "(?i)fatal",
 ]
 max_lines = 60
 on_empty = "go install: ok"
@@ -27,10 +20,18 @@ go: downloading github.com/spf13/pflag v1.0.5
 expected = "go install: ok"
 
 [[tests.go-install]]
-name = "build error kept"
+name = "build error keeps package header and continuations"
 input = """
 go: downloading github.com/x/y v1.0.0
 # github.com/x/y
 ../y/main.go:5:2: undefined: Bar
+../y/main.go:9:4: cannot use v (variable of type int) as string value in argument to Print
+	have (int)
+	want (string)
 """
-expected = "../y/main.go:5:2: undefined: Bar"
+expected = """
+# github.com/x/y
+../y/main.go:5:2: undefined: Bar
+../y/main.go:9:4: cannot use v (variable of type int) as string value in argument to Print
+	have (int)
+	want (string)"""

@@ -2,36 +2,38 @@
 description = "Compact ninja build output: drop progress, keep failures"
 match_command = "^ninja\\b"
 strip_ansi = true
+# Strip-only: ninja success output is pure progress noise; on failure the
+# wrapped compiler diagnostic (snippet, caret, notes) must survive intact,
+# so no keep whitelist.
 strip_lines_matching = [
   "^\\s*$",
   "^\\[\\d+/\\d+\\] ",
   "^ninja: Entering directory",
   "^ninja: no work to do",
 ]
-keep_lines_matching = [
-  "^FAILED:",
-  "^ninja: build stopped",
-  "^ninja: error",
-  "(?i)\\berror:",
-  "(?i)\\bwarning:",
-  "undefined reference",
-]
 max_lines = 50
 on_empty = "ninja: build ok"
 token_budget = 1500
 
 [[tests.ninja]]
-name = "compile failure surfaced"
+name = "compile failure keeps snippet and caret continuations"
 input = """
 [1/3] Compiling foo.c
 [2/3] Compiling bar.c
 FAILED: bar.o
 cc -c bar.c -o bar.o
 bar.c:10:5: error: use of undeclared identifier 'x'
+    x = 5;
+    ^
+bar.c:3:9: note: 'y' declared here
 ninja: build stopped: subcommand failed.
 """
 expected = """FAILED: bar.o
+cc -c bar.c -o bar.o
 bar.c:10:5: error: use of undeclared identifier 'x'
+    x = 5;
+    ^
+bar.c:3:9: note: 'y' declared here
 ninja: build stopped: subcommand failed."""
 
 [[tests.ninja]]

@@ -14,6 +14,9 @@ keep_lines_matching = [
   "(?i)error",
   "(?i)fail",
   "(?i)exception",
+  "^\\* ",
+  "^> ",
+  "^\\s+at ",
 ]
 max_lines = 60
 on_empty = "flutter build: done"
@@ -28,9 +31,16 @@ Resolving dependencies...
 expected = "✓ Built build/app/outputs/flutter-apk/app-release.apk (12.3MB)"
 
 [[tests.flutter-build]]
-name = "build failure kept"
+name = "build failure keeps what-went-wrong section"
 input = """
 Running Gradle task 'assembleRelease'...
 FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileFlutterBuildRelease'.
+> Process 'command flutter' finished with non-zero exit value 1
 """
-expected = "FAILURE: Build failed with an exception."
+expected = """FAILURE: Build failed with an exception.
+* What went wrong:
+Execution failed for task ':app:compileFlutterBuildRelease'.
+> Process 'command flutter' finished with non-zero exit value 1"""

@@ -6,52 +6,54 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Starting",
-  "^\\s*Running",
-  "^\\s*\\d+ passed",
-  "^\\s*\\d+ failed",
-  "^\\s*\\d+ skipped",
-  "^\\s*\\d+ slow",
-  "^\\s*\\d+ leaked",
-]
-keep_lines_matching = [
-  "FAILED",
-  "FAILED",
-  "error:",
-  "Error:",
-  "passed",
-  "failed",
-  "skipped",
-  "test result:",
-  "Slow tests:",
-  "Leaked tests:",
+  "^\\s*Compiling",
+  "^\\s*Finished",
+  "^\\s*Fresh",
+  "^\\s*Downloading",
+  "^\\s*Downloaded",
+  "^\\s*PASS \\[",
+  "^\\s*running \\d+ test",
+  "^-+$",
 ]
 max_lines = 60
 
 [[tests.cargo-nextest]]
 name = "all tests pass"
 input = """
-Starting 50 tests across 8 binaries
-Running tests (sequential)
-[PASS] my-crate::tests::test1 (10ms)
-[PASS] my-crate::tests::test2 (15ms)
-
-Test run: 50 passed, 0 failed, 0 skipped (2.3s)
+    Starting 2 tests across 1 binary
+        PASS [   0.010s] my-crate tests::test1
+        PASS [   0.012s] my-crate tests::test2
+------------
+     Summary [   0.025s] 2 tests run: 2 passed, 0 skipped
 """
-expected = "Test run: 50 passed, 0 failed, 0 skipped (2.3s)"
+expected = "     Summary [   0.025s] 2 tests run: 2 passed, 0 skipped"
 
 [[tests.cargo-nextest]]
-name = "failures shown"
+name = "failure keeps panic payload and left/right values"
 input = """
-Starting 50 tests across 8 binaries
-Running tests (sequential)
-[PASS] my-crate::tests::test1 (10ms)
-[FAIL] my-crate::tests::test2 (15ms)
-   Error: assertion failed: `(left == right)`
-     left: `3`,
-     right: `4`,
+    Starting 2 tests across 1 binary
+        PASS [   0.010s] my-crate tests::test1
+        FAIL [   0.015s] my-crate tests::test2
 
-Test run: 49 passed, 1 failed, 0 skipped (2.5s)
+--- STDOUT:              my-crate tests::test2 ---
+
+running 1 test
+thread 'tests::test2' panicked at src/lib.rs:10:5:
+assertion `left == right` failed
+  left: 3
+ right: 4
+test tests::test2 ... FAILED
+
+  Cancelling due to test failure
+------------
+     Summary [   0.030s] 2 tests run: 1 passed, 1 failed, 0 skipped
 """
-expected = """
-   Error: assertion failed: `(left == right)`
-Test run: 49 passed, 1 failed, 0 skipped (2.5s)"""
+expected = """        FAIL [   0.015s] my-crate tests::test2
+--- STDOUT:              my-crate tests::test2 ---
+thread 'tests::test2' panicked at src/lib.rs:10:5:
+assertion `left == right` failed
+  left: 3
+ right: 4
+test tests::test2 ... FAILED
+  Cancelling due to test failure
+     Summary [   0.030s] 2 tests run: 1 passed, 1 failed, 0 skipped"""

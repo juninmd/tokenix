@@ -1,30 +1,30 @@
 [filters.go-generate]
-description = "Compact go generate output"
+description = "Compact go generate output — drop Running noise, keep generator errors verbatim"
 match_command = "^go\\s+generate\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Running "
 ]
-keep_lines_matching = [
-  "error:",
-  "FAILED",
-  "cannot find"
-]
 max_lines = 30
+on_empty = "go generate: ok"
 
 
 [[tests.go-generate]]
-name = "error shown"
+name = "generator failure keeps stderr and exit line"
 input = """
 Running "go run github.com/golang/mock/mockgen -source=foo.go -destination=mock_foo.go"
-foo.go:10:5: cannot find package "github.com/golang/mock/mockgen"
+2026/06/24 10:00:00 Loading input failed: foo.go:3:8: could not import missing/pkg
+foo.go:10: running "go": exit status 1
 """
 expected = """
-foo.go:10:5: cannot find package "github.com/golang/mock/mockgen" """
+2026/06/24 10:00:00 Loading input failed: foo.go:3:8: could not import missing/pkg
+foo.go:10: running "go": exit status 1"""
 
 [[tests.go-generate]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "running noise collapses on success"
+input = """
+Running "go run github.com/golang/mock/mockgen -source=foo.go -destination=mock_foo.go"
+Running "stringer -type=Color"
+"""
+expected = "go generate: ok"

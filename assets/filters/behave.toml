@@ -11,21 +11,27 @@ keep_lines_matching = [
   "\\.feature:\\d+",
   "AssertionError",
   "Traceback",
-  "^\\s+Assert",
+  "(?i)assert",
   "(?i)error",
+  "^\\s+File \"",
+  "\\.\\.\\. failed",
 ]
 max_lines = 60
 token_budget = 2000
 
 [[tests.behave]]
-name = "totals and failing scenarios kept"
+name = "failing step traceback and assertion payload kept"
 input = """
 Feature: Login
 
   Scenario: valid credentials
     Given a registered user
     When they submit valid credentials
-    Then they reach the dashboard
+    Then they reach the dashboard ... failed
+Traceback (most recent call last):
+  File "/app/features/steps/login.py", line 12, in step_impl
+    assert page.title == "Dashboard"
+AssertionError: expected Dashboard, got Welcome
 
 Failing scenarios:
   features/login.feature:12  Login with bad password
@@ -34,7 +40,12 @@ Failing scenarios:
 5 scenarios passed, 1 failed, 0 skipped
 17 steps passed, 1 failed, 0 skipped, 0 undefined
 """
-expected = """Failing scenarios:
+expected = """    Then they reach the dashboard ... failed
+Traceback (most recent call last):
+  File "/app/features/steps/login.py", line 12, in step_impl
+    assert page.title == "Dashboard"
+AssertionError: expected Dashboard, got Welcome
+Failing scenarios:
   features/login.feature:12  Login with bad password
 2 features passed, 0 failed, 0 skipped
 5 scenarios passed, 1 failed, 0 skipped

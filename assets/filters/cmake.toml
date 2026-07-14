@@ -14,7 +14,8 @@ keep_lines_matching = [
   "CMake Error",
   "CMake Warning",
   "error:",
-  "FAILED"
+  "FAILED",
+  "^\\s{2,}\\S"
 ]
 max_lines = 50
 
@@ -35,7 +36,7 @@ expected = '''
 -- Build files have been written to: /build'''
 
 [[tests.cmake]]
-name = "error shown"
+name = "error body survives"
 input = """
 -- The C compiler identification is GNU 13.2.0
 CMake Error at CMakeLists.txt:10 (find_package):
@@ -44,4 +45,8 @@ CMake Error at CMakeLists.txt:10 (find_package):
     Qt6Config.cmake
     qt6-config.cmake
 """
-expected = "CMake Error at CMakeLists.txt:10 (find_package):"
+expected = """CMake Error at CMakeLists.txt:10 (find_package):
+  Could not find a package configuration file provided by "Qt6" with any of
+  the following names:
+    Qt6Config.cmake
+    qt6-config.cmake"""

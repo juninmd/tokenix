@@ -15,10 +15,22 @@ keep_lines_matching = [
   "error:",
   "warning:",
   "information:",
-  "hint:"
+  "hint:",
+  "^\\s{4,}\\S"
 ]
 max_lines = 60
 
+
+[[tests.basedpyright]]
+name = "diagnostic detail continuation survives"
+input = """
+/src/main.py
+  /src/main.py:10:5 - error: Argument of type "str" cannot be assigned to parameter "x" of type "int"
+    "str" is not assignable to "int" (reportArgumentType)
+1 error, 0 warnings, 0 informations
+"""
+expected = """  /src/main.py:10:5 - error: Argument of type "str" cannot be assigned to parameter "x" of type "int"
+    "str" is not assignable to "int" (reportArgumentType)"""
 
 [[tests.basedpyright]]
 name = "errors shown"

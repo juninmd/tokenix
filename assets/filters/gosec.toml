@@ -10,10 +10,12 @@ strip_lines_matching = [
   "^\\s*Scanning"
 ]
 keep_lines_matching = [
-  "^\\w+\\.go:\\d+:\\d+:",
-  "HIGH:",
-  "MEDIUM:",
-  "LOW:",
+  "\\.go:\\d+",
+  "^\\[",
+  "^\\s*>?\\s*\\d+:\\s",
+  "HIGH",
+  "MEDIUM",
+  "LOW",
   "Error:",
   "WARNING:"
 ]
@@ -21,14 +23,20 @@ max_lines = 50
 
 
 [[tests.gosec]]
-name = "issues shown"
+name = "finding keeps location line and source snippet"
 input = """
-main.go:10:5: G101: Hardcoded credentials (HIGH)
-utils.go:15:1: G104: Errors unhandled (MEDIUM)
+[/work/main.go:10] - G101 (CWE-798): Potential hardcoded credentials (Confidence: LOW, Severity: HIGH)
+    9: func main() {
+  > 10: 	password := "secret123"
+   11: }
+
+Summary:
+  Issues: 1
 """
-expected = """
-main.go:10:5: G101: Hardcoded credentials (HIGH)
-utils.go:15:1: G104: Errors unhandled (MEDIUM)"""
+expected = """[/work/main.go:10] - G101 (CWE-798): Potential hardcoded credentials (Confidence: LOW, Severity: HIGH)
+    9: func main() {
+  > 10: 	password := "secret123"
+   11: }"""
 
 [[tests.gosec]]
 name = "silent success stays empty"

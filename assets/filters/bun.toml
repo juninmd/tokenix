@@ -26,6 +26,13 @@ keep_lines_matching = [
   "warning",
   "WARNING",
   "WARN",
+  "^\\s*[✗✖]",
+  "^\\s+at ",
+  "^\\s+(Expected|Received|Actual)[:\\s]",
+  "^\\s*\\d+ \\|",
+  "^\\s*\\^\\s*$",
+  "^\\s*\\d+ (pass|skip|todo)\\b",
+  "^Ran \\d+ tests",
 ]
 max_lines = 40
 replace_patterns = [
@@ -34,28 +41,48 @@ replace_patterns = [
   ["\\d+\\.\\d+ms", "<duration>"],
   ["[a-z0-9_-]+@[\\d.]+", "<package>@<version>"],
 ]
-extract_sections = [
-  { start_pattern = "error:", end_pattern = "^\\s*$", include_markers = true, max_matches = 3 },
-  { start_pattern = "FAIL", end_pattern = "^\\s*$", include_markers = true, max_matches = 5 },
-]
 deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
 token_budget = 1500
 
 
 [[tests.bun]]
-name = "test failure"
+name = "test failure keeps assertion payload and stack"
 input = """
-$ bun test
-running tests...
-test/add.test.ts:12:3: expected 3 but got 4
-  FAIL test/add.test.ts [FAILED]
+bun test v1.1.0
+test/add.test.ts:
+✗ adds numbers [0.12ms]
+  error: expect(received).toBe(expected)
 
-1 fail
-0 pass
+  Expected: 4
+  Received: 3
+
+      at /app/test/add.test.ts:5:19
+ 1 pass
+ 1 fail
+Ran 2 tests across 1 file.
 """
-expected = """
-  FAIL test/add.test.ts [FAILED]
-1 fail"""
+expected = """✗ adds numbers [<duration>]
+  error: expect(received).toBe(expected)
+  Expected: 4
+  Received: 3
+      at /app/test/add.test.ts:5:19
+ 1 pass
+ 1 fail
+Ran 2 tests across 1 file."""
+
+[[tests.bun]]
+name = "test success keeps counts only"
+input = """
+bun test v1.1.0
+test/add.test.ts:
+✓ adds numbers [0.10ms]
+ 1 pass
+ 0 fail
+Ran 1 tests across 1 file.
+"""
+expected = """ 1 pass
+ 0 fail
+Ran 1 tests across 1 file."""
 
 [[tests.bun]]
 name = "silent success stays empty"

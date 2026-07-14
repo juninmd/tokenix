@@ -25,32 +25,43 @@ keep_lines_matching = [
   "Traceback",
   "File ",
   "assert ",
-  "E       "
+  "^E\\s+",
+  "^>\\s",
+  "\\.py:\\d+",
+  "^_+ [^_].* _+$",
 ]
 max_lines = 80
 
 
 [[tests.pytest]]
-name = "failure shown"
+name = "assert failure keeps header, source, E-continuations and location"
 input = """
-============================= test session starts =============================
-collected 15 items
+============================= test session starts ==============================
+collected 3 items
 
-test_utils.py ......F...
+test_utils.py ..F                                                        [100%]
 
-============================= FAILED test_utils.py::test_add =============================
-def test_add():
-    assert add(1, 2) == 3
-E   AssertionError: assert 4 == 3
-E    +  where 4 = add(1, 2)
+=================================== FAILURES ===================================
+__________________________________ test_add ___________________________________
 
-============================= 1 failed, 14 passed in 0.52s =============================
+    def test_add():
+>       assert add(1, 2) == 3
+E       assert 4 == 3
+E        +  where 4 = add(1, 2)
+
+test_utils.py:5: AssertionError
+=========================== short test summary info ============================
+FAILED test_utils.py::test_add - assert 4 == 3
+============================= 1 failed, 2 passed in 0.05s ======================
 """
-expected = '''
-============================= FAILED test_utils.py::test_add =============================
-    assert add(1, 2) == 3
-E   AssertionError: assert 4 == 3
-============================= 1 failed, 14 passed in 0.52s ============================='''
+expected = """
+__________________________________ test_add ___________________________________
+>       assert add(1, 2) == 3
+E       assert 4 == 3
+E        +  where 4 = add(1, 2)
+test_utils.py:5: AssertionError
+FAILED test_utils.py::test_add - assert 4 == 3
+============================= 1 failed, 2 passed in 0.05s ======================"""
 
 [[tests.pytest]]
 name = "silent success stays empty"

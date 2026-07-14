@@ -1,39 +1,57 @@
 [filters.go-test]
-description = "Compact go test output"
+description = "Compact go test output — drop passing noise, keep failure detail verbatim"
 match_command = "^go\\s+test\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^ok\\s+",
+  "^\\?\\s+.*\\[no test files\\]",
   "^\\s*--- PASS:",
-  "^\\s*PASS\\s*$"
-]
-keep_lines_matching = [
-  "FAIL",
-  "--- FAIL:",
-  "panic:",
-  "Error:",
-  "error:",
-  "FAIL\\s+"
+  "^\\s*=== (RUN|PAUSE|CONT|NAME)",
+  "^\\s*PASS\\s*$",
+  "^\\s*coverage: \\d",
 ]
 max_lines = 60
-
+on_empty = "go test: ok"
 
 [[tests.go-test]]
-name = "test failure shown"
+name = "failure keeps assertion payload"
 input = """
+=== RUN   TestAdd
 --- FAIL: TestAdd (0.00s)
     main_test.go:15: expected 3, got 4
+=== RUN   TestSub
+--- PASS: TestSub (0.00s)
 FAIL
 FAIL    github.com/user/project  0.234s
 """
 expected = """
 --- FAIL: TestAdd (0.00s)
+    main_test.go:15: expected 3, got 4
 FAIL
 FAIL    github.com/user/project  0.234s"""
 
 [[tests.go-test]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "compile error keeps continuation lines"
+input = """
+# github.com/user/project
+./main_test.go:7:2: cannot use x (variable of type string) as int value in argument to Add
+	have (string)
+	want (int)
+FAIL	github.com/user/project [build failed]
+"""
+expected = """
+# github.com/user/project
+./main_test.go:7:2: cannot use x (variable of type string) as int value in argument to Add
+	have (string)
+	want (int)
+FAIL	github.com/user/project [build failed]"""
+
+[[tests.go-test]]
+name = "all pass collapses"
+input = """
+ok  	github.com/user/project	0.212s
+ok  	github.com/user/project/pkg	(cached)
+?   	github.com/user/project/cmd	[no test files]
+"""
+expected = "go test: ok"

@@ -17,6 +17,9 @@ keep_lines_matching = [
   "^✘",
   "^▲",
   "Could not resolve",
+  "^\\s+\\S+:\\d+:\\d+:",
+  "^\\s+\\d+ │",
+  "^\\s+[╵╷]",
 ]
 max_lines = 50
 replace_patterns = [
@@ -25,7 +28,7 @@ replace_patterns = [
 token_budget = 1500
 
 [[tests.esbuild]]
-name = "resolve error surfaced"
+name = "resolve error keeps location, snippet and caret"
 input = """
 ✘ [ERROR] Could not resolve "./missing"
 
@@ -36,6 +39,9 @@ input = """
 1 error
 """
 expected = """✘ [ERROR] Could not resolve "./missing"
+    src/app.ts:1:20:
+      1 │ import x from "./missing"
+        ╵                     ~~~~~~~~~~~
 1 error"""
 
 [[tests.esbuild]]

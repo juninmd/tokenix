@@ -7,9 +7,10 @@ strip_lines_matching = [
   "^\\s*$",
 ]
 keep_lines_matching = [
-  "\\.go:\\d+:\\d+:",
+  "\\.go:\\d+",
   "^panic:",
   "^goroutine ",
+  "^main\\.",
   "cannot find package",
   "undefined:",
   "(?i)error",
@@ -25,6 +26,21 @@ input = """
 ./main.go:10:6: undefined: foo
 """
 expected = """./main.go:10:6: undefined: foo"""
+
+[[tests.go-run]]
+name = "panic keeps stack file:line frames"
+input = """
+panic: runtime error: index out of range [5] with length 3
+
+goroutine 1 [running]:
+main.main()
+	/app/main.go:10 +0x18
+exit status 2
+"""
+expected = """panic: runtime error: index out of range [5] with length 3
+goroutine 1 [running]:
+main.main()
+	/app/main.go:10 +0x18"""
 
 [[tests.go-run]]
 name = "clean program output passes through bounded"

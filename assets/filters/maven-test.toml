@@ -17,23 +17,49 @@ keep_lines_matching = [
   "Tests run:.*Failures:",
   "Tests run:.*Errors:",
   "<<< FAILURE",
-  "<<< ERROR"
+  "<<< ERROR",
+  "^\\s+(?:symbol|location|required|found|reason):",
+  "^[\\w.]*(?:Exception|Error)(?::|$)",
+  "^Caused by:",
+  "^\\s*(?:expected|but was)\\s*:"
 ]
 max_lines = 60
 
 
 [[tests.maven-test]]
-name = "failure shown"
+name = "failure keeps exception message and assertion continuations"
 input = """
 [INFO] --- maven-surefire-plugin:3.0.0:test (default-test) @ my-project ---
 [INFO] Running com.example.MyTest
-[INFO] Tests run: 10, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 2.3 s
+[ERROR] Tests run: 3, Failures: 2, Errors: 0, Skipped: 0, Time elapsed: 0.05 s <<< FAILURE! -- in com.example.MyTest
+[ERROR] com.example.MyTest.testAdd -- Time elapsed: 0.01 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: expected: <3> but was: <4>
+	at com.example.MyTest.testAdd(MyTest.java:12)
+[ERROR] com.example.MyTest.testName -- Time elapsed: 0.01 s <<< FAILURE!
+java.lang.AssertionError:
+expected: "John"
+ but was: "Jane"
+	at com.example.MyTest.testName(MyTest.java:20)
+[INFO] Results:
+[ERROR] Failures:
+[ERROR]   MyTest.testAdd:12 expected: <3> but was: <4>
+[ERROR] Tests run: 3, Failures: 2, Errors: 0, Skipped: 0
 [INFO] ------------------------------------------------------------------------
-[ERROR] BUILD FAILURE
+[INFO] BUILD FAILURE
 [ERROR] There are test failures.
 """
 expected = """
-[ERROR] BUILD FAILURE
+[ERROR] Tests run: 3, Failures: 2, Errors: 0, Skipped: 0, Time elapsed: 0.05 s <<< FAILURE! -- in com.example.MyTest
+[ERROR] com.example.MyTest.testAdd -- Time elapsed: 0.01 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: expected: <3> but was: <4>
+[ERROR] com.example.MyTest.testName -- Time elapsed: 0.01 s <<< FAILURE!
+java.lang.AssertionError:
+expected: "John"
+ but was: "Jane"
+[ERROR] Failures:
+[ERROR]   MyTest.testAdd:12 expected: <3> but was: <4>
+[ERROR] Tests run: 3, Failures: 2, Errors: 0, Skipped: 0
+[INFO] BUILD FAILURE
 [ERROR] There are test failures."""
 
 [[tests.maven-test]]

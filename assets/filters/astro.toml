@@ -15,6 +15,9 @@ keep_lines_matching = [
   "built in",
   "(?i)error",
   "(?i)fail",
+  "^\\s+(Hint|Location|Error reference|Stack trace):",
+  "^\\s+at ",
+  "^\\s{4,}\\S",
 ]
 max_lines = 60
 on_empty = "astro: build done"
@@ -32,9 +35,17 @@ expected = """12:00:01 [build] 10 page(s) built in 1.23s
 12:00:01 [build] Complete!"""
 
 [[tests.astro]]
-name = "build error kept"
+name = "build error with hint and stack kept"
 input = """
 ▶ src/pages/index.astro
-[ERROR] Could not resolve "./missing"
+ error   Could not resolve "./missing" from "src/pages/index.astro".
+  Hint:
+    This is often caused by a typo in the import path.
+  Stack trace:
+    at nodeResolve (/app/node_modules/vite/dist/node.js:1:100)
 """
-expected = """[ERROR] Could not resolve "./missing\""""
+expected = """ error   Could not resolve "./missing" from "src/pages/index.astro".
+  Hint:
+    This is often caused by a typo in the import path.
+  Stack trace:
+    at nodeResolve (/app/node_modules/vite/dist/node.js:1:100)"""

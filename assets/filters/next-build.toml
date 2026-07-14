@@ -22,7 +22,11 @@ keep_lines_matching = [
   "Generating",
   "Build error",
   "Linting",
-  "Type checking"
+  "Type checking",
+  "Failed to compile",
+  "^\\s*\\./",
+  "^\\s*>?\\s*\\d+ \\|",
+  "^\\s*\\|",
 ]
 max_lines = 50
 
@@ -43,15 +47,25 @@ info  - Build completed in 15.2s
 expected = "Route (app)                              Size     First Load JS"
 
 [[tests.next-build]]
-name = "build error shown"
+name = "build error keeps file, code frame and caret"
 input = """
 info  - Creating optimized production build
-info  - Compiled successfully
-Error: Build error occurred
+Failed to compile.
+
 ./src/app/page.tsx:10:5
 Type error: Property 'foo' does not exist on type '{}'.
+
+   8 |   return (
+>  10 |     foo.bar
+     |     ^
+  11 |   );
 info  - Build failed
 """
 expected = """
-Error: Build error occurred
-Type error: Property 'foo' does not exist on type '{}'."""
+Failed to compile.
+./src/app/page.tsx:10:5
+Type error: Property 'foo' does not exist on type '{}'.
+   8 |   return (
+>  10 |     foo.bar
+     |     ^
+  11 |   );"""

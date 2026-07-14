@@ -20,6 +20,14 @@ keep_lines_matching = [
   "error:",
   "^ERROR:",
   "summary",
+  "FAILED",
+  "^E\\s+",
+  "^>\\s",
+  "Traceback",
+  "^\\s+File \"",
+  "assert",
+  "\\.py:\\d+",
+  "\\d+ (?:failed|errors?)",
 ]
 max_lines = 40
 replace_patterns = [
@@ -39,6 +47,33 @@ py312: FAIL code 1 (10.01 seconds)
   evaluation failed :( (22.50 seconds)
 """
 expected = """py311: OK (<duration>)
+py312: FAIL code 1 (<duration>)
+  evaluation failed :( (<duration>)"""
+
+[[tests.tox]]
+name = "wrapped pytest failure detail survives"
+input = """
+py312: install_deps> pip install -r requirements.txt
+py312: commands[0]> pytest
+============================= test session starts ==============================
+collected 3 items
+test_utils.py ..F                                                        [100%]
+=================================== FAILURES ===================================
+__________________________________ test_add ___________________________________
+    def test_add():
+>       assert add(1, 2) == 3
+E       assert 4 == 3
+test_utils.py:5: AssertionError
+FAILED test_utils.py::test_add - assert 4 == 3
+========================= 1 failed, 2 passed in 0.05s ==========================
+py312: FAIL code 1 (10.01 seconds)
+  evaluation failed :( (22.50 seconds)
+"""
+expected = """>       assert add(1, 2) == 3
+E       assert 4 == 3
+test_utils.py:5: AssertionError
+FAILED test_utils.py::test_add - assert 4 == 3
+========================= 1 failed, 2 passed in 0.05s ==========================
 py312: FAIL code 1 (<duration>)
   evaluation failed :( (<duration>)"""
 

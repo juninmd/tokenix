@@ -2255,6 +2255,25 @@ fn print_economics_section(tokens_saved: i64) {
     }
 }
 
+/// Warn when the TOKENIX_DISABLED escape hatch is being overused — every
+/// bypass is unfiltered output the agent paid full price for.
+fn print_bypass_warning(stats: &gain::GainStats) {
+    let total = stats.intercepted + stats.bypassed;
+    if stats.bypassed == 0 || total == 0 {
+        return;
+    }
+    let pct = stats.bypassed as f64 / total as f64 * 100.0;
+    if pct >= 10.0 {
+        println!();
+        println!(
+            "  {} {} command(s) bypassed via TOKENIX_DISABLED ({:.0}% of intercepted+bypassed) — remove the prefix to recover savings",
+            "⚠".yellow(),
+            stats.bypassed,
+            pct
+        );
+    }
+}
+
 fn cmd_gain(path: &Path, history: bool, cost_estimate: bool, economics: bool) -> Result<()> {
     let repo_root = find_repo_root(path);
     let stats = gain::compute_gain(&repo_root);
@@ -2402,6 +2421,7 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool, economics: bool) ->
     if economics {
         print_economics_section(stats.tokens_saved);
     }
+    print_bypass_warning(&stats);
 
     // ── by tool / by phase ────────────────────────────────────────────────────
     if !stats.by_tool.is_empty() {
@@ -2650,6 +2670,7 @@ fn cmd_gain_global(history: bool, cost_estimate: bool, economics: bool) -> Resul
     if economics {
         print_economics_section(stats.tokens_saved);
     }
+    print_bypass_warning(stats);
 
     // ── by tool ───────────────────────────────────────────────────────────────
     if !stats.by_tool.is_empty() {

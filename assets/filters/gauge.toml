@@ -6,31 +6,40 @@ strip_ansi = true
 keep_lines_matching = [
   "^Specifications:\\s",
   "^Scenarios:\\s",
-  "failed",
+  "(?i)failed",
   "[✘✕✗]",
   "Error Message",
   "\\.spec:\\d+",
   "(?i)\\berror\\b",
+  "Stacktrace",
+  "\\(\\S+\\.\\w+:\\d+\\)",
 ]
 max_lines = 60
 token_budget = 2000
 
 [[tests.gauge]]
-name = "totals and failure kept"
+name = "totals and failure kept with stacktrace"
 input = """
 # Login specification
   ## Successful login
     * Open the app	✔
   ## Failed login
     * Submit bad creds	✘
+    Failed Step: Submit bad creds
     Error Message: expected dashboard but got error page
+    Stacktrace:
+    StepImplementation.submit(StepImplementation.java:26)
     specs/login.spec:8
 
 Specifications:	1 executed	0 passed	1 failed	0 skipped
 Scenarios:	2 executed	1 passed	1 failed	0 skipped
 """
-expected = """    * Submit bad creds	✘
+expected = """  ## Failed login
+    * Submit bad creds	✘
+    Failed Step: Submit bad creds
     Error Message: expected dashboard but got error page
+    Stacktrace:
+    StepImplementation.submit(StepImplementation.java:26)
     specs/login.spec:8
 Specifications:	1 executed	0 passed	1 failed	0 skipped
 Scenarios:	2 executed	1 passed	1 failed	0 skipped"""

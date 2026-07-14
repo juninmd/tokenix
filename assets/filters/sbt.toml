@@ -3,8 +3,10 @@ description = "Compact sbt output: drop [info] noise, keep warn/error/success"
 match_command = "^sbt\\b"
 passthrough_when_emptied = true
 strip_ansi = true
+# [info] is NOT blanket-stripped: scalatest prints test failures via [info]
+# ("*** FAILED ***" plus the indented assertion line); the keep list below
+# decides which [info] lines carry signal.
 strip_lines_matching = [
-  "^\\[info\\]",
   "^\\s*$",
   "^download(?:ing|ed) ",
 ]
@@ -16,6 +18,9 @@ keep_lines_matching = [
   "tests? (?:passed|failed)",
   "Compilation failed",
   "^\\[E\\]",
+  "FAILED \\*\\*\\*",
+  "^\\[info\\]\\s{2,}\\S.*\\(\\S+\\.scala:\\d+\\)",
+  "Passed: Total",
 ]
 max_lines = 60
 replace_patterns = [
@@ -34,6 +39,29 @@ input = """
 """
 expected = """[warn] one deprecation warning; re-run with -deprecation
 [success] Total time: <duration>, completed Jun 23, 2026"""
+
+[[tests.sbt]]
+name = "scalatest failure keeps FAILED line and assertion continuation"
+input = """
+[info] compiling 1 Scala source to /work/target/test-classes
+[info] MySpec:
+[info] - should compute sum *** FAILED ***
+[info]   3 did not equal 4 (MySpec.scala:12)
+[info] Run completed in 2 seconds.
+[info] Total number of tests run: 5
+[info] Tests: succeeded 4, failed 1, canceled 0, ignored 0, pending 0
+[info] *** 1 TEST FAILED ***
+[error] Failed tests:
+[error] 	com.example.MySpec
+[error] (Test / test) sbt.TestsFailedException: Tests unsuccessful
+"""
+expected = """[info] - should compute sum *** FAILED ***
+[info]   3 did not equal 4 (MySpec.scala:12)
+[info] Tests: succeeded 4, failed 1, canceled 0, ignored 0, pending 0
+[info] *** 1 TEST FAILED ***
+[error] Failed tests:
+[error] 	com.example.MySpec
+[error] (Test / test) sbt.TestsFailedException: Tests unsuccessful"""
 
 [[tests.sbt]]
 name = "compile error surfaced"

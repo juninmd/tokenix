@@ -1,33 +1,40 @@
 [filters.jest]
-description = "Compact Jest test output"
+description = "Compact Jest output — short-circuit all-pass runs, keep failure detail verbatim"
 match_command = "^((pnpm\\s+exec|pnpm\\s+dlx|yarn\\s+dlx|deno\\s+task|npx|bunx|pnpm|yarn)\\s+)?jest\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*PASS\\s+",
-  "^\\s*Test Suites:",
-  "^\\s*Tests:",
-  "^\\s*Snapshots:",
+  "^\\s*✓",
+  "^\\s*Test Suites:\\s+\\d+ passed",
+  "^\\s*Tests:\\s+\\d+ passed",
+  "^\\s*Snapshots:\\s+0 total",
   "^\\s*Time:",
-  "^\\s*Ran all test suites"
+  "^\\s*Ran all test suites",
 ]
-keep_lines_matching = [
-  "FAIL",
-  "● ",
-  "expect",
-  "Received:",
-  "Expected:",
-  "TypeError",
-  "ReferenceError",
-  "SyntaxError"
+match_output = [
+  { pattern = "Tests:\\s+\\d+ passed, \\d+ total", message = "ok (all tests passed)", unless = "(?i)fail|error|✕|●" },
 ]
 max_lines = 80
 
+[[tests.jest]]
+name = "all tests passed short-circuits to ok"
+input = """
+PASS src/utils.test.ts
+PASS src/app.test.ts
+
+Test Suites: 2 passed, 2 total
+Tests:       15 passed, 15 total
+Snapshots:   0 total
+Time:        1.2 s
+Ran all test suites.
+"""
+expected = "ok (all tests passed)"
 
 [[tests.jest]]
-name = "test failure shown"
+name = "failure keeps assertion, code frame, caret and stack"
 input = """
+PASS src/app.test.ts
  FAIL  src/utils.test.ts
   ● add › should add two numbers
 
@@ -36,11 +43,18 @@ input = """
     Expected: 3
     Received: 4
 
-      12 |   expect(add(1, 2)).toBe(3);
+      11 | test('adds', () => {
+    > 12 |   expect(add(1, 2)).toBe(3);
+         |                     ^
       13 | });
+
+      at Object.<anonymous> (src/utils.test.ts:12:21)
 
 Test Suites: 1 failed, 1 passed, 2 total
 Tests:       1 failed, 14 passed, 15 total
+Snapshots:   0 total
+Time:        1.4 s
+Ran all test suites.
 """
 expected = """
  FAIL  src/utils.test.ts
@@ -48,7 +62,13 @@ expected = """
     expect(received).toBe(expected) // Object.is equality
     Expected: 3
     Received: 4
-      12 |   expect(add(1, 2)).toBe(3);"""
+      11 | test('adds', () => {
+    > 12 |   expect(add(1, 2)).toBe(3);
+         |                     ^
+      13 | });
+      at Object.<anonymous> (src/utils.test.ts:12:21)
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 14 passed, 15 total"""
 
 [[tests.jest]]
 name = "silent success stays empty"

@@ -13,21 +13,16 @@ strip_lines_matching = [
   "^Preprocessing ",
   "^\\[\\d+ of \\d+\\] Compiling ",
   "^Building ",
-]
-keep_lines_matching = [
-  "^Linking ",
-  "(?i)error",
-  "(?i)warning",
-  "rror:",
-  "Failed to build",
-  "cannot satisfy",
-  "tests? (?:passed|failed)",
+  "^Downloading ",
+  "^Downloaded ",
+  "^Installing ",
+  "^Completed ",
 ]
 max_lines = 60
 token_budget = 2000
 
 [[tests.cabal]]
-name = "build error surfaced"
+name = "GHC multi-line diagnostic survives"
 input = """
 Resolving dependencies...
 Build profile: -w ghc-9.4.7 -O1
@@ -36,9 +31,19 @@ In order, the following will be built:
 Configuring executable 'app'
 Preprocessing executable 'app'
 [1 of 2] Compiling Main
-src/Main.hs:10:7: error: Variable not in scope: foo
+src/Main.hs:10:7: error: [GHC-88464]
+    Variable not in scope: foo :: Int -> Int
+   |
+10 |       foo x
+   |       ^^^
+Error: cabal: Failed to build exe:app
 """
-expected = """src/Main.hs:10:7: error: Variable not in scope: foo"""
+expected = """src/Main.hs:10:7: error: [GHC-88464]
+    Variable not in scope: foo :: Int -> Int
+   |
+10 |       foo x
+   |       ^^^
+Error: cabal: Failed to build exe:app"""
 
 [[tests.cabal]]
 name = "successful link kept"

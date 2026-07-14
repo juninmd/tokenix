@@ -22,6 +22,9 @@ keep_lines_matching = [
   "http_reqs",
   "iterations\\.*:",
   "level=error",
+  "ERRO\\[",
+  "WARN\\[",
+  "^\\s+at ",
   "data_received",
 ]
 max_lines = 60
@@ -58,3 +61,13 @@ running (00m01.0s), 0/1 VUs, 0 complete and 0 interrupted iterations
 time="2024-06-23" level=error msg="dial tcp: connection refused"
 """
 expected = """time=\"2024-06-23\" level=error msg=\"dial tcp: connection refused\""""
+
+[[tests.k6]]
+name = "script exception keeps stack line"
+input = """
+running (00m01.0s), 0/1 VUs, 0 complete and 0 interrupted iterations
+ERRO[0001] ReferenceError: foo is not defined
+	at file:///work/script.js:5:3(3)  executor=per-vu-iterations scenario=default
+"""
+expected = """ERRO[0001] ReferenceError: foo is not defined
+	at file:///work/script.js:5:3(3)  executor=per-vu-iterations scenario=default"""

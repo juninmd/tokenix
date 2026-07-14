@@ -18,8 +18,13 @@ keep_lines_matching = [
   "TypeError:",
   "AssertionError",
   "●",
-  "Expected:",
-  "Received:"
+  "Expected",
+  "Received",
+  "expect\\(",
+  "^\\s+at ",
+  "^\\s*[-+] ",
+  "^\\s*>?\\s*\\d+ \\|",
+  "^\\s*\\|"
 ]
 max_lines = 60
 
@@ -38,7 +43,7 @@ Test Suites: 1 passed, 1 total
 Tests:       10 passed, 10 total"""
 
 [[tests.pnpm-test]]
-name = "failing test details preserved"
+name = "failing test keeps matcher, code frame and stack"
 input = """
 > myapp@1.0.0 test
 > jest
@@ -51,13 +56,22 @@ input = """
     Expected: 401
     Received: 200
 
+    > 11 |   expect(res.status).toBe(401);
+         |                      ^
+
+      at Object.<anonymous> (src/auth.test.ts:11:22)
+
 Test Suites: 1 failed, 1 total
 Tests:       1 failed, 9 passed, 10 total
 """
 expected = """
  FAIL  src/auth.test.ts
   ● login › rejects invalid password
+    expect(received).toBe(expected)
     Expected: 401
     Received: 200
+    > 11 |   expect(res.status).toBe(401);
+         |                      ^
+      at Object.<anonymous> (src/auth.test.ts:11:22)
 Test Suites: 1 failed, 1 total
 Tests:       1 failed, 9 passed, 10 total"""

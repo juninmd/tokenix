@@ -24,6 +24,11 @@ keep_lines_matching = [
   "test result:",
   "warning",
   "WARNING",
+  "^\\s+at ",
+  "^\\s*[-+]\\s",
+  "^\\s*\\^",
+  "\\S+ => \\S+:\\d+",
+  "\\[Diff\\]",
 ]
 max_lines = 50
 replace_patterns = [
@@ -42,23 +47,45 @@ token_budget = 2000
 
 
 [[tests.deno]]
-name = "test failure preserved"
+name = "test failure keeps diff, stack frames and location"
 input = """
-Check file:///home/user/project/main.ts
-running 3 tests
-test test_add ... ok
-test test_fail ... FAILED
+Check file:///home/user/project/main_test.ts
+running 2 tests from ./main_test.ts
+test_add ... ok (1ms)
+test_fail ... FAILED (2ms)
 
-failures:
-    test_fail
+ ERRORS
 
-test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+test_fail => ./main_test.ts:6:6
+error: AssertionError: Values are not equal.
+
+    [Diff] Actual / Expected
+
+-   4
++   3
+
+  at assertEquals (file:///home/user/std/assert_equals.ts:52:9)
+  at file:///home/user/project/main_test.ts:7:3
+
+ FAILURES
+
+test_fail => ./main_test.ts:6:6
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out (5ms)
 """
 expected = """
-test test_fail ... FAILED
-failures:
-    test_fail
-test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"""
+test_fail ... FAILED (2ms)
+ ERRORS
+test_fail => ./main_test.ts:6:6
+error: AssertionError: Values are not equal.
+    [Diff] Actual / Expected
+-   4
++   3
+  at assertEquals (file://<path>
+  at file://<path>
+ FAILURES
+test_fail => ./main_test.ts:6:6
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out (5ms)"""
 
 [[tests.deno]]
 name = "silent success stays empty"

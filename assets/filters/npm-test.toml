@@ -16,7 +16,16 @@ keep_lines_matching = [
   "Tests:",
   "Error:",
   "TypeError:",
-  "AssertionError"
+  "AssertionError",
+  "●",
+  "Expected",
+  "Received",
+  "expect\\(",
+  "not ok",
+  "^\\s+at ",
+  "^\\s*[-+] ",
+  "^\\s*>?\\s*\\d+ \\|",
+  "^\\s*\\|"
 ]
 max_lines = 60
 
@@ -38,7 +47,7 @@ Test Suites: 2 passed, 2 total
 Tests:       15 passed, 15 total"""
 
 [[tests.npm-test]]
-name = "test failure shown"
+name = "test failure keeps matcher, diff, code frame and stack"
 input = """
 > my-project@1.0.0 test
 > jest
@@ -50,5 +59,27 @@ input = """
 
     Expected: 3
     Received: 4
+
+      11 |   const sum = add(1, 2);
+    > 12 |   expect(sum).toBe(3);
+         |               ^
+      13 | });
+
+      at Object.<anonymous> (src/utils.test.ts:12:15)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 14 passed, 15 total
 """
-expected = " FAIL  src/utils.test.ts"
+expected = """
+ FAIL  src/utils.test.ts
+  ● add › should add two numbers
+    expect(received).toBe(expected)
+    Expected: 3
+    Received: 4
+      11 |   const sum = add(1, 2);
+    > 12 |   expect(sum).toBe(3);
+         |               ^
+      13 | });
+      at Object.<anonymous> (src/utils.test.ts:12:15)
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 14 passed, 15 total"""

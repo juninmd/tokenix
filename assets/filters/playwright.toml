@@ -7,21 +7,24 @@ strip_lines_matching = [
   "^\\s*$",
   "^\\s*Running",
   "^\\s*\\d+ passed",
-  "^\\s*\\d+ failed",
   "^\\s*\\d+ skipped",
-  "^\\s*\\d+ flaky",
-  "^\\s*\\d+ timed out",
 ]
 keep_lines_matching = [
   "passed",
   "failed",
   "Error:",
-  "Error:",
   "expect",
   "Received:",
   "Expected:",
   "Timeout",
-  "AssertionError"
+  "AssertionError",
+  "^\\s*\\d+\\) ",
+  "[✘✗×] ",
+  "^\\s+at ",
+  "^\\s*>?\\s*\\d+ \\|",
+  "^\\s*\\|",
+  "^\\s*\\d+ flaky",
+  "^\\s*\\d+ timed out",
 ]
 max_lines = 50
 
@@ -39,20 +42,39 @@ expected = """
   ✓ test2.spec.ts:1:1  passed (0.8s)"""
 
 [[tests.playwright]]
-name = "test failures shown"
+name = "failure keeps numbered header, diff, code frame and stack"
 input = """
-Running 10 tests using 2 workers
-  ✓ test1.spec.ts:1:1  passed (1.2s)
-  ✗ test2.spec.ts:1:1  failed (0.8s)
-    Error: expect(received).toBe(expected)
+Running 3 tests using 1 worker
+  ✓  1 example.spec.ts:3:5 › basic test (1.2s)
+  ✘  2 example.spec.ts:10:5 › shows title (500ms)
+
+  1) example.spec.ts:10:5 › shows title ───────────────────
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
     Expected: 3
     Received: 4
 
-9 passed, 1 failed (2.5s)
+       9 |     const x = 4;
+    > 10 |     expect(x).toBe(3);
+         |               ^
+      11 |   });
+
+        at /app/example.spec.ts:10:15
+
+  1 failed
+    example.spec.ts:10:5 › shows title ───────────────────
+  2 passed (2.1s)
 """
 expected = """
-  ✓ test1.spec.ts:1:1  passed (1.2s)
-  ✗ test2.spec.ts:1:1  failed (0.8s)
-    Error: expect(received).toBe(expected)
+  ✘  2 example.spec.ts:10:5 › shows title (500ms)
+  1) example.spec.ts:10:5 › shows title ───────────────────
+    Error: expect(received).toBe(expected) // Object.is equality
     Expected: 3
-    Received: 4"""
+    Received: 4
+       9 |     const x = 4;
+    > 10 |     expect(x).toBe(3);
+         |               ^
+      11 |   });
+        at /app/example.spec.ts:10:15
+  1 failed"""

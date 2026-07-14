@@ -13,9 +13,34 @@ keep_lines_matching = [
   "Ok:\\s+\\d+",
   "Fail:\\s+\\d+",
   "Build failed",
+  "(?i)\\berror",
+  "^FAILED:",
+  "^ninja: build stopped",
+  "^\\s*\\d+ \\|",
+  "^\\s*\\|",
 ]
 max_lines = 50
 token_budget = 1500
+
+[[tests.meson]]
+name = "compile failure keeps compiler diagnostic, snippet and caret"
+input = """
+INFO: autodetecting backend as ninja
+ninja: Entering directory `/work/build'
+[1/2] Compiling C object mylib.o
+FAILED: mylib.o
+cc -Ilib -c ../lib/foo.c -o mylib.o
+../lib/foo.c: In function 'main':
+../lib/foo.c:5:5: error: 'x' undeclared (first use in this function)
+    5 |     x = 5;
+      |     ^
+ninja: build stopped: subcommand failed.
+"""
+expected = """FAILED: mylib.o
+../lib/foo.c:5:5: error: 'x' undeclared (first use in this function)
+    5 |     x = 5;
+      |     ^
+ninja: build stopped: subcommand failed."""
 
 [[tests.meson]]
 name = "build error surfaced"

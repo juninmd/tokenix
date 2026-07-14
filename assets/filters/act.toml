@@ -17,22 +17,39 @@ keep_lines_matching = [
   "Job succeeded",
   "(?i)error",
   "exitcode",
+  "(?i)fail",
+  "(?i)\\|\\s+.*(expected|received|assert)",
+  "\\|\\s+at ",
+  "[✕✖✗●]",
 ]
 max_lines = 60
 on_empty = "act: ok"
 token_budget = 2000
 
 [[tests.act]]
-name = "job failure surfaced"
+name = "failing step payload surfaced"
 input = """
 [CI/build] 🚀  Start image=node:20
 [CI/build] ⭐ Run Set up job
 [CI/build]   ✅  Success - Set up job
 [CI/build] ⭐ Run tests
+[CI/build]   | > app@1.0.0 test
+[CI/build]   | FAIL src/app.test.js
+[CI/build]   | ● adds numbers
+[CI/build]   |   Expected: 4
+[CI/build]   |   Received: 3
+[CI/build]   |       at Object.<anonymous> (src/app.test.js:5:19)
+[CI/build]   | Tests: 1 failed, 1 total
 [CI/build]   ❌  Failure - Run tests
 [CI/build] exitcode '1': failure
 """
-expected = """[CI/build]   ❌  Failure - Run tests
+expected = """[CI/build]   | FAIL src/app.test.js
+[CI/build]   | ● adds numbers
+[CI/build]   |   Expected: 4
+[CI/build]   |   Received: 3
+[CI/build]   |       at Object.<anonymous> (src/app.test.js:5:19)
+[CI/build]   | Tests: 1 failed, 1 total
+[CI/build]   ❌  Failure - Run tests
 [CI/build] exitcode '1': failure"""
 
 [[tests.act]]

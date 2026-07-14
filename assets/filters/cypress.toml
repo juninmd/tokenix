@@ -27,6 +27,8 @@ keep_lines_matching = [
   "CypressError",
   "All specs passed",
   "\\bfailed\\b",
+  "^\\s+at ",
+  "^\\s{5,}\\S",
 ]
 max_lines = 70
 replace_patterns = [
@@ -36,7 +38,7 @@ replace_patterns = [
 token_budget = 2500
 
 [[tests.cypress]]
-name = "failure and summary kept"
+name = "failure block with split title and stack kept"
 input = """
   Running:  login.cy.js
 
@@ -47,14 +49,19 @@ input = """
   1 passing (2s)
   1 failing
 
-  1) Login submits valid credentials:
+  1) Login
+       submits valid credentials:
+
      AssertionError: expected 'Welcome' to equal 'Dashboard'
+      at Context.eval (webpack:///./cypress/e2e/login.cy.js:12:34)
 """
 expected = """    1) submits valid credentials
   1 passing (<duration>)
   1 failing
-  1) Login submits valid credentials:
-     AssertionError: expected 'Welcome' to equal 'Dashboard'"""
+  1) Login
+       submits valid credentials:
+     AssertionError: expected 'Welcome' to equal 'Dashboard'
+      at Context.eval (webpack:///./cypress/e2e/login.cy.js:12:34)"""
 
 [[tests.cypress]]
 name = "all green keeps passing summary"

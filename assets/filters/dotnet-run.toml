@@ -1,7 +1,6 @@
 [filters.dotnet-run]
-description = "Compact `dotnet run` output — drop build/restore banner noise, keep application output and build errors."
+description = "Compact `dotnet run` output — drop build/restore banner noise, keep application output and build errors verbatim."
 match_command = "^dotnet\\s+run\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,15 +12,8 @@ strip_lines_matching = [
   "^\\s*\\d+ Error\\(s\\)",
   "^\\s*Time Elapsed ",
 ]
-keep_lines_matching = [
-  "error",
-  "Error",
-  "Exception",
-  "Unhandled",
-  ": warning ",
-  ": error ",
-]
 max_lines = 60
+on_empty = "dotnet run: ok (no output)"
 
 [[tests.dotnet-run]]
 name = "build error preserved"
@@ -34,6 +26,29 @@ Restored /app/app.csproj (in 120 ms).
 expected = "/app/Program.cs(10,13): error CS0103: The name 'foo' does not exist in the current context"
 
 [[tests.dotnet-run]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "unhandled exception keeps stack frames and app output"
+input = """
+Determining projects to restore...
+All projects are up-to-date for restore.
+Starting worker
+Unhandled exception. System.InvalidOperationException: Something broke
+   at MyApp.Worker.Run() in /app/Worker.cs:line 22
+   at MyApp.Program.Main(String[] args) in /app/Program.cs:line 10
+"""
+expected = """
+Starting worker
+Unhandled exception. System.InvalidOperationException: Something broke
+   at MyApp.Worker.Run() in /app/Worker.cs:line 22
+   at MyApp.Program.Main(String[] args) in /app/Program.cs:line 10"""
+
+[[tests.dotnet-run]]
+name = "banner-only run collapses"
+input = """
+Determining projects to restore...
+All projects are up-to-date for restore.
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+Time Elapsed 00:00:01.23
+"""
+expected = "dotnet run: ok (no output)"

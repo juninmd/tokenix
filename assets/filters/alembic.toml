@@ -15,6 +15,11 @@ keep_lines_matching = [
   "Target database is not up to date",
   "Can't locate revision",
   "FAILED",
+  "Traceback",
+  "^\\s+File \"",
+  "^\\s+raise ",
+  "^\\[SQL",
+  "^\\[parameters",
 ]
 max_lines = 50
 on_empty = "alembic: ok"
@@ -38,3 +43,23 @@ INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
 ERROR [alembic.util.messaging] Can't locate revision identified by 'deadbeef'
 """
 expected = """ERROR [alembic.util.messaging] Can't locate revision identified by 'deadbeef'"""
+
+[[tests.alembic]]
+name = "sql traceback payload survives"
+input = """
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Running upgrade a1b2c3 -> d4e5f6, add email index
+Traceback (most recent call last):
+  File "/app/.venv/bin/alembic", line 8, in <module>
+    sys.exit(main())
+  File "/app/.venv/lib/python3.12/site-packages/alembic/command.py", line 408, in upgrade
+    script.run_env()
+sqlalchemy.exc.ProgrammingError: (psycopg2.errors.UndefinedTable) relation "users" does not exist
+[SQL: CREATE INDEX ix_users_email ON users (email)]
+"""
+expected = """INFO  [alembic.runtime.migration] Running upgrade a1b2c3 -> d4e5f6, add email index
+Traceback (most recent call last):
+  File "/app/.venv/bin/alembic", line 8, in <module>
+  File "/app/.venv/lib/python3.12/site-packages/alembic/command.py", line 408, in upgrade
+sqlalchemy.exc.ProgrammingError: (psycopg2.errors.UndefinedTable) relation "users" does not exist
+[SQL: CREATE INDEX ix_users_email ON users (email)]"""
