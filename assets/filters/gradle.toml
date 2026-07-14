@@ -1,7 +1,6 @@
 [filters.gradle]
 description = "Compact Gradle build output — strip progress, keep tasks and errors"
 match_command = "^gradle\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -18,6 +17,10 @@ strip_lines_matching = [
 ]
 truncate_lines_at = 150
 max_lines = 50
+# Daemon/config-only runs are pure noise; the engine suppresses this message
+# automatically when the raw output carries a failure signal (BUILD FAILED
+# lines are never stripped anyway).
+on_empty = "gradle: ok"
 
 [[tests.gradle]]
 name = "strips UP-TO-DATE tasks, keeps build result"
@@ -28,4 +31,9 @@ expected = "> Task :app:test\n3 tests completed, 1 failed\nBUILD FAILED in 12s"
 name = "clean build preserved"
 input = "BUILD SUCCESSFUL in 8s\n7 actionable tasks: 7 executed"
 expected = "BUILD SUCCESSFUL in 8s\n7 actionable tasks: 7 executed"
+
+[[tests.gradle]]
+name = "config-only noise collapses to ok"
+input = "> Configuring project :app\nStarting a Gradle Daemon (subsequent builds will be faster)\n"
+expected = "gradle: ok"
 

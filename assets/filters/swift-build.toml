@@ -1,33 +1,63 @@
 [filters.swift-build]
-description = "Compact swift build output"
+description = "Compact swift build output — short-circuit clean success, strip compile noise"
 match_command = "^swift\\s+build\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^\\s*Compile ",
-  "^\\s*Linking ",
-  "^\\s*Build complete"
+  "^Compiling ",
+  "^Linking ",
+  "^Building for ",
 ]
-keep_lines_matching = [
-  "error:",
-  "warning:",
-  "note:"
+match_output = [
+  { pattern = "Build complete!", message = "ok (build complete)", unless = "(?i)warning:|error:" },
 ]
 max_lines = 60
-
+on_empty = "swift build: ok"
 
 [[tests.swift-build]]
-name = "error shown"
+name = "clean build short-circuits to ok"
 input = """
-Compile MyPackage main.swift
-main.swift:10:5: error: cannot find 'foo' in scope
+Building for debugging...
+Compiling MyApp main.swift
+Compiling MyApp Helpers.swift
+Linking MyApp
+Build complete! (2.34s)
+"""
+expected = "ok (build complete)"
+
+[[tests.swift-build]]
+name = "error keeps source line and caret"
+input = """
+Building for debugging...
+Compiling MyApp main.swift
+/Sources/MyApp/main.swift:10:5: error: cannot find 'foo' in scope
     foo()
     ^~~
+error: build had 1 command failure
 """
-expected = "main.swift:10:5: error: cannot find 'foo' in scope"
+expected = """
+/Sources/MyApp/main.swift:10:5: error: cannot find 'foo' in scope
+    foo()
+    ^~~
+error: build had 1 command failure"""
 
 [[tests.swift-build]]
-name = "silent success stays empty"
+name = "warnings not masked when Build complete present"
+input = """
+Building for production...
+Compiling MyApp main.swift
+/Sources/MyApp/main.swift:42:9: warning: initialization of immutable value 'x' was never used
+    let x = compute()
+        ^
+Build complete! (1.87s)
+"""
+expected = """
+/Sources/MyApp/main.swift:42:9: warning: initialization of immutable value 'x' was never used
+    let x = compute()
+        ^
+Build complete! (1.87s)"""
+
+[[tests.swift-build]]
+name = "silent success reports ok"
 input = ""
-expected = ""
+expected = "swift build: ok"

@@ -1,18 +1,27 @@
 [filters.turbo]
 description = "Compact Turborepo output — strip cache status noise, keep task results"
 match_command = "^turbo\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*cache (hit|miss|bypass)",
+  # turbo 2.x prefixes cache status with the task id: "web:build: cache hit, ..."
+  "^\\S+: cache (hit|miss|bypass)",
   "^\\s*\\d+ packages in scope",
+  # Preamble bullets: "• Packages in scope: ...", "• Running build in ...",
+  # "• Remote caching disabled"
+  "^\\s*•",
   "^\\s*Tasks:\\s+\\d+",
+  "^\\s*Cached:\\s+\\d+",
+  "^\\s*Time:\\s+",
   "^\\s*Duration:\\s+",
   "^\\s*Remote caching (enabled|disabled)",
 ]
 truncate_lines_at = 150
 max_lines = 50
+# A full cache hit ("FULL TURBO") is pure noise; the engine suppresses this
+# message automatically when the raw output carries a failure signal.
+on_empty = "turbo: ok (full cache hit)"
 
 [[tests.turbo]]
 name = "strips cache noise, keeps task output"
@@ -23,4 +32,9 @@ expected = "> myapp:build\nCompiled successfully."
 name = "preserves error output"
 input = "> myapp:lint\n\nError: src/index.ts(5,1): error TS2304\n\nTasks:    0 successful, 1 total\nDuration: 1.1s"
 expected = "> myapp:lint\nError: src/index.ts(5,1): error TS2304"
+
+[[tests.turbo]]
+name = "full cache hit collapses to ok"
+input = "• Packages in scope: web\n• Running build in 1 packages\n• Remote caching disabled\nweb:build: cache hit, suppressing logs 4f2a1b\n\nTasks:    1 successful, 1 total\nCached:    1 cached, 1 total\n  Time:    98ms >>> FULL TURBO"
+expected = "turbo: ok (full cache hit)"
 

@@ -1,19 +1,28 @@
 [filters.gh-issue]
 description = "Compact gh issue output"
 match_command = "^gh\\s+issue\\s+(list|view|create|close|reopen|comment|edit|transfer|pin|unpin|develop)\\b"
+# Structured/scripted output must never be filtered.
+skip_when_matches = "--json|--jq|--template|--web|\\bapi\\b"
 strip_ansi = true
-# Strip blank lines and success checkmark decorations only. Field lines, the
-# issue body, comments, and URLs are the signal and must survive.
+# Strip blank lines and success checkmark decorations. Field lines, the issue
+# body, comments, and URLs are the signal and must survive. The markdown rules
+# (from rtk filter_markdown_body) drop whole-line template noise from issue
+# bodies: single-line HTML comments (multi-line is too risky without
+# fenced-code awareness), badge/image-only lines, and horizontal rules.
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*✓",
-  "^\\s*✔"
+  "^\\s*✔",
+  "^\\s*<!--.*?-->\\s*$",
+  "^\\s*\\[!\\[[^\\]]*\\]\\([^)]*\\)\\]\\([^)]*\\)\\s*$",
+  "^\\s*!\\[[^\\]]*\\]\\([^)]*\\)\\s*$",
+  "^\\s*(---+|\\*\\*\\*+|___+)\\s*$"
 ]
 max_lines = 40
 passthrough_when_emptied = true
 
 [[tests.gh-issue]]
-name = "issue view keeps body and comments"
+name = "issue view keeps body and comments, drops template noise"
 input = """
 title: Bug in login
 state: OPEN
@@ -22,7 +31,11 @@ assignees: user
 labels: bug, high-priority
 milestone: v1.0
 
+<!-- Please describe the bug and how to reproduce it -->
 Login fails with 500 error when password contains special characters.
+
+---
+![screenshot](https://user-images.example.com/login-500.png)
 
 comments:
   user: investigating...

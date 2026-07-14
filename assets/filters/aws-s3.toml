@@ -1,0 +1,44 @@
+[filters.aws-s3]
+description = "Compact aws s3 transfer output: drop Completed-progress spam, keep transfer results and errors"
+# Longer pattern than aws-cli.toml's generic '^aws\\s+\\w+\\b', so this filter
+# wins the specificity race for s3 transfer commands.
+match_command = "^aws\\s+s3\\s+(cp|sync|mv|rm)\\b"
+strip_ansi = true
+# s3 cp/sync emit a 'Completed X/Y ... with N file(s) remaining' progress line
+# per chunk — the dominant noise. The 'upload:'/'download:'/'delete:' result
+# lines and any '... failed: ... An error occurred (...)' lines are the signal.
+strip_lines_matching = [
+  "^Completed \\d",
+  "with \\d+ file\\(s\\) remaining",
+  "^\\s*$",
+]
+max_lines = 40
+on_empty = "aws s3: ok (no transfers)"
+
+[[tests.aws-s3]]
+name = "sync keeps transfer results, drops progress"
+command = "aws s3 sync dist s3://acme-assets"
+input = """
+Completed 1.0 KiB/5.2 MiB (1.2 MiB/s) with 3 file(s) remaining
+Completed 5.2 MiB/5.2 MiB (2.8 MiB/s) with 1 file(s) remaining
+upload: dist/app.js to s3://acme-assets/app.js
+upload: dist/style.css to s3://acme-assets/style.css
+"""
+expected = """
+upload: dist/app.js to s3://acme-assets/app.js
+upload: dist/style.css to s3://acme-assets/style.css"""
+
+[[tests.aws-s3]]
+name = "access denied failure passes through"
+command = "aws s3 cp secret.txt s3://acme-assets/secret.txt"
+input = """
+upload failed: ./secret.txt to s3://acme-assets/secret.txt An error occurred (AccessDenied) when calling the PutObject operation: Access Denied
+"""
+expected = """
+upload failed: ./secret.txt to s3://acme-assets/secret.txt An error occurred (AccessDenied) when calling the PutObject operation: Access Denied"""
+
+[[tests.aws-s3]]
+name = "nothing to transfer yields ok sentinel"
+command = "aws s3 sync dist s3://acme-assets"
+input = ""
+expected = """aws s3: ok (no transfers)"""

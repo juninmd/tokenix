@@ -6,11 +6,6 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
 ]
-keep_lines_matching = [
-  "parse error",
-  "error:",
-  "Invalid"
-]
 max_lines = 50
 
 [[tests.jq]]
@@ -27,6 +22,22 @@ expected = '''
   "name": "John",
   "age": 30,
   "city": "New York"
+}'''
+
+[[tests.jq]]
+name = "json containing Invalid and error fields passes through complete"
+input = """
+{
+  "status": "Invalid",
+  "error": null,
+  "message": "validation failed upstream"
+}
+"""
+expected = '''
+{
+  "status": "Invalid",
+  "error": null,
+  "message": "validation failed upstream"
 }'''
 
 [[tests.jq]]

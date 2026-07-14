@@ -10,6 +10,7 @@ strip_lines_matching = [
   "^Enumerating objects:",
   "^Counting objects:",
   "^Compressing objects:",
+  "^Delta compression using",
   "^Writing objects:",
   "^Total ",
   "^Branch.*set up to track",
@@ -20,10 +21,12 @@ max_lines = 20
 passthrough_when_emptied = true
 
 [[tests.git-push]]
-name = "clean push"
+name = "clean push full chatter collapses to result line"
 input = """
 Enumerating objects: 5, done.
 Counting objects: 100% (5/5), done.
+Delta compression using up to 16 threads
+Compressing objects: 100% (3/3), done.
 Writing objects: 100% (3/3), 280 bytes | 280.00 KiB/s, done.
 Total 3 (delta 1), reused 0 (delta 0), pack-reused 0
 To github.com:user/repo.git

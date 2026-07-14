@@ -1,38 +1,44 @@
 [filters.gcloud]
-description = "Compact gcloud output"
+description = "Compact gcloud output — bound size, keep resource lines and tables"
 match_command = "^gcloud\\s+\\w+\\b"
 passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
-  "^\\s*$",
-  "^Created ",
-  "^Updated ",
-  "^Deleted ",
-  "^Listed ",
-  "^Operation ",
-  "^Waiting for ",
-  "^DONE"
+  "^\\s*$"
 ]
-keep_lines_matching = [
-  "ERROR:",
-  "ERROR ",
-  "Failed",
-  "FAILED",
-  "Permission denied",
-  "Quota exceeded"
-]
-max_lines = 40
-
+truncate_lines_at = 120
+max_lines = 30
 
 [[tests.gcloud]]
-name = "error shown"
+name = "create success keeps resource URL"
+input = """
+Created [https://www.googleapis.com/compute/v1/projects/my-proj/zones/us-central1-a/instances/my-vm].
+NAME   ZONE           MACHINE_TYPE  STATUS
+my-vm  us-central1-a  e2-medium     RUNNING
+"""
+expected = """
+Created [https://www.googleapis.com/compute/v1/projects/my-proj/zones/us-central1-a/instances/my-vm].
+NAME   ZONE           MACHINE_TYPE  STATUS
+my-vm  us-central1-a  e2-medium     RUNNING"""
+
+[[tests.gcloud]]
+name = "list table survives with header"
+input = """
+ID        CREATE_TIME                DURATION  STATUS
+abc-123   2026-07-14T10:00:00+00:00  1M2S      SUCCESS
+def-456   2026-07-14T09:12:00+00:00  45S       FAILURE
+"""
+expected = """
+ID        CREATE_TIME                DURATION  STATUS
+abc-123   2026-07-14T10:00:00+00:00  1M2S      SUCCESS
+def-456   2026-07-14T09:12:00+00:00  45S       FAILURE"""
+
+[[tests.gcloud]]
+name = "error detail preserved"
 input = """
 ERROR: (gcloud.compute.instances.create) Could not fetch resource:
  - Quota 'CPUS' exceeded. Limit: 24.0 in region us-central1.
 """
-expected = "ERROR: (gcloud.compute.instances.create) Could not fetch resource:"
-
-[[tests.gcloud]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+expected = """
+ERROR: (gcloud.compute.instances.create) Could not fetch resource:
+ - Quota 'CPUS' exceeded. Limit: 24.0 in region us-central1."""

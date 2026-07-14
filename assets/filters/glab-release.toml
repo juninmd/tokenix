@@ -1,0 +1,82 @@
+[filters.glab-release]
+description = "Compact glab release view/list: drop archive URLs, SOURCES block, and body decoration"
+match_command = "^glab\\s+release\\s+(view|list)\\b"
+strip_ansi = true
+# glab indents release descriptions by two spaces, so the horizontal-rule and
+# HTML-comment rules tolerate leading whitespace.
+strip_lines_matching = [
+  "^https?://.*/-/archive/",
+  "^SOURCES$",
+  "^\\s*$",
+  "^\\s*-{3,}\\s*$",
+  "^\\s*<!--.*-->\\s*$",
+]
+
+[[tests.glab-release]]
+name = "release view drops SOURCES archives and decoration"
+command = "glab release view v2.0.0"
+input = """
+Test Release v2.0
+alice_dev released this 3 days ago
+abc1234 - v2.0.0
+
+  ## What's Changed
+
+  - Added widget support
+  - Fixed authentication bug
+
+  ### Contributors
+
+  @alice_dev @bob_dev
+
+  --------
+
+  <!-- internal tracking: PROJ-123 -->
+
+ASSETS
+There are no assets for this release
+SOURCES
+https://gitlab.example.com/acme/toolkit/-/archive/v2.0.0/toolkit-v2.0.0.zip
+https://gitlab.example.com/acme/toolkit/-/archive/v2.0.0/toolkit-v2.0.0.tar.gz
+https://gitlab.example.com/acme/toolkit/-/archive/v2.0.0/toolkit-v2.0.0.tar.bz2
+https://gitlab.example.com/acme/toolkit/-/archive/v2.0.0/toolkit-v2.0.0.tar
+
+View this release on GitLab at https://gitlab.example.com/acme/toolkit/-/releases/v2.0.0
+"""
+expected = """
+Test Release v2.0
+alice_dev released this 3 days ago
+abc1234 - v2.0.0
+  ## What's Changed
+  - Added widget support
+  - Fixed authentication bug
+  ### Contributors
+  @alice_dev @bob_dev
+ASSETS
+There are no assets for this release
+View this release on GitLab at https://gitlab.example.com/acme/toolkit/-/releases/v2.0.0"""
+
+[[tests.glab-release]]
+name = "release list keeps table rows"
+command = "glab release list"
+input = """
+Showing 10 releases on acme/toolkit.
+
+Name	Tag	Created
+v3.2.1	v3.2.1	about 2 days ago
+v3.2.0	v3.2.0	about 1 week ago
+"""
+expected = """
+Showing 10 releases on acme/toolkit.
+Name	Tag	Created
+v3.2.1	v3.2.1	about 2 days ago
+v3.2.0	v3.2.0	about 1 week ago"""
+
+[[tests.glab-release]]
+name = "error passes through"
+command = "glab release view v9.9.9"
+input = """
+ERROR: 404 Not Found
+"""
+expected = """
+ERROR: 404 Not Found"""

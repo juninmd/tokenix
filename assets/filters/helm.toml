@@ -2,12 +2,12 @@
 description = "Compact helm output"
 match_command = "^helm\\b"
 strip_ansi = true
+notify_on_truncate = true
 strip_lines_matching = [
   "^\\s*$",
   "^W\\d{4}",
 ]
 truncate_lines_at = 120
-max_lines = 40
 
 [[tests.helm]]
 name = "strips blank lines, preserves release info"
@@ -27,3 +27,117 @@ expected = "NAME: my-release\nLAST DEPLOYED: Mon Jan 15 10:30:00 2024\nNAMESPACE
 name = "strips glog W-prefix warnings"
 input = "W0115 10:30:00 warning message from internal\nNAME: my-chart\nSTATUS: deployed"
 expected = "NAME: my-chart\nSTATUS: deployed"
+
+[[tests.helm]]
+name = "helm template long multi-document YAML is not truncated"
+input = """
+---
+# Source: my-chart/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  labels:
+    app.kubernetes.io/name: my-app
+    app.kubernetes.io/instance: my-release
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: my-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: my-app
+    spec:
+      containers:
+        - name: my-app
+          image: "nginx:1.27.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+---
+# Source: my-chart/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: my-app
+"""
+expected = """
+---
+# Source: my-chart/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  labels:
+    app.kubernetes.io/name: my-app
+    app.kubernetes.io/instance: my-release
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: my-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: my-app
+    spec:
+      containers:
+        - name: my-app
+          image: "nginx:1.27.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+---
+# Source: my-chart/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: my-app"""

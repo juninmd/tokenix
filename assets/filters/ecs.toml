@@ -1,0 +1,39 @@
+[filters.ecs]
+description = "Compact EasyCodingStandard (PHP) output"
+# Start-anchored on purpose: a bare \becs\b would also match `aws ecs ...`,
+# which aws-cli.toml owns.
+match_command = "^(?:php\\s+)?(?:\\./)?(?:vendor/bin/)?ecs\\b"
+strip_ansi = true
+# 'No errors found' contains the word 'errors', so the unless guard matches
+# explicit failure markers only.
+match_output = [
+  { pattern = "No errors found", message = "ecs: no issues", unless = "(?i)\\[error\\]|error:|fail" },
+]
+strip_lines_matching = [
+  "^\\s*$",
+]
+max_lines = 40
+passthrough_when_emptied = true
+
+[[tests.ecs]]
+name = "clean run collapses to ok"
+command = "vendor/bin/ecs check src"
+input = """
+ [OK] No errors found. Great job - your code is shiny in style!
+"""
+expected = """ecs: no issues"""
+
+[[tests.ecs]]
+name = "violations keep file, diagnostic and summary"
+command = "vendor/bin/ecs check src"
+input = """
+ 1) src/Foo.php:12
+
+    error: Unused variable $bar (SlevomatCodingStandard.Variables.UnusedVariable)
+
+ [ERROR] Found 1 error. Run with --fix to fix it.
+"""
+expected = """
+ 1) src/Foo.php:12
+    error: Unused variable $bar (SlevomatCodingStandard.Variables.UnusedVariable)
+ [ERROR] Found 1 error. Run with --fix to fix it."""

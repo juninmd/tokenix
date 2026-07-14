@@ -1,13 +1,19 @@
 [filters.make]
 description = "Compact make output"
 match_command = "^make\\b"
-passthrough_when_emptied = true
 strip_lines_matching = [
   "^make\\[\\d+\\]:",
   "^\\s*$",
-  "^Nothing to be done",
+  # GNU make prints these prefixed: "make: Nothing to be done for 'all'."
+  "^(make: )?Nothing to be done",
+  "^make: '.*' is up to date",
 ]
 max_lines = 50
+# All-noise runs (nothing to do / up to date / enter-leave only) collapse to
+# ok; the engine suppresses this message automatically when the raw output
+# carries a failure signal. Note top-level failures print as "make: *** ..."
+# which is never stripped.
+on_empty = "make: ok"
 
 [[tests.make]]
 name = "strips entering/leaving lines"
@@ -31,4 +37,27 @@ expected = """
 gcc -O2 foo.c
 gcc -O2 bar.c
 """
+
+[[tests.make]]
+name = "all-noise success collapses to ok"
+input = """
+make[1]: Entering directory '/home/user/project'
+make[1]: Leaving directory '/home/user/project'
+make: Nothing to be done for 'all'.
+"""
+expected = "make: ok"
+
+[[tests.make]]
+name = "build failure is preserved, never masked as ok"
+input = """
+make[1]: Entering directory '/home/user/project'
+cc -O2 -c foo.c
+foo.c:3:1: error: unknown type name 'intt'
+make[1]: *** [foo.o] Error 1
+make: *** [all] Error 2
+"""
+expected = """
+cc -O2 -c foo.c
+foo.c:3:1: error: unknown type name 'intt'
+make: *** [all] Error 2"""
 

@@ -1,21 +1,50 @@
 [filters.poetry-install]
-description = "Compact poetry install output"
-match_command = "^poetry\\s+install\\b"
+description = "Compact poetry install/lock/update output"
+match_command = "^poetry\\s+(install|lock|update)\\b"
 passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Installing dependencies from lock file",
   "^\\s*Package operations:",
-  "^\\s*• Installing",
-  "^\\s*• Updating",
-  "^\\s*• Removing",
+  "^  [-•] Downloading ",
+  "^  [-•] Installing .* \\(",
+  "^  [-•] Updating .* \\(",
+  "^  [-•] Removing .* \\(",
   "^\\s*Installing the current project",
   "^\\s*Generating lock file",
   "^\\s*Lock file up to date"
 ]
+match_output = [
+  { pattern = "No dependencies to install or update|No changes\\.", message = "ok (up to date)", unless = "(?i)error|fail" },
+]
 max_lines = 50
 
+[[tests.poetry-install]]
+name = "up to date short-circuits"
+input = """
+Installing dependencies from lock file
+
+No dependencies to install or update
+"""
+expected = "ok (up to date)"
+
+[[tests.poetry-install]]
+name = "strips both 1.x dash and 2.x bullet progress styles"
+command = "poetry update"
+input = """
+Installing dependencies from lock file
+
+Package operations: 3 installs, 0 updates, 0 removals
+
+  - Downloading requests-2.31.0-py3-none-any.whl (62.6 kB)
+  - Installing charset-normalizer (3.3.2)
+  • Installing certifi (2023.11.17)
+  • Installing requests (2.31.0)
+
+Writing lock file
+"""
+expected = "Writing lock file"
 
 [[tests.poetry-install]]
 name = "stale lock file error preserved"

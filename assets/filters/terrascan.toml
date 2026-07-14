@@ -49,5 +49,9 @@ expected = """	Description    :  S3 bucket Access is not restricted
 name = "clean scan collapses"
 input = """
 Scan Summary -
+
+	IaC Type           : terraform
+	Scanned At         : 2026-07-14 12:00:00 UTC
+	Terrascan Version  : v1.19.9
 """
 expected = "terrascan: no violations"

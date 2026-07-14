@@ -1,15 +1,18 @@
 [filters.phpunit]
-description = "Compact PHPUnit output: keep failures, errors and the summary"
-match_command = "\\b(?:phpunit|vendor/bin/phpunit|pest)\\b"
+description = "Compact PHPUnit/Pest/ParaTest output: keep failures, errors, file:line and the summary"
+match_command = "\\b(?:phpunit|vendor/bin/phpunit|pest|paratest)\\b"
 passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^PHPUnit \\d",
   "^Pest \\d",
+  "^ParaTest \\d",
   "by Sebastian Bergmann",
   "^Runtime:",
   "^Configuration:",
+  "^Random Seed:",
+  "^\\s*[✓√]\\s",
   "^[.FEISRW]+\\s+\\d+ / \\d+ \\(",
   "^Time: ",
 ]
@@ -19,11 +22,15 @@ keep_lines_matching = [
   "FAILURES!",
   "ERRORS!",
   "WARNINGS!",
-  "^Tests: ",
+  "^\\s*Tests: ",
   "^There (?:were|was) \\d+ (?:failure|error|warning)",
   "^\\d+\\) ",
   "Failed asserting",
   "^Error:",
+  "^\\s*FAIL\\b",
+  "^\\s*⨯",
+  "^\\s*Duration:",
+  "\\.php:\\d+",
 ]
 max_lines = 60
 token_budget = 2000
@@ -43,7 +50,7 @@ OK (31 tests, 62 assertions)
 expected = """OK (31 tests, 62 assertions)"""
 
 [[tests.phpunit]]
-name = "failures and summary kept"
+name = "failures keep summary and failing file:line"
 input = """
 PHPUnit 10.5.0 by Sebastian Bergmann and contributors.
 
@@ -64,5 +71,47 @@ Tests: 4, Assertions: 5, Failures: 1, Errors: 1.
 expected = """There were 1 failure:
 1) AppTest::testFoo
 Failed asserting that false is true.
+/app/tests/AppTest.php:12
 FAILURES!
 Tests: 4, Assertions: 5, Failures: 1, Errors: 1."""
+
+[[tests.phpunit]]
+name = "paratest run keeps OK summary"
+command = "vendor/bin/paratest"
+input = """
+ParaTest 7.4.3 upon PHPUnit 10.5.20 by Sebastian Bergmann and contributors.
+
+Processes:     8
+Runtime:       PHP 8.3.6
+Configuration: /app/phpunit.xml
+Random Seed:   1718123456
+
+...............                                                 15 / 15 (100%)
+
+Time: 00:02.345, Memory: 24.00 MB
+
+OK (15 tests, 30 assertions)
+"""
+expected = """OK (15 tests, 30 assertions)"""
+
+[[tests.phpunit]]
+name = "pest failure keeps FAIL block, assertion, file:line and summary"
+command = "pest"
+input = """
+   FAIL  Tests\\Unit\\TokenTest
+  ✓ it accepts valid tokens
+  ⨯ it rejects expired tokens
+
+  Failed asserting that true is false.
+
+  at tests/Unit/TokenTest.php:18
+
+  Tests:    1 failed, 1 passed (2 assertions)
+  Duration: 0.05s
+"""
+expected = """   FAIL  Tests\\Unit\\TokenTest
+  ⨯ it rejects expired tokens
+  Failed asserting that true is false.
+  at tests/Unit/TokenTest.php:18
+  Tests:    1 failed, 1 passed (2 assertions)
+  Duration: 0.05s"""

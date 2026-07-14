@@ -1,7 +1,6 @@
 [filters.task]
 description = "Compact go-task output — strip task headers, keep command results"
 match_command = "^task\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -10,6 +9,9 @@ strip_lines_matching = [
 ]
 truncate_lines_at = 150
 max_lines = 50
+# All-up-to-date runs are pure noise; the engine suppresses this message
+# automatically when the raw output carries a failure signal.
+on_empty = "task: ok"
 
 [[tests.task]]
 name = "strips task headers, keeps output"
@@ -20,4 +22,9 @@ expected = "ok  myapp 0.5s"
 name = "preserves error output"
 input = "task: [build] go build ./...\n./main.go:10: undefined: foo\ntask: Failed to run task \"build\": exit status 1"
 expected = "./main.go:10: undefined: foo\ntask: Failed to run task \"build\": exit status 1"
+
+[[tests.task]]
+name = "all up to date collapses to ok"
+input = "task: Task \"build\" is up to date\ntask: Task \"lint\" is up to date\n"
+expected = "task: ok"
 

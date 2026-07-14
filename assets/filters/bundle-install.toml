@@ -1,6 +1,6 @@
 [filters.bundle-install]
-description = "Compact bundle install output"
-match_command = "^bundle\\s+install\\b"
+description = "Compact bundle install/update output"
+match_command = "^bundle\\s+(install|update)\\b"
 passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
@@ -19,8 +19,38 @@ keep_lines_matching = [
   "Could not find",
   "Bundler::GemNotFound"
 ]
+match_output = [
+  { pattern = "Bundle complete!", message = "ok bundle: complete", unless = "(?i)error|fail" },
+  { pattern = "Bundle updated!", message = "ok bundle: updated", unless = "(?i)error|fail" },
+]
 max_lines = 40
 
+[[tests.bundle-install]]
+name = "install success short-circuits"
+input = """
+Fetching gem metadata from https://rubygems.org/..........
+Resolving dependencies...
+Using rake 13.1.0
+Using ast 2.4.2
+Fetching rspec 3.13.0
+Installing rspec 3.13.0
+Bundle complete! 25 Gemfile dependencies, 78 gems now installed.
+Use `bundle info [gemname]` to see where a bundled gem is installed.
+"""
+expected = "ok bundle: complete"
+
+[[tests.bundle-install]]
+name = "update success short-circuits"
+command = "bundle update"
+input = """
+Fetching gem metadata from https://rubygems.org/.........
+Resolving dependencies...
+Using rake 13.1.0
+Fetching rspec 3.14.0 (was 3.13.0)
+Installing rspec 3.14.0 (was 3.13.0)
+Bundle updated!
+"""
+expected = "ok bundle: updated"
 
 [[tests.bundle-install]]
 name = "missing gem error preserved"

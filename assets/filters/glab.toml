@@ -1,0 +1,76 @@
+[filters.glab]
+description = "Compact glab mr/issue output"
+match_command = "^glab\\s+(mr|issue)\\b"
+# glab api is explicit/advanced — compressing API JSON destroys values and
+# forces a re-fetch; let it pass raw.
+skip_when_matches = "\\bapi\\b"
+strip_ansi = true
+# Strip blank lines, passing-check decorations, and markdown body template
+# noise (same rules as gh-pr: single-line HTML comments, badge/image-only
+# lines, horizontal rules). Field lines, glab notation (!42, opened/merged,
+# can_be_merged, pipeline states), and MR/issue URLs are the signal and must
+# survive — notably the '/-/merge_requests/<id>' line from `mr create`.
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*✓",
+  "^\\s*✔",
+  "^\\s*<!--.*?-->\\s*$",
+  "^\\s*\\[!\\[[^\\]]*\\]\\([^)]*\\)\\]\\([^)]*\\)\\s*$",
+  "^\\s*!\\[[^\\]]*\\]\\([^)]*\\)\\s*$",
+  "^\\s*(---+|\\*\\*\\*+|___+)\\s*$",
+]
+max_lines = 40
+passthrough_when_emptied = true
+
+[[tests.glab]]
+name = "mr view keeps fields and url, drops body template noise"
+command = "glab mr view 42"
+input = """
+!42 Add retry logic to API client (feat/retry-logic)
+opened by alice_dev
+
+merge status: can_be_merged
+pipeline: success
+✓ approved by bob_review
+
+<!-- MR template: remove before submitting -->
+## Summary
+Adds exponential backoff to the API client.
+
+---
+[![pipeline](https://gitlab.example.com/acme/toolkit/badges/main/pipeline.svg)](https://gitlab.example.com/acme/toolkit/-/pipelines)
+![screenshot](https://gitlab.example.com/uploads/shot.png)
+
+https://gitlab.example.com/acme/toolkit/-/merge_requests/42
+"""
+expected = """
+!42 Add retry logic to API client (feat/retry-logic)
+opened by alice_dev
+merge status: can_be_merged
+pipeline: success
+## Summary
+Adds exponential backoff to the API client.
+https://gitlab.example.com/acme/toolkit/-/merge_requests/42"""
+
+[[tests.glab]]
+name = "mr create success keeps the MR URL verbatim"
+command = "glab mr create --fill"
+input = """
+Creating merge request for feat/retry-logic into main in acme/toolkit
+
+!43 Add retry logic to API client (feat/retry-logic)
+https://gitlab.example.com/acme/toolkit/-/merge_requests/43
+"""
+expected = """
+Creating merge request for feat/retry-logic into main in acme/toolkit
+!43 Add retry logic to API client (feat/retry-logic)
+https://gitlab.example.com/acme/toolkit/-/merge_requests/43"""
+
+[[tests.glab]]
+name = "error passes through"
+command = "glab issue list"
+input = """
+ERROR: 401 Unauthorized. Check your token
+"""
+expected = """
+ERROR: 401 Unauthorized. Check your token"""

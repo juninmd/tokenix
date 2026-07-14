@@ -33,5 +33,6 @@ Error: found 2 lint errors"""
 name = "no findings collapses"
 input = """
 KubeLinter 0.6.0
+Loaded 132 checks from built-in configuration
 """
 expected = "kube-linter: no lint errors"

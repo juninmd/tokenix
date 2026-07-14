@@ -1,33 +1,48 @@
 [filters.gradle-test]
-description = "Compact gradle test output"
+description = "Compact gradle test output — strip cached tasks and progress, keep test diagnostics"
 match_command = "^(./gradlew|gradle)\\s+test\\b"
-passthrough_when_emptied = true
 strip_ansi = true
+match_output = [
+  { pattern = "BUILD SUCCESSFUL", message = "gradle: build successful", unless = "(?i)warning|error|failed" },
+]
 strip_lines_matching = [
   "^\\s*$",
-  "^> Task :",
-  "^BUILD SUCCESSFUL",
-  "^\\d+ actionable task"
+  "^> Configuring project",
+  "^> Resolving dependencies",
+  "^> Transform ",
+  "^Download(ing)?\\s+http",
+  "^\\s*<-+>\\s*$",
+  "^> Task :.*UP-TO-DATE$",
+  "^> Task :.*NO-SOURCE$",
+  "^> Task :.*FROM-CACHE$",
+  "^Starting a Gradle Daemon",
+  "^Daemon will be stopped",
 ]
-keep_lines_matching = [
-  "FAILED",
-  "Test.*FAILED",
-  "> Task .* FAILED",
-  "Error",
-  "Exception"
-]
+truncate_lines_at = 150
 max_lines = 60
-
+on_empty = "gradle: ok"
 
 [[tests.gradle-test]]
-name = "failure shown"
+name = "successful test run short-circuits"
+input = """
+> Task :compileJava UP-TO-DATE
+> Task :test
+
+BUILD SUCCESSFUL in 30s
+4 actionable tasks: 1 executed, 3 up-to-date
+"""
+expected = "gradle: build successful"
+
+[[tests.gradle-test]]
+name = "failing tests keep counts, assertion and task failure"
 input = """
 > Task :compileJava
 > Task :test FAILED
+
 com.example.MyTest > testAdd FAILED
     java.lang.AssertionError: expected:<3> but was:<4>
 
-> Task :test FAILED
+3 tests completed, 1 failed
 
 FAILURE: Build failed with an exception.
 
@@ -38,11 +53,13 @@ Execution failed for task ':test'.
 BUILD FAILED in 5s
 """
 expected = """
+> Task :compileJava
+> Task :test FAILED
 com.example.MyTest > testAdd FAILED
     java.lang.AssertionError: expected:<3> but was:<4>
+3 tests completed, 1 failed
+FAILURE: Build failed with an exception.
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///build/reports/tests/test/index.html
 BUILD FAILED in 5s"""
-
-[[tests.gradle-test]]
-name = "silent success stays empty"
-input = ""
-expected = ""

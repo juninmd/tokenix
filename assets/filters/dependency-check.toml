@@ -36,5 +36,7 @@ name = "clean scan collapses"
 input = """
 Checking for updates
 Analysis Started
+Analysis Complete (2 seconds)
+Writing report to: /app/dependency-check-report.html
 """
 expected = "dependency-check: no known vulnerabilities"

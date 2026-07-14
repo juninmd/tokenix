@@ -1,0 +1,41 @@
+[filters.pint]
+description = "Compact Laravel Pint output: drop per-file pass checkmarks, keep issues and summary"
+match_command = "^(?:\\./)?(?:vendor/bin/)?pint\\b|^php\\s+(?:\\./)?vendor/bin/pint\\b"
+strip_ansi = true
+# A clean run is one PASS summary; the per-file checkmark wall is noise.
+# Issue lines (⨯) carry the file + violated rules and must survive.
+match_output = [
+  { pattern = "PASS\\b", message = "pint: ok", unless = "(?i)fail|⨯|error|[1-9]\\d* style issue" },
+]
+strip_lines_matching = [
+  "^\\s*[✓√]\\s",
+  "^\\s*─+\\s*$",
+  "^\\s*$",
+]
+max_lines = 40
+on_empty = "pint: ok"
+
+[[tests.pint]]
+name = "clean run collapses to ok"
+command = "vendor/bin/pint"
+input = """
+  ✓ app/Models/User.php
+  ✓ app/Http/Controllers/HomeController.php
+
+  ────────────────────────────────────────
+  PASS   2 files, 0 style issues
+"""
+expected = """pint: ok"""
+
+[[tests.pint]]
+name = "style issues keep file, rules and summary"
+command = "vendor/bin/pint --test"
+input = """
+  ✓ app/Models/User.php
+  ⨯ app/Http/Controllers/HomeController.php  concat_space, not_operator_with_successor_space
+  ────────────────────────────────────────
+  FAIL   2 files, 1 style issue
+"""
+expected = """
+  ⨯ app/Http/Controllers/HomeController.php  concat_space, not_operator_with_successor_space
+  FAIL   2 files, 1 style issue"""

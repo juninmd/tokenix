@@ -1264,6 +1264,19 @@ pub fn derive_command_candidates(cmd: &str) -> Vec<String> {
     candidates
 }
 
+/// Final safety net: a filter must never make the output more expensive than
+/// the raw it replaces (a short raw beaten by a longer success message or an
+/// omission notice). Byte length is a cheap, monotone proxy for tokens here.
+/// Genuinely empty raw is exempt so `on_empty` sentinels still fire for
+/// commands that print nothing.
+fn never_worse(raw: &str, filtered: String) -> String {
+    let raw_trim = raw.trim_end();
+    if !raw_trim.is_empty() && filtered.len() > raw_trim.len() {
+        return raw_trim.to_string();
+    }
+    filtered
+}
+
 pub fn apply_filter(output: &str, f: &FilterDef) -> String {
     // match_output short-circuits before any other transformation
     for mo in &f.match_output {
@@ -1279,7 +1292,7 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
                         continue;
                     }
                 }
-                return mo.message.clone();
+                return never_worse(output, mo.message.clone());
             }
         }
     }
@@ -1393,16 +1406,19 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
                 })
                 .collect();
             let fb_text = fallback.join("\n");
-            return match f.token_budget {
-                Some(budget) => apply_token_budget(&fb_text, budget),
-                None => fb_text,
-            };
+            return never_worse(
+                output,
+                match f.token_budget {
+                    Some(budget) => apply_token_budget(&fb_text, budget),
+                    None => fb_text,
+                },
+            );
         }
         if let Some(msg) = &f.on_empty {
-            return msg.clone();
+            return never_worse(output, msg.clone());
         }
     }
-    result
+    never_worse(output, result)
 }
 
 /// Strict detection of an unambiguous command-failure signal in raw output.
@@ -1823,6 +1839,21 @@ fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
 
 fn apply_sizing(mut lines: Vec<String>, f: &FilterDef) -> (Vec<String>, usize) {
     let original_len = lines.len();
+    // head+tail together form a first+last window: header/context at the top,
+    // verdict/summary at the bottom (tests, builds and installs all put the
+    // outcome last). The omitted middle gets an explicit inline marker so the
+    // agent never sees a silent seam, and is excluded from the returned count
+    // so notify_on_truncate does not append a second, misplaced notice.
+    if let (Some(head), Some(tail)) = (f.head_lines, f.tail_lines) {
+        if lines.len() > head + tail {
+            let omitted_middle = lines.len() - head - tail;
+            let tail_part = lines.split_off(lines.len() - tail);
+            lines.truncate(head);
+            lines.push(format!("[... {omitted_middle} lines omitted ...]"));
+            lines.extend(tail_part);
+        }
+        return (lines, 0);
+    }
     if let Some(head) = f.head_lines {
         lines.truncate(head);
     } else if let Some(tail) = f.tail_lines {
@@ -2496,35 +2527,84 @@ on_empty = "empty filter output"
         max.max_lines = Some(3);
         assert_eq!(apply_filter(input, &max), "l1\nl2\nl3");
 
-        // head_lines takes precedence over tail/max when both set.
+        // head+tail combine into a first+last window with an explicit middle
+        // marker (rtk parity): header/context on top, verdict at the bottom.
+        let long_input = (1..=40)
+            .map(|i| format!("line number {i} with some payload text"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut both = base_filter();
-        both.head_lines = Some(1);
+        both.head_lines = Some(2);
         both.tail_lines = Some(2);
-        assert_eq!(apply_filter(input, &both), "l1");
+        let out = apply_filter(&long_input, &both);
+        assert_eq!(
+            out,
+            "line number 1 with some payload text\n\
+             line number 2 with some payload text\n\
+             [... 36 lines omitted ...]\n\
+             line number 39 with some payload text\n\
+             line number 40 with some payload text"
+        );
+
+        // The middle marker replaces the notify_on_truncate end notice — no
+        // double marker for the same cut.
+        let mut both_notify = base_filter();
+        both_notify.head_lines = Some(2);
+        both_notify.tail_lines = Some(2);
+        both_notify.notify_on_truncate = true;
+        assert_eq!(apply_filter(&long_input, &both_notify), out);
+    }
+
+    #[test]
+    fn apply_filter_never_worse_than_raw() {
+        // A success message longer than the raw output reverts to the raw:
+        // filtering must never cost more tokens than not filtering.
+        let mut f = base_filter();
+        f.match_output = vec![MatchOutput {
+            pattern: "ok".to_string(),
+            message: "everything completed successfully with no findings".to_string(),
+            unless: None,
+        }];
+        assert_eq!(apply_filter("ok\n", &f), "ok");
+
+        // Same guard for truncation notices on tiny outputs.
+        let mut noisy = base_filter();
+        noisy.max_lines = Some(1);
+        noisy.notify_on_truncate = true;
+        assert_eq!(apply_filter("a\nb\n", &noisy), "a\nb");
+
+        // Genuinely empty raw is exempt so on_empty sentinels still fire.
+        let mut empty = base_filter();
+        empty.on_empty = Some("cmd: ok".to_string());
+        assert_eq!(apply_filter("", &empty), "cmd: ok");
     }
 
     #[test]
     fn notify_on_truncate_is_opt_in_per_filter() {
-        let input = "l1\nl2\nl3\nl4\nl5\n";
+        // Inputs are long enough that notice + kept lines stay cheaper than
+        // raw, so the never_worse guard does not revert them.
+        let input = (1..=9)
+            .map(|i| format!("line {i} with enough payload to keep the notice cheaper"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut silent = base_filter();
         silent.max_lines = Some(2);
-        assert_eq!(apply_filter(input, &silent), "l1\nl2");
+        assert!(!apply_filter(&input, &silent).contains("omitted"));
 
         let mut noisy = base_filter();
         noisy.max_lines = Some(2);
         noisy.notify_on_truncate = true;
-        assert_eq!(
-            apply_filter(input, &noisy),
-            "l1\nl2\n[... 3 lines omitted (line limit) ...]"
-        );
+        assert!(apply_filter(&input, &noisy).ends_with("[... 7 lines omitted (line limit) ...]"));
 
         let mut noisy_chars = base_filter();
-        noisy_chars.truncate_lines_at = Some(4);
+        noisy_chars.truncate_lines_at = Some(24);
         noisy_chars.notify_on_truncate = true;
-        assert_eq!(
-            apply_filter("café\nação\n", &noisy_chars),
-            "caf\naç\n[... 2 line(s) truncated to 4 chars ...]"
+        let long_lines = format!(
+            "café {0}\nação {0}\n",
+            "is a rather long line with plenty of payload so the notice stays cheaper than raw"
         );
+        assert!(apply_filter(&long_lines, &noisy_chars)
+            .ends_with("[... 2 line(s) truncated to 24 chars ...]"));
     }
 
     #[test]
@@ -2577,10 +2657,13 @@ on_empty = "empty filter output"
             similarity: 0.8,
             block_delimiter: None,
         });
-        let block = "x\ny\nz";
+        let block = "connection refused to upstream host\nretrying with backoff enabled\ngiving up after three attempts";
         let input = format!("{block}\n\n{block}\n\n{block}\n");
         let out = apply_filter(&input, &f);
-        assert!(out.starts_with("x\ny\nz"), "first block kept: {out:?}");
+        assert!(
+            out.starts_with("connection refused to upstream host"),
+            "first block kept: {out:?}"
+        );
         assert!(
             out.contains("2 similar block(s) omitted"),
             "duplicates collapsed: {out:?}"
@@ -3259,9 +3342,12 @@ on_empty = "empty filter output"
         let filters = load_bundled_filters();
         let f = find_filter("./gradlew", &filters);
         assert!(f.is_some(), "gradlew filter must be found for './gradlew'");
+        // gradlew is an all-noise-success tool: an emptied benign output must
+        // collapse to the on_empty sentinel (the engine's failure-signal guard
+        // still passes real errors through), not resurrect raw noise.
         assert!(
-            f.unwrap().passthrough_when_emptied,
-            "gradlew filter must pass real output through when filtering empties it"
+            f.unwrap().on_empty.is_some(),
+            "gradlew filter must report success via on_empty when filtering empties it"
         );
     }
 

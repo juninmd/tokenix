@@ -1,5 +1,5 @@
 [filters.gpp]
-description = "Compact g++ compiler output — strip notes, keep errors and warnings"
+description = "Compact g++ compiler output — strip include chains, keep errors with source context"
 match_command = "^g\\+\\+(\\s|$)"
 passthrough_when_emptied = true
 strip_ansi = true
@@ -11,16 +11,11 @@ strip_lines_matching = [
   "^\\d+ warnings? generated",
   "^\\d+ errors? generated",
 ]
-keep_lines_matching = [
-  "error:",
-  "warning:",
-  "note:",
-  "fatal error:",
-]
 max_lines = 50
+on_empty = "g++: ok"
 
 [[tests.gpp]]
-name = "strips include chain, keeps errors and warnings"
+name = "strips include chain, keeps errors with snippet and caret"
 input = """
 In file included from /usr/include/iostream:42:
                  from main.cpp:1:
@@ -35,9 +30,13 @@ main.cpp:15:12: warning: unused variable 'x' [-Wunused-variable]
 """
 expected = """
 main.cpp:10:5: error: use of undeclared identifier 'foo'
-main.cpp:15:12: warning: unused variable 'x' [-Wunused-variable]"""
+    foo();
+    ^
+main.cpp:15:12: warning: unused variable 'x' [-Wunused-variable]
+    int x = 42;
+        ^"""
 
 [[tests.gpp]]
-name = "silent success stays empty"
+name = "silent success reports ok"
 input = ""
-expected = ""
+expected = "g++: ok"

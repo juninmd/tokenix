@@ -1,37 +1,48 @@
 [filters.gradle-build]
-description = "Compact Gradle build output"
+description = "Compact Gradle build output — strip cached tasks and progress, keep diagnostics"
 match_command = "^(./gradlew|gradle)\\s+(build|assemble|compileJava)\\b"
-passthrough_when_emptied = true
 strip_ansi = true
+match_output = [
+  { pattern = "BUILD SUCCESSFUL", message = "gradle: build successful", unless = "(?i)warning|error|failed" },
+]
 strip_lines_matching = [
   "^\\s*$",
-  "^> Task :",
-  "^> Configuring",
-  "^BUILD SUCCESSFUL",
-  "^\\d+ actionable task",
-  "^Deprecated Gradle features"
+  "^> Configuring project",
+  "^> Resolving dependencies",
+  "^> Transform ",
+  "^Download(ing)?\\s+http",
+  "^\\s*<-+>\\s*$",
+  "^> Task :.*UP-TO-DATE$",
+  "^> Task :.*NO-SOURCE$",
+  "^> Task :.*FROM-CACHE$",
+  "^Starting a Gradle Daemon",
+  "^Daemon will be stopped",
 ]
-keep_lines_matching = [
-  "ERROR",
-  "FAILED",
-  "BUILD FAILED",
-  "Compilation failed",
-  "Test.*FAILED",
-  "> Task .* FAILED"
-]
+truncate_lines_at = 150
 max_lines = 60
-
+on_empty = "gradle: ok"
 
 [[tests.gradle-build]]
-name = "build failure shown"
+name = "successful build short-circuits"
+input = """
+> Configuring project :app
+> Task :app:compileJava UP-TO-DATE
+> Task :app:processResources NO-SOURCE
+> Task :app:jar
+
+BUILD SUCCESSFUL in 8s
+7 actionable tasks: 1 executed, 6 up-to-date
+"""
+expected = "gradle: build successful"
+
+[[tests.gradle-build]]
+name = "failing javac compile keeps diagnostic and task failure"
 input = """
 > Task :compileJava FAILED
 /src/main/java/com/example/Main.java:10: error: cannot find symbol
   symbol:   variable foo
   location: class com.example.Main
 1 error
-
-> Task :compileJava FAILED
 
 FAILURE: Build failed with an exception.
 
@@ -42,10 +53,34 @@ Execution failed for task ':compileJava'.
 BUILD FAILED in 5s
 """
 expected = """
+> Task :compileJava FAILED
+/src/main/java/com/example/Main.java:10: error: cannot find symbol
+  symbol:   variable foo
+  location: class com.example.Main
+1 error
+FAILURE: Build failed with an exception.
+* What went wrong:
+Execution failed for task ':compileJava'.
 > Compilation failed; see the compiler error output for details.
 BUILD FAILED in 5s"""
 
 [[tests.gradle-build]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "failing kotlinc compile keeps e: diagnostic"
+input = """
+> Task :app:compileKotlin FAILED
+e: file:///src/main/kotlin/App.kt:10:5 Unresolved reference: foo
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileKotlin'.
+
+BUILD FAILED in 4s
+"""
+expected = """
+> Task :app:compileKotlin FAILED
+e: file:///src/main/kotlin/App.kt:10:5 Unresolved reference: foo
+FAILURE: Build failed with an exception.
+* What went wrong:
+Execution failed for task ':app:compileKotlin'.
+BUILD FAILED in 4s"""
