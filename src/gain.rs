@@ -142,6 +142,40 @@ pub struct CostRow {
     pub saved_usd: f64,
 }
 
+pub struct Economics {
+    pub spend_usd: f64,
+    pub saved_usd: f64,
+    pub pct_of_spend: f64,
+    pub total_tokens: u64,
+    pub saved_tokens: i64,
+}
+
+/// Price measured savings against the user's OWN spend mix from transcripts,
+/// not list-price hypotheticals. A weighted input-equivalent cost-per-token is
+/// derived from the actual usage (output ≈ 5× input, cache write ≈ 1.25×,
+/// cache read ≈ 0.1× — Anthropic's price ratios), then multiplied by the
+/// measured saved tokens (which land on the input/cache side as tool
+/// results). Returns None when no transcript usage is available.
+pub fn economics(tokens_saved: i64) -> Option<Economics> {
+    let mix = crate::usage::spend_mix()?;
+    let units = mix.input as f64
+        + 5.0 * mix.output as f64
+        + 1.25 * mix.cache_write as f64
+        + 0.1 * mix.cache_read as f64;
+    if units <= 0.0 || mix.cost_usd <= 0.0 {
+        return None;
+    }
+    let cpt = mix.cost_usd / units;
+    let saved_usd = tokens_saved.max(0) as f64 * cpt;
+    Some(Economics {
+        spend_usd: mix.cost_usd,
+        saved_usd,
+        pct_of_spend: saved_usd / mix.cost_usd * 100.0,
+        total_tokens: mix.input + mix.output + mix.cache_read + mix.cache_write,
+        saved_tokens: tokens_saved.max(0),
+    })
+}
+
 #[allow(dead_code)]
 pub struct GainStats {
     pub total_calls: usize,
@@ -173,7 +207,7 @@ pub struct GlobalGainStats {
 /// `pnpm run test --coverage 2>&1 | tail` → `pnpm run test`, and the many
 /// `cargo test … | …` variants collapse into one `cargo test` bucket instead of
 /// cluttering the footer with full argument strings.
-fn command_label(cmd: &str) -> String {
+pub(crate) fn command_label(cmd: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for tok in cmd.split_whitespace() {
         let stop = tok.starts_with('-') || tok.chars().any(|c| "|&;<>=\"'/\\`$()".contains(c));

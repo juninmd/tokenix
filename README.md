@@ -556,7 +556,9 @@ tokenix install-hook --tool all
 | `tokenix serve` | Start the background embedding daemon (keeps model + index in RAM) |
 | `tokenix stop` | Stop the background daemon |
 | `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |
-| `tokenix gain` | Token savings analytics with a by-source split — measured Read savings vs command filters; semantic Grep is neutral usage (`--cost-estimate` adds a per-model cost table) |
+| `tokenix gain` | Token savings analytics with a by-source split — measured Read savings vs command filters; semantic Grep is neutral usage (`--cost-estimate` adds a per-model cost table; `--economics` prices savings against **your own** transcript spend mix instead of list prices) |
+| `tokenix discover` | Scan agent transcript history for missed savings: replays the current filters over historical command outputs — **measured**, not estimated — and ranks recoverable waste (filter exists, hook wasn't active) plus uncovered commands worth a new filter (`--agent`, `--top`, `--json`) |
+| `tokenix trust` / `untrust` | Approve (SHA-256 pinned) or revoke this repo's `.tokenix/filters` — repo-local filters are **skipped until trusted** so a cloned repo can't rewrite what the agent sees (`--status` shows state) |
 | `tokenix usage` | Absolute token spend + ≈USD cost from agent transcripts (`daily\|weekly\|monthly\|session\|model\|project\|blocks`, `--since/--until`, `--all-projects`, `--cost-mode`, `--statusline`, `--json`) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix tokenmap` | Directory tree map with token counts, heaviest paths first, plus a top-10 files summary (`--format html` supported) |
@@ -565,6 +567,7 @@ tokenix install-hook --tool all
 | `tokenix filter active` | Show active user and bundled output filters |
 | `tokenix filter generate [CMD]` | AI-generate a TOML output filter for a command |
 | `tokenix filter record [CMD]` | Record real command output for richer filter generation |
+| `tokenix filter verify [NAME]` | Run the embedded `[[tests]]` golden cases of user/project filter files through the real pipeline from the installed binary (`--require-all` fails filters without tests) |
 | `tokenix prompt-audit` | Audit MCP/tool token weight across agents; warns on bloat (`--agent`, `--json`, `--recommend`, `--profile-impact`) |
 | `tokenix session-audit` | Token-economy health check: index, hook events, MCP/tool weight, cache hygiene |
 | `tokenix conversation-audit` | Scan local AI conversation histories for token-waste patterns (`--agent`, `--min-chars`, `--limit`, `--json`) |
@@ -682,7 +685,7 @@ hook errors never break the session.
 
 tokenix reduces noisy shell output by rewriting matching `Bash` commands in `PreToolUse` so they run through `tokenix run` before the agent sees the result. Filtering happens in three layers (highest priority first):
 
-1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control.
+1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control. **Trust-gated**: skipped until you approve them with `tokenix trust` (SHA-256 pinned; any edit revokes trust) — a cloned repository must not silently control what your agent sees.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
 3. **Bundled filters** — 528 TOML output filters shipped inside the binary (each homologated against 1124 embedded golden cases), covering `uv`, `cargo build`/`cargo run`/`cargo audit`, `git`, `gradle`, `terraform plan`, `make`, `npm`/`npm audit`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`/`kubectl top`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, `apt`/`apt-get`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`/`mamba`, `pulumi up`/`preview`/`destroy`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test` (Karma), `bru` (Bruno), `ps`, and more. Applied automatically — no setup needed.
 
@@ -709,12 +712,20 @@ on_empty = "uv: ok"
 | `keep_lines_matching` | Keep only lines matching these patterns |
 | `match_output` | Short-circuit: if output matches `pattern`, return `message` immediately; use `unless` for error/warning guards |
 | `max_lines` / `head_lines` / `tail_lines` | Truncate output. `head_lines` + `tail_lines` together keep a first+last window (header/context on top, verdict at the bottom) with an inline `[... N lines omitted ...]` marker in the middle |
+| `priority_lines` | Lines matching these regexes survive **every** sizing cut, even beyond the line budget — for verdict lines that must never be clipped (error summaries, totals) |
+| `category_caps` | `[{ pattern, max }]`: keep only the first `max` lines per category, collapsing the overflow into one count marker — bounds repetitive classes independently (e.g. 20 errors + 5 warnings) instead of a flat positional cut |
+| `on_failure` | Policy when the command exited nonzero: `"passthrough"` emits the raw output untouched, `"tail:N"` the last N raw lines. Even without it, success sentinels (`match_output`, `on_empty`) are suppressed on failure |
 | `truncate_lines_at` | Truncate individual lines at N characters |
 | `on_empty` | Message to return when filtering produces empty output. **Never emitted if the original output carries a generic failure signal** (`error`/`fatal`/`panic`/`FAILED`/`exit code N`…) — the engine falls back to a bounded view of the real output so a failed command is never masked as success, even when its error format isn't recognized by `keep_lines_matching` |
 | `passthrough_when_emptied` | When the filter reduces *non-empty* output to nothing (an unexpected output shape the keep/extract rules don't recognize), show a bounded view of the real output instead of `on_empty` — so format-specific filters never report a false "nothing here" (e.g. `git log --oneline` against the full-log filter) |
 | `filter_stderr` | Opt in to applying this command-specific filter to stderr. Without it, stderr uses generic safe compression so command errors are not turned into success sentinels |
 
-Engine invariant: **a filter never makes output more expensive than the raw it replaces.** If the filtered result (including any sentinel message or truncation notice) would cost more bytes than the raw output, the engine emits the raw output instead.
+Engine invariants:
+- **Never worse** — a filter never makes output more expensive than the raw it replaces. If the filtered result (including any sentinel message or truncation notice) would cost more bytes than the raw output, the engine emits the raw output instead.
+- **Exit-code aware** — `tokenix run` passes the command's real exit status into filtering: on nonzero exit, success sentinels are suppressed (text heuristics alone miss quiet failures) and the filter's `on_failure` policy applies.
+- **Failure tee** — when a failed command's compressed view dropped content, the full raw output is saved under `~/.tokenix/tee/` (20 files, 1 MB cap, disable with `TOKENIX_TEE=0`) and the output ends with `[full output: <path>]`, so recovery is a targeted Read instead of a full re-run.
+- **Fail loudly** — filter files reject unknown fields (a typo'd key prints a warning instead of silently disabling the filter). Validate your own filters anytime with `tokenix filter verify`.
+- **Escape hatch** — prefix any command with `TOKENIX_DISABLED=1` to skip the rewrite for that command only (logged, so overuse is visible).
 
 ### AI-assisted filter generation
 

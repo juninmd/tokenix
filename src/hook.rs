@@ -709,6 +709,28 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
             pass_through(antigravity);
         }
 
+        // Per-command escape hatch: a TOKENIX_DISABLED=1 env prefix means
+        // "give me the raw output this one time" — skip every rewrite. The
+        // bypass is logged so `tokenix gain` can flag overuse.
+        if command.contains("TOKENIX_DISABLED=1") {
+            let _ = log_hook_event(
+                &repo_root,
+                &HookEvent {
+                    ts: now_ts(),
+                    tool: "Bash".to_string(),
+                    action: "bypassed".to_string(),
+                    phase: "pre".to_string(),
+                    reason: "TOKENIX_DISABLED=1".to_string(),
+                    saved_tokens: 0,
+                    actual_tokens: 0,
+                    original_estimate: 0,
+                    input_preview: command.chars().take(200).collect(),
+                    command: command.to_string(),
+                },
+            );
+            pass_through(antigravity);
+        }
+
         // Recording session active: route every in-scope command through
         // `tokenix run` so its raw output is captured to .tokenix/recordings.
         // PreToolUse is the only path that sees command output under Claude Code,
@@ -846,6 +868,27 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
         }
         // Avoid recursion: the rewrite itself invokes tokenix under pwsh.
         if command.contains("tokenix") {
+            pass_through(antigravity);
+        }
+
+        // Same per-command escape hatch as the Bash path ($env:TOKENIX_DISABLED
+        // or an inline TOKENIX_DISABLED=1 marker).
+        if command.contains("TOKENIX_DISABLED") {
+            let _ = log_hook_event(
+                &repo_root,
+                &HookEvent {
+                    ts: now_ts(),
+                    tool: "PowerShell".to_string(),
+                    action: "bypassed".to_string(),
+                    phase: "pre".to_string(),
+                    reason: "TOKENIX_DISABLED".to_string(),
+                    saved_tokens: 0,
+                    actual_tokens: 0,
+                    original_estimate: 0,
+                    input_preview: command.chars().take(200).collect(),
+                    command: command.to_string(),
+                },
+            );
             pass_through(antigravity);
         }
 

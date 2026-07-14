@@ -36,17 +36,22 @@ fn log_unfiltered_cmd(cmd: &str) {
 }
 
 pub fn compress_bash_output(cmd: &str, s: &str) -> String {
-    compress_bash_output_for_stream(cmd, s, false)
+    compress_bash_output_for_stream(cmd, s, false, None)
 }
 
-fn compress_bash_output_for_stream(cmd: &str, s: &str, is_stderr: bool) -> String {
+fn compress_bash_output_for_stream(
+    cmd: &str,
+    s: &str,
+    is_stderr: bool,
+    exit_ok: Option<bool>,
+) -> String {
     // User-defined TOML filters take priority over built-in heuristics.
     let user_filters = crate::filters::load_all_filters();
     if let Some(f) = crate::filters::find_filter(cmd, &user_filters) {
         if is_stderr && !f.filter_stderr {
             return compress_output(s);
         }
-        return crate::filters::apply_filter(s, f);
+        return crate::filters::apply_filter_with_exit(s, f, exit_ok);
     }
 
     // No filter matched — record for later analysis (tokenix filter list).
@@ -1241,18 +1246,18 @@ fn compress_command_streams(
 ) -> (String, String) {
     let stdout_compressed = if stdout_raw.trim().is_empty() {
         if stderr_raw.trim().is_empty() && success {
-            compress_bash_output_for_stream(command_str, stdout_raw, false)
+            compress_bash_output_for_stream(command_str, stdout_raw, false, Some(success))
         } else {
             String::new()
         }
     } else {
-        compress_bash_output_for_stream(command_str, stdout_raw, false)
+        compress_bash_output_for_stream(command_str, stdout_raw, false, Some(success))
     };
 
     let stderr_compressed = if stderr_raw.trim().is_empty() {
         String::new()
     } else {
-        compress_bash_output_for_stream(command_str, stderr_raw, true)
+        compress_bash_output_for_stream(command_str, stderr_raw, true, Some(success))
     };
 
     (stdout_compressed, stderr_compressed)
@@ -1667,6 +1672,73 @@ fn powershell_program() -> &'static str {
     })
 }
 
+const TEE_MAX_FILES: usize = 20;
+const TEE_MAX_BYTES: usize = 1_000_000;
+const TEE_MIN_RAW_BYTES: usize = 500;
+
+/// Failure tee: when a command fails and compression dropped content, persist
+/// the full raw output under `~/.tokenix/tee/` so the agent can Read the rest
+/// instead of re-running the command (the most expensive recovery path — the
+/// re-run pays the raw cost twice and still goes through the hook). Returns
+/// the file path to reference in a recovery hint. `TOKENIX_TEE=0` disables.
+fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Option<PathBuf> {
+    if std::env::var("TOKENIX_TEE").is_ok_and(|v| v == "0") {
+        return None;
+    }
+    let dir = dirs::home_dir()?.join(".tokenix").join("tee");
+    std::fs::create_dir_all(&dir).ok()?;
+
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let slug: String = command_str
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .take(40)
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    let path = dir.join(format!("{epoch}_{slug}.log"));
+
+    let mut body = format!("$ {command_str}\n");
+    let mut push_stream = |label: &str, raw: &str| {
+        if !raw.trim().is_empty() {
+            body.push_str(&format!("--- {label} ---\n"));
+            let mut cut = raw.len().min(TEE_MAX_BYTES);
+            while cut > 0 && !raw.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            body.push_str(&raw[..cut]);
+            if cut < raw.len() {
+                body.push_str("\n[tee capped at 1MB]");
+            }
+            if !body.ends_with('\n') {
+                body.push('\n');
+            }
+        }
+    };
+    push_stream("stdout", stdout_raw);
+    push_stream("stderr", stderr_raw);
+    std::fs::write(&path, &body).ok()?;
+
+    // Rotation: keep the newest TEE_MAX_FILES logs (epoch prefix sorts).
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        let mut logs: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("log"))
+            .collect();
+        if logs.len() > TEE_MAX_FILES {
+            logs.sort();
+            for old in &logs[..logs.len() - TEE_MAX_FILES] {
+                let _ = std::fs::remove_file(old);
+            }
+        }
+    }
+    Some(path)
+}
+
 pub fn run_command_and_compress(command_str: &str, shell: &str) -> Result<i32> {
     let is_powershell = matches!(shell, "pwsh" | "powershell");
     let mut cmd = if is_powershell {
@@ -1693,12 +1765,24 @@ pub fn run_command_and_compress(command_str: &str, shell: &str) -> Result<i32> {
     let stdout_raw = String::from_utf8_lossy(&output.stdout);
     let stderr_raw = String::from_utf8_lossy(&output.stderr);
 
-    let (stdout_compressed, stderr_compressed) = compress_command_streams(
+    let (stdout_compressed, mut stderr_compressed) = compress_command_streams(
         command_str,
         &stdout_raw,
         &stderr_raw,
         output.status.success(),
     );
+
+    // Failure tee: the compressed view of a failure may not be enough to fix
+    // it. Persist the raw output and point at it, so recovery is a targeted
+    // Read instead of a full re-run. Only when compression actually dropped
+    // content and the raw is big enough to be worth a file.
+    let raw_len = stdout_raw.len() + stderr_raw.len();
+    let compressed_len = stdout_compressed.len() + stderr_compressed.len();
+    if !output.status.success() && raw_len >= TEE_MIN_RAW_BYTES && compressed_len + 80 < raw_len {
+        if let Some(path) = tee_raw_output(command_str, &stdout_raw, &stderr_raw) {
+            stderr_compressed.push_str(&format!("\n[full output: {}]\n", path.display()));
+        }
+    }
 
     // Print to standard streams
     print!("{}", stdout_compressed);

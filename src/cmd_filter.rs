@@ -857,6 +857,177 @@ pub fn cmd_filter_record_status(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// `tokenix filter verify` — run user/project filters' embedded golden tests
+// through the real apply_filter pipeline from the installed binary, so filter
+// authors don't need the repo + cargo toolchain to validate their TOMLs.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct VerifyCase {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    command: Option<String>,
+    input: String,
+    expected: String,
+}
+
+#[derive(serde::Deserialize)]
+struct VerifyFile {
+    #[serde(default)]
+    filters: HashMap<String, filters::FilterDef>,
+    #[serde(default)]
+    tests: HashMap<String, Vec<VerifyCase>>,
+}
+
+fn verify_sources() -> Vec<(String, std::path::PathBuf)> {
+    let mut sources = Vec::new();
+    let user_dir = filters::filters_dir();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let local_dir = store::find_project_root(&cwd)
+        .join(".tokenix")
+        .join("filters");
+    for (label, dir) in [("user", user_dir), ("project", local_dir)] {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                    sources.push((label.to_string(), path));
+                }
+            }
+        }
+    }
+    sources
+}
+
+pub fn cmd_filter_verify(only: Option<&str>, require_all: bool) -> Result<()> {
+    box_header("filter · verify user/project filters");
+    let sources = verify_sources();
+    if sources.is_empty() {
+        println!("{}", "No user or project filter files found.".yellow());
+        return Ok(());
+    }
+
+    let (mut passed, mut failed, mut untested) = (0usize, 0usize, Vec::new());
+    for (label, path) in sources {
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let file: VerifyFile = match toml::from_str(&content) {
+            Ok(f) => f,
+            Err(e) => {
+                failed += 1;
+                println!("  {} {} — invalid TOML: {e}", "✗".red(), path.display());
+                continue;
+            }
+        };
+        for (name, def) in &file.filters {
+            if only.is_some_and(|o| o != name) {
+                continue;
+            }
+            let cases = file.tests.get(name).map(Vec::as_slice).unwrap_or(&[]);
+            if cases.is_empty() {
+                untested.push(format!("{name} ({label})"));
+                continue;
+            }
+            for (i, case) in cases.iter().enumerate() {
+                let case_name = case
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("case {}", i + 1));
+                if let Some(cmd) = &case.command {
+                    let one = [def.clone()];
+                    if filters::find_filter(cmd, &one).is_none() {
+                        failed += 1;
+                        println!(
+                            "  {} {name} / {case_name}: command {cmd:?} does not match match_command",
+                            "✗".red()
+                        );
+                        continue;
+                    }
+                }
+                let actual = filters::apply_filter(&case.input, def);
+                if actual == case.expected {
+                    passed += 1;
+                } else {
+                    failed += 1;
+                    println!("  {} {name} / {case_name} ({label})", "✗".red());
+                    println!("    expected: {:?}", case.expected);
+                    println!("    actual:   {actual:?}");
+                }
+            }
+        }
+    }
+
+    println!(
+        "\n  {passed} passed · {failed} failed · {} filter(s) without tests",
+        untested.len()
+    );
+    for name in &untested {
+        println!("  {} no [[tests]]: {name}", "!".yellow());
+    }
+    if failed > 0 || (require_all && !untested.is_empty()) {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `tokenix trust` / `untrust` — SHA-256 gate for repo-local filter files.
+// ---------------------------------------------------------------------------
+
+pub fn cmd_trust(status_only: bool) -> Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let root = store::find_project_root(&cwd);
+    let hashes = filters::local_filter_hashes(&root);
+    if hashes.is_empty() {
+        println!("No repo-local filters found under .tokenix/filters — nothing to trust.");
+        return Ok(());
+    }
+    let trusted = filters::local_filters_trusted(&root);
+    if status_only {
+        for name in hashes.keys() {
+            println!("  {name}");
+        }
+        println!(
+            "\n  {} file(s) — {}",
+            hashes.len(),
+            if trusted {
+                "trusted (applied)".green().to_string()
+            } else {
+                "NOT trusted (skipped) — run `tokenix trust`"
+                    .yellow()
+                    .to_string()
+            }
+        );
+        return Ok(());
+    }
+    let count = filters::set_local_filters_trust(&root, true)?;
+    println!(
+        "{} Trusted {count} repo-local filter file(s) for {}",
+        "✓".green(),
+        root.display()
+    );
+    println!("  Any edit to these files revokes trust until you run `tokenix trust` again.");
+    Ok(())
+}
+
+pub fn cmd_untrust() -> Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let root = store::find_project_root(&cwd);
+    let count = filters::set_local_filters_trust(&root, false)?;
+    if count == 0 {
+        println!("No trust entry for {}", root.display());
+    } else {
+        println!(
+            "{} Revoked trust for {count} filter file(s) — they will be skipped.",
+            "✓".green()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
