@@ -79,8 +79,10 @@ pub fn run(opts: Options) -> Result<()> {
     // command → matched filter index so each unique command pays once.
     let mut match_cache: HashMap<String, Option<usize>> = HashMap::new();
 
-    let cutoff = (opts.since_days > 0).then(|| {
-        std::time::SystemTime::now() - std::time::Duration::from_secs(opts.since_days * 86_400)
+    let cutoff = (opts.since_days > 0).and_then(|days| {
+        days.checked_mul(86_400)
+            .map(std::time::Duration::from_secs)
+            .and_then(|dur| std::time::SystemTime::now().checked_sub(dur))
     });
     let mut skipped_files = 0usize;
 
