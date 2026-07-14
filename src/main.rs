@@ -592,6 +592,14 @@ enum Commands {
     },
     /// Diagnose embedding backend, GPU availability, model cache, and daemon
     Doctor,
+    /// Trust this repo's .tokenix/filters so they are applied (SHA-256 pinned)
+    Trust {
+        /// Show trust state without changing it
+        #[arg(long)]
+        status: bool,
+    },
+    /// Revoke trust for this repo's .tokenix/filters
+    Untrust,
     /// Generate and manage per-command output filters
     Filter {
         #[command(subcommand)]
@@ -792,6 +800,14 @@ enum FilterAction {
     Record {
         #[command(subcommand)]
         action: RecordAction,
+    },
+    /// Run the embedded [[tests]] golden cases of user/project filter files
+    Verify {
+        /// Verify a single filter by name (default: all user + project filters)
+        name: Option<String>,
+        /// Fail when a filter has no embedded tests
+        #[arg(long)]
+        require_all: bool,
     },
 }
 
@@ -1081,8 +1097,13 @@ fn main() -> Result<()> {
                     RecordAction::Stop => cmd_filter::cmd_filter_record_stop(&repo_root),
                     RecordAction::Status => cmd_filter::cmd_filter_record_status(&repo_root),
                 },
+                FilterAction::Verify { name, require_all } => {
+                    cmd_filter::cmd_filter_verify(name.as_deref(), require_all)
+                }
             }
         }
+        Commands::Trust { status } => cmd_filter::cmd_trust(status),
+        Commands::Untrust => cmd_filter::cmd_untrust(),
         Commands::Run {
             command,
             path: _,

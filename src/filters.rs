@@ -6,6 +6,7 @@ use rust_embed::Embed;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct MatchOutput {
     pub pattern: String,
     pub message: String,
@@ -17,6 +18,7 @@ pub struct MatchOutput {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct FilterDef {
     #[allow(dead_code)]
     pub description: Option<String>,
@@ -92,6 +94,33 @@ pub struct FilterDef {
     /// Hard token budget: truncate intelligently to stay under token limit.
     /// Prioritizes head/tail/errors/semantic relevance.
     pub token_budget: Option<usize>,
+
+    /// Failure policy applied when the run wrapper observed a nonzero exit:
+    /// "passthrough" emits the raw output untouched; "tail:N" emits the last
+    /// N raw lines. Unset = normal filtering (success sentinels are still
+    /// suppressed on failure — see `apply_filter_with_exit`).
+    #[serde(default)]
+    pub on_failure: Option<String>,
+
+    /// Lines matching any of these regexes survive every sizing cut
+    /// (max/head/tail), even beyond the line budget — for verdict lines that
+    /// must never be clipped (error summaries, totals).
+    #[serde(default)]
+    pub priority_lines: Vec<String>,
+
+    /// Per-category caps: keep only the first `max` lines matching `pattern`,
+    /// replacing the overflow with a single count marker. Bounds repetitive
+    /// classes independently (e.g. 20 errors + 5 warnings) instead of a flat
+    /// positional cut that may spend the whole budget on one class.
+    #[serde(default)]
+    pub category_caps: Vec<CategoryCap>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct CategoryCap {
+    pub pattern: String,
+    pub max: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -193,9 +222,15 @@ pub fn filters_dir() -> PathBuf {
 }
 
 fn parse_filter_file_named(content: &str) -> Vec<(String, FilterDef)> {
-    toml::from_str::<FilterFile>(content)
-        .map(|f| f.filters.into_iter().collect())
-        .unwrap_or_default()
+    match toml::from_str::<FilterFile>(content) {
+        Ok(f) => f.filters.into_iter().collect(),
+        Err(e) => {
+            // Fail loudly: FilterDef rejects unknown fields, so a typo'd key
+            // must surface instead of silently disabling the whole file.
+            eprintln!("tokenix: skipping invalid filter file: {e}");
+            Vec::new()
+        }
+    }
 }
 
 pub fn load_user_filters() -> Vec<FilterDef> {
@@ -224,11 +259,94 @@ pub fn load_user_filters_named() -> Vec<(String, FilterDef)> {
     result
 }
 
+/// Path of the JSON trust store gating repo-local filter files.
+pub fn trust_store_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".tokenix")
+        .join("trusted_filters.json")
+}
+
+/// SHA-256 of every `.toml` under `<repo>/.tokenix/filters`, keyed by file name.
+pub fn local_filter_hashes(root: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut hashes = std::collections::BTreeMap::new();
+    let dir = root.join(".tokenix").join("filters");
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                if let (Some(name), Ok(content)) = (
+                    path.file_name().and_then(|n| n.to_str()),
+                    std::fs::read(&path),
+                ) {
+                    hashes.insert(name.to_string(), hex::encode(Sha256::digest(&content)));
+                }
+            }
+        }
+    }
+    hashes
+}
+
+fn load_trust_store() -> HashMap<String, std::collections::BTreeMap<String, String>> {
+    std::fs::read_to_string(trust_store_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// True when every current repo-local filter file matches the hash recorded
+/// by `tokenix trust` for this repo. New, edited, or never-trusted files fail
+/// closed: repo-local filters control what the agent gets to see, so a cloned
+/// repository must not be able to rewrite command output until a human
+/// approves its filters.
+pub fn local_filters_trusted(root: &std::path::Path) -> bool {
+    let current = local_filter_hashes(root);
+    if current.is_empty() {
+        return true; // nothing to trust
+    }
+    let store = load_trust_store();
+    match store.get(&root.to_string_lossy().to_string()) {
+        Some(trusted) => *trusted == current,
+        None => false,
+    }
+}
+
+/// Record the current repo-local filter hashes as trusted (or remove the
+/// entry with `trust = false`). Returns the number of files affected.
+pub fn set_local_filters_trust(root: &std::path::Path, trust: bool) -> std::io::Result<usize> {
+    let mut store = load_trust_store();
+    let key = root.to_string_lossy().to_string();
+    let count;
+    if trust {
+        let current = local_filter_hashes(root);
+        count = current.len();
+        store.insert(key, current);
+    } else {
+        count = store.remove(&key).map(|m| m.len()).unwrap_or(0);
+    }
+    let path = trust_store_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&store).unwrap_or_default(),
+    )?;
+    Ok(count)
+}
+
 pub fn load_local_filters_named() -> Vec<(String, FilterDef)> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let root = crate::store::find_project_root(&cwd);
     let dir = root.join(".tokenix").join("filters");
     if !dir.exists() {
+        return vec![];
+    }
+    // Trust gate: silently skip untrusted repo-local filters in the hot path
+    // (a warning here would leak into every filtered command's stderr).
+    // `tokenix trust` reports the pending state interactively.
+    if !local_filters_trusted(&root) {
         return vec![];
     }
     let mut result = Vec::new();
@@ -1278,21 +1396,50 @@ fn never_worse(raw: &str, filtered: String) -> String {
 }
 
 pub fn apply_filter(output: &str, f: &FilterDef) -> String {
-    // match_output short-circuits before any other transformation
-    for mo in &f.match_output {
-        if let Ok(re) = Regex::new(&mo.pattern) {
-            if re.is_match(output) {
-                // `unless` guard: do not short-circuit when the output also matches
-                // this pattern, so errors/warnings are never masked as success.
-                if let Some(unless) = &mo.unless {
-                    if Regex::new(unless)
-                        .map(|u| u.is_match(output))
-                        .unwrap_or(false)
-                    {
-                        continue;
+    apply_filter_with_exit(output, f, None)
+}
+
+/// `exit_ok = Some(false)` means the run wrapper observed a nonzero exit.
+/// On failure: the filter's `on_failure` policy ("passthrough" | "tail:N")
+/// takes over if set; otherwise normal filtering runs but success sentinels
+/// (`match_output` messages, `on_empty`) are suppressed — text heuristics
+/// alone miss failing commands with quiet or unusual output.
+pub fn apply_filter_with_exit(output: &str, f: &FilterDef, exit_ok: Option<bool>) -> String {
+    let failed = exit_ok == Some(false);
+    if failed {
+        if let Some(policy) = &f.on_failure {
+            if policy == "passthrough" {
+                return output.trim_end().to_string();
+            }
+            if let Some(n) = policy
+                .strip_prefix("tail:")
+                .and_then(|n| n.parse::<usize>().ok())
+            {
+                let lines: Vec<&str> = output.trim_end().lines().collect();
+                let start = lines.len().saturating_sub(n);
+                return lines[start..].join("\n");
+            }
+        }
+    }
+
+    // match_output short-circuits before any other transformation. These are
+    // success sentinels by convention — never fire them on a known failure.
+    if !failed {
+        for mo in &f.match_output {
+            if let Ok(re) = Regex::new(&mo.pattern) {
+                if re.is_match(output) {
+                    // `unless` guard: do not short-circuit when the output also matches
+                    // this pattern, so errors/warnings are never masked as success.
+                    if let Some(unless) = &mo.unless {
+                        if Regex::new(unless)
+                            .map(|u| u.is_match(output))
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
                     }
+                    return never_worse(output, mo.message.clone());
                 }
-                return never_worse(output, mo.message.clone());
             }
         }
     }
@@ -1331,6 +1478,11 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
     // NEW: replace_patterns - regex replacements
     if !f.replace_patterns.is_empty() {
         lines = apply_replace_patterns(lines, &f.replace_patterns);
+    }
+
+    // category_caps - bound repetitive line classes independently
+    if !f.category_caps.is_empty() {
+        lines = apply_category_caps(lines, &f.category_caps);
     }
 
     // NEW: deduplicate_blocks - structural deduplication
@@ -1394,7 +1546,7 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
         //    tool's native error format would be masked as the success
         //    `on_empty` message — the same "never mask errors" rule the
         //    `match_output.unless` guard enforces.
-        let masks_failure = f.on_empty.is_some() && output_has_failure_signal(output);
+        let masks_failure = f.on_empty.is_some() && (failed || output_has_failure_signal(output));
         if !output.trim().is_empty() && (f.passthrough_when_emptied || masks_failure) {
             let cap = f.max_lines.unwrap_or(40);
             let fallback: Vec<String> = s
@@ -1415,7 +1567,11 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
             );
         }
         if let Some(msg) = &f.on_empty {
-            return never_worse(output, msg.clone());
+            // A failed command must never earn the success sentinel, even
+            // when it printed nothing — the empty result stands on its own.
+            if !failed {
+                return never_worse(output, msg.clone());
+            }
         }
     }
     never_worse(output, result)
@@ -1837,35 +1993,130 @@ fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-fn apply_sizing(mut lines: Vec<String>, f: &FilterDef) -> (Vec<String>, usize) {
-    let original_len = lines.len();
-    // head+tail together form a first+last window: header/context at the top,
-    // verdict/summary at the bottom (tests, builds and installs all put the
-    // outcome last). The omitted middle gets an explicit inline marker so the
-    // agent never sees a silent seam, and is excluded from the returned count
-    // so notify_on_truncate does not append a second, misplaced notice.
-    if let (Some(head), Some(tail)) = (f.head_lines, f.tail_lines) {
-        if lines.len() > head + tail {
-            let omitted_middle = lines.len() - head - tail;
-            let tail_part = lines.split_off(lines.len() - tail);
-            lines.truncate(head);
-            lines.push(format!("[... {omitted_middle} lines omitted ...]"));
-            lines.extend(tail_part);
+/// Keep only the first `max` lines per category; overflow collapses into one
+/// count marker placed right after the category's last kept line. The first
+/// matching cap owns a line, so overlapping patterns don't double-count.
+fn apply_category_caps(lines: Vec<String>, caps: &[CategoryCap]) -> Vec<String> {
+    let compiled: Vec<(Regex, usize)> = caps
+        .iter()
+        .filter_map(|c| Regex::new(&c.pattern).ok().map(|re| (re, c.max)))
+        .collect();
+    if compiled.is_empty() {
+        return lines;
+    }
+    let mut kept = vec![0usize; compiled.len()];
+    let mut dropped = vec![0usize; compiled.len()];
+    let mut marker_pos = vec![0usize; compiled.len()];
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    for line in lines {
+        if let Some(ci) = compiled.iter().position(|(re, _)| re.is_match(&line)) {
+            if kept[ci] < compiled[ci].1 {
+                kept[ci] += 1;
+                out.push(line);
+                marker_pos[ci] = out.len();
+            } else {
+                dropped[ci] += 1;
+            }
+            continue;
         }
+        out.push(line);
+    }
+    // Insert markers from the highest position down so earlier insertions
+    // don't shift later ones.
+    let mut markers: Vec<(usize, String)> = dropped
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| **d > 0)
+        .map(|(ci, d)| {
+            (
+                marker_pos[ci],
+                format!("[... {d} more similar line(s) omitted ...]"),
+            )
+        })
+        .collect();
+    markers.sort_by(|a, b| b.0.cmp(&a.0));
+    for (pos, text) in markers {
+        out.insert(pos.min(out.len()), text);
+    }
+    out
+}
+
+fn apply_sizing(lines: Vec<String>, f: &FilterDef) -> (Vec<String>, usize) {
+    let original_len = lines.len();
+    let n = lines.len();
+
+    // Positional keep mask for the configured window.
+    let mut keep = vec![true; n];
+    let head_tail_combo = matches!((f.head_lines, f.tail_lines), (Some(h), Some(t)) if n > h + t);
+    match (f.head_lines, f.tail_lines) {
+        // head+tail together form a first+last window: header/context at the
+        // top, verdict/summary at the bottom. The omitted middle gets an
+        // explicit inline marker so the agent never sees a silent seam, and
+        // is excluded from the returned count so notify_on_truncate does not
+        // append a second, misplaced notice.
+        (Some(head), Some(tail)) if n > head + tail => {
+            for k in keep.iter_mut().take(n - tail).skip(head) {
+                *k = false;
+            }
+        }
+        // Both set but the output already fits the window — keep everything.
+        (Some(_), Some(_)) => {}
+        (Some(head), None) => {
+            for k in keep.iter_mut().skip(head) {
+                *k = false;
+            }
+        }
+        (None, Some(tail)) => {
+            for k in keep.iter_mut().take(n.saturating_sub(tail)) {
+                *k = false;
+            }
+        }
+        (None, None) => {
+            if let Some(max) = f.max_lines {
+                for k in keep.iter_mut().skip(max) {
+                    *k = false;
+                }
+            }
+        }
+    }
+
+    // Priority rescue: lines matching any priority regex survive the cut.
+    if !f.priority_lines.is_empty() {
+        let priority: Vec<Regex> = f
+            .priority_lines
+            .iter()
+            .filter_map(|p| Regex::new(p).ok())
+            .collect();
+        if !priority.is_empty() {
+            for (i, line) in lines.iter().enumerate() {
+                if !keep[i] && priority.iter().any(|re| re.is_match(line)) {
+                    keep[i] = true;
+                }
+            }
+        }
+    }
+
+    let dropped = keep.iter().filter(|k| !**k).count();
+    if dropped == 0 {
         return (lines, 0);
     }
-    if let Some(head) = f.head_lines {
-        lines.truncate(head);
-    } else if let Some(tail) = f.tail_lines {
-        let len = lines.len();
-        if len > tail {
-            lines = lines[len - tail..].to_vec();
+
+    let mut result: Vec<String> = Vec::with_capacity(n - dropped + 1);
+    let mut marker_inserted = false;
+    for (i, line) in lines.into_iter().enumerate() {
+        if keep[i] {
+            result.push(line);
+        } else if head_tail_combo && !marker_inserted {
+            result.push(format!("[... {dropped} lines omitted ...]"));
+            marker_inserted = true;
         }
-    } else if let Some(max) = f.max_lines {
-        lines.truncate(max);
     }
-    let omitted = original_len - lines.len();
-    (lines, omitted)
+    let omitted = if head_tail_combo {
+        0
+    } else {
+        original_len - result.len()
+    };
+    (result, omitted)
 }
 
 /// Generate the TOML prompt to send to an AI CLI for filter creation.
@@ -1966,6 +2217,15 @@ on_empty = "empty filter output"
         )
         .unwrap();
 
+        // Trust gate: repo-local filters are skipped until `tokenix trust`.
+        let root = crate::store::find_project_root(&std::env::current_dir().unwrap());
+        let _ = set_local_filters_trust(&root, false);
+        assert!(
+            load_local_filters().is_empty(),
+            "untrusted repo-local filters must not load"
+        );
+
+        set_local_filters_trust(&root, true).unwrap();
         let local_filters = load_local_filters();
         assert!(!local_filters.is_empty());
         let found = find_filter("test_local_cmd", &local_filters);
@@ -1973,7 +2233,19 @@ on_empty = "empty filter output"
         let filter = found.unwrap();
         assert_eq!(filter.on_empty.as_deref(), Some("empty filter output"));
 
+        // Editing a trusted file revokes trust (hash mismatch).
+        std::fs::write(
+            &toml_path,
+            "[filters.test_local_cmd]\nmatch_command = \"^x$\"\n",
+        )
+        .unwrap();
+        assert!(
+            load_local_filters().is_empty(),
+            "edited filter file must fail the trust check until re-trusted"
+        );
+
         // Clean up
+        let _ = set_local_filters_trust(&root, false);
         let _ = std::fs::remove_file(&toml_path);
         let _ = std::fs::remove_dir_all(
             std::env::current_dir()
@@ -2120,6 +2392,9 @@ on_empty = "empty filter output"
             deduplicate_blocks: None,
             summarize_json: None,
             token_budget: None,
+            on_failure: None,
+            priority_lines: vec![],
+            category_caps: vec![],
         };
         // Would panic with naive &l[..4] because 'é'/'ç' straddle the boundary.
         let out = apply_filter("café\nação\n", &f);
@@ -2155,6 +2430,9 @@ on_empty = "empty filter output"
             deduplicate_blocks: None,
             summarize_json: None,
             token_budget: None,
+            on_failure: None,
+            priority_lines: vec![],
+            category_caps: vec![],
         };
         let issues = semantic_filter_issues(&f);
         assert_eq!(
@@ -2225,6 +2503,9 @@ on_empty = "empty filter output"
             deduplicate_blocks: None,
             summarize_json: None,
             token_budget: None,
+            on_failure: None,
+            priority_lines: vec![],
+            category_caps: vec![],
         };
         let filters = [f];
         // Unspaced semicolon, cd prefix, and a pipe all resolve to the filter.
@@ -2257,6 +2538,9 @@ on_empty = "empty filter output"
             deduplicate_blocks: None,
             summarize_json: None,
             token_budget: None,
+            on_failure: None,
+            priority_lines: vec![],
+            category_caps: vec![],
         };
         let f_gitleaks = FilterDef {
             description: None,
@@ -2280,6 +2564,9 @@ on_empty = "empty filter output"
             deduplicate_blocks: None,
             summarize_json: None,
             token_budget: None,
+            on_failure: None,
+            priority_lines: vec![],
+            category_caps: vec![],
         };
         let filters2 = [f_cat, f_gitleaks];
         let matched = find_filter("cat x | gitleaks detect", &filters2).unwrap();
@@ -2310,6 +2597,9 @@ on_empty = "empty filter output"
             deduplicate_blocks: None,
             summarize_json: None,
             token_budget: None,
+            on_failure: None,
+            priority_lines: vec![],
+            category_caps: vec![],
         };
         let filters = [f];
         // Unbounded full dump: filter applies.
@@ -2388,6 +2678,9 @@ on_empty = "empty filter output"
             deduplicate_blocks: None,
             summarize_json: None,
             token_budget: None,
+            on_failure: None,
+            priority_lines: vec![],
+            category_caps: vec![],
         };
         let filters = [f];
         assert!(find_filter("git -C /repo add .", &filters).is_some());
@@ -2450,6 +2743,9 @@ on_empty = "empty filter output"
             deduplicate_blocks: None,
             summarize_json: None,
             token_budget: None,
+            on_failure: None,
+            priority_lines: vec![],
+            category_caps: vec![],
         };
         // Pattern present, no error → short-circuit to message
         assert_eq!(apply_filter("total size is 100\n", &f), "ok (synced)");
@@ -2483,6 +2779,9 @@ on_empty = "empty filter output"
             deduplicate_blocks: None,
             summarize_json: None,
             token_budget: None,
+            on_failure: None,
+            priority_lines: vec![],
+            category_caps: vec![],
         }
     }
 
@@ -2577,6 +2876,114 @@ on_empty = "empty filter output"
         let mut empty = base_filter();
         empty.on_empty = Some("cmd: ok".to_string());
         assert_eq!(apply_filter("", &empty), "cmd: ok");
+    }
+
+    #[test]
+    fn apply_filter_with_exit_failure_policies() {
+        // on_failure = "passthrough": nonzero exit emits raw untouched.
+        let mut f = base_filter();
+        f.keep_lines_matching = vec!["^KEEP".to_string()];
+        f.on_failure = Some("passthrough".to_string());
+        let raw = "some context line\nanother detail line\nKEEP this one\n";
+        assert_eq!(
+            apply_filter_with_exit(raw, &f, Some(false)),
+            "some context line\nanother detail line\nKEEP this one"
+        );
+        // Success (or unknown exit) still filters normally.
+        assert_eq!(apply_filter_with_exit(raw, &f, Some(true)), "KEEP this one");
+        assert_eq!(apply_filter_with_exit(raw, &f, None), "KEEP this one");
+
+        // on_failure = "tail:N": last N raw lines.
+        let mut t = base_filter();
+        t.keep_lines_matching = vec!["^KEEP".to_string()];
+        t.on_failure = Some("tail:2".to_string());
+        assert_eq!(
+            apply_filter_with_exit(raw, &t, Some(false)),
+            "another detail line\nKEEP this one"
+        );
+    }
+
+    #[test]
+    fn apply_filter_with_exit_suppresses_success_sentinels() {
+        // A success match_output must not fire on a known-failed command,
+        // even when the output contains its success marker.
+        let mut f = base_filter();
+        f.match_output = vec![MatchOutput {
+            pattern: "Build complete!".to_string(),
+            message: "ok".to_string(),
+            unless: None,
+        }];
+        let raw = "Build complete! (but the linker crashed afterwards)\n";
+        assert_eq!(apply_filter_with_exit(raw, &f, Some(false)), raw.trim_end());
+
+        // on_empty must not report success for a failed command: benign-looking
+        // emptied output falls back to a bounded raw view instead.
+        let mut e = base_filter();
+        e.keep_lines_matching = vec!["^NEVER".to_string()];
+        e.on_empty = Some("cmd: ok".to_string());
+        let benign = "all tasks completed with warnings suppressed\n";
+        assert_eq!(
+            apply_filter_with_exit(benign, &e, Some(false)),
+            benign.trim_end()
+        );
+        // And a failed command that printed nothing yields nothing — never the
+        // success sentinel.
+        assert_eq!(apply_filter_with_exit("", &e, Some(false)), "");
+    }
+
+    #[test]
+    fn apply_filter_priority_lines_survive_sizing() {
+        let mut f = base_filter();
+        f.max_lines = Some(2);
+        f.priority_lines = vec!["^error".to_string(), "^Summary:".to_string()];
+        let input = (1..=6)
+            .map(|i| format!("noise line number {i} with plenty of padding"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\nerror: the thing that matters\nSummary: 1 failed\n";
+        let out = apply_filter(&input, &f);
+        assert_eq!(
+            out,
+            "noise line number 1 with plenty of padding\n\
+             noise line number 2 with plenty of padding\n\
+             error: the thing that matters\n\
+             Summary: 1 failed"
+        );
+    }
+
+    #[test]
+    fn apply_filter_category_caps_bound_each_class() {
+        let mut f = base_filter();
+        f.category_caps = vec![CategoryCap {
+            pattern: "^warning:".to_string(),
+            max: 2,
+        }];
+        let input = "warning: first warning about a thing\n\
+                     warning: second warning about a thing\n\
+                     warning: third warning about a thing\n\
+                     warning: fourth warning about a thing\n\
+                     error: the actual problem to look at\n";
+        let out = apply_filter(input, &f);
+        assert_eq!(
+            out,
+            "warning: first warning about a thing\n\
+             warning: second warning about a thing\n\
+             [... 2 more similar line(s) omitted ...]\n\
+             error: the actual problem to look at"
+        );
+    }
+
+    #[test]
+    fn filter_def_rejects_unknown_fields() {
+        let toml = r#"
+[filters.typo]
+match_command = "^typo\\b"
+keep_lines_matchin = ["oops"]
+"#;
+        assert!(
+            toml::from_str::<FilterFile>(toml).is_err(),
+            "typo'd field must fail loudly, not silently no-op"
+        );
     }
 
     #[test]
@@ -3376,6 +3783,9 @@ on_empty = "empty filter output"
                 deduplicate_blocks: None,
                 summarize_json: None,
                 token_budget: None,
+                on_failure: None,
+                priority_lines: vec![],
+                category_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -3399,6 +3809,9 @@ on_empty = "empty filter output"
                 deduplicate_blocks: None,
                 summarize_json: None,
                 token_budget: None,
+                on_failure: None,
+                priority_lines: vec![],
+                category_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -3422,6 +3835,9 @@ on_empty = "empty filter output"
                 deduplicate_blocks: None,
                 summarize_json: None,
                 token_budget: None,
+                on_failure: None,
+                priority_lines: vec![],
+                category_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -3445,6 +3861,9 @@ on_empty = "empty filter output"
                 deduplicate_blocks: None,
                 summarize_json: None,
                 token_budget: None,
+                on_failure: None,
+                priority_lines: vec![],
+                category_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -3473,6 +3892,9 @@ on_empty = "empty filter output"
                     exclude: vec![],
                 }),
                 token_budget: None,
+                on_failure: None,
+                priority_lines: vec![],
+                category_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -3496,6 +3918,9 @@ on_empty = "empty filter output"
                 deduplicate_blocks: None,
                 summarize_json: None,
                 token_budget: None,
+                on_failure: None,
+                priority_lines: vec![],
+                category_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -3519,6 +3944,9 @@ on_empty = "empty filter output"
                 deduplicate_blocks: None,
                 summarize_json: None,
                 token_budget: None,
+                on_failure: None,
+                priority_lines: vec![],
+                category_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -3542,6 +3970,9 @@ on_empty = "empty filter output"
                 deduplicate_blocks: None,
                 summarize_json: None,
                 token_budget: None,
+                on_failure: None,
+                priority_lines: vec![],
+                category_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -3565,6 +3996,9 @@ on_empty = "empty filter output"
                 deduplicate_blocks: None,
                 summarize_json: None,
                 token_budget: None,
+                on_failure: None,
+                priority_lines: vec![],
+                category_caps: vec![],
             },
         ];
 
