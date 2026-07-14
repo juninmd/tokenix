@@ -31,5 +31,7 @@ expected = """      L5 |<div><span></div>
 name = "clean scan collapses"
 input = """
    index.html
+   about.html
+   contact.html
 """
 expected = "htmlhint: no errors"

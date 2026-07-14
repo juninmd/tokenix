@@ -1,0 +1,42 @@
+[filters.artisan]
+description = "Compact Laravel artisan output: strip box-drawing tables and dot leaders"
+match_command = "^php\\s+artisan\\b"
+strip_ansi = true
+# Laravel 10+ renders console output as box-drawing tables with dot leaders
+# ('Environment ......... production') and multi-space padding — pure
+# decoration that doubles the token cost of every value line.
+strip_lines_matching = [
+  "^\\s*$",
+  "^[\\x{2500}-\\x{257F}\\s]+$",
+]
+replace_patterns = [
+  ["[\\x{2500}-\\x{257F}\\x{2580}-\\x{259F}\\x{25A0}-\\x{25FF}]+", ""],
+  ["\\.{3,}", ".."],
+  ["[ \\t]{2,}", " "],
+]
+max_lines = 60
+
+[[tests.artisan]]
+name = "about table collapses dot leaders and padding"
+command = "php artisan about"
+input = """
+  Environment ......................................... production
+  Laravel Version ..................................... 11.4.0
+  PHP Version ......................................... 8.3.6
+"""
+expected = """
+ Environment .. production
+ Laravel Version .. 11.4.0
+ PHP Version .. 8.3.6"""
+
+[[tests.artisan]]
+name = "migrate failure keeps the exception"
+command = "php artisan migrate"
+input = """
+   Illuminate\\Database\\QueryException
+
+  SQLSTATE[42S02]: Base table or view not found: 1146 Table 'app.jobs' doesn't exist
+"""
+expected = """
+ Illuminate\\Database\\QueryException
+ SQLSTATE[42S02]: Base table or view not found: 1146 Table 'app.jobs' doesn't exist"""

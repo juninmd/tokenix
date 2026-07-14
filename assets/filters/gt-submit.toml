@@ -1,0 +1,55 @@
+[filters.gt-submit]
+description = "Compact Graphite gt submit: drop git-push transfer chatter, keep pushed branches and PR URLs"
+match_command = "^gt\\s+submit\\b"
+strip_ansi = true
+# gt submit shells out to git push per stacked branch, so its output is
+# mostly the same transfer chatter git-push filters away. The signal is the
+# 'Pushed branch <name>' lines and the '(Created|Updated) pull request #N'
+# lines with their URLs.
+strip_lines_matching = [
+  "^\\s*Enumerating objects:",
+  "^\\s*Counting objects:",
+  "^\\s*Compressing objects:",
+  "^\\s*Writing objects:",
+  "^\\s*Delta compression using",
+  "^\\s*Total \\d+ \\(delta",
+  "Pushing to remote",
+  "^\\s*Creating pull request for",
+  "^\\s*Updating pull request for",
+  "All branches submitted successfully",
+  "^\\s*$",
+]
+max_lines = 40
+on_empty = "gt submit: ok"
+
+[[tests.gt-submit]]
+name = "submit keeps pushed branch and PR url, drops push chatter"
+command = "gt submit"
+input = """
+🥞 Pushing to remote and creating/updating PRs...
+Enumerating objects: 5, done.
+Counting objects: 100% (5/5), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (3/3), done.
+Writing objects: 100% (3/3), 340 bytes | 340.00 KiB/s, done.
+Total 3 (delta 2), reused 0 (delta 0), pack-reused 0
+Pushed branch feat/retry-logic
+Created pull request #128 for feat/retry-logic: https://github.com/acme/toolkit/pull/128
+All branches submitted successfully!
+"""
+expected = """
+Pushed branch feat/retry-logic
+Created pull request #128 for feat/retry-logic: https://github.com/acme/toolkit/pull/128"""
+
+[[tests.gt-submit]]
+name = "push rejection passes through"
+command = "gt submit"
+input = """
+Pushed branch feat/retry-logic
+error: failed to push some refs to 'github.com:acme/toolkit.git'
+hint: Updates were rejected because the remote contains work that you do not have locally.
+"""
+expected = """
+Pushed branch feat/retry-logic
+error: failed to push some refs to 'github.com:acme/toolkit.git'
+hint: Updates were rejected because the remote contains work that you do not have locally."""

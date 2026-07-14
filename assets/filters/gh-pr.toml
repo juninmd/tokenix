@@ -1,19 +1,28 @@
 [filters.gh-pr]
 description = "Compact gh pr output"
 match_command = "^gh\\s+pr\\s+(list|view|create|checkout|merge|ready|comment|edit|close|reopen|diff|checks|status)\\b"
+# Structured/scripted output must never be filtered.
+skip_when_matches = "--json|--jq|--template|--web|\\bapi\\b"
 strip_ansi = true
-# Strip blank lines and the passing-check decorations only. Field lines, failing
-# checks, and the PR URL are the signal and must survive.
+# Strip blank lines and the passing-check decorations. Field lines, failing
+# checks, and the PR URL are the signal and must survive. The markdown rules
+# (from rtk filter_markdown_body) drop whole-line template noise from PR
+# bodies: single-line HTML comments (multi-line is too risky without
+# fenced-code awareness), badge/image-only lines, and horizontal rules.
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*✓",
-  "^\\s*✔"
+  "^\\s*✔",
+  "^\\s*<!--.*?-->\\s*$",
+  "^\\s*\\[!\\[[^\\]]*\\]\\([^)]*\\)\\]\\([^)]*\\)\\s*$",
+  "^\\s*!\\[[^\\]]*\\]\\([^)]*\\)\\s*$",
+  "^\\s*(---+|\\*\\*\\*+|___+)\\s*$"
 ]
 max_lines = 40
 passthrough_when_emptied = true
 
 [[tests.gh-pr]]
-name = "pr view keeps fields and url"
+name = "pr view keeps fields and url, drops body template noise"
 input = """
 title: Add new feature
 state: OPEN
@@ -24,6 +33,14 @@ labels: enhancement
 milestone: v1.0
 base: main
 head: feature/new-feature
+
+## Summary
+<!-- Describe your changes in detail -->
+Adds retry logic to the API client.
+
+---
+[![CI](https://github.com/owner/repo/actions/workflows/ci.yml/badge.svg)](https://github.com/owner/repo/actions)
+![screenshot](https://user-images.example.com/shot.png)
 
 checks:
   ✓ CI
@@ -42,6 +59,8 @@ labels: enhancement
 milestone: v1.0
 base: main
 head: feature/new-feature
+## Summary
+Adds retry logic to the API client.
 checks:
   ✗ Tests (2 failing)
 view this pull request on GitHub: https://github.com/owner/repo/pull/42"""

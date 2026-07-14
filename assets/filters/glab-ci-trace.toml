@@ -1,0 +1,106 @@
+[filters.glab-ci-trace]
+description = "Compact glab ci/pipeline trace: drop runner boilerplate, keep build output and failures"
+match_command = "^glab\\s+(ci|pipeline)\\s+trace\\b"
+strip_ansi = true
+# Runner/executor boilerplate carries no signal. '$ cmd' lines, build output,
+# FAIL/AssertionError blocks, and 'ERROR: Job failed' must survive.
+# Standalone section markers are stripped as whole lines (strip runs before
+# replace, so replacing them with "" would leave blank lines behind).
+strip_lines_matching = [
+  "^section_(?:start|end):\\d+:",
+  "^Running with gitlab-runner",
+  "^\\s*on .*system ID:",
+  "^Using (Docker executor|Shell)",
+  "^Running on ",
+  "^Preparing ",
+  "^Getting source from",
+  "^Resolving secrets",
+  "^Cleaning up",
+  "^(Up|Down)loading artifacts",
+  "^Runtime platform",
+  "^Fetching changes",
+  "^Initialized empty Git",
+  "^Created fresh repository",
+  "^Checking out ",
+  "^Skipping Git submodules",
+  "^\\s*$",
+]
+# GitLab job logs carry ESC-less color/erase codes ([32m, [0K) that
+# strip_ansi (real ESC only) misses, plus inline section markers.
+replace_patterns = [
+  ["section_(?:start|end):\\d+:[a-z0-9_]+(?:\\[0K)*", ""],
+  ["\\[[\\d;]+[A-Za-z]", ""],
+  ["\\[0K", ""],
+]
+
+[[tests.glab-ci-trace]]
+name = "failed job keeps failing command and ERROR line"
+command = "glab ci trace 98765"
+input = """
+section_start:1711234567:prepare_executor[0K
+Running with gitlab-runner 16.9.0 (656c1943)
+  on runner-abc123 system ID: r_defGHI456
+Using Docker executor with image node:20-alpine ...
+Preparing the "docker" executor
+Running on runner-abc123-project-42-concurrent-0 via runner-host...
+section_end:1711234570:prepare_executor[0K
+section_start:1711234570:get_sources[0K
+Getting source from Git repository
+Fetching changes with git depth set to 20...
+Initialized empty Git repository in /builds/acme/toolkit/.git/
+Checking out abc12345 as main...
+Skipping Git submodules setup
+section_end:1711234575:get_sources[0K
+section_start:1711234575:build_script[0K
+$ npm test
+> acme-toolkit@3.2.1 test
+> vitest run
+[32m✓[0m src/utils.test.ts (3 tests) 45ms
+[31m✗[0m src/auth.test.ts (2 tests) 67ms
+  FAIL  src/auth.test.ts > validateToken > should reject expired tokens
+    AssertionError: expected true to be false
+      at src/auth.test.ts:42:18
+Test Files  1 failed | 2 passed | 3 total
+section_end:1711234600:build_script[0K
+section_start:1711234600:upload_artifacts[0K
+Uploading artifacts...
+section_end:1711234605:upload_artifacts[0K
+Cleaning up project directory and file based variables
+[31;1mERROR: Job failed: exit code 1[0m
+"""
+expected = """
+$ npm test
+> acme-toolkit@3.2.1 test
+> vitest run
+✓ src/utils.test.ts (3 tests) 45ms
+✗ src/auth.test.ts (2 tests) 67ms
+  FAIL  src/auth.test.ts > validateToken > should reject expired tokens
+    AssertionError: expected true to be false
+      at src/auth.test.ts:42:18
+Test Files  1 failed | 2 passed | 3 total
+ERROR: Job failed: exit code 1"""
+
+[[tests.glab-ci-trace]]
+name = "successful job keeps build output only"
+command = "glab pipeline trace 98766"
+input = """
+section_start:1711234567:prepare_executor[0K
+Running with gitlab-runner 16.9.0 (656c1943)
+  on runner-abc123 system ID: r_defGHI456
+Preparing the "docker" executor
+section_end:1711234570:prepare_executor[0K
+section_start:1711234570:build_script[0K
+$ npm run build
+> acme-toolkit@3.2.1 build
+[36;1mvite v5.2.0[0m building for production...
+[32m✓[0m built in 4.56s
+section_end:1711234600:build_script[0K
+Cleaning up project directory and file based variables
+Job succeeded
+"""
+expected = """
+$ npm run build
+> acme-toolkit@3.2.1 build
+vite v5.2.0 building for production...
+✓ built in 4.56s
+Job succeeded"""

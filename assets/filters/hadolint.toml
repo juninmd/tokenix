@@ -6,25 +6,31 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$"
 ]
-keep_lines_matching = [
-  "^\\w+:\\d+\\s+",
-  "Error:",
-  "Warning:",
-  "Info:",
-  "Style:"
-]
-max_lines = 50
-
+truncate_lines_at = 120
+max_lines = 40
 
 [[tests.hadolint]]
-name = "issues shown"
+name = "lowercase severities kept, blank lines stripped"
 input = """
-Dockerfile:10 DL3008 Pin versions in apt get install
-Dockerfile:15 DL3015 Avoid additional packages by specifying --no-install-recommends
+Dockerfile:3 DL3008 warning: Pin versions in apt-get install
+Dockerfile:5 DL3009 info: Delete apt-get lists after installing
+
+Dockerfile:8 DL4006 warning: Set SHELL option -o pipefail before RUN with pipe
 """
 expected = """
-Dockerfile:10 DL3008 Pin versions in apt get install
-Dockerfile:15 DL3015 Avoid additional packages by specifying --no-install-recommends"""
+Dockerfile:3 DL3008 warning: Pin versions in apt-get install
+Dockerfile:5 DL3009 info: Delete apt-get lists after installing
+Dockerfile:8 DL4006 warning: Set SHELL option -o pipefail before RUN with pipe"""
+
+[[tests.hadolint]]
+name = "findings from subdirectory Dockerfile survive"
+input = """
+docker/Dockerfile.prod:5 DL3025 warning: Use arguments JSON notation for CMD and ENTRYPOINT arguments
+docker/Dockerfile.prod:12 SC2046 warning: Quote this to prevent word splitting
+"""
+expected = """
+docker/Dockerfile.prod:5 DL3025 warning: Use arguments JSON notation for CMD and ENTRYPOINT arguments
+docker/Dockerfile.prod:12 SC2046 warning: Quote this to prevent word splitting"""
 
 [[tests.hadolint]]
 name = "silent success stays empty"

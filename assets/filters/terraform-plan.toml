@@ -1,62 +1,114 @@
 [filters.terraform-plan]
-description = "Compact terraform plan output aggressively"
+description = "Compact terraform plan output — strip refresh/lock noise, keep diff and Plan summary"
 match_command = "^terraform\\s+plan\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
+  "^Refreshing state",
+  "^\\S+: Refreshing state\\.\\.\\.",
   "^\\s*Refreshing Terraform state",
   "^\\s*data\\.",
-  "^\\s*# ",
-  "^\\s*\\+\\/\\-",
-  "^\\s*\\-",
-  "^Plan:",
-  "^\\s*\\d+ to add",
-  "^\\s*\\d+ to change",
-  "^\\s*\\d+ to destroy",
+  "^\\s*#.*unchanged",
+  "^Acquiring state lock",
+  "^Releasing state lock",
   "^\\s*Terraform used the selected providers",
   "^\\s*Resource actions are indicated",
-  "^\\s*[+~-] create",
-  "^\\s*[+~-] update in-place",
-  "^\\s*[+~-] destroy",
-  "^\\s*[+~-] read",
-  "^\\s*\\(\\d+/\\)",
 ]
-keep_lines_matching = [
-  "Error:",
-  "Warning:",
-  "Error: ",
-  "│ Error",
-  "│ Warning",
-  "Plan:",
-  "to add",
-  "to change",
-  "to destroy",
-  "No changes",
-]
-max_lines = 50
+max_lines = 80
+on_empty = "terraform plan: no changes detected"
 replace_patterns = [
   ["\\(ID: [a-f0-9-]+\\)", "(ID: <uuid>)"],
   ["[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", "<resource_id>"],
   ["arn:aws:[^\\s]+", "arn:aws:<resource>"],
   ["\\d+\\.\\d+s", "<duration>"],
 ]
-extract_sections = [
-  { start_pattern = "^\\s*[+~-]", end_pattern = "^\\s*$", include_markers = true, max_matches = 20 },
-  { start_pattern = "Error:", end_pattern = "^\\s*$", include_markers = true, max_matches = 5 },
-]
-deduplicate_blocks = { min_block_lines = 3, similarity = 0.75 }
-summarize_json = { max_array_items = 5, max_depth = 2 }
-token_budget = 2000
 
 [[tests.terraform-plan]]
-name = "no changes"
+name = "changes plan keeps resource diff and Plan summary"
 input = """
-No changes. Infrastructure is up-to-date.
+Acquiring state lock. This may take a few moments...
+aws_instance.web: Refreshing state... [id=i-0abc123]
+data.aws_ami.ubuntu: Reading...
+data.aws_ami.ubuntu: Read complete after 1s [id=ami-0abc]
+Releasing state lock. This may take a few moments...
+
+Terraform used the selected providers to generate the following execution plan.
+Resource actions are indicated with the following symbols:
+  + create
+  ~ update in-place
+
+Terraform will perform the following actions:
+
+  # aws_instance.web will be updated in-place
+  ~ resource "aws_instance" "web" {
+        id            = "i-0abc123"
+      ~ instance_type = "t3.micro" -> "t3.small"
+        # (24 unchanged attributes hidden)
+    }
+
+  # aws_s3_bucket.logs will be created
+  + resource "aws_s3_bucket" "logs" {
+      + bucket = "demo-logs"
+    }
+
+Plan: 1 to add, 1 to change, 0 to destroy.
 """
-expected = "No changes. Infrastructure is up-to-date."
+expected = """
+  + create
+  ~ update in-place
+Terraform will perform the following actions:
+  # aws_instance.web will be updated in-place
+  ~ resource "aws_instance" "web" {
+        id            = "i-0abc123"
+      ~ instance_type = "t3.micro" -> "t3.small"
+    }
+  # aws_s3_bucket.logs will be created
+  + resource "aws_s3_bucket" "logs" {
+      + bucket = "demo-logs"
+    }
+Plan: 1 to add, 1 to change, 0 to destroy."""
 
 [[tests.terraform-plan]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "error block survives with indented continuation lines"
+input = """
+Acquiring state lock. This may take a few moments...
+aws_instance.web: Refreshing state... [id=i-0abc123]
+
+╷
+│ Error: Reference to undeclared resource
+│
+│   on main.tf line 12, in resource "aws_instance" "web":
+│   12:   subnet_id = aws_subnet.private.id
+│
+│ A managed resource "aws_subnet" "private" has not been declared in the root module.
+╵
+"""
+expected = """
+╷
+│ Error: Reference to undeclared resource
+│
+│   on main.tf line 12, in resource "aws_instance" "web":
+│   12:   subnet_id = aws_subnet.private.id
+│
+│ A managed resource "aws_subnet" "private" has not been declared in the root module.
+╵"""
+
+[[tests.terraform-plan]]
+name = "no changes line preserved"
+input = """
+aws_instance.web: Refreshing state... [id=i-0abc123]
+
+No changes. Your infrastructure matches the configuration.
+"""
+expected = "No changes. Your infrastructure matches the configuration."
+
+[[tests.terraform-plan]]
+name = "all-noise refresh output collapses to on_empty"
+input = """
+Acquiring state lock. This may take a few moments...
+aws_instance.web: Refreshing state... [id=i-0abc123]
+data.aws_caller_identity.current: Reading...
+data.aws_caller_identity.current: Read complete after 0s [id=123456789012]
+Releasing state lock. This may take a few moments...
+"""
+expected = "terraform plan: no changes detected"

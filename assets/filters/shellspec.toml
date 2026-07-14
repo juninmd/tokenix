@@ -28,6 +28,10 @@ expected = "Examples: 6, Failures: 1"
 [[tests.shellspec]]
 name = "all pass collapses"
 input = """
-......
+Running: /bin/sh [sh]
+..........
+
+Finished in 0.53 seconds (user 0.48 seconds, sys 0.04 seconds)
+10 examples, 0 failures
 """
 expected = "shellspec: all examples passed"

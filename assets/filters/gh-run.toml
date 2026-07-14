@@ -7,7 +7,21 @@ strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*✓",
-  "^\\s*✔"
+  "^\\s*✔",
+  # Bare ##[endgroup] markers carry no content; dropping them here (before
+  # replace_patterns) avoids leaving an empty line behind.
+  "##\\[endgroup\\]\\s*$"
+]
+# CI logs (gh run view --log) carry ESC-less ANSI remnants ('[36;1m', '[0K' —
+# the ESC byte was eaten upstream, so strip_ansi misses them), ##[group]-style
+# workflow markers, and a per-line timestamp that doubles every line's tokens.
+# Applied per line, after the strips above. ##[error]/##[warning] are signal
+# and intentionally survive.
+replace_patterns = [
+  ["\\[[\\d;]+m", ""],
+  ["\\[0K", ""],
+  ["##\\[(group|endgroup|section|command)\\]", ""],
+  ["^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+Z ", ""],
 ]
 max_lines = 40
 passthrough_when_emptied = true
@@ -43,6 +57,25 @@ jobs:
   ✗ build (3m 45s)
     Error: Compilation failed
 view this run on GitHub: https://github.com/owner/repo/actions/runs/12345"""
+
+[[tests.gh-run]]
+name = "log excerpt loses timestamps, ansi remnants and group markers"
+input = """
+2024-01-15T10:30:45.1234567Z ##[group]Run npm test
+2024-01-15T10:30:45.2000000Z [36;1mnpm test[0m
+2024-01-15T10:30:45.3000000Z ##[endgroup]
+2024-01-15T10:30:46.0000000Z > app@1.0.0 test
+2024-01-15T10:30:47.0000000Z [0KFAIL src/app.test.ts
+2024-01-15T10:30:47.5000000Z Error: expected 2 to be 3
+2024-01-15T10:30:48.0000000Z ##[error]Process completed with exit code 1.
+"""
+expected = """
+Run npm test
+npm test
+> app@1.0.0 test
+FAIL src/app.test.ts
+Error: expected 2 to be 3
+##[error]Process completed with exit code 1."""
 
 [[tests.gh-run]]
 name = "error shown"

@@ -1,7 +1,6 @@
 [filters.biome]
-description = "Compact biome check/format output"
-match_command = "^biome\\s+(check|lint|format)\\b"
-passthrough_when_emptied = true
+description = "Compact biome check/lint/format/ci output"
+match_command = "^biome\\s+(check|lint|format|ci)\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -12,7 +11,7 @@ strip_lines_matching = [
   "^\\s*Checked \\d+ files?"
 ]
 max_lines = 100
-
+on_empty = "biome: ok"
 
 [[tests.biome]]
 name = "issues shown"
@@ -22,7 +21,6 @@ error: Unexpected console statement. Use a logger instead.
   │
 10 │ console.log("hello");
    │ ^^^^^^^^^^^^^^^^^^^
-
 warning: Variable 'x' is assigned a value but never used.
   ┌─ src/main.ts:15:5
   │
@@ -41,6 +39,14 @@ warning: Variable 'x' is assigned a value but never used.
    │     ^^^^^^^^^^"""
 
 [[tests.biome]]
-name = "silent success stays empty"
+name = "clean ci run reports ok"
+command = "biome ci ."
+input = """
+Checked 42 files in 12ms. No fixes applied.
+"""
+expected = "biome: ok"
+
+[[tests.biome]]
+name = "empty input reports ok"
 input = ""
-expected = ""
+expected = "biome: ok"

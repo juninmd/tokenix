@@ -1,48 +1,67 @@
 [filters.dotnet-test]
-description = "Compact dotnet test output"
+description = "Compact dotnet test output — short-circuit all-pass runs, keep failure detail verbatim"
 match_command = "^dotnet\\s+test\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^\\s*Microsoft \\(R\\) Test Execution",
+  "^\\s*Microsoft \\(R\\)",
   "^\\s*Copyright",
+  "^\\s*Determining projects to restore",
+  "^\\s*Restored ",
   "^\\s*Starting test execution",
-  "^\\s*Test Run Successful",
-  "^\\s*Total tests:",
-  "^\\s*Passed:",
-  "^\\s*Failed:",
-  "^\\s*Skipped:",
-  "^\\s*Test Run Failed"
+  "^\\s*A total of \\d+ test files matched",
+  "^\\s*Passed\\s+\\S+",
+  "^\\s*Passed!\\s+- Failed:\\s+0",
 ]
-keep_lines_matching = [
-  "Failed ",
-  "Error ",
-  "FAILED",
-  "Exception:",
-  "StackTrace:"
+match_output = [
+  { pattern = "Passed!\\s+-\\s+Failed:\\s+0", message = "ok (all tests passed)", unless = "(?i)failed:\\s+[1-9]|error" },
 ]
-max_lines = 60
-
+max_lines = 80
 
 [[tests.dotnet-test]]
-name = "failure shown"
+name = "all tests passed short-circuits to ok"
 input = """
-Test Run Failed.
-Total tests: 10
-     Passed: 9
-     Failed: 1
-     Skipped: 0
-Failed MyApp.Tests.TestAdd [10 ms]
-Error Message:
+Determining projects to restore...
+  Restored /repo/Tests/Tests.csproj (in 320 ms).
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+  Passed TestAdd [1 ms]
+  Passed TestSubtract [1 ms]
+
+Passed!  - Failed:     0, Passed:    12, Skipped:     0, Total:    12, Duration: 480 ms - Tests.dll (net8.0)
+"""
+expected = "ok (all tests passed)"
+
+[[tests.dotnet-test]]
+name = "failure keeps assertion payload verbatim"
+input = """
+Determining projects to restore...
+  Restored /repo/Tests/Tests.csproj (in 320 ms).
+Microsoft (R) Test Execution Command Line Tool Version 17.8.0 (x64)
+Copyright (c) Microsoft Corporation.  All rights reserved.
+
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+  Passed TestSubtract [2 ms]
+  Failed TestAdd [10 ms]
+  Error Message:
+   Assert.That(result, Is.EqualTo(3))
   Expected: 3
   But was:  4
-StackTrace:
-   at MyApp.Tests.TestAdd() in /Tests.cs:line 15
+  Stack Trace:
+     at MyApp.Tests.TestAdd() in /repo/Tests.cs:line 15
+
+Failed!  - Failed:     1, Passed:     1, Skipped:     0, Total:     2, Duration: 12 ms - Tests.dll (net8.0)
 """
-expected = """Failed MyApp.Tests.TestAdd [10 ms]
-Error Message:
-StackTrace:"""
+expected = """
+  Failed TestAdd [10 ms]
+  Error Message:
+   Assert.That(result, Is.EqualTo(3))
+  Expected: 3
+  But was:  4
+  Stack Trace:
+     at MyApp.Tests.TestAdd() in /repo/Tests.cs:line 15
+Failed!  - Failed:     1, Passed:     1, Skipped:     0, Total:     2, Duration: 12 ms - Tests.dll (net8.0)"""
 
 [[tests.dotnet-test]]
 name = "silent success stays empty"

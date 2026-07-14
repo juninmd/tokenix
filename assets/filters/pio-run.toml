@@ -1,7 +1,6 @@
 [filters.pio-run]
 description = "Compact PlatformIO build output"
 match_command = "^pio\\s+run"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -15,6 +14,10 @@ strip_lines_matching = [
   "^Checking size",
 ]
 max_lines = 30
+# All-noise clean builds collapse to ok; the engine suppresses this message
+# automatically when the raw output carries a failure signal ([FAILED]
+# summaries and compiler errors are never stripped anyway).
+on_empty = "pio run: ok"
 
 [[tests.pio-run]]
 name = "strips build noise, preserves errors"
@@ -31,6 +34,10 @@ src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared
 expected = "src/main.cpp:10:3: error: 'LED_BUILTINN' was not declared"
 
 [[tests.pio-run]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "clean build with only noise collapses to ok"
+input = """
+Verbose mode can be enabled via `-v, --verbose` option
+Compiling .pio/build/esp32dev/src/main.cpp.o
+Linking .pio/build/esp32dev/firmware.elf
+"""
+expected = "pio run: ok"

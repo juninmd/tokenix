@@ -1,0 +1,61 @@
+[filters.gt]
+description = "Compact Graphite gt sync/restack/create/log output"
+match_command = "^gt\\s+(sync|restack|create|log)\\b"
+strip_ansi = true
+# Keep the per-branch results (Synced/Deleted/Restacked/Created branch ...);
+# drop the progress narration around them. gt forwards unknown subcommands
+# straight to git, so git-* filters already cover `gt status`, `gt diff`, etc.
+strip_lines_matching = [
+  "Pulling latest changes",
+  "Successfully pulled",
+  "All branches synced",
+  "Successfully rebased",
+  "All branches restacked",
+  "^\\s*$",
+]
+# gt log prints author emails on graph entries — scrub them (noise + PII).
+replace_patterns = [
+  ["\\s*\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b", ""],
+]
+max_lines = 40
+on_empty = "gt: ok"
+
+[[tests.gt]]
+name = "sync keeps synced and deleted branches, drops narration"
+command = "gt sync"
+input = """
+Pulling latest changes from remote...
+Successfully pulled main
+Synced with remote
+Deleted branch feat/old-thing (merged)
+All branches synced!
+"""
+expected = """
+Synced with remote
+Deleted branch feat/old-thing (merged)"""
+
+[[tests.gt]]
+name = "log scrubs author emails, keeps graph"
+command = "gt log"
+input = """
+◉ feat/retry-logic (current)
+│ Add retry logic alice@example.com
+◯ main
+"""
+expected = """
+◉ feat/retry-logic (current)
+│ Add retry logic
+◯ main"""
+
+[[tests.gt]]
+name = "restack conflict passes through"
+command = "gt restack"
+input = """
+Restacked branch feat/retry-logic
+error: could not apply abc1234... fix flaky test
+hint: Resolve all conflicts manually, then run gt continue.
+"""
+expected = """
+Restacked branch feat/retry-logic
+error: could not apply abc1234... fix flaky test
+hint: Resolve all conflicts manually, then run gt continue."""

@@ -1,7 +1,6 @@
 [filters.shopify-theme]
 description = "Compact shopify theme push/pull output"
 match_command = "^shopify\\s+theme\\s+(push|pull)"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -10,6 +9,9 @@ strip_lines_matching = [
 ]
 tail_lines = 5
 max_lines = 15
+# All-noise pushes/pulls collapse to ok; the engine suppresses this message
+# automatically when the raw output carries a failure signal.
+on_empty = "shopify theme: ok"
 
 [[tests.shopify-theme]]
 name = "strips upload/download lines, keeps tail"
@@ -24,6 +26,11 @@ Theme 'Development' (id: 12345) pushed to store.example.myshopify.com
 expected = "Theme 'Development' (id: 12345) pushed to store.example.myshopify.com"
 
 [[tests.shopify-theme]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "all upload noise collapses to ok"
+input = "Uploading assets/app.css\nDownloading assets/base.css\n"
+expected = "shopify theme: ok"
+
+[[tests.shopify-theme]]
+name = "push error is preserved, never masked as ok"
+input = "Uploading assets/app.css\nUploading assets/app.js\nError: theme push failed: templates/index.liquid: Liquid syntax error (line 5)"
+expected = "Error: theme push failed: templates/index.liquid: Liquid syntax error (line 5)"

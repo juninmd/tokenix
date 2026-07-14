@@ -1,40 +1,48 @@
 [filters.gradlew]
-description = "Compact ./gradlew output"
+description = "Compact ./gradlew output — strip cached tasks and progress, keep diagnostics"
 match_command = "^(\\./)?gradlew(\\s|$)"
-passthrough_when_emptied = true
 strip_ansi = true
+match_output = [
+  { pattern = "BUILD SUCCESSFUL", message = "gradle: build successful", unless = "(?i)warning|error|failed" },
+]
 strip_lines_matching = [
   "^\\s*$",
-  "^> Task :",
-  "^> Configuring",
-  "^BUILD SUCCESSFUL",
-  "^\\d+ actionable task",
-  "^Deprecated Gradle features",
+  "^> Configuring project",
+  "^> Resolving dependencies",
+  "^> Transform ",
+  "^Download(ing)?\\s+http",
+  "^\\s*<-+>\\s*$",
+  "^> Task :.*UP-TO-DATE$",
+  "^> Task :.*NO-SOURCE$",
+  "^> Task :.*FROM-CACHE$",
+  "^Starting a Gradle Daemon",
+  "^Daemon will be stopped",
 ]
-keep_lines_matching = [
-  "ERROR",
-  "FAILED",
-  "BUILD FAILED",
-  "Compilation failed",
-  "Test.*FAILED",
-  "> Task .* FAILED",
-  "Error",
-  "Exception",
-  "Caused by:",
-]
+truncate_lines_at = 150
 max_lines = 60
-
+on_empty = "gradle: ok"
 
 [[tests.gradlew]]
-name = "build failure shown"
+name = "successful build short-circuits"
+input = """
+Starting a Gradle Daemon (subsequent builds will be faster)
+> Configuring project :app
+> Task :app:compileJava UP-TO-DATE
+> Task :app:test
+
+BUILD SUCCESSFUL in 8s
+7 actionable tasks: 1 executed, 6 up-to-date
+"""
+expected = "gradle: build successful"
+
+[[tests.gradlew]]
+name = "failing compile keeps javac diagnostic and task failure"
 input = """
 > Task :compileJava FAILED
 /src/main/java/com/example/Main.java:10: error: cannot find symbol
   symbol:   variable foo
   location: class com.example.Main
 1 error
-
-> Task :compileJava FAILED
 
 FAILURE: Build failed with an exception.
 
@@ -45,10 +53,39 @@ Execution failed for task ':compileJava'.
 BUILD FAILED in 5s
 """
 expected = """
+> Task :compileJava FAILED
+/src/main/java/com/example/Main.java:10: error: cannot find symbol
+  symbol:   variable foo
+  location: class com.example.Main
+1 error
+FAILURE: Build failed with an exception.
+* What went wrong:
+Execution failed for task ':compileJava'.
 > Compilation failed; see the compiler error output for details.
 BUILD FAILED in 5s"""
 
 [[tests.gradlew]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "failing tests keep counts and stack trace"
+input = """
+> Task :app:compileJava
+> Task :app:test FAILED
+
+com.example.MyTest > testAdd FAILED
+    org.opentest4j.AssertionFailedError: expected: <3> but was: <4>
+        at app//com.example.MyTest.testAdd(MyTest.java:12)
+
+3 tests completed, 1 failed
+
+FAILURE: Build failed with an exception.
+
+BUILD FAILED in 12s
+"""
+expected = """
+> Task :app:compileJava
+> Task :app:test FAILED
+com.example.MyTest > testAdd FAILED
+    org.opentest4j.AssertionFailedError: expected: <3> but was: <4>
+        at app//com.example.MyTest.testAdd(MyTest.java:12)
+3 tests completed, 1 failed
+FAILURE: Build failed with an exception.
+BUILD FAILED in 12s"""

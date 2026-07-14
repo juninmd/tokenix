@@ -1,37 +1,84 @@
 [filters.tofu-plan]
-description = "Compact OpenTofu plan output"
+description = "Compact OpenTofu plan output — strip refresh/lock noise, keep diff and Plan summary"
 match_command = "^tofu\\s+plan\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
+  "^Refreshing state",
+  "^\\S+: Refreshing state\\.\\.\\.",
   "^\\s*Refreshing OpenTofu state",
   "^\\s*data\\.",
-  "^\\s*# ",
-  "^\\s*\\+\\/\\-",
-  "^\\s*\\-",
-  "^Plan:",
-  "^\\s*\\d+ to add",
-  "^\\s*\\d+ to change",
-  "^\\s*\\d+ to destroy"
+  "^\\s*#.*unchanged",
+  "^Acquiring state lock",
+  "^Releasing state lock",
+  "^\\s*OpenTofu used the selected providers",
+  "^\\s*Resource actions are indicated",
 ]
-keep_lines_matching = [
-  "Error:",
-  "Warning:",
-  "Error: ",
-  "│ Error",
-  "│ Warning"
-]
-max_lines = 60
+max_lines = 80
+on_empty = "tofu plan: no changes detected"
 
 [[tests.tofu-plan]]
-name = "error shown"
+name = "changes plan keeps resource diff and Plan summary"
 input = """
-Error: Invalid resource type
+Acquiring state lock. This may take a few moments...
+aws_instance.web: Refreshing state... [id=i-0abc123]
+Releasing state lock. This may take a few moments...
+
+OpenTofu used the selected providers to generate the following execution plan.
+Resource actions are indicated with the following symbols:
+  + create
+
+OpenTofu will perform the following actions:
+
+  # aws_instance.web will be created
+  + resource "aws_instance" "web" {
+      + ami           = "ami-0abc"
+      + instance_type = "t3.micro"
+    }
+
+Plan: 1 to add, 0 to change, 0 to destroy.
 """
-expected = "Error: Invalid resource type"
+expected = """
+  + create
+OpenTofu will perform the following actions:
+  # aws_instance.web will be created
+  + resource "aws_instance" "web" {
+      + ami           = "ami-0abc"
+      + instance_type = "t3.micro"
+    }
+Plan: 1 to add, 0 to change, 0 to destroy."""
 
 [[tests.tofu-plan]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "error block survives with indented continuation lines"
+input = """
+aws_instance.web: Refreshing state... [id=i-0abc123]
+
+╷
+│ Error: Invalid resource type
+│
+│   on main.tf line 3, in resource "aws_instanc" "web":
+│    3: resource "aws_instanc" "web" {
+│
+│ The provider hashicorp/aws does not support resource type "aws_instanc".
+╵
+"""
+expected = """
+╷
+│ Error: Invalid resource type
+│
+│   on main.tf line 3, in resource "aws_instanc" "web":
+│    3: resource "aws_instanc" "web" {
+│
+│ The provider hashicorp/aws does not support resource type "aws_instanc".
+╵"""
+
+[[tests.tofu-plan]]
+name = "all-noise refresh output collapses to on_empty"
+input = """
+Acquiring state lock. This may take a few moments...
+aws_instance.web: Refreshing state... [id=i-0abc123]
+data.aws_ami.ubuntu: Reading...
+data.aws_ami.ubuntu: Read complete after 0s [id=ami-0abc]
+Releasing state lock. This may take a few moments...
+"""
+expected = "tofu plan: no changes detected"

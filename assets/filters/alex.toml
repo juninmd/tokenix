@@ -29,5 +29,7 @@ expected = """  5:10-5:18  warning  `master` may be insensitive, use `main`  mas
 name = "clean run collapses"
 input = """
 README.md
+docs/guide.md
+CONTRIBUTING.md
 """
 expected = "alex: no issues"

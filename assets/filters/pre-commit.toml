@@ -1,83 +1,65 @@
 [filters.pre-commit]
-description = "Compact pre-commit output aggressively"
-match_command = "^pre-commit\\s+(run|install|autoupdate)\\b"
-passthrough_when_emptied = true
+description = "Compact pre-commit output — strip install noise and passed hooks, keep failures"
+match_command = "^pre-commit\\b"
 strip_ansi = true
 strip_lines_matching = [
-  "^\\s*$",
   "^\\s*\\[INFO\\]",
-  "^\\s*Installing",
-  "^\\s*Installing environment",
-  "^\\s*\\d+ passed",
-  "^\\s*\\d+ failed",
-  "^\\s*All hooks passed",
-  "^\\s*\\.\\.\\.\\.\\.Passed",
-  "^\\s*\\.\\.\\.\\.\\.Skipped",
-  "^\\s*\\d+\\.\\d+s$",
-  "^\\s*Environment:",
+  "^\\s*$",
+  "\\.{3,}(\\(no files to check\\))?(Passed|Skipped)$",
 ]
-keep_lines_matching = [
-  "FAILED",
-  "Error:",
-  "error:",
-  "Hook failed",
-  "returned non-zero",
-  "Failed",
-  "warning",
-  "WARNING",
-]
-max_lines = 30
-replace_patterns = [
-  ["https://github\\.com/[^\\s]+", "github.com/<repo>"],
-  ["\\.\\.\\.\\.\\.\\.+Passed", "Passed"],
-  ["\\.\\.\\.\\.\\.\\.+Failed", "Failed"],
-  ["\\.\\.\\.\\.\\.\\.+Skipped", "Skipped"],
-  ["\\d+\\.\\d+s", "<duration>"],
-]
-extract_sections = [
-  { start_pattern = "^\\s*[-*] hook id:", end_pattern = "^\\s*$", include_markers = true, max_matches = 10 },
-  { start_pattern = "Error:", end_pattern = "^\\s*$", include_markers = true, max_matches = 5 },
-]
-deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
-token_budget = 1500
-
+max_lines = 40
+on_empty = "pre-commit: all hooks passed"
 
 [[tests.pre-commit]]
-name = "hook failure shown"
+name = "all-passed run collapses to on_empty"
+command = "pre-commit"
 input = """
-Check Yaml............................................................Failed
-- hook id: check-yaml
-- exit code: 1
-
-Error: Invalid YAML: mapping values are not allowed here
-  in ".github/workflows/ci.yml", line 10, column 15
+[INFO] Installing environment for https://github.com/psf/black.
+[INFO] Once installed this environment will be reused.
+[INFO] This may take a few minutes...
+Trim Trailing Whitespace.................................................Passed
+Fix End of Files.........................................................Passed
+black....................................................................Passed
+flake8...............................(no files to check)Skipped
 """
-expected = "Error: Invalid YAML: mapping values are not allowed here"
+expected = "pre-commit: all hooks passed"
 
 [[tests.pre-commit]]
-name = "multiple hook failures deduplicated"
+name = "failing hooks keep id, exit code, modified notice and linter payload"
+command = "pre-commit run --all-files"
 input = """
-Check Yaml............................................................Failed
-- hook id: check-yaml
+Trim Trailing Whitespace.................................................Passed
+black....................................................................Failed
+- hook id: black
+- files were modified by this hook
+
+reformatted app/models.py
+
+All done! ✨ 🍰 ✨
+1 file reformatted.
+
+flake8...................................................................Failed
+- hook id: flake8
 - exit code: 1
 
-Error: Invalid YAML: mapping values are not allowed here
-
-Check JSON............................................................Failed
-- hook id: check-json
-- exit code: 1
-
-Error: Invalid JSON: unexpected token
-
-Check TOML............................................................Failed
-- hook id: check-toml
-- exit code: 1
-
-Error: Invalid TOML: key not found
+app/models.py:10:1: E302 expected 2 blank lines, got 1
 """
 expected = """
-Error: Invalid YAML: mapping values are not allowed here
-Check JSONFailed
-Error: Invalid JSON: unexpected token
-Check TOMLFailed
-Error: Invalid TOML: key not found"""
+black....................................................................Failed
+- hook id: black
+- files were modified by this hook
+reformatted app/models.py
+All done! ✨ 🍰 ✨
+1 file reformatted.
+flake8...................................................................Failed
+- hook id: flake8
+- exit code: 1
+app/models.py:10:1: E302 expected 2 blank lines, got 1"""
+
+[[tests.pre-commit]]
+name = "install output passes through"
+command = "pre-commit install"
+input = """
+pre-commit installed at .git/hooks/pre-commit
+"""
+expected = "pre-commit installed at .git/hooks/pre-commit"

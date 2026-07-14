@@ -56,7 +56,7 @@ Run bare `tokenix` to open a terminal dashboard — ten tabs, zero flags. `←`/
 <td colspan="2"><sub><b>Graph</b> — repo-wide symbol-graph overview: <i>god nodes</i> (most connected), <i>bottlenecks</i> (high fan-in / low fan-out), and <i>blast-radius leaders</i> (most transitive dependents). <code>r</code> refreshes.</sub></td>
 </tr>
 <tr>
-<td><img src=".github/prints/filters.png" alt="Filters tab" /><br /><sub><b>Filters</b> — browse all 386 bundled filters by tool with a live <i>input → output</i> preview and a per-filter <code>X → Y tokens · % saved</code> gauge.</sub></td>
+<td><img src=".github/prints/filters.png" alt="Filters tab" /><br /><sub><b>Filters</b> — browse all 528 bundled filters by tool with a live <i>input → output</i> preview and a per-filter <code>X → Y tokens · % saved</code> gauge.</sub></td>
 <td><img src=".github/prints/secrets.png" alt="Secrets tab" /><br /><sub><b>Secrets</b> — credentials leaked across agent transcripts, grouped by rule and attributed to repo + branch. Starts scoped to the current repo; <code>g</code> toggles all repos. <code>v</code> reveal · <code>c</code> copy · <code>x</code> redact.</sub></td>
 </tr>
 <tr>
@@ -684,7 +684,7 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
-3. **Bundled filters** — 386 TOML output filters shipped inside the binary (each homologated against 800 embedded golden cases), covering `uv`, `cargo build`/`cargo run`/`cargo audit`, `git`, `gradle`, `terraform plan`, `make`, `npm`/`npm audit`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`/`kubectl top`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, `apt`/`apt-get`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`/`mamba`, `pulumi up`/`preview`/`destroy`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test` (Karma), `bru` (Bruno), `ps`, and more. Applied automatically — no setup needed.
+3. **Bundled filters** — 528 TOML output filters shipped inside the binary (each homologated against 1124 embedded golden cases), covering `uv`, `cargo build`/`cargo run`/`cargo audit`, `git`, `gradle`, `terraform plan`, `make`, `npm`/`npm audit`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`/`kubectl top`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, `apt`/`apt-get`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`/`mamba`, `pulumi up`/`preview`/`destroy`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test` (Karma), `bru` (Bruno), `ps`, and more. Applied automatically — no setup needed.
 
 ### Filter format
 
@@ -708,11 +708,13 @@ on_empty = "uv: ok"
 | `strip_lines_matching` | Drop lines matching any of these regex patterns |
 | `keep_lines_matching` | Keep only lines matching these patterns |
 | `match_output` | Short-circuit: if output matches `pattern`, return `message` immediately; use `unless` for error/warning guards |
-| `max_lines` / `head_lines` / `tail_lines` | Truncate output |
+| `max_lines` / `head_lines` / `tail_lines` | Truncate output. `head_lines` + `tail_lines` together keep a first+last window (header/context on top, verdict at the bottom) with an inline `[... N lines omitted ...]` marker in the middle |
 | `truncate_lines_at` | Truncate individual lines at N characters |
 | `on_empty` | Message to return when filtering produces empty output. **Never emitted if the original output carries a generic failure signal** (`error`/`fatal`/`panic`/`FAILED`/`exit code N`…) — the engine falls back to a bounded view of the real output so a failed command is never masked as success, even when its error format isn't recognized by `keep_lines_matching` |
 | `passthrough_when_emptied` | When the filter reduces *non-empty* output to nothing (an unexpected output shape the keep/extract rules don't recognize), show a bounded view of the real output instead of `on_empty` — so format-specific filters never report a false "nothing here" (e.g. `git log --oneline` against the full-log filter) |
 | `filter_stderr` | Opt in to applying this command-specific filter to stderr. Without it, stderr uses generic safe compression so command errors are not turned into success sentinels |
+
+Engine invariant: **a filter never makes output more expensive than the raw it replaces.** If the filtered result (including any sentinel message or truncation notice) would cost more bytes than the raw output, the engine emits the raw output instead.
 
 ### AI-assisted filter generation
 
@@ -752,7 +754,7 @@ src/
 └── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
 assets/
-└── filters/       386 TOML output filters (+800 golden cases), embedded in the binary via rust-embed
+└── filters/       528 TOML output filters (+1124 golden cases), embedded in the binary via rust-embed
 ```
 
 ### GPU acceleration (opt-in)

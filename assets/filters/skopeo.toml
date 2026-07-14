@@ -1,7 +1,6 @@
 [filters.skopeo]
 description = "Compact skopeo output — truncate large manifests, strip verbosity"
 match_command = "^skopeo\\b"
-passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
@@ -13,7 +12,21 @@ strip_lines_matching = [
 ]
 max_lines = 30
 truncate_lines_at = 120
+# A clean copy is pure progress noise; the engine suppresses this message
+# automatically when the raw output carries a failure signal.
+on_empty = "skopeo: ok"
 
+[[tests.skopeo]]
+name = "copy strips progress, collapses to ok"
+input = """
+Getting image source signatures
+Copying blob sha256:abc123 done
+Copying blob sha256:def456 done
+Copying config sha256:789ghi done
+Writing manifest to image destination
+Storing signatures
+"""
+expected = "skopeo: ok"
 
 [[tests.skopeo]]
 name = "inspect keeps output"
@@ -29,6 +42,10 @@ input = """
 expected = "{\n    \"Name\": \"docker.io/library/nginx\",\n    \"Tag\": \"latest\",\n    \"Digest\": \"sha256:abc123\",\n    \"RepoTags\": [\"latest\", \"1.25\"],\n    \"Created\": \"2026-01-01T00:00:00Z\"\n}"
 
 [[tests.skopeo]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "copy failure is preserved, never masked as ok"
+input = """
+Getting image source signatures
+Copying blob sha256:abc123 done
+FATA[0005] Error writing blob: io: read/write on closed pipe
+"""
+expected = "FATA[0005] Error writing blob: io: read/write on closed pipe"

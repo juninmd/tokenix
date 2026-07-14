@@ -1,40 +1,121 @@
 [filters.xcodebuild]
-description = "Compact xcodebuild output"
+description = "Compact xcodebuild output — strip build phases, keep errors/warnings/tests/summary"
 match_command = "^xcodebuild\\b"
-passthrough_when_emptied = true
 strip_ansi = true
+match_output = [
+  { pattern = "\\*\\* BUILD SUCCEEDED \\*\\*", message = "xcodebuild: ok", unless = "(?i)error|warning|failed" },
+]
 strip_lines_matching = [
   "^\\s*$",
-  "^\\s*=== BUILD TARGET",
-  "^\\s*=== BUILD",
-  "^\\s*Build succeeded",
-  "^\\s*\\*\\*\\* BUILD",
-  "^\\s*\\d+\\.\\d+s$"
-]
-keep_lines_matching = [
-  "error:",
-  "warning:",
-  "FAILED",
-  "BUILD FAILED",
-  "Build failed"
+  "^CompileC\\s",
+  "^CompileSwift",
+  "^Ld\\s",
+  "^CreateBuildDirectory\\s",
+  "^MkDir\\s",
+  "^ProcessInfoPlistFile\\s",
+  "^CopySwiftLibs\\s",
+  "^CodeSign\\s",
+  "^Signing Identity:",
+  "^RegisterWithLaunchServices",
+  "^Validate\\s",
+  "^ProcessProductPackaging",
+  "^Touch\\s",
+  "^LinkStoryboards",
+  "^CompileStoryboard",
+  "^CompileAssetCatalog",
+  "^GenerateDSYMFile",
+  "^PhaseScriptExecution",
+  "^PBXCp\\s",
+  "^SetMode\\s",
+  "^SetOwnerAndGroup\\s",
+  "^Ditto\\s",
+  "^CpResource\\s",
+  "^CpHeader\\s",
+  "^\\s+cd /",
+  "^\\s+export ",
+  "^\\s+/Applications/Xcode",
+  "^\\s+/usr/bin/",
+  "^\\s+builtin-",
+  "^note: Using new build system",
 ]
 max_lines = 60
-
+on_empty = "xcodebuild: ok"
 
 [[tests.xcodebuild]]
-name = "failure shown"
+name = "clean build collapses to ok"
 input = """
-=== BUILD TARGET MyApp OF PROJECT MyApp WITH CONFIGURATION Debug ===
-/Users/me/MyApp/ViewController.swift:10:5: error: cannot find 'foo' in scope
-    foo()
-    ^~~
+note: Using new build system
+CompileSwift normal arm64 /Users/dev/App/Main.swift
+    cd /Users/dev/App
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend -c
+Ld /Users/dev/Build/Products/Debug/App normal arm64
+    cd /Users/dev/App
+CodeSign /Users/dev/Build/Products/Debug/App.app
+    cd /Users/dev/App
+    builtin-codesign --force --sign
+
+** BUILD SUCCEEDED **
+"""
+expected = "xcodebuild: ok"
+
+[[tests.xcodebuild]]
+name = "failing build keeps error, source snippet and caret"
+input = """
+note: Using new build system
+CompileSwift normal arm64 /Users/dev/App/ViewController.swift
+    cd /Users/dev/App
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend -c
+/Users/dev/App/ViewController.swift:42:9: error: cannot find 'foo' in scope
+        foo()
+        ^~~
+Ld /Users/dev/Build/Products/Debug/App normal arm64
+    cd /Users/dev/App
+
 ** BUILD FAILED **
+
+The following build commands failed:
+	CompileSwift normal arm64 /Users/dev/App/ViewController.swift
+(1 failure)
 """
 expected = """
-/Users/me/MyApp/ViewController.swift:10:5: error: cannot find 'foo' in scope
-** BUILD FAILED **"""
+/Users/dev/App/ViewController.swift:42:9: error: cannot find 'foo' in scope
+        foo()
+        ^~~
+** BUILD FAILED **
+The following build commands failed:
+	CompileSwift normal arm64 /Users/dev/App/ViewController.swift
+(1 failure)"""
 
 [[tests.xcodebuild]]
-name = "silent success stays empty"
-input = ""
-expected = ""
+name = "test run output passes through with failed test case"
+input = """
+note: Using new build system
+CompileSwift normal arm64 /Users/dev/AppTests/Tests.swift
+    cd /Users/dev/App
+Test Suite 'All tests' started at 2026-03-10 12:00:00
+Test Suite 'AppTests' started at 2026-03-10 12:00:00
+Test Case '-[AppTests testExample]' passed (0.001 seconds).
+Test Case '-[AppTests testFailing]' failed (0.002 seconds).
+Test Suite 'AppTests' passed at 2026-03-10 12:00:01
+Executed 2 tests, with 1 failure in 0.003 seconds
+"""
+expected = """
+Test Suite 'All tests' started at 2026-03-10 12:00:00
+Test Suite 'AppTests' started at 2026-03-10 12:00:00
+Test Case '-[AppTests testExample]' passed (0.001 seconds).
+Test Case '-[AppTests testFailing]' failed (0.002 seconds).
+Test Suite 'AppTests' passed at 2026-03-10 12:00:01
+Executed 2 tests, with 1 failure in 0.003 seconds"""
+
+[[tests.xcodebuild]]
+name = "build succeeded never masks a warning"
+input = """
+CompileSwift normal arm64 /Users/dev/App/Model.swift
+    cd /Users/dev/App
+/Users/dev/App/Model.swift:18:5: warning: variable 'x' was never used
+
+** BUILD SUCCEEDED **
+"""
+expected = """
+/Users/dev/App/Model.swift:18:5: warning: variable 'x' was never used
+** BUILD SUCCEEDED **"""
