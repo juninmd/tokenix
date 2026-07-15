@@ -153,37 +153,9 @@ jobs:
           file "$BIN" | grep -q "ARM aarch64" || { echo "FAIL: wrong arch"; exit 1; }
           echo "PASS: aarch64 binary built natively"
 
-  # ─── Job 4: Cargo unit tests on Linux (fast) ────────────────────────────
-  unit-tests-linux:
-    name: Unit tests (Linux)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Install Rust stable
-        run: rustup update stable && rustup default stable
-
-      - name: Cache cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-cargo-tests-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-cargo-tests-
-
-      - name: Run fast unit tests
-        run: cargo test --locked -- --test-threads=4
-
-      - name: Clippy (Linux target)
-        run: cargo clippy --all-targets --locked -- -D warnings
+  # Unit tests + clippy are NOT run here: rust.yml already runs the identical
+  # `cargo test --locked` and `cargo clippy` on the same push/PR events, so a
+  # second copy only burned runner minutes without adding coverage.
 
   # ─── Summary gate ────────────────────────────────────────────────────────
   homologation-gate:
@@ -191,17 +163,14 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - homologation
-      - unit-tests-linux
       - cross-compile-check
     if: always()
     steps:
       - name: Check all jobs passed
         run: |
           echo "homologation : ${{ needs.homologation.result }}"
-          echo "unit-tests   : ${{ needs.unit-tests-linux.result }}"
           echo "cross-compile: ${{ needs.cross-compile-check.result }}"
           if [ "${{ needs.homologation.result }}" != "success" ] || \
-             [ "${{ needs.unit-tests-linux.result }}" != "success" ] || \
              [ "${{ needs.cross-compile-check.result }}" != "success" ]; then
             echo "FAIL: one or more jobs did not succeed"
             exit 1
