@@ -11,8 +11,14 @@ const BASH_HEAD_LINES: usize = 40;
 const BASH_TAIL_LINES: usize = 15;
 
 /// Bash-aware compression: checks user TOML filters first, then built-in heuristics.
+const UNFILTERED_LOG_CAP: u64 = 262_144; // 256 KB before rotation
+
 fn log_unfiltered_cmd(cmd: &str) {
-    if cmd.is_empty() {
+    let cmd = cmd.trim();
+    // Skip empties and multi-line commands (for-loops, heredocs): they log one
+    // entry per line and pollute the "what to filter next" signal with fragments
+    // like `for`, `done`, and stray regex pieces rather than real command names.
+    if cmd.is_empty() || cmd.contains('\n') {
         return;
     }
     // Write to the global ~/.tokenix/ dir, not the project dir, to avoid
@@ -23,6 +29,10 @@ fn log_unfiltered_cmd(cmd: &str) {
     };
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
+    }
+    // Rotate at the cap so the log cannot grow unbounded (one generation kept).
+    if std::fs::metadata(&log_path).is_ok_and(|m| m.len() >= UNFILTERED_LOG_CAP) {
+        let _ = std::fs::rename(&log_path, log_path.with_extension("log.1"));
     }
     let entry = format!("{}\n", cmd);
     use std::io::Write;
@@ -1073,7 +1083,153 @@ fn truncate_head_tail(lines: &[&str], head: usize, tail: usize) -> String {
     )
 }
 
+/// Minimum length of an unbroken base64 run before it is treated as an embedded
+/// blob and redacted. Prose, code, hashes, and even minified JS break the base64
+/// alphabet with whitespace or punctuation long before this length, so a run this
+/// long is effectively always a real payload (embedded image, tar/binary dump).
+const BASE64_MIN: usize = 512;
+
+/// Label a base64 run by its decoded magic bytes so the redaction says what was
+/// dropped (`png image base64`) instead of an opaque `base64 blob`. Matching is on
+/// the base64-encoded prefix — the first few base64 chars deterministically encode
+/// the leading file-magic bytes.
+fn base64_blob_kind(run: &[u8]) -> &'static str {
+    let head = std::str::from_utf8(&run[..run.len().min(16)]).unwrap_or("");
+    if head.starts_with("iVBORw0KGgo") {
+        "png image base64"
+    } else if head.starts_with("/9j/") {
+        "jpeg image base64"
+    } else if head.starts_with("R0lGOD") {
+        "gif image base64"
+    } else if head.starts_with("UklGR") {
+        "webp/riff base64"
+    } else if head.starts_with("JVBERi0") {
+        "pdf base64"
+    } else if head.starts_with("H4sI") {
+        "gzip base64"
+    } else {
+        "base64 blob"
+    }
+}
+
+/// Redact long base64 / data-URI blobs (embedded PNGs, tar/binary dumps) that
+/// otherwise replay tens of thousands of tokens of pure noise into context. A
+/// `data:<mime>;base64,` prefix is preserved (its `:`/`;`/`,` break the run), so
+/// only the payload is dropped. Operates on bytes but only ever removes ASCII
+/// base64 runs, so the result stays valid UTF-8.
+fn strip_base64_blobs(s: &str) -> String {
+    if s.len() < BASE64_MIN {
+        return s.to_string();
+    }
+    let is_b64 = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'-' | b'_');
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut changed = false;
+    while i < bytes.len() {
+        if is_b64(bytes[i]) {
+            let start = i;
+            while i < bytes.len() && is_b64(bytes[i]) {
+                i += 1;
+            }
+            let run = i - start;
+            if run >= BASE64_MIN {
+                let kind = base64_blob_kind(&bytes[start..i]);
+                out.extend_from_slice(format!("[{kind} omitted: {run} chars]").as_bytes());
+                changed = true;
+            } else {
+                out.extend_from_slice(&bytes[start..i]);
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    if !changed {
+        return s.to_string();
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
+/// Minimum encoded width of an interior line and minimum consecutive-line count for
+/// a *wrapped* base64 block (MIME/PEM/`base64`/`openssl` wrap at 64–76 cols, which
+/// the contiguous scanner misses because each line is under `BASE64_MIN`).
+const WRAP_MIN_LINE: usize = 60;
+const WRAP_MIN_LINES: usize = 5;
+
+/// Collapse line-wrapped base64 blocks (PEM certs/keys, `base64 file`, binary git
+/// patches) that `strip_base64_blobs` cannot see because the newline every ~76
+/// chars keeps each run under `BASE64_MIN`. A block is ≥`WRAP_MIN_LINES` consecutive
+/// pure-base64 lines of width ≥`WRAP_MIN_LINE` (plus one optional shorter padded
+/// tail line). PEM `-----BEGIN/END-----` markers contain spaces/dashes-with-spaces
+/// so they are not base64 lines and survive, keeping the block's context.
+fn strip_wrapped_base64(s: &str) -> String {
+    if s.len() < BASE64_MIN {
+        return s.to_string();
+    }
+    let is_b64_line = |t: &str| {
+        !t.is_empty()
+            && t.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'-' | b'_'))
+    };
+    let trailing = s.ends_with('\n');
+    let lines: Vec<&str> = s.trim_end_matches('\n').split('\n').collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    let mut changed = false;
+    while i < lines.len() {
+        let t = lines[i].trim();
+        if is_b64_line(t) && t.len() >= WRAP_MIN_LINE {
+            let start = i;
+            let mut chars = 0usize;
+            while i < lines.len()
+                && is_b64_line(lines[i].trim())
+                && lines[i].trim().len() >= WRAP_MIN_LINE
+            {
+                chars += lines[i].trim().len();
+                i += 1;
+            }
+            // The final padded chunk of a real block is a shorter line, but a normal
+            // all-alnum word (`done`, `trailer`) also qualifies — absorbing it would
+            // eat legit text. Leave it: a single ≤76-char line is negligible tokens.
+            let count = i - start;
+            if count >= WRAP_MIN_LINES && chars >= BASE64_MIN {
+                let kind = base64_blob_kind(lines[start].trim().as_bytes());
+                out.push(format!(
+                    "[{kind} omitted: {chars} chars across {count} lines]"
+                ));
+                changed = true;
+            } else {
+                for line in &lines[start..i] {
+                    out.push((*line).to_string());
+                }
+            }
+        } else {
+            out.push(lines[i].to_string());
+            i += 1;
+        }
+    }
+    if !changed {
+        return s.to_string();
+    }
+    let mut joined = out.join("\n");
+    if trailing {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// Redact both single-line/data-URI and line-wrapped base64 blobs.
+fn redact_base64_blobs(s: &str) -> String {
+    strip_wrapped_base64(&strip_base64_blobs(s))
+}
+
 pub fn compress_output(s: &str) -> String {
+    // Redact embedded base64 blobs first: a data URI inside a JSON string would
+    // otherwise survive JSON compaction at full weight.
+    let stripped = redact_base64_blobs(s);
+    let s: &str = &stripped;
+
     // JSON compaction first: if output is pure JSON or NDJSON, compact and return early.
     // The other transforms (ANSI, emoji, blank lines) don't apply to JSON.
     let compacted = compact_json(s);
@@ -1595,14 +1751,26 @@ pub fn run_hook_post() -> Result<()> {
     };
 
     let input = match parse_post_input(&v) {
-        Some(i) if !i.text.is_empty() && POST_HOOK_TOOLS.contains(&i.tool_name.as_str()) => i,
+        Some(i) if !i.text.is_empty() => i,
         _ => std::process::exit(0),
     };
 
+    // Non-shell tools (e.g. an MCP image-generation result) are only worth
+    // processing for a dialect that can actually replace the result. Claude/Codex
+    // post is a no-op, so skip the work; Copilot's modifiedResult is honored.
+    let is_shell = POST_HOOK_TOOLS.contains(&input.tool_name.as_str());
+    if !is_shell && input.dialect == PostDialect::ClaudeNoop {
+        std::process::exit(0);
+    }
+
     let compressed = if input.tool_name == "Bash" {
         compress_bash_output(&input.command, &input.text)
-    } else {
+    } else if is_shell {
         compress_output(&input.text)
+    } else {
+        // Non-shell result: skip the command-oriented heuristics, just redact
+        // embedded base64 blobs — the dominant token waste in agent histories.
+        redact_base64_blobs(&input.text)
     };
 
     if compressed == input.text {
@@ -1823,6 +1991,105 @@ mod tests {
     use super::*;
 
     #[test]
+    fn strips_data_uri_image_blob() {
+        let blob = "A".repeat(2000);
+        let raw = format!("here is the image data:image/png;base64,{blob} end");
+        let out = compress_output(&raw);
+        assert!(out.contains("data:image/png;base64,"), "prefix kept: {out}");
+        assert!(
+            out.contains("[base64 blob omitted: 2000 chars]"),
+            "redacted: {out}"
+        );
+        assert!(!out.contains(&blob), "raw blob must be gone");
+        assert!(out.starts_with("here is the image"));
+        assert!(out.trim_end().ends_with("end"));
+    }
+
+    #[test]
+    fn strips_bare_base64_blob() {
+        // A tar/binary dump with no data: prefix (the `unknown-large` audit shape).
+        let blob = "iVBORw0KGgoAAAANSUhEUg".repeat(60); // > 512 base64 chars, PNG magic
+        let out = strip_base64_blobs(&blob);
+        assert_eq!(
+            out,
+            format!("[png image base64 omitted: {} chars]", blob.len())
+        );
+    }
+
+    #[test]
+    fn strips_line_wrapped_base64_block() {
+        // 10 wrapped lines of 64 base64 chars — the MIME/`base64 file` shape the
+        // contiguous scanner misses (each line < BASE64_MIN).
+        let line = "A".repeat(64);
+        let block = std::iter::repeat_n(line.as_str(), 10)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let raw = format!("preamble\n{block}\ntrailer\n");
+        let out = strip_wrapped_base64(&raw);
+        assert!(out.contains("omitted:"), "collapsed: {out}");
+        assert!(out.contains("across 10 lines"), "line count: {out}");
+        assert!(out.starts_with("preamble\n"));
+        // A trailing all-alnum word must NOT be absorbed into the blob.
+        assert!(out.ends_with("trailer\n"), "trailer kept: {out}");
+        assert!(!out.contains(&line), "raw blob gone");
+    }
+
+    #[test]
+    fn strips_pem_body_keeps_markers() {
+        // 64-char lines (PEM wrap width) so each clears WRAP_MIN_LINE.
+        let body = std::iter::repeat_n(
+            "MIIDdummyBase64ContentLinePadded0123456789ABCDEFabcdefXYZ01234567",
+            8,
+        )
+        .collect::<Vec<_>>()
+        .join("\n");
+        let pem = format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n");
+        let out = strip_wrapped_base64(&pem);
+        assert!(
+            out.contains("-----BEGIN CERTIFICATE-----"),
+            "begin kept: {out}"
+        );
+        assert!(out.contains("-----END CERTIFICATE-----"), "end kept: {out}");
+        assert!(out.contains("omitted:"), "body collapsed: {out}");
+    }
+
+    #[test]
+    fn wrapped_stripper_spares_short_or_prose_blocks() {
+        // 4 long base64 lines (>512 chars total, so past the length gate) but
+        // below WRAP_MIN_LINES → untouched.
+        let short = format!("{a}\n{a}\n{a}\n{a}", a = "A".repeat(140));
+        assert_eq!(strip_wrapped_base64(&short), short);
+        // Consecutive prose lines with spaces are not base64 lines.
+        let prose = "the quick brown fox jumped\n".repeat(30);
+        assert_eq!(strip_wrapped_base64(&prose), prose);
+    }
+
+    #[test]
+    fn base64_blob_kind_labels_by_magic() {
+        let jpeg = format!("/9j/{}", "A".repeat(600));
+        assert!(strip_base64_blobs(&jpeg).contains("[jpeg image base64 omitted:"));
+        let gif = format!("R0lGOD{}", "A".repeat(600));
+        assert!(strip_base64_blobs(&gif).contains("[gif image base64 omitted:"));
+        let opaque = "A".repeat(600);
+        assert!(strip_base64_blobs(&opaque).contains("[base64 blob omitted:"));
+    }
+
+    #[test]
+    fn base64_stripper_spares_normal_text() {
+        // Long minified-looking code stays intact: punctuation breaks the run.
+        let code = "const x=(a,b)=>{return a+b;};".repeat(80);
+        assert_eq!(strip_base64_blobs(&code), code);
+        // A short token below threshold is untouched.
+        let short = "AAAABBBBCCCCDDDD";
+        assert_eq!(strip_base64_blobs(short), short);
+        // UTF-8 around a blob survives.
+        let mixed = format!("café ☕ {} über", "Zm9vYmFy".repeat(80));
+        let out = strip_base64_blobs(&mixed);
+        assert!(out.starts_with("café ☕ "));
+        assert!(out.trim_end().ends_with("über"));
+    }
+
+    #[test]
     fn strips_ansi_colors() {
         assert_eq!(strip_ansi("\x1b[32mOK\x1b[0m"), "OK");
         assert_eq!(strip_ansi("\x1b[1;31mError\x1b[0m: bad"), "Error: bad");
@@ -1848,6 +2115,38 @@ mod tests {
         ];
         let out = compress_grep(&lines);
         assert_eq!(out, "src/a.rs:10:let x = 5;\nsrc/b.rs:2:fn main() {}");
+    }
+
+    // Golden/safety-net for the dominant savings path: `cargo build` is ~96% of
+    // all tokens tokenix saves globally, and it flows through `compress_cargo`.
+    // This pins the exact kept-vs-dropped behavior so any accidental change to the
+    // cargo heuristic shows up as a failing snapshot instead of a silent regression.
+    #[test]
+    fn cargo_build_golden_keeps_signal_drops_noise() {
+        let raw = "\
+   Compiling libc v0.2.1
+   Compiling serde v1.0.2
+   Compiling tokenix v0.57.1
+warning: function is never used: `foo`
+error[E0425]: cannot find value `y`
+    Finished `dev` profile [optimized] target(s) in 4.2s";
+        let lines: Vec<&str> = raw.lines().collect();
+        let out = compress_cargo(&lines);
+
+        // Exact snapshot: warning + error + Finished survive; every `Compiling` drops.
+        assert_eq!(
+            out,
+            "warning: function is never used: `foo`\n\
+             error[E0425]: cannot find value `y`\n\
+             \x20   Finished `dev` profile [optimized] target(s) in 4.2s"
+        );
+        // Invariants (robust to formatting tweaks in the snapshot above).
+        assert!(!out.contains("Compiling "), "build noise dropped");
+        assert!(out.contains("error[E0425]"), "errors preserved");
+        assert!(out.contains("Finished "), "summary preserved");
+        assert!(out.len() < raw.len(), "net reduction");
+        // Deterministic: same input → same output.
+        assert_eq!(compress_cargo(&lines), out);
     }
 
     #[test]

@@ -309,10 +309,42 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         .to_string_lossy()
         .replace('\\', "/");
 
-    let ext = full_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    // Extensions the outliner (`chunker::detect_lang`) actually supports — keep in
+    // sync with it. C/C++, VB and SQL were previously excluded here, so their large
+    // files passed through full even though `generate_outline` can outline them; the
+    // >=30% savings gate below still rejects any outline that isn't worth it.
+    let ext = full_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let is_code = matches!(
-        ext,
-        "rs" | "py" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "go"
+        ext.as_str(),
+        "rs" | "py"
+            | "ts"
+            | "tsx"
+            | "js"
+            | "jsx"
+            | "mjs"
+            | "cjs"
+            | "go"
+            | "c"
+            | "cpp"
+            | "h"
+            | "hpp"
+            | "cc"
+            | "cxx"
+            | "bas"
+            | "cls"
+            | "ctl"
+            | "frm"
+            | "sql"
+            | "fnc"
+            | "trg"
+            | "pkg"
+            | "prc"
+            | "tab"
+            | "vw"
     );
 
     if !is_code {
