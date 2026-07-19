@@ -1112,6 +1112,28 @@ fn base64_blob_kind(run: &[u8]) -> &'static str {
     }
 }
 
+/// A long run of base64-alphabet bytes is only a real blob if it looks like
+/// encoded binary — mixed-case letters, or a base64 symbol (`+ / = - _`). Pure-hex
+/// or all-digit runs (checksum manifests, id lists, hex dumps) are spared: real
+/// base64 of binary is mixed-case/symbol-rich with overwhelming probability, so
+/// this avoids silently eating a list of sha256 hashes or a numeric column.
+fn looks_like_base64(run: &[u8]) -> bool {
+    let mut has_lower = false;
+    let mut has_upper = false;
+    for &b in run {
+        match b {
+            b'+' | b'/' | b'=' | b'-' | b'_' => return true,
+            b'a'..=b'z' => has_lower = true,
+            b'A'..=b'Z' => has_upper = true,
+            _ => {}
+        }
+        if has_lower && has_upper {
+            return true;
+        }
+    }
+    false
+}
+
 /// Redact long base64 / data-URI blobs (embedded PNGs, tar/binary dumps) that
 /// otherwise replay tens of thousands of tokens of pure noise into context. A
 /// `data:<mime>;base64,` prefix is preserved (its `:`/`;`/`,` break the run), so
@@ -1133,12 +1155,13 @@ fn strip_base64_blobs(s: &str) -> String {
                 i += 1;
             }
             let run = i - start;
-            if run >= BASE64_MIN {
-                let kind = base64_blob_kind(&bytes[start..i]);
+            let slice = &bytes[start..i];
+            if run >= BASE64_MIN && looks_like_base64(slice) {
+                let kind = base64_blob_kind(slice);
                 out.extend_from_slice(format!("[{kind} omitted: {run} chars]").as_bytes());
                 changed = true;
             } else {
-                out.extend_from_slice(&bytes[start..i]);
+                out.extend_from_slice(slice);
             }
         } else {
             out.push(bytes[i]);
@@ -1193,7 +1216,10 @@ fn strip_wrapped_base64(s: &str) -> String {
             // all-alnum word (`done`, `trailer`) also qualifies — absorbing it would
             // eat legit text. Leave it: a single ≤76-char line is negligible tokens.
             let count = i - start;
-            if count >= WRAP_MIN_LINES && chars >= BASE64_MIN {
+            if count >= WRAP_MIN_LINES
+                && chars >= BASE64_MIN
+                && looks_like_base64(lines[start].trim().as_bytes())
+            {
                 let kind = base64_blob_kind(lines[start].trim().as_bytes());
                 out.push(format!(
                     "[{kind} omitted: {chars} chars across {count} lines]"
@@ -1992,12 +2018,13 @@ mod tests {
 
     #[test]
     fn strips_data_uri_image_blob() {
-        let blob = "A".repeat(2000);
+        let blob = "Zm9vQmFyBaz1".repeat(200); // 2400 mixed-case base64 chars
+        let n = blob.len();
         let raw = format!("here is the image data:image/png;base64,{blob} end");
         let out = compress_output(&raw);
         assert!(out.contains("data:image/png;base64,"), "prefix kept: {out}");
         assert!(
-            out.contains("[base64 blob omitted: 2000 chars]"),
+            out.contains(&format!("[base64 blob omitted: {n} chars]")),
             "redacted: {out}"
         );
         assert!(!out.contains(&blob), "raw blob must be gone");
@@ -2020,7 +2047,7 @@ mod tests {
     fn strips_line_wrapped_base64_block() {
         // 10 wrapped lines of 64 base64 chars — the MIME/`base64 file` shape the
         // contiguous scanner misses (each line < BASE64_MIN).
-        let line = "A".repeat(64);
+        let line = "Zm9v".repeat(16); // 64 mixed-case base64 chars per line
         let block = std::iter::repeat_n(line.as_str(), 10)
             .collect::<Vec<_>>()
             .join("\n");
@@ -2055,9 +2082,9 @@ mod tests {
 
     #[test]
     fn wrapped_stripper_spares_short_or_prose_blocks() {
-        // 4 long base64 lines (>512 chars total, so past the length gate) but
-        // below WRAP_MIN_LINES → untouched.
-        let short = format!("{a}\n{a}\n{a}\n{a}", a = "A".repeat(140));
+        // 4 long mixed-case base64 lines (>512 chars total, past the length gate)
+        // but below WRAP_MIN_LINES → untouched (exercises the line-count gate).
+        let short = format!("{a}\n{a}\n{a}\n{a}", a = "Zm9v".repeat(35));
         assert_eq!(strip_wrapped_base64(&short), short);
         // Consecutive prose lines with spaces are not base64 lines.
         let prose = "the quick brown fox jumped\n".repeat(30);
@@ -2070,8 +2097,29 @@ mod tests {
         assert!(strip_base64_blobs(&jpeg).contains("[jpeg image base64 omitted:"));
         let gif = format!("R0lGOD{}", "A".repeat(600));
         assert!(strip_base64_blobs(&gif).contains("[gif image base64 omitted:"));
-        let opaque = "A".repeat(600);
+        let opaque = "Zm9v".repeat(150); // 600 mixed-case chars, no magic prefix
         assert!(strip_base64_blobs(&opaque).contains("[base64 blob omitted:"));
+    }
+
+    #[test]
+    fn base64_stripper_spares_hex_and_digit_runs() {
+        // A long lowercase-hex run (concatenated checksums) is NOT base64 — sparing
+        // it avoids silently eating a sha256 manifest or hex dump.
+        let hex = "deadbeef0123456789abcdef".repeat(30); // 720 hex chars, single case
+        assert_eq!(strip_base64_blobs(&hex), hex);
+        // A long numeric id column is spared too.
+        let digits = "1234567890".repeat(70); // 700 digits
+        assert_eq!(strip_base64_blobs(&digits), digits);
+    }
+
+    #[test]
+    fn wrapped_stripper_spares_hash_manifest() {
+        // 8 lines of 64-char lowercase hex (a `.sha256` manifest) must not collapse.
+        let line = "0123456789abcdef".repeat(4); // 64 hex chars
+        let manifest = std::iter::repeat_n(line.as_str(), 8)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(strip_wrapped_base64(&manifest), manifest);
     }
 
     #[test]
