@@ -173,6 +173,9 @@ struct Shell {
     stats_msg: Option<String>,
     // Gain page ------------------------------------------------------------
     gain_cache: Option<GainView>,
+    /// In-flight background gain computation (async so the UI never freezes
+    /// while `compute_gain`/`compute_global_gain` runs).
+    gain_rx: Option<Receiver<GainView>>,
     gain_cost: bool,
     gain_global: bool,
     // Project scope (cwd vs. all repos) shared by Secrets/Egress tabs --------
@@ -228,6 +231,10 @@ struct Shell {
     usage_global: bool,
     // Report / install pages ----------------------------------------------
     reports: HashMap<usize, String>,
+    /// In-flight background report capture: `(tab index, channel)`. Report tabs
+    /// self-execute the binary; doing it on a worker thread keeps the UI live and
+    /// lets the shared spinner animate instead of freezing the whole shell.
+    report_rx: Option<(usize, Receiver<String>)>,
     scroll: u16,
     /// Max scroll offset for the pane drawn last frame (content rows − inner
     /// height). Set during render, read by the key handlers to bound `scroll`
@@ -271,6 +278,7 @@ pub fn run() -> Result<()> {
         usage_group: 0,
         usage_global: false,
         gain_cache: None,
+        gain_rx: None,
         gain_cost: false,
         gain_global: false,
         proj_root_norm,
@@ -311,6 +319,7 @@ pub fn run() -> Result<()> {
         studio_confirm_delete: false,
         request_generate: None,
         reports: HashMap::new(),
+        report_rx: None,
         scroll: 0,
         max_scroll: Cell::new(0),
         request_index: false,
@@ -347,17 +356,38 @@ impl Shell {
                 self.apply_egr_scope();
             }
 
+            // Collect a finished background report capture, if any.
+            let done = self
+                .report_rx
+                .as_ref()
+                .and_then(|(i, rx)| rx.try_recv().ok().map(|body| (*i, body)));
+            if let Some((idx, body)) = done {
+                self.reports.insert(idx, body);
+                self.report_rx = None;
+            }
+
+            // Collect a finished background gain computation, if any.
+            let done = self.gain_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+            if let Some(view) = done {
+                self.gain_cache = Some(view);
+                self.gain_rx = None;
+            }
+
             terminal.draw(|f| self.draw(f))?;
 
-            // While a scan runs, poll so the spinner animates; otherwise block.
-            let scanning = self.secrets_rx.is_some() || self.egress_rx.is_some();
-            let timeout = if scanning {
+            // While any background work runs, poll so the shared spinner animates;
+            // otherwise block until the next key.
+            let loading = self.secrets_rx.is_some()
+                || self.egress_rx.is_some()
+                || self.report_rx.is_some()
+                || self.gain_rx.is_some();
+            let timeout = if loading {
                 Duration::from_millis(120)
             } else {
                 Duration::from_secs(3600)
             };
             if !event::poll(timeout)? {
-                if scanning {
+                if loading {
                     self.spinner = self.spinner.wrapping_add(1);
                 }
                 continue;
@@ -468,19 +498,40 @@ impl Shell {
         };
     }
 
-    /// Lazily capture report output the first time its tab is shown. Tabs with
-    /// state (Usage group/scope) build their argv dynamically.
+    /// Lazily capture report output the first time its tab is shown, on a worker
+    /// thread so the UI stays live (the shared spinner animates meanwhile). Tabs
+    /// with state (Usage group/scope) build their argv dynamically.
     fn ensure_report(&mut self) {
         let idx = self.cmd.index();
-        if let Some(args) = self.dyn_argv() {
-            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            self.reports.entry(idx).or_insert_with(|| capture(&refs));
+        if self.reports.contains_key(&idx) {
             return;
         }
-        let Some(argv) = self.cmd.argv() else {
+        // Already capturing this tab — let it finish.
+        if matches!(&self.report_rx, Some((i, _)) if *i == idx) {
+            return;
+        }
+        let argv: Vec<String> = if let Some(args) = self.dyn_argv() {
+            args
+        } else if let Some(args) = self.cmd.argv() {
+            args.iter().map(|s| s.to_string()).collect()
+        } else {
             return;
         };
-        self.reports.entry(idx).or_insert_with(|| capture(argv));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(capture_owned(&argv));
+        });
+        self.report_rx = Some((idx, rx));
+    }
+
+    /// Drop any cached report for the current tab and cancel an in-flight capture
+    /// so the next frame kicks off a fresh async load.
+    fn refresh_report(&mut self) {
+        let idx = self.cmd.index();
+        self.reports.remove(&idx);
+        if matches!(&self.report_rx, Some((i, _)) if *i == idx) {
+            self.report_rx = None;
+        }
     }
 
     /// Per-tab dynamic argv for report tabs whose output depends on UI state.
@@ -508,16 +559,16 @@ impl Shell {
         match code {
             KeyCode::Char('s') => {
                 self.usage_group = (self.usage_group + 1) % 5;
-                self.reports.remove(&self.cmd.index());
+                self.refresh_report();
                 self.scroll = 0;
             }
             KeyCode::Char('a') => {
                 self.usage_global = !self.usage_global;
-                self.reports.remove(&self.cmd.index());
+                self.refresh_report();
                 self.scroll = 0;
             }
             KeyCode::Char('r') => {
-                self.reports.remove(&self.cmd.index());
+                self.refresh_report();
                 self.scroll = 0;
             }
             _ => self.key_scroll(code),
@@ -526,7 +577,7 @@ impl Shell {
 
     fn key_graph(&mut self, code: KeyCode) {
         if let KeyCode::Char('r') = code {
-            self.reports.remove(&self.cmd.index());
+            self.refresh_report();
             self.scroll = 0;
         } else {
             self.key_scroll(code);
@@ -536,24 +587,29 @@ impl Shell {
     /// Compute gain data the first time the Gain tab is shown (or after a toggle
     /// that changed the project scope cleared the cache).
     fn ensure_gain(&mut self) {
-        if self.cmd != Cmd::Gain || self.gain_cache.is_some() {
+        if self.cmd != Cmd::Gain || self.gain_cache.is_some() || self.gain_rx.is_some() {
             return;
         }
-        let view = if self.gain_global {
-            let g = crate::gain::compute_global_gain();
-            GainView {
-                stats: g.aggregate,
-                projects: g.projects,
-            }
-        } else {
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let root = crate::store::find_project_root(&cwd);
-            GainView {
-                stats: crate::gain::compute_gain(&root),
-                projects: Vec::new(),
-            }
-        };
-        self.gain_cache = Some(view);
+        let global = self.gain_global;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let view = if global {
+                let g = crate::gain::compute_global_gain();
+                GainView {
+                    stats: g.aggregate,
+                    projects: g.projects,
+                }
+            } else {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let root = crate::store::find_project_root(&cwd);
+                GainView {
+                    stats: crate::gain::compute_gain(&root),
+                    projects: Vec::new(),
+                }
+            };
+            let _ = tx.send(view);
+        });
+        self.gain_rx = Some(rx);
     }
 
     fn key_gain(&mut self, code: KeyCode) {
@@ -562,10 +618,12 @@ impl Shell {
             KeyCode::Char('a') => {
                 self.gain_global = !self.gain_global;
                 self.gain_cache = None;
+                self.gain_rx = None;
                 self.scroll = 0;
             }
             KeyCode::Char('r') => {
                 self.gain_cache = None;
+                self.gain_rx = None;
                 self.scroll = 0;
             }
             _ => self.key_scroll(code),
@@ -798,27 +856,11 @@ impl Shell {
         let Some(findings) = &self.secrets else {
             return;
         };
-        let mut order: Vec<String> = Vec::new();
-        let mut map: HashMap<String, Vec<usize>> = HashMap::new();
-        for (i, fnd) in findings.iter().enumerate() {
-            let key = match self.sec_gmode {
-                SecGroup::Rule => fnd.rule.clone(),
-                SecGroup::Agent => fnd.agent.clone(),
-            };
-            if !map.contains_key(&key) {
-                order.push(key.clone());
-            }
-            map.entry(key).or_default().push(i);
-        }
-        let mut groups: Vec<(String, Vec<usize>)> = order
-            .into_iter()
-            .map(|k| {
-                let v = map.remove(&k).unwrap_or_default();
-                (k, v)
-            })
-            .collect();
-        groups.sort_by_key(|g| std::cmp::Reverse(g.1.len()));
-        self.sec_groups = groups;
+        let mode = self.sec_gmode;
+        self.sec_groups = group_indices(findings, |f| match mode {
+            SecGroup::Rule => f.rule.clone(),
+            SecGroup::Agent => f.agent.clone(),
+        });
     }
 
     fn sec_items(&self) -> &[usize] {
@@ -834,21 +876,7 @@ impl Shell {
         let Some(findings) = &self.secrets else {
             return Vec::new();
         };
-        let mut order: Vec<String> = Vec::new();
-        let mut map: HashMap<String, Vec<usize>> = HashMap::new();
-        for &i in self.sec_items() {
-            let key = findings[i].secret.clone();
-            if !map.contains_key(&key) {
-                order.push(key.clone());
-            }
-            map.entry(key).or_default().push(i);
-        }
-        let mut out: Vec<Vec<usize>> = order
-            .into_iter()
-            .map(|k| map.remove(&k).unwrap_or_default())
-            .collect();
-        out.sort_by_key(|v| std::cmp::Reverse(v.len()));
-        out
+        distinct_by(self.sec_items(), |i| findings[i].secret.clone())
     }
 
     /// Finding indices for the highlighted distinct secret (all its occurrences).
@@ -1028,29 +1056,13 @@ impl Shell {
         let Some(findings) = &self.egress else {
             return;
         };
-        let mut order: Vec<String> = Vec::new();
-        let mut map: HashMap<String, Vec<usize>> = HashMap::new();
-        for (i, fnd) in findings.iter().enumerate() {
-            let key = match self.egr_gmode {
-                EgrGroup::Host => fnd.host.clone(),
-                EgrGroup::Rule => fnd.rule.clone(),
-                EgrGroup::Agent => fnd.agent.clone(),
-                EgrGroup::File => fnd.file.clone(),
-            };
-            if !map.contains_key(&key) {
-                order.push(key.clone());
-            }
-            map.entry(key).or_default().push(i);
-        }
-        let mut groups: Vec<(String, Vec<usize>)> = order
-            .into_iter()
-            .map(|k| {
-                let v = map.remove(&k).unwrap_or_default();
-                (k, v)
-            })
-            .collect();
-        groups.sort_by_key(|g| std::cmp::Reverse(g.1.len()));
-        self.egr_groups = groups;
+        let mode = self.egr_gmode;
+        self.egr_groups = group_indices(findings, |f| match mode {
+            EgrGroup::Host => f.host.clone(),
+            EgrGroup::Rule => f.rule.clone(),
+            EgrGroup::Agent => f.agent.clone(),
+            EgrGroup::File => f.file.clone(),
+        });
     }
 
     fn key_egress(&mut self, code: KeyCode) {
@@ -1095,21 +1107,9 @@ impl Shell {
         let Some(findings) = &self.egress else {
             return Vec::new();
         };
-        let mut order: Vec<String> = Vec::new();
-        let mut map: HashMap<String, Vec<usize>> = HashMap::new();
-        for &i in self.egr_items() {
-            let key = format!("{}\n{}", findings[i].host, findings[i].target);
-            if !map.contains_key(&key) {
-                order.push(key.clone());
-            }
-            map.entry(key).or_default().push(i);
-        }
-        let mut out: Vec<Vec<usize>> = order
-            .into_iter()
-            .map(|k| map.remove(&k).unwrap_or_default())
-            .collect();
-        out.sort_by_key(|v| std::cmp::Reverse(v.len()));
-        out
+        distinct_by(self.egr_items(), |i| {
+            format!("{}\n{}", findings[i].host, findings[i].target)
+        })
     }
 
     fn current_egress_occurrences(&self) -> Vec<usize> {
@@ -1282,7 +1282,7 @@ impl Shell {
             KeyCode::End => self.scroll = self.max_scroll.get(),
             KeyCode::Home | KeyCode::Char('g') => self.scroll = 0,
             KeyCode::Char('r') => {
-                self.reports.remove(&self.cmd.index());
+                self.refresh_report();
             }
             _ => {}
         }
@@ -1671,9 +1671,19 @@ impl Shell {
 
     fn draw_gain(&self, f: &mut Frame, area: Rect) {
         let Some(view) = &self.gain_cache else {
-            f.render_widget(
-                Paragraph::new("computing…").block(Block::bordered().title(" gain ")),
+            let scope = if self.gain_global {
+                "all projects"
+            } else {
+                "this repo"
+            };
+            draw_loading(
+                f,
                 area,
+                "gain",
+                self.spinner,
+                "Computing token savings…",
+                &format!("aggregating hook events for {scope}"),
+                None,
             );
             return;
         };
@@ -2224,32 +2234,14 @@ impl Shell {
     fn draw_secrets(&self, f: &mut Frame, area: Rect) {
         // Still scanning.
         if self.secrets.is_none() {
-            let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            let spin = frames[self.spinner % frames.len()];
-            let mut lines = vec![Line::from("")];
-            if let Some(msg) = &self.sec_msg {
-                lines.push(Line::from(vec![
-                    Span::styled("  ✓  ", Style::default().green()),
-                    Span::styled(msg.clone(), Style::default().green()),
-                ]));
-                lines.push(Line::from(""));
-            }
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {spin}  "), Style::default().cyan()),
-                Span::styled(
-                    "Scanning AI agent conversations for credentials…",
-                    Style::default().add_modifier(Modifier::BOLD).cyan(),
-                ),
-            ]));
-            lines.push(Line::from(""));
-            lines.push(Line::from(
-                "  reading Claude · Copilot · Codex history (SQLite + JSON), redacting matches"
-                    .to_string()
-                    .dim(),
-            ));
-            f.render_widget(
-                Paragraph::new(Text::from(lines)).block(Block::bordered().title(" secrets ")),
+            draw_loading(
+                f,
                 area,
+                "secrets",
+                self.spinner,
+                "Scanning AI agent conversations for credentials…",
+                "reading Claude · Copilot · Codex history (SQLite + JSON), redacting matches",
+                self.sec_msg.as_deref(),
             );
             return;
         }
@@ -2490,27 +2482,14 @@ impl Shell {
     fn draw_egress(&self, f: &mut Frame, area: Rect) {
         // Still scanning.
         if self.egress.is_none() {
-            let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            let spin = frames[self.spinner % frames.len()];
-            let lines = vec![
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled(format!("  {spin}  "), Style::default().cyan()),
-                    Span::styled(
-                        "Scanning AI agent conversations for external destinations…",
-                        Style::default().add_modifier(Modifier::BOLD).cyan(),
-                    ),
-                ]),
-                Line::from(""),
-                Line::from(
-                    "  reading Claude · Copilot · Codex history, collecting DNS/IPs"
-                        .to_string()
-                        .dim(),
-                ),
-            ];
-            f.render_widget(
-                Paragraph::new(Text::from(lines)).block(Block::bordered().title(" egress ")),
+            draw_loading(
+                f,
                 area,
+                "egress",
+                self.spinner,
+                "Scanning AI agent conversations for external destinations…",
+                "reading Claude · Copilot · Codex history, collecting DNS/IPs",
+                None,
             );
             return;
         }
@@ -2720,14 +2699,22 @@ impl Shell {
     }
 
     fn draw_report(&self, f: &mut Frame, area: Rect) {
-        let body = self
-            .reports
-            .get(&self.cmd.index())
-            .cloned()
-            .unwrap_or_else(|| "loading…".to_string());
+        let title = self.cmd.title().to_lowercase();
+        let Some(body) = self.reports.get(&self.cmd.index()) else {
+            draw_loading(
+                f,
+                area,
+                &title,
+                self.spinner,
+                &format!("Running {title}…"),
+                "self-executing tokenix in the background",
+                None,
+            );
+            return;
+        };
         let scroll = self.scroll_for(body.lines().count(), area);
-        let p = Paragraph::new(body)
-            .block(Block::bordered().title(format!(" {} ", self.cmd.title().to_lowercase())))
+        let p = Paragraph::new(body.clone())
+            .block(Block::bordered().title(format!(" {title} ")))
             .scroll((scroll, 0));
         f.render_widget(p, area);
     }
@@ -2837,6 +2824,57 @@ fn other_pane(p: Pane) -> Pane {
         Pane::Groups => Pane::Filters,
         Pane::Filters => Pane::Groups,
     }
+}
+
+/// The one braille spinner used by every loading state, so the animation is
+/// identical everywhere it appears.
+const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+fn spinner_frame(tick: usize) -> char {
+    SPINNER_FRAMES[tick % SPINNER_FRAMES.len()]
+}
+
+/// The single loading panel: optional green ✓ note, animated spinner + bold
+/// label, and a dim sub-line, in a titled border. Every tab that waits on data
+/// renders through this so the loading experience is standardized.
+fn draw_loading(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    tick: usize,
+    label: &str,
+    sub: &str,
+    note: Option<&str>,
+) {
+    let mut lines: Vec<Line> = vec![Line::from("")];
+    if let Some(note) = note {
+        lines.push(Line::from(vec![
+            Span::styled("  ✓  ", Style::default().green()),
+            Span::styled(note.to_string(), Style::default().green()),
+        ]));
+        lines.push(Line::from(""));
+    }
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("  {}  ", spinner_frame(tick)),
+            Style::default().cyan(),
+        ),
+        Span::styled(
+            label.to_string(),
+            Style::default().add_modifier(Modifier::BOLD).cyan(),
+        ),
+    ]));
+    if !sub.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  {sub}"),
+            Style::default().dim(),
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).block(Block::bordered().title(format!(" {title} "))),
+        area,
+    );
 }
 
 /// Compact byte count for the Studio recordings list.
@@ -3000,6 +3038,13 @@ fn capture(args: &[&str]) -> String {
     }
 }
 
+/// `capture` for an owned argv — used by the background report worker thread,
+/// which can't borrow the UI's argv slice.
+fn capture_owned(args: &[String]) -> String {
+    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    capture(&refs)
+}
+
 /// Index the current repo with inherited stdio (so the progress bar shows), then
 /// wait for a keypress before the caller restores the TUI.
 fn run_index_foreground() {
@@ -3026,6 +3071,51 @@ fn read_index_stats() -> Option<(i64, i64, i64)> {
 /// (`cargo-test` → `cargo`, `git-diff` → `git`, `bat` → `bat`).
 fn tool_of(name: &str) -> &str {
     name.split_once('-').map(|(p, _)| p).unwrap_or(name)
+}
+
+/// Bucket item indices by a string key, preserving first-seen order, then sort the
+/// groups by descending size. Shared by the Secrets and Egress group panes, which
+/// previously carried a byte-identical copy of this each.
+fn group_indices<T>(items: &[T], key: impl Fn(&T) -> String) -> Vec<(String, Vec<usize>)> {
+    let mut order: Vec<String> = Vec::new();
+    let mut map: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, it) in items.iter().enumerate() {
+        let k = key(it);
+        if !map.contains_key(&k) {
+            order.push(k.clone());
+        }
+        map.entry(k).or_default().push(i);
+    }
+    let mut groups: Vec<(String, Vec<usize>)> = order
+        .into_iter()
+        .map(|k| {
+            let v = map.remove(&k).unwrap_or_default();
+            (k, v)
+        })
+        .collect();
+    groups.sort_by_key(|g| std::cmp::Reverse(g.1.len()));
+    groups
+}
+
+/// Group a set of finding indices by a per-index key, returning the occurrence
+/// lists sorted by descending count. Shared by the Secrets (distinct value) and
+/// Egress (distinct host+target) item panes.
+fn distinct_by(indices: &[usize], key: impl Fn(usize) -> String) -> Vec<Vec<usize>> {
+    let mut order: Vec<String> = Vec::new();
+    let mut map: HashMap<String, Vec<usize>> = HashMap::new();
+    for &i in indices {
+        let k = key(i);
+        if !map.contains_key(&k) {
+            order.push(k.clone());
+        }
+        map.entry(k).or_default().push(i);
+    }
+    let mut out: Vec<Vec<usize>> = order
+        .into_iter()
+        .map(|k| map.remove(&k).unwrap_or_default())
+        .collect();
+    out.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    out
 }
 
 fn group_by(filters: &[ActiveFilter], key: impl Fn(&ActiveFilter) -> String) -> Vec<Group> {
@@ -3099,4 +3189,43 @@ fn file_has_tokenix(path: &std::path::Path) -> bool {
     std::fs::read_to_string(path)
         .map(|s| s.contains("tokenix"))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spinner_frame_cycles_and_never_panics() {
+        // Wraps over the frame set and stays in-bounds for a large tick.
+        assert_eq!(spinner_frame(0), SPINNER_FRAMES[0]);
+        assert_eq!(spinner_frame(SPINNER_FRAMES.len()), SPINNER_FRAMES[0]);
+        assert_eq!(spinner_frame(usize::MAX), SPINNER_FRAMES[usize::MAX % 10]);
+    }
+
+    #[test]
+    fn trunc_adds_ellipsis_only_when_over_width() {
+        assert_eq!(trunc("short", 10), "short");
+        assert_eq!(trunc("abcdef", 4), "abc…");
+    }
+
+    #[test]
+    fn group_indices_buckets_and_ranks_by_size() {
+        let items = ["a", "b", "a", "c", "b", "a"];
+        let g = group_indices(&items, |s| s.to_string());
+        // a:3 (idx 0,2,5), b:2 (1,4), c:1 (3) — sorted by descending count.
+        assert_eq!(g.len(), 3);
+        assert_eq!(g[0], ("a".to_string(), vec![0, 2, 5]));
+        assert_eq!(g[1], ("b".to_string(), vec![1, 4]));
+        assert_eq!(g[2], ("c".to_string(), vec![3]));
+    }
+
+    #[test]
+    fn distinct_by_groups_occurrences_by_key() {
+        let vals = ["x", "y", "x", "x"];
+        let d = distinct_by(&[0, 1, 2, 3], |i| vals[i].to_string());
+        // x occurs 3× (0,2,3) then y once (1).
+        assert_eq!(d, vec![vec![0, 2, 3], vec![1]]);
+        assert!(distinct_by(&[], |i: usize| i.to_string()).is_empty());
+    }
 }
