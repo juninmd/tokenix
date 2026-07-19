@@ -154,6 +154,7 @@ pub struct Options {
     pub min_chars: usize,
     pub limit: usize,
     pub json: bool,
+    pub generate: bool,
 }
 
 pub fn run(options: Options) -> Result<()> {
@@ -162,8 +163,82 @@ pub fn run(options: Options) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         print_human(&report);
+        if options.generate {
+            print_actions(&report);
+        }
     }
     Ok(())
+}
+
+/// Scenarios whose waste is a shell command's output — i.e. a `tokenix filter`
+/// could catch it. Blob/prompt scenarios are not command-driven, so a generated
+/// filter would not help them.
+fn is_command_scenario(s: Scenario) -> bool {
+    matches!(
+        s,
+        Scenario::LargeCommandOutput | Scenario::DiffDump | Scenario::TestLog
+    )
+}
+
+/// Reduce a full command line to the program name a filter keys on: first token,
+/// path and `.exe` suffix stripped (`/usr/bin/kubectl get pods` -> `kubectl`).
+fn program_name(cmd: &str) -> String {
+    cmd.split_whitespace()
+        .next()
+        .unwrap_or("")
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(".exe")
+        .to_string()
+}
+
+/// Closes the audit -> action loop: for command-output waste that has no filter
+/// yet, print the exact `tokenix filter generate` invocation, ranked by tokens.
+fn print_actions(report: &Report) {
+    use std::collections::HashMap;
+    let mut by_prog: HashMap<String, (usize, usize)> = HashMap::new();
+    for f in &report.findings {
+        if f.filter.is_some() || !is_command_scenario(f.scenario) {
+            continue;
+        }
+        let Some(cmd) = f.command.as_deref() else {
+            continue;
+        };
+        let prog = program_name(cmd);
+        if prog.is_empty() {
+            continue;
+        }
+        let e = by_prog.entry(prog).or_insert((0, 0));
+        e.0 += f.tokens;
+        e.1 += 1;
+    }
+
+    println!("\n{}", "next actions".bold());
+    if by_prog.is_empty() {
+        println!(
+            "  {}",
+            "no command-output findings lack a filter — the top waste here is not \
+             filter-fixable (base64/image blobs are handled by output redaction; see \
+             the recommendations above)"
+                .dimmed()
+        );
+        return;
+    }
+    let mut ranked: Vec<(String, (usize, usize))> = by_prog.into_iter().collect();
+    ranked.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(a.0.cmp(&b.0)));
+    for (prog, (tokens, count)) in ranked {
+        println!(
+            "  tokenix filter generate '{}'   {}",
+            prog.cyan(),
+            format!(
+                "# ~{} tokens across {} finding(s)",
+                crate::ui::format_num(tokens as i64),
+                count
+            )
+            .dimmed()
+        );
+    }
 }
 
 fn audit(agent: Agent, min_chars: usize, limit: usize) -> Result<Report> {
@@ -866,6 +941,22 @@ mod tests {
             classify("/payload/base_instructions/text", "You are Codex", None),
             Scenario::BootstrapPrompt
         );
+    }
+
+    #[test]
+    fn program_name_strips_path_args_and_exe() {
+        assert_eq!(program_name("/usr/bin/kubectl get pods"), "kubectl");
+        assert_eq!(program_name("C:\\tools\\rg.exe -n foo"), "rg");
+        assert_eq!(program_name("git diff HEAD"), "git");
+        assert_eq!(program_name(""), "");
+    }
+
+    #[test]
+    fn only_command_scenarios_are_filter_actionable() {
+        assert!(is_command_scenario(Scenario::LargeCommandOutput));
+        assert!(is_command_scenario(Scenario::DiffDump));
+        assert!(!is_command_scenario(Scenario::ImageBlob));
+        assert!(!is_command_scenario(Scenario::BootstrapPrompt));
     }
 
     #[test]

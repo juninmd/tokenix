@@ -677,6 +677,10 @@ enum Commands {
         /// Emit machine-readable JSON instead of a human report
         #[arg(long)]
         json: bool,
+        /// Emit ready-to-run `tokenix filter generate` commands for command-output
+        /// waste that has no filter yet (closes the audit -> action loop)
+        #[arg(long)]
+        generate: bool,
     },
     /// Scan AI agent conversation transcripts for exposed credentials (gitleaks-style, no git)
     ScanSecrets {
@@ -1173,11 +1177,13 @@ fn main() -> Result<()> {
             min_chars,
             limit,
             json,
+            generate,
         } => conversation_audit::run(conversation_audit::Options {
             agent: agent.to_audit_agent(),
             min_chars,
             limit,
             json,
+            generate,
         }),
         Commands::ScanSecrets {
             agent,

@@ -340,6 +340,7 @@ tokenix prompt-audit --agent claude   # one agent (claude|codex|copilot|opencode
 tokenix prompt-audit --json           # machine-readable
 tokenix prompt-audit --recommend      # include practical reduction advice
 tokenix conversation-audit            # scan agent histories for token-waste blobs
+tokenix conversation-audit --generate # + ready-to-run filter commands for the fixable waste
 tokenix conversation-audit --agent codex --json
 ```
 
@@ -570,7 +571,7 @@ tokenix install-hook --tool all
 | `tokenix filter verify [NAME]` | Run the embedded `[[tests]]` golden cases of user/project filter files through the real pipeline from the installed binary (`--require-all` fails filters without tests) |
 | `tokenix prompt-audit` | Audit MCP/tool token weight across agents; warns on bloat (`--agent`, `--json`, `--recommend`, `--profile-impact`) |
 | `tokenix session-audit` | Token-economy health check: index, hook events, MCP/tool weight, cache hygiene |
-| `tokenix conversation-audit` | Scan local AI conversation histories for token-waste patterns (`--agent`, `--min-chars`, `--limit`, `--json`) |
+| `tokenix conversation-audit` | Scan local AI conversation histories for token-waste patterns (`--agent`, `--min-chars`, `--limit`, `--json`, `--generate`). `--generate` prints ready-to-run `tokenix filter generate` commands for unfiltered command-output waste, ranked by tokens |
 | `tokenix scan-secrets` | Scan AI agent conversation transcripts for exposed credentials, gitleaks-style; attributes each to its repo + git branch (`--agent`, `--filter`, `--group`, `--reveal`, `--json`) |
 | `tokenix egress-audit` | Scan AI agent conversation transcripts for external DNS/IP destinations and validate hosts against local safe/dangerous reputation lists (`--agent`, `--filter`, `--group`, `--safe`, `--json`) |
 | `tokenix artifacts list` | List context artifacts defined in `.tokenix/artifacts.json` |
