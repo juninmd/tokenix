@@ -176,6 +176,39 @@ Legacy `hook-post` compression flows through (in order):
   (default 8000, `0` disables) to a 75% head + 25% tail window at char
   boundaries. It is the only cap that covers single-giant-line output and the
   `compact_json` early return, both of which bypass every line-count cap.
+  `preserved_identifiers` scans the dropped range for things a caller cannot
+  re-derive — git SHAs (hex, 7–40, mixed letters+digits so "decade"/"facade"
+  and plain numbers are excluded), UUIDs, http(s) URLs, `E0308`-style codes —
+  and appends up to 12 of them (≤240 chars) as `[ids kept from the omitted
+  range: …]`.
+
+## Recall (`src/recall.rs`)
+
+Content-addressed stash + dedup, ported from what competitors do well (squeez's
+reversible compression + cross-call dedup; read-once / semantic-cache-MCP's
+re-read suppression). FNV-1a digest, no new dependency.
+
+| Store | Path | Cap |
+|---|---|---|
+| blobs (raw + compressed bodies) | `~/.tokenix/blobs/<digest>.txt` | 60 files, oldest pruned |
+| command output index | `~/.tokenix/recent_outputs.json` | 24 entries |
+| full-read index | `~/.tokenix/recent_reads.json` | 24 entries |
+
+- **`tokenix retrieve <key>`** prints a stashed body. Keys are validated as
+  ASCII-alphanumeric, so a key echoed by the model can never traverse out of the
+  blob directory.
+- **Cross-call dedup** (`find_identical` in `run_command_and_compress`): only on
+  **exit 0** — a repeated failure still needs its error text — only above
+  `TOKENIX_DEDUP_MIN_TOKENS` (200), and only when the marker is shorter than the
+  output. Every hit is verified against the stored blob, so a hash collision or
+  a pruned blob degrades to "no match" rather than a wrong collapse.
+  `TOKENIX_DEDUP=0` disables.
+- **Re-read suppression** (`find_recent_read` in `handle_read`): remembers only
+  reads that delivered the **full content**. A read answered with an outline is
+  deliberately *not* remembered — otherwise the agent could never get past the
+  outline. TTL `TOKENIX_READ_DEDUP_TTL` (900s) bounds the context-compaction
+  risk; `TOKENIX_READ_DEDUP_MIN_TOKENS` (1500) keeps small files verbatim;
+  `TOKENIX_READ_DEDUP=0` disables. Recovery is exact via the stash key.
 
 `apply_filter()` pipeline: `match_output` short-circuit → `strip_ansi` → `strip_lines_matching` → `keep_lines_matching` → `head/tail/max_lines` → `truncate_lines_at` → `on_empty`. Opt-in `passthrough_when_emptied`: when the pipeline reduces *non-empty* output to nothing (an unrecognized output shape, not a genuinely empty command), emit a bounded view of the real output instead of `on_empty` — set on `git-log`/`git-diff` so `--oneline`/`--stat` don't report a false "no commits"/"no changes". The same bounded fallback fires **automatically** (no opt-in) whenever the original output matches `output_has_failure_signal()` (a strict, case/anchor-tuned `error`/`fatal`/`panic`/`FAILED`/`exit code N` probe) — so a failed build/test/deploy whose error text isn't matched by the tool's `keep_lines_matching` is never masked as the success `on_empty`. Guarded by `bundled_filters_never_mask_generic_failure`.
 

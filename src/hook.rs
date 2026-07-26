@@ -282,9 +282,32 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         Err(_) => return (false, String::new(), format!("read error: {}", file_path)),
     };
 
+    // Re-read suppression: if the agent already received these exact bytes
+    // recently, resending the file is pure waste. Unlike the outline path this
+    // works for any language, since it does not parse the file.
+    //
+    // Only reads that actually delivered the *full content* are remembered — a
+    // read answered with an outline must stay re-readable, or the agent could
+    // never get past the outline. `remember_full_read` is therefore called on
+    // the pass-through paths only.
+    let recall_path = full_path.to_string_lossy().replace('\\', "/");
+    let content_tokens = count_tokens(&content);
+    let now = now_ts();
+    if let Some(hit) = crate::recall::find_recent_read(&recall_path, &content, content_tokens, now)
+    {
+        return (
+            true,
+            crate::recall::read_marker(&hit, now),
+            "unchanged since a recent full read".to_string(),
+        );
+    }
+    let remember_full_read =
+        || crate::recall::remember_read(&recall_path, &content, content_tokens, now);
+
     let line_count = content.lines().count();
     let min_lines = min_lines_for_outline();
     if line_count < min_lines {
+        remember_full_read();
         return (
             false,
             String::new(),
@@ -295,11 +318,12 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     let outline = match get_file_outline(&full_path) {
         Some(o) => o,
         None => {
+            remember_full_read();
             return (
                 false,
                 String::new(),
                 "failed to generate outline".to_string(),
-            )
+            );
         }
     };
 

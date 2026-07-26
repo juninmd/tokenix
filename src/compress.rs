@@ -1122,6 +1122,22 @@ fn base64_blob_kind(run: &[u8]) -> &'static str {
 /// base64 of binary is mixed-case/symbol-rich with overwhelming probability, so
 /// this avoids silently eating a list of sha256 hashes or a numeric column.
 fn looks_like_base64(run: &[u8]) -> bool {
+    // `-` and `_` are base64url characters, but they are also how humans join
+    // words: a long kebab/snake identifier chain (`build-step-1-step-2-...`,
+    // a joined list of slugs) hit this and was silently redacted. Real base64
+    // payloads do not decompose into many short separator-delimited groups, so
+    // reject that shape before anything else.
+    let separator_groups = run
+        .split(|b| matches!(b, b'-' | b'_'))
+        .filter(|g| !g.is_empty())
+        .count();
+    if separator_groups >= 4 {
+        let avg_group = run.len() / separator_groups;
+        if avg_group < 12 {
+            return false;
+        }
+    }
+
     let mut has_lower = false;
     let mut has_upper = false;
     for &b in run {
@@ -1322,13 +1338,95 @@ fn enforce_token_budget(s: &str) -> String {
     }
 
     let omitted = tokens.saturating_sub(budget);
+    let facts = match preserved_identifiers(&s[head_end..tail_start]) {
+        Some(ids) => format!("\n[ids kept from the omitted range: {ids}]"),
+        None => String::new(),
+    };
     format!(
-        "{}\n[... {} tokens omitted by tokenix output cap ({} max; set TOKENIX_MAX_OUTPUT_TOKENS to change) ...]\n{}",
+        "{}\n[... {} tokens omitted by tokenix output cap ({} max; set TOKENIX_MAX_OUTPUT_TOKENS to change) ...]{}\n{}",
         &s[..head_end],
         omitted,
         budget,
+        facts,
         &s[tail_start..]
     )
+}
+
+/// Identifiers a caller cannot reconstruct or guess: commit SHAs, UUIDs, URLs,
+/// and compiler/error codes. Truncating a range that contained the one SHA the
+/// agent needed forces a re-run, so they are carried over into the marker.
+/// Everything else (prose, repeated log lines) is genuinely re-derivable and is
+/// left dropped.
+fn preserved_identifiers(omitted: &str) -> Option<String> {
+    const MAX_FACTS: usize = 12;
+    const MAX_CHARS: usize = 240;
+
+    let mut facts: Vec<&str> = Vec::new();
+    for token in omitted.split(|c: char| {
+        c.is_whitespace() || matches!(c, '"' | '\'' | ',' | '(' | ')' | '[' | ']' | '{' | '}')
+    }) {
+        let token = token.trim_matches(|c: char| matches!(c, '.' | ':' | ';' | '`'));
+        if token.len() < 5 || facts.len() >= MAX_FACTS || facts.contains(&token) {
+            continue;
+        }
+        if is_identifier_like(token) {
+            facts.push(token);
+        }
+    }
+    if facts.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    for fact in facts {
+        if out.len() + fact.len() + 2 > MAX_CHARS {
+            break;
+        }
+        if !out.is_empty() {
+            out.push_str(", ");
+        }
+        out.push_str(fact);
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+fn is_identifier_like(token: &str) -> bool {
+    if token.starts_with("http://") || token.starts_with("https://") {
+        return true;
+    }
+    // UUID: 8-4-4-4-12 hex groups.
+    let groups: Vec<&str> = token.split('-').collect();
+    if groups.len() == 5
+        && [8, 4, 4, 4, 12]
+            == [
+                groups[0].len(),
+                groups[1].len(),
+                groups[2].len(),
+                groups[3].len(),
+                groups[4].len(),
+            ]
+        && groups
+            .iter()
+            .all(|g| g.chars().all(|c| c.is_ascii_hexdigit()))
+    {
+        return true;
+    }
+    // Git-style SHA: 7-40 hex chars, mixed letters and digits so plain numbers
+    // and English words ("added", "decade") are not mistaken for one.
+    let is_hex = token.len() >= 7
+        && token.len() <= 40
+        && token.chars().all(|c| c.is_ascii_hexdigit())
+        && token.chars().any(|c| c.is_ascii_digit())
+        && token.chars().any(|c| c.is_ascii_alphabetic());
+    if is_hex {
+        return true;
+    }
+    // Compiler/runtime error codes: E0308, ERR_MODULE_NOT_FOUND, TS2345.
+    let code_like = token.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        && token.chars().any(|c| c.is_ascii_digit())
+        && token
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    code_like
 }
 
 fn byte_index_at_char(s: &str, char_idx: usize) -> usize {
@@ -2118,6 +2216,32 @@ pub fn run_command_and_compress(command_str: &str, shell: &str) -> Result<i32> {
         }
     }
 
+    // Cross-call dedup: agents re-run `git status`/`cargo check`/`kubectl get`
+    // and pay full price for byte-identical output every time. Only on success
+    // — a repeated failure still needs its error text in front of the model.
+    let mut stdout_compressed = stdout_compressed;
+    let mut deduped_against: Option<String> = None;
+    if output.status.success() {
+        let stdout_tokens = count_tokens(&stdout_compressed);
+        if let Some(hit) = crate::recall::find_identical(&stdout_compressed, stdout_tokens) {
+            let marker = crate::recall::dedup_marker(&hit, now_ts());
+            // Never trade a short output for a longer marker.
+            if marker.len() < stdout_compressed.len() {
+                deduped_against = Some(hit.key.clone());
+                stdout_compressed = format!("{marker}\n");
+            }
+        }
+        if deduped_against.is_none() && stdout_tokens >= 1 {
+            crate::recall::remember(
+                command_str,
+                &stdout_compressed,
+                &stdout_raw,
+                stdout_tokens,
+                now_ts(),
+            );
+        }
+    }
+
     // Print to standard streams
     print!("{}", stdout_compressed);
     eprint!("{}", stderr_compressed);
@@ -2559,6 +2683,72 @@ test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
         assert!(count_tokens(&out) < count_tokens(&giant) / 2);
         assert!(out.starts_with("prefix "));
         assert!(out.ends_with(" suffix"));
+    }
+
+    #[test]
+    fn token_budget_keeps_identifiers_from_the_dropped_range() {
+        // A dropped SHA/UUID/URL cannot be re-derived — losing it forces the
+        // re-run the cap exists to avoid.
+        let filler = "routine log line with nothing worth keeping\n".repeat(6000);
+        let s = format!(
+            "start\n{filler}commit 9fceb02d1a3e5b7c failed at https://ci.example.com/run/42 with E0308 and id 550e8400-e29b-41d4-a716-446655440000\n{filler}end\n"
+        );
+        let out = enforce_token_budget(&s);
+        assert!(
+            out.contains("ids kept from the omitted range"),
+            "got: {}",
+            &out[..400.min(out.len())]
+        );
+        assert!(out.contains("9fceb02d1a3e5b7c"));
+        assert!(out.contains("https://ci.example.com/run/42"));
+        assert!(out.contains("E0308"));
+        assert!(out.contains("550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    #[test]
+    fn base64_stripper_spares_long_kebab_identifier_chains() {
+        // Found by smoke-testing a real command: `-` is a base64url character,
+        // so a long hyphen-joined slug list was redacted as a blob (data loss).
+        let chain = (1..=80)
+            .map(|i| format!("chunk{i}"))
+            .collect::<Vec<_>>()
+            .join("-");
+        assert!(chain.len() > BASE64_MIN, "fixture must reach the run floor");
+        let out = redact_base64_blobs(&format!("SMOKE-{chain}"));
+        assert!(out.contains("chunk80"), "identifier chain was eaten: {out}");
+        assert!(!out.contains("omitted"));
+
+        // Snake_case chains are the same shape.
+        let snake = (1..=80)
+            .map(|i| format!("Step{i}"))
+            .collect::<Vec<_>>()
+            .join("_");
+        assert!(redact_base64_blobs(&snake).contains("Step80"));
+    }
+
+    #[test]
+    fn base64_stripper_still_redacts_base64url_payloads() {
+        // A real base64url blob has few, long separator-free stretches — the
+        // guard above must not give it a pass.
+        let blob = format!(
+            "{}-{}",
+            "Zm9vQmFyBaz1".repeat(30),
+            "QmFyRm9vYmF6".repeat(30)
+        );
+        let out = redact_base64_blobs(&blob);
+        assert!(
+            out.contains("omitted"),
+            "real base64url must still be cut: {out}"
+        );
+    }
+
+    #[test]
+    fn identifier_scan_ignores_ordinary_prose() {
+        // "decade"/"facade" are hex-only words; plain numbers are not identifiers.
+        assert_eq!(
+            preserved_identifiers("the decade long facade of 123456 lines added"),
+            None
+        );
     }
 
     #[test]
