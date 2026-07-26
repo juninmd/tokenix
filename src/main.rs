@@ -19,6 +19,7 @@ mod mcp_audit;
 mod memory;
 mod pack;
 mod query;
+mod recall;
 mod recordings;
 mod secrets_scan;
 mod store;
@@ -621,6 +622,12 @@ enum Commands {
         #[arg(long, default_value = "auto")]
         shell: String,
     },
+    /// Print an output stashed by a previous compressed run (see the key in a
+    /// `[tokenix: ...]` marker) — recovery without re-running the command
+    Retrieve {
+        /// Stash key from a tokenix marker
+        key: String,
+    },
     /// Audit MCP/tool "weight" of the effective system prompt across AI agents
     PromptAudit {
         /// Which agent to audit (default: all that have config)
@@ -1139,6 +1146,15 @@ fn main() -> Result<()> {
             let code = compress::run_command_and_compress(&command, &shell)?;
             std::process::exit(code);
         }
+        Commands::Retrieve { key } => match recall::retrieve(&key) {
+            Some(content) => {
+                print!("{content}");
+                Ok(())
+            }
+            None => {
+                anyhow::bail!("no stashed output for key `{key}` (it may have been pruned)")
+            }
+        },
         Commands::PromptAudit {
             agent,
             json,

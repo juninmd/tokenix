@@ -196,6 +196,9 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **MCP/prompt weight audit** | `tokenix prompt-audit --recommend --profile-impact` connects to configured MCP servers, tokenizes tool schemas, weighs the always-on context (CLAUDE.md/AGENTS.md/copilot-instructions.md + the skill listing) and the on-invoke cost of heavy skills, and shows full-vs-slim MCP savings |
 | **Global output cap** | Every compressed output is bounded by a hard token ceiling (`TOKENIX_MAX_OUTPUT_TOKENS`, default `8000`) that also covers one-line giants and compacted JSON, plus repeated-*block* collapsing for watch/poll loops |
 | **Uncapped grep guard** | A lexical `Grep` asking for match content with no `head_limit` is rewritten with one (`TOKENIX_GREP_HEAD_LIMIT`, default `100`) instead of dumping every match into context |
+| **Reversible compression** | Every compressed run stashes its raw output content-addressed; `tokenix retrieve <key>` returns the exact bytes, so recovery is never a re-run |
+| **Cross-call dedup** | A successful command whose output is byte-identical to a recent call collapses to a one-line marker pointing at the earlier call and its stash key (`TOKENIX_DEDUP=0` to disable) |
+| **Re-read suppression** | Re-reading an unchanged file you already received in full is answered with a pointer instead of the file (`TOKENIX_READ_DEDUP=0`, TTL `TOKENIX_READ_DEDUP_TTL`) |
 | **Session audit** | `tokenix session-audit --cache-hygiene` combines index freshness, hook history, MCP/tool weight, and prompt-cache stability risks |
 | **Conversation token-waste audit** | `tokenix conversation-audit` scans local Claude / Codex / Copilot / OpenAI histories for large assistant-visible blobs such as full reads, command logs, bootstrap prompts, connector JSON, images, patches, and task artifacts |
 | **Conversation secret scan** | `tokenix scan-secrets` — gitleaks-style credential scan of Claude / Gemini / Copilot / Antigravity conversation transcripts (no git); findings are always redacted, exits non-zero when any are found. Patterns live in TOML (`assets/secret-rules/`), extensible via `~/.tokenix/secret-rules/*.toml` or `<repo>/.tokenix/secret-rules/*.toml` |
@@ -575,6 +578,7 @@ tokenix install-hook --tool all
 | `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |
 | `tokenix gain` | Token savings analytics with a by-source split — measured Read savings vs command filters; semantic Grep is neutral usage (`--cost-estimate` adds a per-model cost table; `--economics` prices savings against **your own** transcript spend mix instead of list prices) |
 | `tokenix discover` | Scan agent transcript history for missed savings: replays the current filters over historical command outputs — **measured**, not estimated — and ranks recoverable waste (filter exists, hook wasn't active) plus uncovered commands worth a new filter (`--agent`, `--top`, `--json`) |
+| `tokenix retrieve <key>` | Print the exact original output a compressed run stashed — the key comes from a `[tokenix: ...]` marker. Recovery without re-running the command |
 | `tokenix trust` / `untrust` | Approve (SHA-256 pinned) or revoke this repo's `.tokenix/filters` — repo-local filters are **skipped until trusted** so a cloned repo can't rewrite what the agent sees (`--status` shows state) |
 | `tokenix usage` | Absolute token spend + ≈USD cost from agent transcripts (`daily\|weekly\|monthly\|session\|model\|project\|blocks`, `--since/--until`, `--all-projects`, `--cost-mode`, `--statusline`, `--json`) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
@@ -745,6 +749,9 @@ Engine invariants:
 - **Escape hatch** — prefix any command with `TOKENIX_DISABLED=1` to skip the rewrite for that command only. Bypasses are logged and `tokenix gain` warns when ≥10% of commands dodge the filter.
 - **Hard output ceiling** — after every filter and heuristic, compressed output is clipped to `TOKENIX_MAX_OUTPUT_TOKENS` (default `8000`, `0` disables) keeping a head and tail window. This is the backstop for shapes the line-based caps cannot see: a single megabyte-long line, or a huge payload that `compact_json` shrank by only a few percent.
 - **Repeated blocks** — a multi-line stanza repeated 3+ times in a row (watch/poll loops, retry banners) is kept once and annotated `[block of N lines repeated Kx]`, alongside the existing identical-line collapsing.
+- **Identifiers survive truncation** — commit SHAs, UUIDs, URLs and error codes found in a range the output cap dropped are carried into the marker (`[ids kept from the omitted range: ...]`). Everything else that is dropped is re-derivable; those are not.
+- **Reversible** — every compressed run stashes its raw output under a content hash in `~/.tokenix/blobs/`. Markers carry the key, and `tokenix retrieve <key>` prints the exact original, so a compression that dropped the one line you needed costs a cheap lookup instead of a re-run.
+- **Cross-call dedup** — when a *successful* command produces output byte-identical to a recent call, it collapses to `[tokenix: output identical to \`<cmd>\` from 4m ago … run \`tokenix retrieve <key>\`]`. Failures are never deduped: a repeated error still needs its text in front of the model. Disable with `TOKENIX_DEDUP=0`, tune with `TOKENIX_DEDUP_MIN_TOKENS` (default 200).
 
 ### AI-assisted filter generation
 
