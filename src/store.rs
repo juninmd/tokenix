@@ -1794,6 +1794,26 @@ pub fn get_file_token_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
     Ok(res)
 }
 
+/// Per-file graph centrality: the maximum PageRank of any symbol the file
+/// defines. Used to decide what survives a token budget — a file other code
+/// depends on is worth more than a file that merely sorts earlier by name.
+/// Files with no graph nodes are absent from the map (treated as rank 0).
+pub fn get_file_graph_ranks(conn: &Connection) -> Result<HashMap<String, f32>> {
+    let mut stmt = conn.prepare(
+        "SELECT chunks.path, MAX(graph_nodes.rank)
+         FROM graph_nodes
+         JOIN chunks ON chunks.id = graph_nodes.chunk_id
+         GROUP BY chunks.path",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f32>(1)?)))?;
+    let mut res = HashMap::new();
+    for row in rows {
+        let (path, rank) = row?;
+        res.insert(path.replace('\\', "/"), rank);
+    }
+    Ok(res)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
