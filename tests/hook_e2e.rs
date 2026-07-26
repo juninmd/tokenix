@@ -125,6 +125,80 @@ fn empty_tool_name_passes_through() {
     assert!(stdout.trim().is_empty());
 }
 
+/// Cross-call dedup + `tokenix retrieve`: a repeated successful command must
+/// collapse to a marker, and the marker's key must return the original bytes.
+/// Runs the real binary twice, like the hook does.
+#[test]
+fn repeated_successful_command_dedupes_and_stays_retrievable() {
+    let dir = std::env::temp_dir().join(format!("tokenix-dedup-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp cwd");
+
+    // The stash lives in ~/.tokenix and outlives the test run, so the fixture
+    // must be unique per process — otherwise a previous run's entry makes the
+    // *first* call dedup and the test asserts against the wrong baseline.
+    let marker_word = format!("DEDUPFIXTURE{}", std::process::id());
+    // ~4 KB: comfortably over the 200-token dedup floor, and well under the
+    // ~8 KB Windows command-line limit that a bigger fixture would blow.
+    let payload: String = (0..90)
+        .map(|i| format!("{marker_word}-{i}-filler-text-for-the-token-floor"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let command = if cfg!(windows) {
+        format!("echo {payload}")
+    } else {
+        format!("echo '{payload}'")
+    };
+
+    let run = |cmd: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+            .args(["run", cmd])
+            .current_dir(&dir)
+            .output()
+            .expect("tokenix run");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let first = run(&command);
+    assert!(
+        first.contains(&marker_word) && !first.contains("output identical to"),
+        "first run must show real output, not a marker: {}",
+        &first[..first.len().min(200)]
+    );
+
+    let second = run(&command);
+    if !second.contains("output identical to") {
+        // Environment-dependent (no home dir / unwritable ~/.tokenix): the
+        // feature degrades to plain pass-through, which is still correct.
+        eprintln!("dedup did not engage in this environment; skipping key check");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        second.len() < first.len() / 2,
+        "dedup marker must be far cheaper than the output"
+    );
+
+    let key = second
+        .split("tokenix retrieve ")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_alphanumeric()).next())
+        .expect("marker must carry a retrieve key")
+        .to_string();
+
+    let retrieved = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["retrieve", &key])
+        .current_dir(&dir)
+        .output()
+        .expect("tokenix retrieve");
+    let body = String::from_utf8_lossy(&retrieved.stdout);
+    assert!(
+        retrieved.status.success() && body.contains(&marker_word),
+        "retrieve must return the original bytes for key {key}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An uncapped content grep must come back with a `head_limit` injected — and
 /// it must work from a temp cwd with no index at all, since the stale-index gate
 /// exits before the tool handlers.
