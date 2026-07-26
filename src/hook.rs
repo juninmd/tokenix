@@ -613,6 +613,109 @@ fn bash_rewrite_output(
     })
 }
 
+/// Build a PreToolUse output that hands the tool back a *modified argument set*
+/// (as opposed to `bash_rewrite_output`, which only rewrites a command string).
+fn input_rewrite_output(
+    input: &HookInput,
+    updated: serde_json::Value,
+    reason: &str,
+    antigravity: bool,
+) -> serde_json::Value {
+    if antigravity {
+        return serde_json::json!({
+            "decision": "allow",
+            "reason": reason,
+            "overwrite": {
+                "name": input.raw_tool_name,
+                "args": updated
+            }
+        });
+    }
+
+    serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": reason,
+            "updatedInput": updated
+        }
+    })
+}
+
+/// Cap injected into an uncapped content-mode Grep. Measured motivation: a
+/// single unbounded lexical Grep over a large repo cost ~937k tokens because
+/// `handle_grep` only intercepts semantic/symbol queries and passes every other
+/// pattern through untouched. Override with `TOKENIX_GREP_HEAD_LIMIT`; `0`
+/// disables the cap.
+const DEFAULT_GREP_HEAD_LIMIT: i64 = 100;
+
+fn grep_head_limit() -> i64 {
+    std::env::var("TOKENIX_GREP_HEAD_LIMIT")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .unwrap_or(DEFAULT_GREP_HEAD_LIMIT)
+}
+
+/// Returns the full replacement tool input with a `head_limit` injected, when a
+/// lexical Grep asks for match *content* without bounding how much comes back.
+///
+/// Deliberately narrow: modes that emit one line per file (`files_with_matches`,
+/// `count`) are already cheap, and an agent that set its own `head_limit` has
+/// bounded itself — both pass through untouched.
+fn grep_cap_input(tool_input: &serde_json::Value) -> Option<(serde_json::Value, String)> {
+    let limit = grep_head_limit();
+    if limit <= 0 {
+        return None;
+    }
+    if tool_input["head_limit"].is_number() {
+        return None;
+    }
+    if tool_input["output_mode"].as_str() != Some("content") {
+        return None;
+    }
+
+    let mut updated = tool_input.clone();
+    updated.as_object_mut()?.insert(
+        "head_limit".to_string(),
+        serde_json::Value::Number(limit.into()),
+    );
+    Some((
+        updated,
+        format!("tokenix: capped uncapped content grep at head_limit={limit}"),
+    ))
+}
+
+/// Emit the capped-grep rewrite and exit, when the input qualifies. Returns
+/// normally (doing nothing) for any other tool or an already-bounded grep.
+fn try_grep_cap(input: &HookInput, repo_root: &Path, antigravity: bool, raw_stdin: &str) {
+    if input.tool_name != "Grep" {
+        return;
+    }
+    let Some((updated, reason)) = grep_cap_input(&input.tool_input) else {
+        return;
+    };
+    let out = input_rewrite_output(input, updated, &reason, antigravity);
+    let _ = log_hook_event(
+        repo_root,
+        &HookEvent {
+            ts: now_ts(),
+            tool: input.tool_name.clone(),
+            action: "intercepted".to_string(),
+            phase: "pre".to_string(),
+            reason,
+            // Savings are unmeasurable here — the unbounded output never runs —
+            // so log zero rather than inflating `gain`.
+            saved_tokens: 0,
+            actual_tokens: 0,
+            original_estimate: 0,
+            input_preview: raw_stdin.chars().take(200).collect(),
+            command: String::new(),
+        },
+    );
+    println!("{}", serde_json::to_string(&out).unwrap_or_default());
+    exit_success();
+}
+
 fn pass_through(antigravity: bool) -> ! {
     if antigravity {
         println!(r#"{{"decision":"allow","reason":"tokenix pass-through"}}"#);
@@ -971,6 +1074,9 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
     let staleness = index_staleness(&repo_root);
 
     if staleness.stale {
+        // Bounding an unbounded grep needs no index, so a stale/missing index
+        // must not disable it — this is where most repos actually sit.
+        try_grep_cap(&input, &repo_root, antigravity, &raw_stdin);
         let _ = log_hook_event(
             &repo_root,
             &HookEvent {
@@ -996,6 +1102,10 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
     };
 
     if !intercepted {
+        // A lexical Grep is not something tokenix can answer from the index, but
+        // it can still be bounded before it dumps every match into the context.
+        try_grep_cap(&input, &repo_root, antigravity, &raw_stdin);
+
         let _ = log_hook_event(
             &repo_root,
             &HookEvent {
@@ -1281,6 +1391,66 @@ mod tests {
         assert_eq!(
             original_tokens_for_log("Grep", &input, Path::new("."), 77),
             77
+        );
+    }
+
+    #[test]
+    fn grep_cap_injects_head_limit_on_uncapped_content_grep() {
+        let args = serde_json::json!({"pattern": "foo", "output_mode": "content", "-C": 3});
+        let (updated, reason) = grep_cap_input(&args).expect("should cap");
+        assert_eq!(updated["head_limit"], DEFAULT_GREP_HEAD_LIMIT);
+        // Every original field survives — updatedInput replaces the whole input.
+        assert_eq!(updated["pattern"], "foo");
+        assert_eq!(updated["-C"], 3);
+        assert!(reason.contains("head_limit"));
+    }
+
+    #[test]
+    fn grep_cap_respects_agent_supplied_limit() {
+        let args = serde_json::json!({"pattern": "foo", "output_mode": "content", "head_limit": 5});
+        assert!(grep_cap_input(&args).is_none());
+    }
+
+    #[test]
+    fn grep_cap_skips_cheap_output_modes() {
+        for mode in ["files_with_matches", "count"] {
+            let args = serde_json::json!({"pattern": "foo", "output_mode": mode});
+            assert!(grep_cap_input(&args).is_none(), "mode {mode} should pass");
+        }
+        // No explicit mode: the tool default is not content, so nothing to cap.
+        assert!(grep_cap_input(&serde_json::json!({"pattern": "foo"})).is_none());
+    }
+
+    #[test]
+    fn grep_cap_emits_valid_pretooluse_rewrite() {
+        let input = HookInput {
+            tool_name: "Grep".to_string(),
+            tool_input: serde_json::json!({"pattern": "foo", "output_mode": "content"}),
+            raw_tool_name: "Grep".to_string(),
+        };
+        let (updated, reason) = grep_cap_input(&input.tool_input).unwrap();
+        let out = input_rewrite_output(&input, updated, &reason, false);
+        let hso = &out["hookSpecificOutput"];
+        assert_eq!(hso["hookEventName"], "PreToolUse");
+        assert_eq!(hso["permissionDecision"], "allow");
+        assert_eq!(hso["updatedInput"]["head_limit"], DEFAULT_GREP_HEAD_LIMIT);
+        assert_eq!(hso["updatedInput"]["pattern"], "foo");
+    }
+
+    #[test]
+    fn grep_cap_antigravity_uses_overwrite_shape() {
+        let input = HookInput {
+            tool_name: "Grep".to_string(),
+            tool_input: serde_json::json!({"pattern": "foo", "output_mode": "content"}),
+            raw_tool_name: "grep_search".to_string(),
+        };
+        let (updated, reason) = grep_cap_input(&input.tool_input).unwrap();
+        let out = input_rewrite_output(&input, updated, &reason, true);
+        assert_eq!(out["decision"], "allow");
+        assert_eq!(out["overwrite"]["name"], "grep_search");
+        assert_eq!(
+            out["overwrite"]["args"]["head_limit"],
+            DEFAULT_GREP_HEAD_LIMIT
         );
     }
 

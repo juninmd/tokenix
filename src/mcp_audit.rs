@@ -9,6 +9,10 @@
 //! static baseline for the agent's native tools, and warns when the total looks
 //! bloated.
 //!
+//! Beyond MCP, it also weighs the *context* an agent loads before doing anything:
+//! instruction files (CLAUDE.md / AGENTS.md / copilot-instructions.md) and skills
+//! (always-on listing entry + on-invoke body). See "Context weight" below.
+//!
 //! The number is a *relative bloat indicator*, not the exact system-prompt token
 //! count (native baseline is approximate, HTTP/SSE servers are not introspected,
 //! and `count_tokens` is a ~4-chars/token estimate).
@@ -146,9 +150,23 @@ pub fn run_audit(
 ) -> Result<()> {
     let (agents, reports, thresholds) = collect_audit(filter, cwd);
     if json_out {
-        print_json(&agents, &reports, &thresholds, recommend, profile_impact);
+        print_json(
+            &agents,
+            &reports,
+            &thresholds,
+            recommend,
+            profile_impact,
+            cwd,
+        );
     } else {
-        print_human(&agents, &reports, &thresholds, recommend, profile_impact);
+        print_human(
+            &agents,
+            &reports,
+            &thresholds,
+            recommend,
+            profile_impact,
+            cwd,
+        );
     }
     Ok(())
 }
@@ -158,8 +176,8 @@ pub fn audit_summary(filter: Option<Agent>, cwd: &Path) -> AuditSummary {
     let mut combined_tokens = 0usize;
     let mut warnings = Vec::new();
     for agent in &agents {
-        let (_rows, totals) = aggregate(*agent, &reports, &thresholds);
-        combined_tokens += totals.native + totals.mcp_tokens;
+        let (_rows, totals) = aggregate(*agent, &reports, &thresholds, context_weight(*agent, cwd));
+        combined_tokens += totals.native + totals.mcp_tokens + totals.context.always_on();
         for reason in totals.reasons {
             warnings.push(format!("{}: {reason}", agent.label()));
         }
@@ -674,6 +692,216 @@ fn await_response(rx: &mpsc::Receiver<String>, id: i64) -> Result<Value, String>
 }
 
 // ---------------------------------------------------------------------------
+// Context weight: instruction files + skills
+// ---------------------------------------------------------------------------
+//
+// MCP tool schemas are not the only variable prompt cost. Two others are just as
+// real and were previously invisible here:
+//   * instruction files (CLAUDE.md / AGENTS.md / copilot-instructions.md) — read
+//     into context on *every* session, in full;
+//   * skills — their name+description sit in the prompt permanently, and their
+//     body is pulled in whole on invocation (one measured skill load cost
+//     ~198k tokens in this user's history).
+
+/// Skills whose body is reported as an on-invoke cost.
+const HEAVY_SKILL_TOKENS: usize = 5_000;
+/// Depth-bounded scan of plugin trees so a deep node_modules-style directory
+/// cannot turn the audit into a full-disk walk.
+const PLUGIN_SCAN_DEPTH: usize = 4;
+
+pub struct SkillEntry {
+    pub name: String,
+    /// Always-on cost: the name+description entry in the skill listing.
+    pub listing: usize,
+    /// On-invoke cost: the whole SKILL.md body.
+    pub body: usize,
+}
+
+#[derive(Default)]
+pub struct ContextWeight {
+    pub instruction_files: Vec<(String, usize)>,
+    pub skills: Vec<SkillEntry>,
+}
+
+impl ContextWeight {
+    /// Tokens paid on every request, before the agent does anything.
+    fn always_on(&self) -> usize {
+        let files: usize = self.instruction_files.iter().map(|(_, t)| t).sum();
+        let listings: usize = self.skills.iter().map(|s| s.listing).sum();
+        files + listings
+    }
+
+    fn is_empty(&self) -> bool {
+        self.instruction_files.is_empty() && self.skills.is_empty()
+    }
+
+    fn heavy_skills(&self) -> Vec<&SkillEntry> {
+        let mut heavy: Vec<&SkillEntry> = self
+            .skills
+            .iter()
+            .filter(|s| s.body >= HEAVY_SKILL_TOKENS)
+            .collect();
+        heavy.sort_by_key(|s| Reverse(s.body));
+        heavy
+    }
+}
+
+fn file_tokens(path: &Path) -> Option<(String, usize)> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    // Strip the Windows extended-length prefix `\\?\` that canonicalization adds,
+    // so the reported path is the one the user recognizes.
+    let label = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_start_matches("//?/")
+        .to_string();
+    Some((label, count_tokens(&raw)))
+}
+
+/// Extract the `name:`/`description:` frontmatter a skill contributes to the
+/// always-loaded listing. Falls back to the file's first line when a skill has
+/// no frontmatter, so an unparsable skill still counts as non-zero.
+fn skill_listing_tokens(raw: &str, fallback_name: &str) -> (String, usize) {
+    let mut name = fallback_name.to_string();
+    let mut description = String::new();
+    if let Some(body) = raw.strip_prefix("---") {
+        if let Some(end) = body.find("\n---") {
+            let lines: Vec<&str> = body[..end].lines().collect();
+            let mut i = 0;
+            while i < lines.len() {
+                let line = lines[i];
+                i += 1;
+                let Some((key, value)) = line.split_once(':') else {
+                    continue;
+                };
+                if !matches!(key.trim(), "name" | "description") {
+                    continue;
+                }
+                let mut value = value.trim().to_string();
+                // YAML block scalars (`description: |`) put the real text on the
+                // following indented lines — the common shape for skills, and
+                // reading only the `|` undercounted the listing ~10x.
+                if value == "|" || value == ">" || value == "|-" || value == ">-" {
+                    value.clear();
+                    while i < lines.len() && lines[i].starts_with([' ', '\t']) {
+                        value.push_str(lines[i].trim());
+                        value.push(' ');
+                        i += 1;
+                    }
+                    value = value.trim_end().to_string();
+                }
+                match key.trim() {
+                    "name" => name = value,
+                    _ => description = value,
+                }
+            }
+        }
+    }
+    if description.is_empty() {
+        description = raw.lines().next().unwrap_or("").to_string();
+    }
+    let listing = count_tokens(&format!("{name}: {description}"));
+    (name, listing)
+}
+
+fn collect_skills_in(dir: &Path, out: &mut Vec<SkillEntry>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let skill_md = entry.path().join("SKILL.md");
+        let Ok(raw) = std::fs::read_to_string(&skill_md) else {
+            continue;
+        };
+        let fallback = entry.file_name().to_string_lossy().to_string();
+        let (name, listing) = skill_listing_tokens(&raw, &fallback);
+        out.push(SkillEntry {
+            name,
+            listing,
+            body: count_tokens(&raw),
+        });
+    }
+}
+
+/// Walk a plugin tree looking for `skills/` directories, bounded in depth.
+fn collect_plugin_skills(dir: &Path, depth: usize, out: &mut Vec<SkillEntry>) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path.file_name().and_then(|n| n.to_str()) == Some("skills") {
+            collect_skills_in(&path, out);
+        } else {
+            collect_plugin_skills(&path, depth - 1, out);
+        }
+    }
+}
+
+fn context_weight(agent: Agent, cwd: &Path) -> ContextWeight {
+    let repo_root = crate::find_repo_root(cwd);
+    let home = dirs::home_dir();
+    let mut weight = ContextWeight::default();
+
+    let instruction_paths: Vec<std::path::PathBuf> = match agent {
+        Agent::ClaudeCode => {
+            let mut v = vec![repo_root.join("CLAUDE.md"), repo_root.join("AGENTS.md")];
+            if let Some(h) = &home {
+                v.push(h.join(".claude").join("CLAUDE.md"));
+            }
+            v
+        }
+        Agent::Codex => {
+            let mut v = vec![repo_root.join("AGENTS.md")];
+            if let Some(h) = &home {
+                v.push(h.join(".codex").join("AGENTS.md"));
+            }
+            v
+        }
+        Agent::Copilot => vec![
+            repo_root.join(".github").join("copilot-instructions.md"),
+            repo_root.join("AGENTS.md"),
+        ],
+        Agent::OpenCode => vec![repo_root.join("AGENTS.md")],
+        Agent::Antigravity => Vec::new(),
+    };
+    for path in instruction_paths {
+        if let Some(entry) = file_tokens(&path) {
+            weight.instruction_files.push(entry);
+        }
+    }
+
+    // Skills are a Claude Code concept; other agents have no equivalent listing.
+    if agent == Agent::ClaudeCode {
+        collect_skills_in(
+            &repo_root.join(".claude").join("skills"),
+            &mut weight.skills,
+        );
+        if let Some(h) = &home {
+            collect_skills_in(&h.join(".claude").join("skills"), &mut weight.skills);
+            collect_plugin_skills(
+                &h.join(".claude").join("plugins"),
+                PLUGIN_SCAN_DEPTH,
+                &mut weight.skills,
+            );
+        }
+        weight.skills.sort_by(|a, b| a.name.cmp(&b.name));
+        weight.skills.dedup_by(|a, b| a.name == b.name);
+    }
+
+    weight
+}
+
+// ---------------------------------------------------------------------------
 // Reporting
 // ---------------------------------------------------------------------------
 
@@ -682,14 +910,18 @@ struct AgentTotals {
     tools: usize,
     mcp_tokens: usize,
     native: usize,
+    context: ContextWeight,
     warn: bool,
     reasons: Vec<String>,
 }
 
+/// `context` is passed in rather than discovered here so callers control the
+/// filesystem scan (and tests can aggregate against a known-empty context).
 fn aggregate(
     agent: Agent,
     reports: &[(Agent, String, Status)],
     th: &Thresholds,
+    context: ContextWeight,
 ) -> (Vec<(String, Status)>, AgentTotals) {
     let mut rows: Vec<(String, Status)> = reports
         .iter()
@@ -717,11 +949,19 @@ fn aggregate(
     if tools > th.tools {
         reasons.push(format!("{tools} tools > {}", th.tools));
     }
+    if context.always_on() > th.tokens {
+        reasons.push(format!(
+            "~{} always-on context tokens (instructions + skill listing) > {}",
+            context.always_on(),
+            th.tokens
+        ));
+    }
     let totals = AgentTotals {
         servers: rows.len(),
         tools,
         mcp_tokens,
         native,
+        context,
         warn: !reasons.is_empty(),
         reasons,
     };
@@ -734,8 +974,9 @@ fn print_human(
     th: &Thresholds,
     recommend: bool,
     profile_impact: bool,
+    cwd: &Path,
 ) {
-    println!("{}", "tokenix prompt-audit — MCP/tool weight".bold());
+    println!("{}", "tokenix prompt-audit — prompt weight".bold());
     println!(
         "{}",
         "estimate of the variable system-prompt cost per agent\n".dimmed()
@@ -744,12 +985,12 @@ fn print_human(
     let mut grand_tokens = 0usize;
     let mut any = false;
     for agent in agents {
-        let (rows, totals) = aggregate(*agent, reports, th);
-        if rows.is_empty() {
+        let (rows, totals) = aggregate(*agent, reports, th, context_weight(*agent, cwd));
+        if rows.is_empty() && totals.context.is_empty() {
             println!(
                 "{}  {}",
                 agent.label().bold(),
-                "(no MCP config found)".dimmed()
+                "(no MCP config, instruction files or skills found)".dimmed()
             );
             println!();
             continue;
@@ -769,15 +1010,17 @@ fn print_human(
             };
             println!("    {:<24} {}", name, detail);
         }
-        let total = totals.native + totals.mcp_tokens;
+        print_context_weight(&totals.context);
+        let total = totals.native + totals.mcp_tokens + totals.context.always_on();
         grand_tokens += total;
         println!(
-            "    {} {} servers, {} tools, ~{} MCP tok + ~{} native = {}",
+            "    {} {} servers, {} tools, ~{} MCP tok + ~{} native + ~{} context = {}",
             "└".dimmed(),
             totals.servers,
             totals.tools,
             totals.mcp_tokens,
             totals.native,
+            totals.context.always_on(),
             format!("~{total} tok").bold()
         );
         for reason in &totals.reasons {
@@ -800,11 +1043,41 @@ fn print_human(
     print_caveats();
 }
 
+/// Render the non-MCP prompt weight: instruction files (always loaded, in full)
+/// and skills (listing always loaded; body loaded on invoke).
+fn print_context_weight(context: &ContextWeight) {
+    for (path, tokens) in &context.instruction_files {
+        let short = path.rsplit('/').next().unwrap_or(path);
+        println!(
+            "    {:<24} {}",
+            short,
+            format!("~{tokens} tok (always loaded) — {path}").dimmed()
+        );
+    }
+    if context.skills.is_empty() {
+        return;
+    }
+    let listing: usize = context.skills.iter().map(|s| s.listing).sum();
+    println!(
+        "    {:<24} {} skills, ~{listing} tok always-on listing",
+        "skills",
+        context.skills.len()
+    );
+    for skill in context.heavy_skills().iter().take(3) {
+        println!(
+            "      {} {}",
+            "↳".dimmed(),
+            format!("{}: ~{} tok loaded on invoke", skill.name, skill.body).dimmed()
+        );
+    }
+}
+
 fn print_caveats() {
     let lines = [
         "Caveats: native-tool baseline is a static approximation; HTTP/SSE servers",
         "are not introspected (shown as unknown); token counts use a ~4-chars/token",
-        "estimate. Treat this as a relative bloat indicator, not the exact prompt size.",
+        "estimate. Skill bodies are on-invoke costs and are excluded from the always-on",
+        "total. Treat this as a relative bloat indicator, not the exact prompt size.",
     ];
     println!();
     for l in lines {
@@ -818,11 +1091,12 @@ fn print_json(
     th: &Thresholds,
     recommend: bool,
     profile_impact: bool,
+    cwd: &Path,
 ) {
     let mut agents_json = Vec::new();
     let mut grand_tokens = 0usize;
     for agent in agents {
-        let (rows, totals) = aggregate(*agent, reports, th);
+        let (rows, totals) = aggregate(*agent, reports, th, context_weight(*agent, cwd));
         let servers: Vec<Value> = rows
             .iter()
             .map(|(name, status)| match status {
@@ -837,8 +1111,20 @@ fn print_json(
                 }),
             })
             .collect();
-        let total = totals.native + totals.mcp_tokens;
+        let total = totals.native + totals.mcp_tokens + totals.context.always_on();
         grand_tokens += total;
+        let instruction_files: Vec<Value> = totals
+            .context
+            .instruction_files
+            .iter()
+            .map(|(path, tokens)| json!({"path": path, "tokens": tokens}))
+            .collect();
+        let skills: Vec<Value> = totals
+            .context
+            .skills
+            .iter()
+            .map(|s| json!({"name": s.name, "listing_tokens": s.listing, "body_tokens": s.body}))
+            .collect();
         let mut agent_json = json!({
             "agent": agent.key(),
             "label": agent.label(),
@@ -848,6 +1134,9 @@ fn print_json(
             "tool_count": totals.tools,
             "mcp_tokens": totals.mcp_tokens,
             "native_tokens": totals.native,
+            "context_tokens": totals.context.always_on(),
+            "instruction_files": instruction_files,
+            "skills": skills,
             "total_tokens": total,
             "warn": totals.warn,
             "reasons": totals.reasons,
@@ -1055,7 +1344,7 @@ TOKEN = "abc"
             servers: 5,
             tools: 40,
         };
-        let (rows, totals) = aggregate(Agent::ClaudeCode, &reports, &th);
+        let (rows, totals) = aggregate(Agent::ClaudeCode, &reports, &th, ContextWeight::default());
         assert_eq!(rows.len(), 2);
         assert_eq!(totals.tools, 15);
         assert_eq!(totals.mcp_tokens, 14_000);
@@ -1078,8 +1367,73 @@ TOKEN = "abc"
             servers: 5,
             tools: 40,
         };
-        let (_, totals) = aggregate(Agent::Codex, &reports, &th);
+        let (_, totals) = aggregate(Agent::Codex, &reports, &th, ContextWeight::default());
         assert!(!totals.warn);
         assert!(totals.reasons.is_empty());
+    }
+
+    #[test]
+    fn skill_listing_counts_frontmatter_not_body() {
+        let raw = "---\nname: deploy-thing\ndescription: Deploy the thing safely\n---\n\n# Body\n";
+        let (name, listing) =
+            skill_listing_tokens(&format!("{raw}{}", "filler ".repeat(4000)), "dir-name");
+        assert_eq!(name, "deploy-thing");
+        // The always-on cost is the one-line entry, not the multi-thousand-token body.
+        assert!(listing < 30, "listing was {listing}");
+    }
+
+    #[test]
+    fn skill_listing_reads_yaml_block_scalar_description() {
+        // The shape every bundled skill uses; reading only the `|` undercounted
+        // the always-on listing by ~10x.
+        let raw = "---\nname: deploy-thing\ndescription: |\n  **DEPLOY SKILL** - ship the thing.\n  USE FOR: rollouts, rollbacks, canary analysis, cluster drift.\n  DO NOT USE FOR: writing app code.\n---\n\nbody\n";
+        let (name, listing) = skill_listing_tokens(raw, "dir-name");
+        assert_eq!(name, "deploy-thing");
+        assert!(
+            listing > 25,
+            "block-scalar description must be counted, got {listing}"
+        );
+    }
+
+    #[test]
+    fn skill_listing_falls_back_without_frontmatter() {
+        let (name, listing) = skill_listing_tokens("# Some skill\nbody\n", "dir-name");
+        assert_eq!(name, "dir-name");
+        assert!(listing > 0);
+    }
+
+    #[test]
+    fn context_weight_totals_always_on_cost() {
+        let ctx = ContextWeight {
+            instruction_files: vec![("CLAUDE.md".to_string(), 1200)],
+            skills: vec![
+                SkillEntry {
+                    name: "a".to_string(),
+                    listing: 30,
+                    body: 40_000,
+                },
+                SkillEntry {
+                    name: "b".to_string(),
+                    listing: 20,
+                    body: 100,
+                },
+            ],
+        };
+        // Bodies are on-invoke, so they must NOT inflate the always-on figure.
+        assert_eq!(ctx.always_on(), 1250);
+        let heavy = ctx.heavy_skills();
+        assert_eq!(heavy.len(), 1);
+        assert_eq!(heavy[0].name, "a");
+    }
+
+    #[test]
+    fn context_weight_reads_instruction_files_from_disk() {
+        let dir = std::env::temp_dir().join(format!("tokenix-ctxweight-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("AGENTS.md"), "rules ".repeat(500)).unwrap();
+        let weight = context_weight(Agent::OpenCode, &dir);
+        assert_eq!(weight.instruction_files.len(), 1);
+        assert!(weight.always_on() > 100);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

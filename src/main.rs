@@ -1471,7 +1471,7 @@ fn cmd_session_audit(path: &Path, json: bool, cache_hygiene: bool) -> Result<()>
     }
     if prompt.combined_tokens > 10_000 {
         recommendations.push(format!(
-            "MCP/tool prompt weight high (~{} tok): run `tokenix prompt-audit --recommend`",
+            "prompt weight high (~{} tok of MCP schemas + always-on context): run `tokenix prompt-audit --recommend`",
             prompt.combined_tokens
         ));
     }

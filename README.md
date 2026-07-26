@@ -193,7 +193,9 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Savings analytics** | `tokenix gain` — token summary, savings split by source (semantic index vs command filters), and by-tool histogram; `--cost-estimate` adds a per-model cost table (10 reference models across Anthropic / OpenAI / Google) |
 | **Spend analytics** | `tokenix usage` — absolute token spend and ≈USD cost read from agent transcripts, by `daily\|weekly\|monthly\|session\|model\|project\|blocks`; rolling 5-hour blocks with burn rate, month-end forecast, `--cost-mode auto\|calculate\|display`, `--statusline`, and `--json` |
 | **Slim MCP profile** | `tokenix mcp --profile slim` exposes 3 meta-tools instead of the full tool surface for hosts that support progressive discovery |
-| **MCP/prompt weight audit** | `tokenix prompt-audit --recommend --profile-impact` connects to configured MCP servers, tokenizes tool schemas, and shows full-vs-slim MCP savings |
+| **MCP/prompt weight audit** | `tokenix prompt-audit --recommend --profile-impact` connects to configured MCP servers, tokenizes tool schemas, weighs the always-on context (CLAUDE.md/AGENTS.md/copilot-instructions.md + the skill listing) and the on-invoke cost of heavy skills, and shows full-vs-slim MCP savings |
+| **Global output cap** | Every compressed output is bounded by a hard token ceiling (`TOKENIX_MAX_OUTPUT_TOKENS`, default `8000`) that also covers one-line giants and compacted JSON, plus repeated-*block* collapsing for watch/poll loops |
+| **Uncapped grep guard** | A lexical `Grep` asking for match content with no `head_limit` is rewritten with one (`TOKENIX_GREP_HEAD_LIMIT`, default `100`) instead of dumping every match into context |
 | **Session audit** | `tokenix session-audit --cache-hygiene` combines index freshness, hook history, MCP/tool weight, and prompt-cache stability risks |
 | **Conversation token-waste audit** | `tokenix conversation-audit` scans local Claude / Codex / Copilot / OpenAI histories for large assistant-visible blobs such as full reads, command logs, bootstrap prompts, connector JSON, images, patches, and task artifacts |
 | **Conversation secret scan** | `tokenix scan-secrets` — gitleaks-style credential scan of Claude / Gemini / Copilot / Antigravity conversation transcripts (no git); findings are always redacted, exits non-zero when any are found. Patterns live in TOML (`assets/secret-rules/`), extensible via `~/.tokenix/secret-rules/*.toml` or `<repo>/.tokenix/secret-rules/*.toml` |
@@ -332,10 +334,10 @@ against 10 reference models across Anthropic, OpenAI, and Google. Prices are
 shown with their collection date (currently `2026-06-11`) so the numbers stay
 auditable.
 
-### 8. Audit MCP / tool weight
+### 8. Audit MCP / tool / context weight
 
 ```bash
-tokenix prompt-audit                  # every agent that has MCP config
+tokenix prompt-audit                  # every agent with MCP config, instruction files or skills
 tokenix prompt-audit --agent claude   # one agent (claude|codex|copilot|opencode|antigravity)
 tokenix prompt-audit --json           # machine-readable
 tokenix prompt-audit --recommend      # include practical reduction advice
@@ -351,6 +353,20 @@ prompt itself cannot be read by tools, so this is a **relative bloat estimate**:
 the native-tool baseline is approximate and HTTP/SSE servers are shown as
 `unknown`. Thresholds are overridable via `TOKENIX_AUDIT_WARN_TOKENS`,
 `TOKENIX_AUDIT_WARN_SERVERS`, and `TOKENIX_AUDIT_WARN_TOOLS`.
+
+MCP schemas are not the only variable weight, so the audit also measures the
+**context** an agent loads before doing anything:
+
+- instruction files (`CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`)
+  — read in full on every session;
+- skills (`<repo>/.claude/skills`, `~/.claude/skills`, plugin `skills/` trees) —
+  their `name`+`description` entry is always on, and the whole `SKILL.md` body is
+  pulled in on invoke. Skills whose body exceeds ~5k tokens are listed with that
+  on-invoke cost so a heavy skill stops being invisible.
+
+Only the always-on part counts toward the per-agent total; skill bodies are
+reported separately so the estimate is not inflated by content that may never
+load.
 
 For MCP hosts that support progressive discovery, run `tokenix mcp --profile slim`.
 The slim profile advertises only `tokenix_context`, `tokenix_search_tools`, and
@@ -727,6 +743,8 @@ Engine invariants:
 - **Failure tee** — when a failed command's compressed view dropped content, the full raw output is saved under `~/.tokenix/tee/` (20 files, 1 MB cap, disable with `TOKENIX_TEE=0`) and the output ends with `[full output: <path>]`, so recovery is a targeted Read instead of a full re-run.
 - **Fail loudly** — filter files reject unknown fields (a typo'd key prints a warning instead of silently disabling the filter). Validate your own filters anytime with `tokenix filter verify`.
 - **Escape hatch** — prefix any command with `TOKENIX_DISABLED=1` to skip the rewrite for that command only. Bypasses are logged and `tokenix gain` warns when ≥10% of commands dodge the filter.
+- **Hard output ceiling** — after every filter and heuristic, compressed output is clipped to `TOKENIX_MAX_OUTPUT_TOKENS` (default `8000`, `0` disables) keeping a head and tail window. This is the backstop for shapes the line-based caps cannot see: a single megabyte-long line, or a huge payload that `compact_json` shrank by only a few percent.
+- **Repeated blocks** — a multi-line stanza repeated 3+ times in a row (watch/poll loops, retry banners) is kept once and annotated `[block of N lines repeated Kx]`, alongside the existing identical-line collapsing.
 
 ### AI-assisted filter generation
 
