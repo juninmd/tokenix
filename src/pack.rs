@@ -96,8 +96,27 @@ pub fn build_pack(repo_root: &Path, options: PackOptions) -> Result<String> {
         }
     }
 
+    // Graph centrality (PageRank over the symbol graph) is already computed at
+    // index time; use it to decide what fills the remaining slots and, below,
+    // what survives the budget. "Biggest file" is a poor proxy for "most
+    // important" — a file other code depends on is worth more than a large one.
+    let graph_ranks = crate::store::get_file_graph_ranks(&conn).unwrap_or_default();
     let mut by_tokens = get_file_token_counts(&conn)?;
-    by_tokens.sort_by_key(|row| Reverse(row.1));
+    by_tokens.sort_by(|a, b| {
+        let rank_a = graph_ranks
+            .get(&a.0.replace('\\', "/"))
+            .copied()
+            .unwrap_or(0.0);
+        let rank_b = graph_ranks
+            .get(&b.0.replace('\\', "/"))
+            .copied()
+            .unwrap_or(0.0);
+        rank_b
+            .partial_cmp(&rank_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| Reverse(a.1).cmp(&Reverse(b.1)))
+            .then_with(|| a.0.cmp(&b.0))
+    });
     let mut safety = SafetyReport::default();
     for (path, _) in by_tokens {
         if selected.len() >= 24 {
@@ -115,10 +134,16 @@ pub fn build_pack(repo_root: &Path, options: PackOptions) -> Result<String> {
         }
     }
 
+    // `selected` is a BTreeSet, so iterating it directly meant the budget cut
+    // files by *alphabetical order*: a semantic hit or a changed file could be
+    // dropped so that an alphabetically-earlier filler file fit. Order by why
+    // the file is here, then by graph centrality, then by path for determinism.
+    let ordered = order_by_priority(&selected, &reasons, &graph_ranks);
+
     let mut files = Vec::new();
     let mut used = count_tokens(&context);
     let file_budget = budget.saturating_sub(used).max(400);
-    for path in selected {
+    for path in ordered {
         if used >= budget {
             break;
         }
@@ -166,6 +191,42 @@ pub fn build_pack(repo_root: &Path, options: PackOptions) -> Result<String> {
         )),
         PackFormat::Json => format_json(repo_root, profile, budget, used, context, files, safety),
     }
+}
+
+/// Rank reasons by how load-bearing they are for the task at hand.
+/// `changed` beats `semantic` because a file the user just touched is why they
+/// are packing at all; both beat `top-file`, which is only filler.
+fn reason_priority(reason: &str) -> u8 {
+    match reason {
+        "changed" => 0,
+        "semantic" => 1,
+        _ => 2,
+    }
+}
+
+/// Order the selected paths so the budget cuts the least important files.
+fn order_by_priority(
+    selected: &BTreeSet<String>,
+    reasons: &std::collections::BTreeMap<String, String>,
+    graph_ranks: &std::collections::HashMap<String, f32>,
+) -> Vec<String> {
+    let mut ordered: Vec<String> = selected.iter().cloned().collect();
+    ordered.sort_by(|a, b| {
+        let pa = reason_priority(reasons.get(a).map(String::as_str).unwrap_or(""));
+        let pb = reason_priority(reasons.get(b).map(String::as_str).unwrap_or(""));
+        let ra = graph_ranks
+            .get(&a.replace('\\', "/"))
+            .copied()
+            .unwrap_or(0.0);
+        let rb = graph_ranks
+            .get(&b.replace('\\', "/"))
+            .copied()
+            .unwrap_or(0.0);
+        pa.cmp(&pb)
+            .then_with(|| rb.partial_cmp(&ra).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| a.cmp(b))
+    });
+    ordered
 }
 
 fn selected_paths(repo_root: &Path, task: &str, budget: usize) -> Result<BTreeSet<String>> {
@@ -435,6 +496,75 @@ pub fn write_or_print(output: Option<PathBuf>, content: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reasons_of(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(p, r)| (p.to_string(), r.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn budget_order_puts_changed_and_semantic_before_filler() {
+        // The defect this pins: `selected` is a BTreeSet, so the budget used to
+        // cut files alphabetically — `zzz.rs` (a changed file) lost to `aaa.rs`
+        // (filler) purely because of its name.
+        let selected: BTreeSet<String> = ["aaa.rs", "mmm.rs", "zzz.rs"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let reasons = reasons_of(&[
+            ("aaa.rs", "top-file"),
+            ("mmm.rs", "semantic"),
+            ("zzz.rs", "changed"),
+        ]);
+        let ordered = order_by_priority(&selected, &reasons, &std::collections::HashMap::new());
+        assert_eq!(ordered, vec!["zzz.rs", "mmm.rs", "aaa.rs"]);
+    }
+
+    #[test]
+    fn graph_rank_breaks_ties_within_the_same_reason() {
+        let selected: BTreeSet<String> = ["a.rs", "b.rs", "c.rs"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let reasons = reasons_of(&[
+            ("a.rs", "semantic"),
+            ("b.rs", "semantic"),
+            ("c.rs", "semantic"),
+        ]);
+        let ranks: std::collections::HashMap<String, f32> = [
+            ("a.rs".to_string(), 0.01),
+            ("b.rs".to_string(), 0.90),
+            ("c.rs".to_string(), 0.40),
+        ]
+        .into_iter()
+        .collect();
+        // The file other code depends on wins, regardless of filename.
+        let ordered = order_by_priority(&selected, &reasons, &ranks);
+        assert_eq!(ordered, vec!["b.rs", "c.rs", "a.rs"]);
+    }
+
+    #[test]
+    fn ordering_is_deterministic_without_graph_ranks() {
+        // No index graph (fresh repo): fall back to a stable alphabetical order
+        // rather than an arbitrary one.
+        let selected: BTreeSet<String> = ["b.rs", "a.rs"].iter().map(|s| s.to_string()).collect();
+        let reasons = reasons_of(&[("a.rs", "semantic"), ("b.rs", "semantic")]);
+        let ranks = std::collections::HashMap::new();
+        assert_eq!(
+            order_by_priority(&selected, &reasons, &ranks),
+            vec!["a.rs", "b.rs"]
+        );
+    }
+
+    #[test]
+    fn unknown_reason_sorts_as_filler() {
+        let selected: BTreeSet<String> = ["a.rs", "b.rs"].iter().map(|s| s.to_string()).collect();
+        let reasons = reasons_of(&[("a.rs", "mystery"), ("b.rs", "semantic")]);
+        let ordered = order_by_priority(&selected, &reasons, &std::collections::HashMap::new());
+        assert_eq!(ordered, vec!["b.rs", "a.rs"]);
+    }
 
     #[test]
     fn excludes_sensitive_paths() {

@@ -163,7 +163,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Exact search** | Regex/literal search over indexed content, no embedding (`tokenix grep`) |
 | **One-call task context** | `tokenix context` combines semantic search, entry points, and compact outlines with strict budget modes (`plan`, `debug`, `audit`, `security`, `review`) |
 | **Graph-aware explore** | `tokenix explore` returns related symbols, relationship maps, and grouped source in one capped call |
-| **Repository pack** | `tokenix pack` emits a budgeted, secret-safe repo map with changed-file packs, token maps, and safety reporting |
+| **Repository pack** | `tokenix pack` emits a budgeted, secret-safe repo map with changed-file packs, token maps, and safety reporting. When the budget forces cuts, files are kept by *why they are there* (changed > semantic hit > filler) and then by PageRank centrality — never by filename order |
 | **Symbol graph** | `tokenix symbols` (`--kind` filters by symbol type), `callers`, `callees`, `impact`, `flow`, and `cycles` trace relationships, call-flow, and circular deps between indexed symbols |
 | **Import graph** | `tokenix deps FILE` shows file-level import dependencies (`--reverse` for importers, `--transitive` to follow the chain); external deps are tracked too |
 | **Int8-quantized embeddings** | Vectors are stored int8-quantized (4x smaller DB + daemon RAM, near-identical recall); legacy f32 indexes migrate automatically on the next `tokenix index` |
