@@ -199,6 +199,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Reversible compression** | Every compressed run stashes its raw output content-addressed; `tokenix retrieve <key>` returns the exact bytes, so recovery is never a re-run |
 | **Cross-call dedup** | A successful command whose output is byte-identical to a recent call collapses to a one-line marker pointing at the earlier call and its stash key (`TOKENIX_DEDUP=0` to disable) |
 | **Re-read suppression** | Re-reading an unchanged file you already received in full is answered with a pointer instead of the file (`TOKENIX_READ_DEDUP=0`, TTL `TOKENIX_READ_DEDUP_TTL`) |
+| **MCP result compression** | `tokenix mcp-proxy -- <server cmd>` wraps any stdio MCP server and runs its tool results through the same pipeline (base64 redaction, JSON compaction, caps) — the only path that reaches MCP output, since hooks never see it |
 | **Session audit** | `tokenix session-audit --cache-hygiene` combines index freshness, hook history, MCP/tool weight, and prompt-cache stability risks |
 | **Conversation token-waste audit** | `tokenix conversation-audit` scans local Claude / Codex / Copilot / OpenAI histories for large assistant-visible blobs such as full reads, command logs, bootstrap prompts, connector JSON, images, patches, and task artifacts |
 | **Conversation secret scan** | `tokenix scan-secrets` — gitleaks-style credential scan of Claude / Gemini / Copilot / Antigravity conversation transcripts (no git); findings are always redacted, exits non-zero when any are found. Patterns live in TOML (`assets/secret-rules/`), extensible via `~/.tokenix/secret-rules/*.toml` or `<repo>/.tokenix/secret-rules/*.toml` |
@@ -370,6 +371,35 @@ MCP schemas are not the only variable weight, so the audit also measures the
 Only the always-on part counts toward the per-agent total; skill bodies are
 reported separately so the estimate is not inflated by content that may never
 load.
+
+### Compressing MCP tool results
+
+`prompt-audit` measures what MCP *schemas* cost. The other half — what MCP tools
+*return* — is invisible to hooks: a PreToolUse hook fires on the agent's own
+tools (Read/Grep/Bash), never on an MCP server's response, and Claude Code
+installs no PostToolUse hook. A browser snapshot or an image-generation result
+therefore reaches the model at full price.
+
+Wrapping the server is the one path that reaches it:
+
+```jsonc
+// before
+{ "command": "npx", "args": ["-y", "some-mcp-server"] }
+
+// after — same server, results compressed on the way back
+{ "command": "tokenix",
+  "args": ["mcp-proxy", "--name", "some-mcp", "--", "npx", "-y", "some-mcp-server"] }
+```
+
+The proxy forwards JSON-RPC in both directions untouched and only rewrites the
+`text` blocks of `tools/call` results, through the same pipeline as shell output
+(base64/data-URI redaction first, then JSON compaction, repeat collapsing and
+the token cap). It never rewrites requests, never touches `tools/list` schemas
+(shrinking a tool description changes what the model believes the tool does),
+never touches `image` blocks (those are what your host renders), and leaves a
+block untouched when compression would not make it smaller. Savings are logged
+as `mcp:<name>` so `tokenix gain` prices them alongside everything else.
+`TOKENIX_MCP_PROXY=0` turns the rewriting off while leaving the proxy in place.
 
 For MCP hosts that support progressive discovery, run `tokenix mcp --profile slim`.
 The slim profile advertises only `tokenix_context`, `tokenix_search_tools`, and
