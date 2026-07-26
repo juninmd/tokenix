@@ -125,6 +125,48 @@ fn empty_tool_name_passes_through() {
     assert!(stdout.trim().is_empty());
 }
 
+/// An uncapped content grep must come back with a `head_limit` injected — and
+/// it must work from a temp cwd with no index at all, since the stale-index gate
+/// exits before the tool handlers.
+#[test]
+fn uncapped_content_grep_gets_head_limit() {
+    let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"pattern":"foo","output_mode":"content","-C":3}}"#;
+    let (stdout, code) = run_hook(payload);
+    assert_eq!(code, 0);
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|_| panic!("expected JSON: {stdout}"));
+    let updated = &v["hookSpecificOutput"]["updatedInput"];
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert!(
+        updated["head_limit"].is_number(),
+        "grep must be capped: {stdout}"
+    );
+    assert_eq!(updated["pattern"], "foo", "original args preserved");
+    assert_eq!(updated["-C"], 3);
+}
+
+#[test]
+fn bounded_grep_passes_through_untouched() {
+    let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"pattern":"foo","output_mode":"content","head_limit":20}}"#;
+    let (stdout, code) = run_hook(payload);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "agent-bounded grep must not be rewritten: {stdout}"
+    );
+}
+
+#[test]
+fn files_with_matches_grep_passes_through() {
+    let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"pattern":"foo","output_mode":"files_with_matches"}}"#;
+    let (stdout, code) = run_hook(payload);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "cheap output mode must not be rewritten: {stdout}"
+    );
+}
+
 /// The PowerShell tool routes through `run --shell pwsh` with native-exe
 /// quoting — Windows-only behavior (exact tool name "PowerShell"; the
 /// lowercase variants route through the bash path).

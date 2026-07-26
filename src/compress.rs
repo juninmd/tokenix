@@ -61,7 +61,11 @@ fn compress_bash_output_for_stream(
         if is_stderr && !f.filter_stderr {
             return compress_output(s);
         }
-        return crate::filters::apply_filter_with_exit(s, f, exit_ok);
+        // The global ceiling applies to filtered output too: a filter's own caps
+        // are per-filter, and a passthrough fallback (`passthrough_when_emptied`,
+        // failure-signal passthrough, `never_worse`) can hand back the full raw
+        // output, which is exactly the shape this cap exists to bound.
+        return enforce_token_budget(&crate::filters::apply_filter_with_exit(s, f, exit_ok));
     }
 
     // No filter matched — record for later analysis (tokenix filter list).
@@ -1260,15 +1264,151 @@ pub fn compress_output(s: &str) -> String {
     // The other transforms (ANSI, emoji, blank lines) don't apply to JSON.
     let compacted = compact_json(s);
     if compacted != s {
-        return compacted;
+        return enforce_token_budget(&compacted);
     }
     let s = strip_ansi(s);
     let s = remove_emojis(&s);
     let s = collapse_blank_lines(&s);
+    let s = group_repeated_blocks(&s);
     let s = group_repeated_lines(&s);
 
     // Additional generic aggressive compression
-    generic_aggressive_compress(&s)
+    enforce_token_budget(&generic_aggressive_compress(&s))
+}
+
+/// Absolute ceiling on how many tokens any single compressed output may cost.
+/// The line-based caps (`generic_aggressive_compress`) cannot bound output that
+/// is few-but-enormous lines (a one-line JSON payload, a minified bundle, a grep
+/// hit with megabyte-long lines), and the `compact_json` early return bypasses
+/// them entirely — a 3 MB tool result compacted by 10% still costs ~700k tokens.
+/// Override with `TOKENIX_MAX_OUTPUT_TOKENS`; `0` disables the cap.
+const DEFAULT_MAX_OUTPUT_TOKENS: usize = 8000;
+
+fn max_output_tokens() -> usize {
+    std::env::var("TOKENIX_MAX_OUTPUT_TOKENS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+}
+
+/// Clip `s` to the global token budget, keeping a head and a tail window so both
+/// the command's opening context and its (usually load-bearing) final lines
+/// survive. Char boundaries are respected, so UTF-8 output stays valid.
+fn enforce_token_budget(s: &str) -> String {
+    let budget = max_output_tokens();
+    if budget == 0 || s.is_empty() {
+        return s.to_string();
+    }
+    let tokens = count_tokens(s);
+    if tokens <= budget {
+        return s.to_string();
+    }
+
+    // Convert the token budget into a char budget using this payload's own
+    // observed density, rather than assuming a fixed chars-per-token ratio.
+    let char_count = s.chars().count();
+    let chars_per_token = (char_count as f64 / tokens as f64).max(1.0);
+    let char_budget = (budget as f64 * chars_per_token) as usize;
+    if char_budget >= char_count {
+        return s.to_string();
+    }
+    let head_chars = char_budget * 3 / 4;
+    let tail_chars = char_budget.saturating_sub(head_chars);
+
+    let head_end = byte_index_at_char(s, head_chars);
+    let tail_start = byte_index_at_char(s, char_count.saturating_sub(tail_chars));
+    if tail_start <= head_end {
+        return s.to_string();
+    }
+
+    let omitted = tokens.saturating_sub(budget);
+    format!(
+        "{}\n[... {} tokens omitted by tokenix output cap ({} max; set TOKENIX_MAX_OUTPUT_TOKENS to change) ...]\n{}",
+        &s[..head_end],
+        omitted,
+        budget,
+        &s[tail_start..]
+    )
+}
+
+fn byte_index_at_char(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
+
+/// Longest block a repeat scan will consider. Loop bodies that spam a context
+/// window (a PowerShell exception block, a retry banner, a k8s poll report) are
+/// typically a handful of lines; scanning wider costs time for no real gain.
+const MAX_REPEAT_BLOCK_LINES: usize = 12;
+
+/// Collapse consecutive repetitions of a multi-line *block*.
+///
+/// `group_repeated_lines` only sees runs of identical adjacent lines, so a
+/// watch/poll loop that re-emits the same 8-line stanza hundreds of times slips
+/// through untouched (measured: a single monitoring session cost ~617k tokens
+/// this way). A block repeated 3+ times is kept once, annotated with the count.
+fn group_repeated_blocks(s: &str) -> String {
+    let trailing_newline = s.ends_with('\n');
+    let source = if trailing_newline {
+        &s[..s.len() - 1]
+    } else {
+        s
+    };
+    let lines: Vec<&str> = source.split('\n').collect();
+    // Below 6 lines there is nothing a 3x block repeat can be built from; above
+    // the ceiling the quadratic-ish scan is not worth it (the token cap and the
+    // line caps already bound outputs that large).
+    if lines.len() < 6 || lines.len() > 100_000 {
+        return s.to_string();
+    }
+
+    let mut result = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let mut collapsed = false;
+        // Prefer the smallest repeating unit: a 2-line stanza repeated 6x should
+        // report 6, not 3 repeats of a 4-line block.
+        for width in 2..=MAX_REPEAT_BLOCK_LINES.min((lines.len() - i) / 2) {
+            let block = &lines[i..i + width];
+            // A block of identical lines is a run, not a stanza: leave it to
+            // `group_repeated_lines`, which reports it as one line + a count
+            // instead of an arbitrary N-line window.
+            if block.iter().all(|l| *l == block[0]) {
+                continue;
+            }
+            let mut reps = 1;
+            while i + (reps + 1) * width <= lines.len()
+                && &lines[i + reps * width..i + (reps + 1) * width] == block
+            {
+                reps += 1;
+            }
+            if reps >= 3 {
+                for line in block {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+                result.push_str(&format!(
+                    "[block of {} lines repeated {}x]\n",
+                    width,
+                    reps - 1
+                ));
+                i += reps * width;
+                collapsed = true;
+                break;
+            }
+        }
+        if !collapsed {
+            result.push_str(lines[i]);
+            result.push('\n');
+            i += 1;
+        }
+    }
+    if !trailing_newline && result.ends_with('\n') {
+        result.pop();
+    }
+    result
 }
 
 fn generic_aggressive_compress(s: &str) -> String {
@@ -2364,6 +2504,93 @@ test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
     fn does_not_group_two_identical_lines() {
         let input = "a\na\nb\n";
         assert_eq!(group_repeated_lines(input), "a\na\nb\n");
+    }
+
+    #[test]
+    fn groups_repeated_multiline_blocks() {
+        // The monitoring-loop shape: an 3-line stanza re-emitted every poll.
+        let stanza = "SetValueInvocationException:\n  Line | 3 | $RawUI.CursorPosition\n  Exception setting CursorPosition\n";
+        let input = format!("{}header\n", stanza.repeat(5));
+        let output = group_repeated_blocks(&input);
+        assert!(
+            output.contains("[block of 3 lines repeated 4x]"),
+            "got: {output}"
+        );
+        assert_eq!(output.matches("SetValueInvocationException").count(), 1);
+        assert!(output.ends_with("header\n"));
+    }
+
+    #[test]
+    fn block_grouping_prefers_smallest_unit() {
+        let input = "a\nb\na\nb\na\nb\na\nb\nz\n";
+        let output = group_repeated_blocks(input);
+        assert_eq!(output, "a\nb\n[block of 2 lines repeated 3x]\nz\n");
+    }
+
+    #[test]
+    fn block_grouping_defers_identical_line_runs_to_line_grouping() {
+        // "a" x6 must stay a line run, not become a 2-line "block".
+        let input = "a\na\na\na\na\na\nz\n";
+        assert_eq!(group_repeated_blocks(input), input);
+        assert_eq!(group_repeated_lines(input), "a\n[repeated 5x]\nz\n");
+    }
+
+    #[test]
+    fn block_grouping_leaves_two_repeats_alone() {
+        let input = "a\nb\nc\na\nb\nc\nz\n";
+        assert_eq!(group_repeated_blocks(input), input);
+    }
+
+    #[test]
+    fn block_grouping_preserves_non_repeating_output() {
+        let input = "one\ntwo\nthree\nfour\nfive\nsix\nseven\n";
+        assert_eq!(group_repeated_blocks(input), input);
+    }
+
+    #[test]
+    fn token_budget_caps_single_giant_line() {
+        // The gap this closes: one enormous line has no line count to truncate on.
+        let giant = format!(
+            "prefix {} suffix",
+            "lorem ipsum dolor sit amet ".repeat(20_000)
+        );
+        let out = enforce_token_budget(&giant);
+        assert!(out.contains("tokens omitted by tokenix output cap"));
+        assert!(count_tokens(&out) < count_tokens(&giant) / 2);
+        assert!(out.starts_with("prefix "));
+        assert!(out.ends_with(" suffix"));
+    }
+
+    #[test]
+    fn token_budget_leaves_small_output_untouched() {
+        let s = "short output\nsecond line\n";
+        assert_eq!(enforce_token_budget(s), s);
+    }
+
+    #[test]
+    fn token_budget_is_utf8_safe() {
+        let s = "café ☕ ".repeat(30_000);
+        let out = enforce_token_budget(&s);
+        assert!(out.len() < s.len());
+        // Round-tripping through String proves no char boundary was split.
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn compress_output_caps_giant_compacted_json() {
+        // compact_json returned early with no cap: a huge payload shrank ~10% and
+        // still cost hundreds of thousands of tokens.
+        let items: Vec<String> = (0..40_000)
+            .map(|i| format!("{{\n  \"id\": {i},\n  \"name\": \"item number {i}\"\n}}"))
+            .collect();
+        let raw = format!("[\n{}\n]", items.join(",\n"));
+        let out = compress_output(&raw);
+        assert!(
+            count_tokens(&out) <= DEFAULT_MAX_OUTPUT_TOKENS + 64,
+            "cap not applied: {} tokens",
+            count_tokens(&out)
+        );
+        assert!(out.contains("tokens omitted by tokenix output cap"));
     }
 
     #[test]
