@@ -41,6 +41,7 @@ tokenix --help
 | `src/transcripts.rs` | Shared enumeration of local agent transcript files (`roots` per agent: Claude/Codex/Copilot/OpenAI, `transcript_files` walker). Single source of truth reused by `conversation-audit` and `usage` |
 | `src/usage.rs` | `tokenix usage` — absolute token spend + ≈USD cost parsed from transcript `message.usage` blocks (input/output/cache read+write), deduped by `(message.id, requestId)`. Aggregates by `daily\|weekly\|monthly\|session\|model\|project`; rolling 5-hour `blocks` with burn rate + projection; month-end forecast; `--cost-mode auto\|calculate\|display`; `--statusline`; `--all-projects` scope; `--json` |
 | `src/mcp.rs` | MCP server. `--profile full` exposes all tools; `--profile slim` exposes context/search/call meta-tools for progressive discovery |
+| `src/mcp_proxy.rs` | `tokenix mcp-proxy` — stdio JSON-RPC passthrough that compresses `tools/call` text results (the only reachable path for MCP output); see the section below for the contract |
 | `src/mcp_audit.rs` | `tokenix prompt-audit` / `session-audit` — per-agent MCP config discovery (Claude, Codex, Copilot, OpenCode, Antigravity) + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report + `context_weight()` (instruction files always-on, skills listing always-on / body on-invoke) |
 | `src/secrets_scan.rs` | `tokenix scan-secrets` — gitleaks-style credential scan of Claude/Gemini/Copilot/Antigravity conversation transcripts under `~`; rules loaded from TOML (`assets/secret-rules/` bundled via `rust-embed`, extended by `<repo>/` then `~/.tokenix/secret-rules/*.toml`, later `id` wins), backtracking-free regex + entropy-gated generic rule. Each finding is attributed to its repo + git branch via the transcript line's `cwd`/`gitBranch` (Claude), falling back to the project dir slug. Report supports `--filter` (substring), `--group <value\|rule\|agent\|file\|repo>`, `--reveal` (raw values, default redacted), `--json`; exit 1 on hits. `scan_findings()` returns structured `ScanFinding`s (raw + redacted) for the TUI; `redact_in_files()` rewrites `[REDACTED]` over a value in text files (SQLite DBs skipped) |
 | `src/egress_scan.rs` | `tokenix egress-audit` — scans Claude/Gemini/Copilot/Antigravity conversation transcripts for external DNS/IP destinations; bundled TOML rules live under `assets/egress-rules/`, local safe hosts are loaded from `~/.tokenix/safe-hosts.toml`, and local blocklist hosts from `~/.tokenix/dangerous-hosts.toml` (`dangerous`, `blocklist`, or `hosts` arrays); report supports `--filter`, `--group <host\|rule\|agent\|file>`, `--safe`, and `--json`. `scan_findings()` returns structured `EgressFinding`s for the TUI |
@@ -181,6 +182,29 @@ Legacy `hook-post` compression flows through (in order):
   and plain numbers are excluded), UUIDs, http(s) URLs, `E0308`-style codes —
   and appends up to 12 of them (≤240 chars) as `[ids kept from the omitted
   range: …]`.
+
+## MCP proxy (`src/mcp_proxy.rs`)
+
+`tokenix mcp-proxy [--name X] -- <server cmd>` wraps a stdio MCP server. This is
+the **only** path that reaches MCP tool output: PreToolUse fires on the agent's
+own tools, and Claude Code ships no PostToolUse
+([[project_claude_no_posttooluse_by_design]] in memory) — so an image-generation
+or browser-snapshot result was previously unreachable, which is where
+`conversation-audit`'s largest bucket (image-blob, millions of tokens) lives.
+
+Contract, deliberately narrow:
+- requests are forwarded **verbatim** — the proxy never rewrites what the agent asks for;
+- only `result.content[]` blocks with `type == "text"` are compressed, via
+  `compress_output` (base64 redaction → JSON compaction → repeat collapse → cap);
+- `image` blocks are never touched (the host renders them);
+- `tools/list` schemas are never touched (a shortened description changes what
+  the model believes the tool does — that is mcp-compressor's trade, not ours);
+- per-block `never worse`: the original text stays when compression is not smaller;
+- results under `MIN_RESULT_TOKENS` (200) pass through untouched;
+- anything unparseable is forwarded as-is; child stderr is inherited.
+
+Savings log as `tool="MCP"`, `phase="proxy"`, `command="mcp:<name>"`, so `gain`
+counts them under command filters. `TOKENIX_MCP_PROXY=0` disables the rewriting.
 
 ## Recall (`src/recall.rs`)
 

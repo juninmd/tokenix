@@ -16,6 +16,7 @@ mod hook;
 mod indexer;
 mod mcp;
 mod mcp_audit;
+mod mcp_proxy;
 mod memory;
 mod pack;
 mod query;
@@ -622,6 +623,16 @@ enum Commands {
         #[arg(long, default_value = "auto")]
         shell: String,
     },
+    /// Wrap another MCP server and compress its tool results before they reach
+    /// the agent (the only path that reaches MCP output — hooks cannot)
+    McpProxy {
+        /// Label for this server in `tokenix gain` (defaults to the program name)
+        #[arg(long)]
+        name: Option<String>,
+        /// Server command after `--`, e.g. `-- npx -y some-mcp-server`
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
     /// Print an output stashed by a previous compressed run (see the key in a
     /// `[tokenix: ...]` marker) — recovery without re-running the command
     Retrieve {
@@ -1144,6 +1155,21 @@ fn main() -> Result<()> {
             shell,
         } => {
             let code = compress::run_command_and_compress(&command, &shell)?;
+            std::process::exit(code);
+        }
+        Commands::McpProxy { name, command } => {
+            let label = name.unwrap_or_else(|| {
+                command
+                    .first()
+                    .map(|p| {
+                        std::path::Path::new(p)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| p.clone())
+                    })
+                    .unwrap_or_else(|| "mcp".to_string())
+            });
+            let code = mcp_proxy::run_proxy(&label, &command)?;
             std::process::exit(code);
         }
         Commands::Retrieve { key } => match recall::retrieve(&key) {
