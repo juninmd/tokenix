@@ -1,6 +1,7 @@
 [filters.hyperfine]
 description = "Keep hyperfine mean timings and comparison summary, drop range/warmup detail"
 match_command = "^hyperfine\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

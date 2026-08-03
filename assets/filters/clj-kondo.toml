@@ -1,6 +1,7 @@
 [filters.clj-kondo]
 description = "Keep clj-kondo warnings/errors and the linting summary line"
 match_command = "^clj-kondo\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

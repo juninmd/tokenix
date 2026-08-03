@@ -1,6 +1,7 @@
 [filters.buildah]
 description = "Keep buildah build STEP/COMMIT lines and errors, drop layer noise"
 match_command = "^buildah\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

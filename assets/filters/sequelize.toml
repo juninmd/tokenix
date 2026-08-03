@@ -17,6 +17,10 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 80
+match_output = [
+  { pattern = "No migrations were executed", message = "sequelize: nothing to migrate", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "sequelize: nothing to migrate"
 
 [[tests.sequelize]]

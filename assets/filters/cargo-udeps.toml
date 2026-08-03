@@ -15,6 +15,10 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 80
+match_output = [
+  { pattern = "All deps seem to have been used", message = "cargo-udeps: no unused dependencies", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "cargo-udeps: no unused dependencies"
 
 [[tests.cargo-udeps]]

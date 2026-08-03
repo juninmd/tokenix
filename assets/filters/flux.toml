@@ -17,6 +17,10 @@ keep_lines_matching = [
   "(?i)fail",
 ]
 max_lines = 60
+match_output = [
+  { pattern = "no changes detected", message = "flux: nothing to report", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "flux: nothing to report"
 
 [[tests.flux]]

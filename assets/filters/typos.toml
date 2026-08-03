@@ -1,6 +1,7 @@
 [filters.typos]
 description = "Keep typos findings (word + location), drop source-context rendering"
 match_command = "^typos\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

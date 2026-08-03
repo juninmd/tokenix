@@ -1,6 +1,7 @@
 [filters.mockgen]
 description = "Surface mockgen errors, collapse silent success"
 match_command = "^mockgen\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

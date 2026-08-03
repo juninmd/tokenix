@@ -1,6 +1,7 @@
 [filters.changeset]
 description = "Keep changeset bump/status lines, drop blanks"
 match_command = "^(npx\\s+)?changeset\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

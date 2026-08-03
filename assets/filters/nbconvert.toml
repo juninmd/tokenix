@@ -1,6 +1,7 @@
 [filters.nbconvert]
 description = "Keep jupyter nbconvert output-written lines and errors"
 match_command = "^jupyter\\s+nbconvert\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

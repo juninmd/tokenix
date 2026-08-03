@@ -1,6 +1,7 @@
 [filters.buf]
 description = "Compact buf lint/build/breaking output, keep diagnostics"
 match_command = "^buf\\s+(lint|build|breaking|generate|format)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

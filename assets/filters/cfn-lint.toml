@@ -1,6 +1,7 @@
 [filters.cfn-lint]
 description = "Keep cfn-lint findings (rule code + location), drop blanks"
 match_command = "^cfn-lint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

@@ -1,6 +1,7 @@
 [filters.kustomize]
 description = "Summarize kustomize build YAML to resource kind+name per document"
 match_command = "^kustomize\\s+build\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 keep_lines_matching = [
   "^kind:",

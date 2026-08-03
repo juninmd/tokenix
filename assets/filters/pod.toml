@@ -1,6 +1,7 @@
 [filters.pod]
 description = "Keep CocoaPods install result and errors, drop per-pod install lines"
 match_command = "^pod\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

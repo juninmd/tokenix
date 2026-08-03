@@ -1,6 +1,7 @@
 [filters.bru]
 description = "Bruno CLI (@usebruno/cli) — requests, tests, summary"
 match_command = "\\bbru\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 keep_lines_matching = [
   "^[A-Za-z][A-Za-z0-9_/\\-]+ \\([0-9]{3}",

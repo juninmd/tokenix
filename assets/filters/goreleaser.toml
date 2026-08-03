@@ -1,6 +1,7 @@
 [filters.goreleaser]
 description = "Keep goreleaser result and errors, drop routine build bullets"
 match_command = "^goreleaser\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

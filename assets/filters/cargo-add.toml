@@ -1,6 +1,7 @@
 [filters.cargo-add]
 description = "Keep cargo add dependency lines, drop index update and feature dumps"
 match_command = "^cargo\\s+add\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

@@ -1,6 +1,7 @@
 [filters.infracost]
 description = "Keep infracost project totals and cost lines, drop sub-resource detail"
 match_command = "^infracost\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

@@ -1,6 +1,7 @@
 [filters.moon]
 description = "Keep moon task summary and failures, drop per-task progress bars"
 match_command = "^moon\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

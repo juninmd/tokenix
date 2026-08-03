@@ -972,9 +972,9 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
         }
 
         // 2. Otherwise check for other active filters to wrap in tokenix run
-        let filters = crate::filters::load_all_filters();
         let unwrapped =
             crate::filters::unwrap_shell_runner(command).unwrap_or_else(|| command.to_string());
+        let filters = crate::filters::load_filters_for_command(&unwrapped);
 
         if crate::filters::find_filter(&unwrapped, &filters).is_some() {
             let exe_path = std::env::current_exe()
@@ -1051,7 +1051,7 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
             pass_through(antigravity);
         }
 
-        let filters = crate::filters::load_all_filters();
+        let filters = crate::filters::load_filters_for_command(command);
         if crate::filters::find_filter(command, &filters).is_some() {
             let exe_path = std::env::current_exe()
                 .map(|p| p.to_string_lossy().replace('\\', "/"))

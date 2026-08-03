@@ -1,6 +1,7 @@
 [filters.please]
 description = "Keep please (plz) build result and failures, drop per-target progress"
 match_command = "^(plz|please)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

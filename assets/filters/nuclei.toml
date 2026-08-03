@@ -18,6 +18,10 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 100
+match_output = [
+  { pattern = "No results found", message = "nuclei: no findings", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "nuclei: no findings"
 token_budget = 2000
 

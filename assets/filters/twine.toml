@@ -1,6 +1,7 @@
 [filters.twine]
 description = "Keep twine uploaded artifacts and view URL, drop progress bars"
 match_command = "^twine\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

@@ -1,6 +1,7 @@
 [filters.kafka-topics]
 description = "Keep kafka-topics descriptions and errors, drop blanks"
 match_command = "^kafka-topics(\\.sh)?\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

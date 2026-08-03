@@ -1,6 +1,7 @@
 [filters.nox]
 description = "Keep nox session start/result lines and the multi-session summary, drop inner command echoes"
 match_command = "^nox\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

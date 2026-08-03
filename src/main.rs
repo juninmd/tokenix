@@ -50,6 +50,13 @@ struct Cli {
     #[arg(long, global = true)]
     only_cpu: bool,
 
+    /// Print plain text instead of opening the interactive shell. Human report
+    /// commands (stats, doctor, gain, usage, tokenmap, graph, scan-secrets,
+    /// egress-audit, filter list) open the shell on their tab when stdout is a
+    /// terminal; this flag (or TOKENIX_NO_TUI=1) forces the old plain output.
+    #[arg(long, global = true)]
+    no_tui: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -868,6 +875,184 @@ enum RecordAction {
     Status,
 }
 
+/// The shell entry a direct command should be redirected to, or `None` when it
+/// must keep printing: not a terminal, `--no-tui`/`TOKENIX_NO_TUI`, or the
+/// invocation asked for output the tab cannot represent (JSON, a status line,
+/// a file/HTML target, a drill-down index, `--history`, `--economics`, …).
+///
+/// This table is the single place that decides CLI-vs-shell. Agent-facing
+/// commands are absent on purpose — a hook, `run`, `mcp` or `query` must never
+/// be answered with a terminal UI.
+fn tui_entry_for(command: &Commands) -> Option<tui::Entry> {
+    let (machine, entry) = tui_target(command)?;
+    tui::should_open(machine).then_some(entry)
+}
+
+/// The pure half of the rule: where a command *would* open and whether this
+/// invocation demands plain output. Split out from the TTY gate so the whole
+/// table is unit-testable.
+fn tui_target(command: &Commands) -> Option<(bool, tui::Entry)> {
+    // (this invocation needs plain output, where it would open)
+    let (machine, entry) = match command {
+        Commands::Stats { path } => (elsewhere(path), tui::Entry::tab(tui::Cmd::Stats)),
+        Commands::Doctor => (false, tui::Entry::tab(tui::Cmd::Doctor)),
+        // Exhaustive on purpose: destructuring every field means a new flag
+        // cannot be added without the compiler forcing a decision here, which
+        // is how flags stopped being silently dropped by the redirect.
+        Commands::Tokenmap {
+            format,
+            path,
+            output: _,
+        } => (
+            !format.eq_ignore_ascii_case("text") || elsewhere(path),
+            tui::Entry::tab(tui::Cmd::Tokenmap),
+        ),
+        Commands::Graph {
+            format,
+            output,
+            top,
+            path,
+        } => (
+            !format.eq_ignore_ascii_case("text")
+                || output.is_some()
+                || *top != 30
+                || elsewhere(path),
+            tui::Entry::tab(tui::Cmd::Graph),
+        ),
+        Commands::Gain {
+            history,
+            cost_estimate,
+            economics,
+            global,
+            path,
+        } => (
+            // The Gain tab renders the headline + source split + tables and
+            // toggles the cost table; per-call history and the transcript-mix
+            // economics view have no tab equivalent, so they stay on stdout.
+            *history || *economics || elsewhere(path),
+            tui::Entry {
+                tab: tui::Cmd::Gain,
+                global: *global,
+                gain_cost: *cost_estimate,
+                ..tui::Entry::default()
+            },
+        ),
+        Commands::Usage {
+            group,
+            since,
+            until,
+            all_projects,
+            cost_mode,
+            statusline,
+            json,
+            path,
+        } => (
+            *json
+                || *statusline
+                || since.is_some()
+                || until.is_some()
+                || elsewhere(path)
+                // The tab re-runs `usage <group> [--all-projects]`; anything
+                // else the invocation asked for would be silently dropped.
+                || !matches!(cost_mode, usage::CostMode::Auto),
+            tui::Entry {
+                tab: tui::Cmd::Usage,
+                usage_group: usage_tab_index(group)?,
+                global: *all_projects,
+                ..tui::Entry::default()
+            },
+        ),
+        Commands::ScanSecrets {
+            agent,
+            filter,
+            group,
+            reveal,
+            json,
+        } => (
+            *json
+                || filter.is_some()
+                || *reveal
+                // The tab always scans every agent and owns its own grouping.
+                || !matches!(agent, ScanAgent::All)
+                || !matches!(group, GroupBy::None),
+            // The CLI scan is not repo-scoped; the tab defaults to the current
+            // repo, so open it on the all-repos view to keep the same meaning.
+            tui::Entry {
+                tab: tui::Cmd::Secrets,
+                global: true,
+                ..tui::Entry::default()
+            },
+        ),
+        Commands::EgressAudit {
+            agent,
+            filter,
+            group,
+            safe,
+            json,
+        } => (
+            *json
+                || filter.is_some()
+                || *safe
+                || !matches!(agent, EgressAgent::All)
+                || !matches!(group, EgressGroupBy::Host),
+            tui::Entry {
+                tab: tui::Cmd::Egress,
+                global: true,
+                ..tui::Entry::default()
+            },
+        ),
+        Commands::Discover {
+            agent,
+            top,
+            since_days,
+            json,
+        } => (
+            *json || *top != 15 || *since_days != 30 || !matches!(agent, ConversationAgent::All),
+            tui::Entry::tab(tui::Cmd::Discover),
+        ),
+        Commands::PromptAudit {
+            agent,
+            json,
+            recommend,
+            profile_impact,
+        } => (
+            *json || *recommend || *profile_impact || !matches!(agent, AuditAgent::All),
+            tui::Entry::tab(tui::Cmd::Audit),
+        ),
+        Commands::Filter { action } => match action {
+            None | Some(FilterAction::Active) => (false, tui::Entry::tab(tui::Cmd::Filters)),
+            // `filter list` ranks unfiltered commands — that is the Studio
+            // tab's left column, which also offers record/generate on it.
+            Some(FilterAction::List { index }) => {
+                (index.is_some(), tui::Entry::tab(tui::Cmd::Studio))
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some((machine, entry))
+}
+
+/// True when `--path` points somewhere other than the current directory. The
+/// shell always reports on the repo it was opened in, so a foreign `--path`
+/// must keep printing instead of silently answering about the wrong project.
+fn elsewhere(path: &Path) -> bool {
+    path != Path::new(".")
+}
+
+/// Usage breakdown → Usage tab index, or `None` for a breakdown the tab cannot
+/// cycle to (weekly / monthly), which therefore keeps printing.
+fn usage_tab_index(group: &usage::Group) -> Option<usize> {
+    match group {
+        usage::Group::Daily => Some(0),
+        usage::Group::Model => Some(1),
+        usage::Group::Blocks => Some(2),
+        usage::Group::Project => Some(3),
+        usage::Group::Session => Some(4),
+        _ => None,
+    }
+}
+
 fn find_repo_root(start: &Path) -> PathBuf {
     store::find_project_root(start)
 }
@@ -897,13 +1082,18 @@ fn main() -> Result<()> {
     let only_cpu = cli.only_cpu;
     crate::embed::set_force_cpu(only_cpu);
 
+    // `--no-tui` is just the flag form of the env every nested tokenix already
+    // honors, so a single check covers both the flag and self-exec'd children.
+    if cli.no_tui {
+        set_env_override(tui::NO_TUI_ENV, "1");
+    }
+
     // Bare `tokenix`: launch the interactive launcher on a TTY (one cursor menu
     // over the human commands), else fall back to the grouped help for pipes/CI.
     let command = match cli.command {
         Some(command) => command,
         None => {
-            use std::io::IsTerminal;
-            if std::io::stdout().is_terminal() {
+            if tui::should_open(false) {
                 return tui::run();
             }
             cmd.print_help()?;
@@ -911,6 +1101,16 @@ fn main() -> Result<()> {
             std::process::exit(0);
         }
     };
+
+    // One visual interface: a human report command run on a terminal opens the
+    // shell on its own tab instead of printing a second, divergent rendering.
+    // `machine` is the per-command "this invocation asked for text I must not
+    // swallow" test — JSON, a status line, a file/HTML target, or a flag the
+    // tab cannot express. Agent-facing commands (hook, run, mcp, query, …) are
+    // deliberately absent from this table.
+    if let Some(entry) = tui_entry_for(&command) {
+        return tui::run_entry(entry);
+    }
 
     let res = match command {
         Commands::Index {
@@ -1119,15 +1319,10 @@ fn main() -> Result<()> {
         Commands::Doctor => doctor::run_doctor(),
         Commands::Filter { action } => {
             let repo_root = find_repo_root(&PathBuf::from("."));
+            // A TTY already went to the Filters tab in `tui_entry_for`; getting
+            // here means plain output was asked for (pipe / --no-tui / CI).
             let Some(action) = action else {
-                // Bare `tokenix filter`: interactive browser on a TTY, else the
-                // plain list so pipes / CI keep working.
-                use std::io::IsTerminal;
-                return if std::io::stdout().is_terminal() {
-                    tui::run()
-                } else {
-                    cmd_filter::cmd_filter_list(None, &repo_root)
-                };
+                return cmd_filter::cmd_filter_list(None, &repo_root);
             };
             match action {
                 FilterAction::List { index } => cmd_filter::cmd_filter_list(index, &repo_root),
@@ -4408,6 +4603,128 @@ fn format_ts(ts: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parse a real argv through clap so the tests exercise the same
+    /// `Commands` values `main` dispatches on.
+    fn parse(argv: &[&str]) -> Commands {
+        Cli::try_parse_from(argv)
+            .expect("argv parses")
+            .command
+            .expect("subcommand")
+    }
+
+    #[test]
+    fn human_report_commands_target_their_tab() {
+        for (argv, tab) in [
+            (vec!["tokenix", "stats"], tui::Cmd::Stats),
+            (vec!["tokenix", "doctor"], tui::Cmd::Doctor),
+            (vec!["tokenix", "tokenmap"], tui::Cmd::Tokenmap),
+            (vec!["tokenix", "graph"], tui::Cmd::Graph),
+            (vec!["tokenix", "gain"], tui::Cmd::Gain),
+            (vec!["tokenix", "usage"], tui::Cmd::Usage),
+            (vec!["tokenix", "scan-secrets"], tui::Cmd::Secrets),
+            (vec!["tokenix", "egress-audit"], tui::Cmd::Egress),
+            (vec!["tokenix", "filter"], tui::Cmd::Filters),
+            (vec!["tokenix", "filter", "active"], tui::Cmd::Filters),
+            (vec!["tokenix", "filter", "list"], tui::Cmd::Studio),
+            (vec!["tokenix", "discover"], tui::Cmd::Discover),
+            (vec!["tokenix", "prompt-audit"], tui::Cmd::Audit),
+        ] {
+            let (machine, entry) = tui_target(&parse(&argv)).unwrap_or_else(|| {
+                panic!("{argv:?} should have a tab");
+            });
+            assert!(!machine, "{argv:?} should open the shell on a TTY");
+            assert!(entry.tab == tab, "{argv:?} opened the wrong tab");
+        }
+    }
+
+    #[test]
+    fn machine_and_unrepresentable_invocations_keep_printing() {
+        // Never swallow output the invocation explicitly asked for.
+        for argv in [
+            vec!["tokenix", "usage", "--json"],
+            vec!["tokenix", "usage", "--statusline"],
+            vec!["tokenix", "usage", "--since", "2026-01-01"],
+            vec!["tokenix", "usage", "weekly"],
+            vec!["tokenix", "gain", "--history"],
+            vec!["tokenix", "gain", "--economics"],
+            vec!["tokenix", "tokenmap", "--format", "html"],
+            vec!["tokenix", "graph", "--format", "dot"],
+            vec!["tokenix", "graph", "--output", "g.txt"],
+            vec!["tokenix", "graph", "--top", "5"],
+            vec!["tokenix", "scan-secrets", "--json"],
+            vec!["tokenix", "scan-secrets", "--reveal"],
+            vec!["tokenix", "egress-audit", "--json"],
+            vec!["tokenix", "filter", "list", "3"],
+            // The shell only ever reports on the repo it was opened in.
+            vec!["tokenix", "stats", "--path", "../other"],
+            vec!["tokenix", "gain", "--path", "../other"],
+            vec!["tokenix", "usage", "--path", "../other"],
+            vec!["tokenix", "tokenmap", "--path", "../other"],
+            vec!["tokenix", "graph", "--path", "../other"],
+            vec!["tokenix", "discover", "--json"],
+            vec!["tokenix", "discover", "--top", "5"],
+            vec!["tokenix", "prompt-audit", "--json"],
+            vec!["tokenix", "prompt-audit", "--recommend"],
+            // A flag the tab cannot express must not be silently dropped by
+            // the redirect — the tab would answer a different question.
+            vec!["tokenix", "usage", "--cost-mode", "calculate"],
+            vec!["tokenix", "scan-secrets", "--agent", "claude"],
+            vec!["tokenix", "scan-secrets", "--group", "repo"],
+            vec!["tokenix", "egress-audit", "--agent", "copilot"],
+            vec!["tokenix", "egress-audit", "--group", "rule"],
+            vec!["tokenix", "egress-audit", "--safe"],
+            vec!["tokenix", "prompt-audit", "--agent", "codex"],
+            vec!["tokenix", "discover", "--agent", "codex"],
+        ] {
+            let target = tui_target(&parse(&argv));
+            let opens = target.is_some_and(|(machine, _)| !machine);
+            assert!(!opens, "{argv:?} must keep its plain output");
+        }
+    }
+
+    #[test]
+    fn agent_facing_commands_never_open_the_shell() {
+        // A hook, a compressed run, an MCP session or a query is consumed by a
+        // program. Opening a terminal UI there would break the product.
+        for argv in [
+            vec!["tokenix", "hook"],
+            vec!["tokenix", "hook-post"],
+            vec!["tokenix", "hook-antigravity"],
+            vec!["tokenix", "run", "cargo test"],
+            vec!["tokenix", "mcp"],
+            vec!["tokenix", "query", "how does embedding work"],
+            vec!["tokenix", "context", "task"],
+            vec!["tokenix", "read", "src/main.rs"],
+            vec!["tokenix", "symbols", "run_hook"],
+            vec!["tokenix", "pack"],
+            vec!["tokenix", "index"],
+            vec!["tokenix", "serve"],
+            vec!["tokenix", "retrieve", "abc123"],
+            vec!["tokenix", "install-hook"],
+            vec!["tokenix", "benchmark"],
+        ] {
+            assert!(
+                tui_target(&parse(&argv)).is_none(),
+                "{argv:?} must never be redirected to the shell"
+            );
+        }
+    }
+
+    #[test]
+    fn scoping_flags_are_carried_into_the_tab() {
+        let (_, e) = tui_target(&parse(&["tokenix", "usage", "model", "--all-projects"])).unwrap();
+        assert_eq!(e.usage_group, 1);
+        assert!(e.global);
+
+        let (_, e) =
+            tui_target(&parse(&["tokenix", "gain", "--global", "--cost-estimate"])).unwrap();
+        assert!(e.global && e.gain_cost);
+
+        // The CLI scan is not repo-scoped, so the tab must open unscoped too.
+        let (_, e) = tui_target(&parse(&["tokenix", "scan-secrets"])).unwrap();
+        assert!(e.global);
+    }
 
     #[test]
     #[cfg(windows)] // codex_hook_ps1 is Windows-only; the test must be too.

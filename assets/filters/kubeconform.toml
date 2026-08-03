@@ -16,6 +16,8 @@ keep_lines_matching = [
   "Valid:",
 ]
 max_lines = 60
+passthrough_when_emptied = true
+uniform_success = { pattern = " is valid\\s*$", message = "kubeconform: {n} manifests valid" }
 on_empty = "kubeconform: all valid"
 token_budget = 2000
 
@@ -34,4 +36,4 @@ input = """
 fixtures/deployment.yaml - Deployment app is valid
 fixtures/service.yaml - Service web is valid
 """
-expected = "kubeconform: all valid"
+expected = "kubeconform: 2 manifests valid"

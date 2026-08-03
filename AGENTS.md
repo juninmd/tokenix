@@ -33,9 +33,9 @@ tokenix --help
 | `src/hook.rs` | `run_hook()` — called by PreToolUse hook. Tries daemon first for Grep. Thresholds (Read 200 lines / Grep 3 words) overridable via `[hook]` in `.tokenix.toml` (`read_min_lines`, `grep_min_words`). Read intercept `is_code` set is kept in sync with `chunker::detect_lang` (Rust/Py/TS/JS/Go/**C·C++·VB·SQL**); a large file in a supported-but-unlisted language used to pass through full. `try_grep_cap`/`grep_cap_input` + `input_rewrite_output` bound a lexical `output_mode="content"` Grep that carries no `head_limit` (`TOKENIX_GREP_HEAD_LIMIT`, default 100) — called both on the non-intercept path and inside the stale-index gate, since capping needs no index |
 | `src/daemon.rs` | Background TCP server (port 47392). Holds model + int8-quantized embedding cache (LRU, max 3 projects, content cap 1000). Bounded to 4 handler threads. Protocol: `search`/`health`/`status`; CLI `tokenix daemon status\|stop\|restart` |
 | `src/compress.rs` | Legacy `PostToolUse` compatibility compression + `tokenix run` command-output compression: ANSI strip, emoji removal, blank-line collapse, repeat grouping (identical lines **and** repeated 2–12 line blocks via `group_repeated_blocks`), a hard `enforce_token_budget` ceiling applied to every return path including the `compact_json` early return and the TOML-filter result (`TOKENIX_MAX_OUTPUT_TOKENS`, default 8000, `0` disables), JSON compaction, base64/data-URI blob redaction (`redact_base64_blobs` = `strip_base64_blobs` for single-line/data-URI runs ≥512 chars + `strip_wrapped_base64` for line-wrapped blocks — ≥5 pure-base64 lines ≥60 wide, e.g. PEM certs/keys/MIME; PEM `-----BEGIN/END-----` markers survive; `[<kind> omitted: N chars]` typed by decoded magic — `png image base64`/`jpeg image base64`/`pdf base64`/…, keeps any `data:<mime>;base64,` prefix; a run only redacts if `looks_like_base64` — mixed-case or a `+/=-_` symbol — so single-case pure-hex/all-digit runs like `.sha256` manifests or numeric columns are NOT eaten), cargo/git-log heuristics. `tokenix run` only applies command-specific filters to stderr when `filter_stderr=true`; otherwise stderr uses safe generic compression so errors are not turned into success sentinels. `run_hook_post` also processes **non-shell** tool results (e.g. MCP image-generation output) for base64-only redaction in dialects that can replace the result (Copilot); Claude/Codex post stays a no-op |
-| `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()`. `find_filter()` matches via `derive_command_candidates()`, which unwraps shell runners, strips `cd`/env prefixes, and `split_on_operators()` splits compound commands quote-aware on `&&`/`\|\|`/`;`/`\|` so anchored `match_command` patterns match a base command in any segment/position |
+| `src/filters.rs` | `FilterDef` (TOML schema), active filter listing, `load_user_filters()`, `load_bundled_filters()` (rust-embed), `apply_filter()`. `find_filter()` matches via `derive_command_candidates()`, which unwraps shell runners, strips `cd`/env prefixes, and `split_on_operators()` splits compound commands quote-aware on `&&`/`\|\|`/`;`/`\|` so anchored `match_command` patterns match a base command in any segment/position. **Hot path (hook / `tokenix run`) uses `load_filters_for_command()`, not `load_all_filters()`** — see "Filter resolution cost" below |
 | `src/cmd_filter.rs` | `tokenix filter list/active/generate` + `filter record start/stop/status` subcommands. `generate` prefers `recordings::read_samples` over a re-run, invokes a detected AI CLI, and saves to `~/.tokenix/filters/`; reused by the TUI Studio tab as a foreground drop-out |
-| `src/tui.rs` | Interactive ratatui shell shown by a bare `tokenix` / `tokenix filter` in a TTY (else falls back to help / `filter list`). Tab bar (`←`/`→`): **Stats** dashboard (wordmark + version + hook status + index summary, with selectable Index / Install hooks / Install binary actions — Index runs in the foreground with live progress, the two install actions confirm before writing; Install binary self-execs `tokenix install-binary`), **Filters** (3-pane groups · filters · live `apply_filter` input→output preview with a `chunker::count_tokens` gauge line showing `X → Y tokens · % saved` between the panes), **Studio** (surfaces the record→preview→generate filter loop: `r`/`s` arm/stop a `recordings::start`/`stop` session, left column is a unified candidate list from `cmd_filter::suggest_filters` — recordings unioned with the tokens-wasted ranking, badged `⚠` unfiltered sink (biggest waste first) / `✓` already filtered / `●` recorded-only — plus saved `~/.tokenix/filters/*.toml`, right pane previews a `recordings::read_samples` head with a live `apply_filter` before→after `chunker::count_tokens` delta when an active filter matches the base command; `g` sets `request_generate` to run `cmd_filter::cmd_filter_generate` as a foreground drop-out — same pattern as Index — then resumes the TUI; `x` deletes a saved filter with confirm; `Tab` switches pane), **Gain** (native colored render of `gain::compute_gain`: tokens-saved headline with ≈USD at the ★ reference model's input rate, savings-by-source split — semantic index vs command filters — and numbered by command / by project tables with share %, toggles `c`/`a`), **Usage** (self-exec captured `tokenix usage` via dynamic argv: `s` cycles daily/model/blocks/project/session, `a` toggles all-projects, `r` refresh), **Doctor**/**Tokenmap** (self-exec captured output), **Graph** (self-exec captured `tokenix graph` repo overview — god nodes / bottlenecks / blast radius; `r` refresh), **Secrets** (background-threaded `secrets_scan::scan_findings` with spinner; dedup by distinct value + count; `v` reveal, `c` copy raw value to system clipboard via `clip`/`pbcopy`/`wl-copy`/`xclip`/`xsel`, `x` write `[REDACTED]`), **Egress** (background-threaded `egress_scan::scan_findings` with the same 3-pane pattern as Secrets: groups · destinations · occurrence detail; `s` cycles host/rule/agent/file grouping; `r` rescans; host reputation colors: green safe, red dangerous, yellow unknown). Both Secrets and Egress open scoped to the current repo (cwd) and `g` toggles a global all-repos view; scoping filters the raw scan by each finding's attributed `repo` (`is_local` matches exact `cwd` paths plus Claude `~slug:`/Gemini `~dir:` fallback markers against the project root). **Loading is standardized:** every data-loading tab (Gain, Usage, Doctor, Tokenmap, Graph, Secrets, Egress) loads on a background thread behind one shared panel (`draw_loading` + `spinner_frame`, single `SPINNER_FRAMES`) so the shell never blocks and the braille spinner animates; the event loop polls at 120ms whenever any `*_rx` is in flight. Only Index still runs as a foreground drop-out (it needs the child's own live progress bar) |
+| `src/tui.rs` | Interactive ratatui shell — the **only** human interface. Entered by a bare `tokenix` or by any human report command on a TTY (see "One interface" below); `run_entry(Entry)` seeds the opening tab and its scope, `should_open()` is the single TTY/`--no-tui` gate, and `new_shell()` builds the state (split out so the shell is unit-testable). `switch_tab` calls `disarm()` so an armed destructive confirmation (redact / delete filter / install) can never survive a tab change; Studio generate/delete call `reload_filters()` so the Filters tab never lists a filter that no longer exists. Tab bar (`←`/`→`): **Stats** dashboard (wordmark + version + hook status + index summary, with selectable Index / Install hooks / Install binary actions — Index runs in the foreground with live progress, the two install actions confirm before writing; Install binary self-execs `tokenix install-binary`), **Filters** (3-pane groups · filters · live `apply_filter` input→output preview with a `chunker::count_tokens` gauge line showing `X → Y tokens · % saved` between the panes), **Studio** (surfaces the record→preview→generate filter loop: `r`/`s` arm/stop a `recordings::start`/`stop` session, left column is a unified candidate list from `cmd_filter::suggest_filters` — recordings unioned with the tokens-wasted ranking, badged `⚠` unfiltered sink (biggest waste first) / `✓` already filtered / `●` recorded-only — plus saved `~/.tokenix/filters/*.toml`, right pane previews a `recordings::read_samples` head with a live `apply_filter` before→after `chunker::count_tokens` delta when an active filter matches the base command; `g` sets `request_generate` to run `cmd_filter::cmd_filter_generate` as a foreground drop-out — same pattern as Index — then resumes the TUI; `x` deletes a saved filter with confirm; `Tab` switches pane), **Gain** (native colored render of `gain::compute_gain`: tokens-saved headline with ≈USD at the ★ reference model's input rate, savings-by-source split — semantic index vs command filters — and numbered by command / by project tables with share %, toggles `c`/`a`), **Usage** (self-exec captured `tokenix usage` via dynamic argv: `s` cycles daily/model/blocks/project/session, `a` toggles all-projects, `r` refresh), **Doctor**/**Tokenmap** (self-exec captured output), **Graph** (self-exec captured `tokenix graph` repo overview — god nodes / bottlenecks / blast radius; `r` refresh), **Secrets** (background-threaded `secrets_scan::scan_findings` with spinner; dedup by distinct value + count; `v` reveal, `c` copy raw value to system clipboard via `clip`/`pbcopy`/`wl-copy`/`xclip`/`xsel`, `x` write `[REDACTED]`), **Egress** (background-threaded `egress_scan::scan_findings` with the same 3-pane pattern as Secrets: groups · destinations · occurrence detail; `s` cycles host/rule/agent/file grouping; `r` rescans; host reputation colors: green safe, red dangerous, yellow unknown). Both Secrets and Egress open scoped to the current repo (cwd) and `g` toggles a global all-repos view; scoping filters the raw scan by each finding's attributed `repo` (`is_local` matches exact `cwd` paths plus Claude `~slug:`/Gemini `~dir:` fallback markers against the project root). **Loading is standardized:** every data-loading tab (Gain, Usage, Doctor, Tokenmap, Graph, Secrets, Egress) loads on a background thread behind one shared panel (`draw_loading` + `spinner_frame`, single `SPINNER_FRAMES`) so the shell never blocks and the braille spinner animates; the event loop polls at 120ms whenever any `*_rx` is in flight. Only Index still runs as a foreground drop-out (it needs the child's own live progress bar) |
 | `src/ui.rs` | Shared terminal-UI vocabulary for human-facing CLI output (`box_header`, `bar`, `section`/`kv`, `format_num`, `table` via `tabled`); LLM/JSON output deliberately does not route through it |
 | `src/gain.rs` | `compute_gain()`/`compute_global_gain()`, `GainStats` (incl. `index_saved`/`filter_saved` source split: empty `command` = semantic-index intercept, non-empty = command filter; pre-phase Bash/PowerShell rewrite markers are excluded from `filter_calls`), `MODELS` pricing table (Anthropic/OpenAI/Google, with `input`/`output`/`cache_read`/`cache_write` per-1M rates; `price_for` name/prefix match + `usage_cost` per-record helper reused by `tokenix usage`). Grep semantic intercepts are logged as neutral usage, not claimed savings, because native grep output is not measured before interception |
 | `src/transcripts.rs` | Shared enumeration of local agent transcript files (`roots` per agent: Claude/Codex/Copilot/OpenAI, `transcript_files` walker). Single source of truth reused by `conversation-audit` and `usage` |
@@ -45,7 +45,7 @@ tokenix --help
 | `src/mcp_audit.rs` | `tokenix prompt-audit` / `session-audit` — per-agent MCP config discovery (Claude, Codex, Copilot, OpenCode, Antigravity) + minimal synchronous MCP stdio client (`initialize`/`tools/list`) + token scoring/report + `context_weight()` (instruction files always-on, skills listing always-on / body on-invoke) |
 | `src/secrets_scan.rs` | `tokenix scan-secrets` — gitleaks-style credential scan of Claude/Gemini/Copilot/Antigravity conversation transcripts under `~`; rules loaded from TOML (`assets/secret-rules/` bundled via `rust-embed`, extended by `<repo>/` then `~/.tokenix/secret-rules/*.toml`, later `id` wins), backtracking-free regex + entropy-gated generic rule. Each finding is attributed to its repo + git branch via the transcript line's `cwd`/`gitBranch` (Claude), falling back to the project dir slug. Report supports `--filter` (substring), `--group <value\|rule\|agent\|file\|repo>`, `--reveal` (raw values, default redacted), `--json`; exit 1 on hits. `scan_findings()` returns structured `ScanFinding`s (raw + redacted) for the TUI; `redact_in_files()` rewrites `[REDACTED]` over a value in text files (SQLite DBs skipped) |
 | `src/egress_scan.rs` | `tokenix egress-audit` — scans Claude/Gemini/Copilot/Antigravity conversation transcripts for external DNS/IP destinations; bundled TOML rules live under `assets/egress-rules/`, local safe hosts are loaded from `~/.tokenix/safe-hosts.toml`, and local blocklist hosts from `~/.tokenix/dangerous-hosts.toml` (`dangerous`, `blocklist`, or `hosts` arrays); report supports `--filter`, `--group <host\|rule\|agent\|file>`, `--safe`, and `--json`. `scan_findings()` returns structured `EgressFinding`s for the TUI |
-| `src/discover.rs` | `tokenix discover` — scans agent transcripts (Claude `tool_use`/`tool_result`, Codex/OpenAI `function_call`/`function_call_output`, argv-array commands) and REPLAYS the current filter set over historical command outputs: measured recoverable savings (filter exists, hook wasn't active) + uncovered commands ranked by waste. Memoizes command→filter matches (`find_filter` recompiles regexes per call) |
+| `src/discover.rs` | `tokenix discover` — scans agent transcripts (Claude `tool_use`/`tool_result`, Codex/OpenAI `function_call`/`function_call_output`, argv-array commands) and REPLAYS the current filter set over historical command outputs: measured recoverable savings (filter exists, hook wasn't active) + uncovered commands ranked by waste. Memoizes command→filter matches |
 | `assets/filters/` | 528 TOML output filters embedded via `rust-embed`, each homologated with ≥2 golden `[[tests]]` cases (realistic success + failure-path inputs; the failure case must prove errors are never masked). 1146 cases run through the real `apply_filter` pipeline in `bundled_filters_pass_embedded_golden_tests`; `verbose_real_output_compresses_at_least_70pct` proves ≥70% reduction on realistic verbose output and `match_command_resolves_many_invocation_variants` homologates wrapper/shell/global-opt command variants. User filters in `~/.tokenix/filters/` take priority |
 
 ## SQLite Schema
@@ -94,7 +94,11 @@ Bash / PowerShell tools:
   uses `& 'exe' run --shell pwsh '<cmd>'`, re-executed under pwsh with UTF-8)
   otherwise → exit 0 (pass)
 
-Index missing or >1h old → always exit 0 regardless of tool
+Index stale → Grep still gets its head_limit cap, then exit 0 for every tool.
+  Staleness is NOT age-based: `store::index_staleness` flags a missing DB, a
+  missing `indexed_at`, an explicitly requested different embedding model, or a
+  changed git fingerprint (auto-updated when HEAD moved but the code is
+  identical).
 ```
 
 Matcher (installer): `^(Read|Grep|Bash|PowerShell|grep_search|run_in_terminal)$`.
@@ -248,6 +252,171 @@ match_output   = [{ pattern = "Success", message = "ok" }]
 max_lines      = 30
 ```
 
+## One interface: direct commands open the shell
+
+There is exactly one human-facing rendering, the ratatui shell. A human report
+command run on a terminal **redirects to its own tab** instead of printing a
+second, divergent view of the same data:
+
+| Command | Tab | Seeded state |
+|---|---|---|
+| `tokenix` (bare) | Stats | — |
+| `stats` | Stats | — |
+| `doctor` | Doctor | — |
+| `tokenmap` | Tokenmap | — |
+| `graph` | Graph | — |
+| `discover` | Discover | — |
+| `prompt-audit` | Audit | — |
+| `gain` | Gain | `--global`, `--cost-estimate` |
+| `usage [group]` | Usage | group (daily/model/blocks/project/session), `--all-projects` |
+| `scan-secrets` | Secrets | opens all-repos (the CLI scan is not repo-scoped) |
+| `egress-audit` | Egress | opens all-repos |
+| `filter`, `filter active` | Filters | — |
+| `filter list` | Studio | — |
+
+`main.rs::tui_target()` is the single decision table; `tui_entry_for()` adds the
+gate `tui::should_open()`. **The table must stay pure and testable** — the
+`tests::{human_report_commands_target_their_tab, machine_and_unrepresentable_invocations_keep_printing, agent_facing_commands_never_open_the_shell, scoping_flags_are_carried_into_the_tab}` cases lock it down.
+
+Plain output is kept whenever:
+- stdout is not a terminal (pipe, CI, capture);
+- `--no-tui` (global flag) or `TOKENIX_NO_TUI=1`;
+- the invocation asked for something a tab cannot represent: `--json`,
+  `--statusline`, `--format html|dot`, `--output <file>`, `--since/--until`,
+  `--filter`, `--reveal`, `gain --history/--economics`, `--top`/`--since-days`
+  other than the default (`graph`, `discover`), `prompt-audit
+  --recommend/--profile-impact`, `usage weekly|monthly`, `filter list <index>`,
+  or a `--path` pointing outside the current repo (the shell always reports on
+  the repo it was opened in).
+
+**Agent-facing commands are never redirected** — `hook`, `hook-post`,
+`hook-antigravity`, `run`, `mcp`, `query`, `context`, `read`, `symbols`,
+`pack`, `index`, `serve`, `retrieve`, `install-hook`, `prompt-audit`,
+`discover`, `benchmark`. A terminal UI in those paths would break the product.
+
+The shell's own self-exec captures (`capture()`, `run_index_foreground()`) set
+`TOKENIX_NO_TUI=1` on the child so a report tab can never spawn another shell.
+
+## Per-filter homologation
+
+Aggregate green is not per-filter green. `homologate_each_filter` (ignored by
+default — `cargo test --release --bin tokenix homologate -- --ignored
+--nocapture`) emits one TSV row per bundled filter: golden verdict, raw→filtered
+tokens and %, whether a golden case carries a failure signal, whether that case
+is masked, byte inflation, sentinel shape, prefilter class, and whether the
+filter fabricates its `on_empty` sentinel over unrecognized output.
+
+Status of the 528 bundled filters at the last full pass:
+
+| Property | Result |
+|---|---|
+| Golden cases byte-exact | 528/528 (1,146 cases) |
+| Never inflates non-empty output (`never_worse`) | 528/528 |
+| Never masks a failure signal | 528/528 |
+| Median per-filter token economy | 32% (mean 33%, max 88%) |
+| Fabricates a sentinel over unrecognized output | **36** (was 141) |
+| Golden cases include a failure-path input | 204/528 |
+
+Two findings from that pass are worth carrying forward:
+
+1. **The 89 filters fixed.** A filter whose sentinel only ever answers a
+   genuinely empty run (a silent linter) was answering *unrecognized non-empty*
+   output with the same "all clear". Adding `passthrough_when_emptied = true`
+   is behavior-preserving for every golden case (proven: the whole suite stayed
+   green) and replaces the lie with a bounded view of the real output.
+   `on_empty_sentinel_never_answers_unrecognized_output` locks this in.
+2. **The summary filters (52 → 40).** These legitimately collapse *recognized*
+   verbose output into a summary (proven by a golden case with non-empty
+   input), so passthrough alone would destroy their compression. The fix is
+   **positive evidence**, borrowed from rtk's `basedpyright` filter: pair a
+   `match_output` on the tool's own success marker with
+   `passthrough_when_emptied = true`. `match_output` short-circuits first, so
+   the clean run still collapses to one line; unrecognized output now falls
+   through to the real text instead of a fabricated "all clear".
+
+   ```toml
+   match_output = [
+     { pattern = "didn't find any unused dependencies",
+       message = "cargo-machete: no unused dependencies",
+       unless = "(?i)\\b(error|fatal|failed)\\b" },
+   ]
+   passthrough_when_emptied = true
+   ```
+
+   **For per-item tools that rule does not apply** — a `match_output` on
+   `PASS` fires on a run where item 3 failed. That is what `uniform_success`
+   exists for: it collapses only when EVERY significant line matches the pass
+   shape and at least one did, so a single dissenting line disqualifies the
+   whole run, and `{n}` reports the real item count.
+
+   ```toml
+   passthrough_when_emptied = true
+   uniform_success = { pattern = "^PASS - ", message = "conftest: {n} policies passed" }
+   ```
+
+   Converting a filter this way *promotes* it out of the summary group: with
+   the summary job handled by evidence, its `on_empty` only answers a genuinely
+   empty run, so `passthrough_when_emptied` becomes behavior-preserving.
+   Applied to conftest, kubeconform, prowler and lychee (40 → 36). Verified
+   end-to-end through the real binary, not just fixtures: uniform run →
+   `conftest: 3 policies passed`; one `FAIL` line → real output kept;
+   unrecognized output → real output kept.
+
+   Applied to the 12 whose marker is a whole-run summary (cargo-machete,
+   cargo-outdated, cargo-udeps, attw, dart-analyze, ggshield, istioctl, nuclei,
+   osv-scanner, atlas, flux, sequelize) — golden stayed green and mean economy
+   did not move. **The remaining 40 are deliberately untouched**: their marker
+   is per-item (`PASS`, `ok 1`, `[200]`, `is valid`), so a `match_output` on it
+   would short-circuit a run where *other* items failed. They need a
+   whole-run assertion, not a line marker. `report_sentinel_evidence_candidates`
+   (ignored test) prints the fixture that already contains each one's evidence.
+
+**Coverage note:** 324 filters have no failure-path golden case of their own.
+That is a corpus documentation gap, not a live hole —
+`bundled_filters_never_mask_generic_failure` feeds *every* bundled filter a
+synthetic failure payload and asserts a failure marker survives, so the
+guarantee holds for all 528 regardless.
+
+## Filter resolution cost (hook hot path)
+
+The `PreToolUse` hook is a fresh process on **every** Bash/PowerShell call, so
+filter resolution is latency, not throughput. Three mechanisms keep it cheap;
+all three are "skip work only" — none may change which filter is selected.
+
+1. **Prefilter (`prefilter_for`)** — a cheap NECESSARY condition derived from
+   the raw pattern text: `^cargo\s+test` → candidate must *start with* `cargo`;
+   `\bactionlint\b` / `^(npx\s+)?eslint\b` → candidate must *contain* the first
+   mandatory literal (case-folded for a leading `(?i)`). Unrecognized shapes
+   (mandatory alternation, nested groups) return `None` = always evaluate.
+   `literal_run` stops at `.` and `+` because those are metacharacters, and a
+   **top-level `|` alternation returns `None`** — only the first branch carries
+   the leading literal, so no single literal is mandatory (3 bundled patterns;
+   `select-string` is the one that was actually unsound). Guarded by
+   `prefilter_never_rejects_a_real_match`, which asserts
+   `regex matches ⇒ prefilter allows` over every bundled/user pattern against a
+   corpus of each filter's own literal **plus every `command` recorded in the
+   golden cases** — that corpus is what surfaced the alternation hole.
+2. **Lazy loading (`load_filters_for_command`)** — the bundled corpus is
+   indexed once per process by scanning each embedded file's `match_command`
+   off the raw text (`scan_bundled_anchors`, no TOML parse); only files whose
+   prefilter allows a candidate are parsed. `parse_filter_file_named` also cuts
+   the content at the first `[[tests]]` block (~60% of the bytes) and falls
+   back to a full parse if that head does not parse. Homologated by
+   `lazy_load_matches_full_load_for_commands` and
+   `scanned_anchor_never_overshoots_parsed_pattern`.
+3. **User filter index** — `~/.tokenix/filters/.prefilter-index.json` caches
+   per-file prefilters, validated against the directory listing (name + mtime +
+   size); any drift rebuilds the whole index. Without it, a user with hundreds
+   of generated filters pays ~15 ms of file I/O per hook call.
+
+Regexes are compiled at most once per process (`cached_regex`), including
+inside `apply_filter` — compiling per call made the TUI preview and
+`tokenix discover`'s replay loop recompile the same patterns thousands of
+times.
+
+Measured on Windows (528 bundled + 231 user filters), `tokenix hook` for a
+Bash command: **~59 ms → ~28 ms** end-to-end; `apply_filter` 1.28 ms → 0.07 ms.
+
 ## Prompt Audit (MCP/tool/context weight)
 
 `tokenix prompt-audit` estimates the variable cost of the effective system prompt
@@ -332,11 +501,11 @@ but a `node` grandchild may linger briefly until stdin EOF. Kill-the-tree
 
 **Add a language:** `chunker.rs` — add extension to `INDEXED_EXTS`, add `Lang` variant, map in `detect_lang()`, implement `chunk_<lang>()` following `chunk_rust()` pattern (tree-sitter), or `chunk_by_symbol_lines()` with a `<lang>_symbol_of()` line matcher when no grammar is bundled (see VB6/SQL). Also add the new `Lang` arms in `graph.rs` (`extract_references_tree_sitter`, `extract_file_imports`). Do NOT add to `INDEXED_EXTS` without a symbol-aware chunker.
 
-**Add a bundled filter:** create `assets/filters/<slug>.toml` with **≥2 embedded `[[tests.<name>]]` golden cases** (input/expected — enforced by `bundled_filters_require_minimum_tests`). Filters with an `on_empty` sentinel must NOT also set `passthrough_when_emptied` (they conflict; passthrough wins and the sentinel never fires), and any filter that can empty a failure payload must keep failure markers (`(?i)error|fail|fatal`) or set `passthrough_when_emptied` — else `bundled_filters_never_mask_generic_failure` fails. Rebuild — rust-embed includes it automatically. Homologate with `cargo test --bin tokenix filters::tests::` (golden + 70% economy + never-mask + no-inflate). Currently 528 filters · 1146 golden cases. Engine invariants: `never_worse` guarantees the filtered result never costs more bytes than the raw output (longer sentinel/notice → raw wins); `head_lines`+`tail_lines` together form a first+last window with an inline `[... N lines omitted ...]` middle marker; `apply_filter_with_exit` suppresses success sentinels on nonzero exit and honors per-filter `on_failure = "passthrough"|"tail:N"`; `priority_lines` survive every sizing cut; `category_caps` bound repetitive classes with a count marker; `FilterDef` is `deny_unknown_fields` (typo'd keys fail loudly — `tokenix filter verify` runs user/project golden tests from the installed binary). Repo-local `.tokenix/filters` are trust-gated (`tokenix trust`, SHA-256 in `~/.tokenix/trusted_filters.json`) and skipped until approved. Failed commands with clipped output tee the raw to `~/.tokenix/tee/` with a `[full output: path]` hint (TOKENIX_TEE=0 disables). `TOKENIX_DISABLED=1` prefix bypasses the hook per command (logged as action="bypassed").
+**Add a bundled filter:** create `assets/filters/<slug>.toml` with **≥2 embedded `[[tests.<name>]]` golden cases** (input/expected — enforced by `bundled_filters_require_minimum_tests`). `on_empty` and `passthrough_when_emptied` **compose — they do not conflict** (an earlier note here claimed otherwise; the code disagrees and 94 bundled filters ship with both, golden-green). The fallback in `apply_filter_with_exit` is gated on `!output.trim().is_empty()`, so passthrough only takes over when filtering emptied *non-empty* output; a genuinely empty run still gets the sentinel. Setting both is the recommended shape for a silent-on-success tool. Any filter that can empty a failure payload must keep failure markers (`(?i)error|fail|fatal`) or set `passthrough_when_emptied` — else `bundled_filters_never_mask_generic_failure` fails. Rebuild — rust-embed includes it automatically. Homologate with `cargo test --bin tokenix filters::tests::` (golden + 70% economy + never-mask + no-inflate). Currently 528 filters · 1146 golden cases. Engine invariants: `never_worse` guarantees the filtered result never costs more bytes than the raw output (longer sentinel/notice → raw wins); `head_lines`+`tail_lines` together form a first+last window with an inline `[... N lines omitted ...]` middle marker; `apply_filter_with_exit` suppresses success sentinels on nonzero exit and honors per-filter `on_failure = "passthrough"|"tail:N"`; `priority_lines` survive every sizing cut; `category_caps` bound repetitive classes with a count marker; `FilterDef` is `deny_unknown_fields` (typo'd keys fail loudly — `tokenix filter verify` runs user/project golden tests from the installed binary). Repo-local `.tokenix/filters` are trust-gated (`tokenix trust`, SHA-256 in `~/.tokenix/trusted_filters.json`) and skipped until approved. Failed commands with clipped output tee the raw to `~/.tokenix/tee/` with a `[full output: path]` hint (TOKENIX_TEE=0 disables). `TOKENIX_DISABLED=1` prefix bypasses the hook per command (logged as action="bypassed").
 
 **`filter record` token-economy preview:** `recordings::economy()` reconstructs each captured command's raw output (stripping the `$ cmd`/`--- stderr ---`/truncation scaffold), resolves the bundled filter via the real `find_filter`+`apply_filter` path, and reports `raw→filtered` tokens. `record stop`/`status` render it as a per-command compression bar + total via `print_economy_table` in `cmd_filter.rs`.
 
-**Change intercept threshold:** `hook.rs` constants — `MAX_INDEX_AGE_SECS`, `MIN_LINES_FOR_OUTLINE`, `MIN_QUERY_WORDS`.
+**Change intercept threshold:** `hook.rs` constants — `MIN_LINES_FOR_OUTLINE`, `MIN_QUERY_WORDS` (both overridable per project via `[hook]` in `.tokenix.toml`). Index staleness lives in `store::index_staleness` and is fingerprint-based, not age-based.
 
 **Extend hook to a new tool:**
 1. Add variant to `Tool` enum in `main.rs`

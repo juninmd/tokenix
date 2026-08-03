@@ -1,6 +1,7 @@
 [filters.restic]
 description = "Keep restic backup summary and snapshot id, drop scan progress"
 match_command = "^restic\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

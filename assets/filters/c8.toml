@@ -1,6 +1,7 @@
 [filters.c8]
 description = "Keep c8 coverage table rows with uncovered lines and the All-files summary"
 match_command = "^(npx\\s+)?c8\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

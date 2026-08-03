@@ -1,6 +1,7 @@
 [filters.actionlint]
 description = "Keep actionlint diagnostics, drop snippet context"
 match_command = "\\bactionlint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

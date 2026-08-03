@@ -18,6 +18,7 @@
 
   <p>
     <a href="#-quick-install">Install</a> ·
+    <a href="#-homologation--does-it-actually-save">Proof</a> ·
     <a href="#-interactive-dashboard">Dashboard</a> ·
     <a href="#-how-it-works">How it Works</a> ·
     <a href="#-usage">Usage</a> ·
@@ -32,17 +33,19 @@
 > **tokenix** is a local-first Rust CLI that helps AI coding agents understand a repository without dumping huge files into the prompt. It indexes your code, finds relevant chunks by meaning, returns compact file outlines, and can hook into AI tools to replace noisy reads and command output with smaller, more useful context. Works with Claude Code, GitHub Copilot, OpenAI Codex CLI, OpenCode, Gemini, and any MCP client. **No Ollama or external server required.**
 
 ```
-Without tokenix:  Read(src/auth/middleware.rs) → 800 lines → ~2,400 tokens  (illustrative)
-With tokenix:     tokenix read src/auth/middleware.rs → symbol outline → ~180 tokens
+Without tokenix:  Read(src/hook.rs)        → 1,518 lines → 13,498 tokens
+With tokenix:     tokenix read src/hook.rs → symbol outline →  2,395 tokens   (-82.3%)
 ```
 
-Savings depend on codebase size, AI behavior, and file sizes. Run `tokenix gain` to see measured Read and command-filter savings; semantic Grep context is logged as usage, not counted as saved tokens.
+Those two numbers are measured, not illustrative — they come from `tokenix benchmark` run on this repository (see [Homologation](#-homologation--does-it-actually-save)). Savings depend on codebase size, AI behavior, and file sizes. Run `tokenix gain` to see measured Read and command-filter savings on *your* machine; semantic Grep context is logged as usage, not counted as saved tokens.
 
 ---
 
 ## 🖥 Interactive Dashboard
 
-Run bare `tokenix` to open a terminal dashboard — ten tabs, zero flags. `←`/`→` switch tabs, `↑`/`↓` move, `q` quits. Piped or non-TTY falls back to `--help`.
+Run bare `tokenix` to open a terminal dashboard — twelve tabs, zero flags. `←`/`→` switch tabs, `↑`/`↓` move, `q` quits. Piped or non-TTY falls back to `--help`.
+
+**There is only one human interface.** Typing a report command on a terminal opens the dashboard on that command's tab instead of printing a second, separate rendering of the same data — `tokenix doctor` lands on Doctor, `tokenix usage model --all-projects` on Usage with that breakdown already selected, `tokenix scan-secrets` on Secrets, `tokenix filter list` on Studio. Everything scriptable is untouched: piping, `--json`, `--statusline`, `--format html|dot`, `--output <file>`, and any flag a tab cannot represent keep the plain text output, and `--no-tui` (or `TOKENIX_NO_TUI=1`) forces it explicitly. Agent-facing commands — `hook`, `run`, `mcp`, `query`, `read`, `pack`, … — never open a UI.
 
 <table>
 <tr>
@@ -62,6 +65,12 @@ Run bare `tokenix` to open a terminal dashboard — ten tabs, zero flags. `←`/
 <tr>
 <td><img src=".github/prints/tokenmap.png" alt="Tokenmap tab" /><br /><sub><b>Tokenmap</b> — the repository as a tree weighted by token count, heaviest paths first.</sub></td>
 <td><img src=".github/prints/doctor.png" alt="Doctor tab" /><br /><sub><b>Doctor</b> — build/GPU support, detected GPU + CUDA/cuDNN status, active embedding model & cache, and bundled-filter inventory, all on one screen.</sub></td>
+</tr>
+<tr>
+<td colspan="2"><sub><b>Discover</b> — replays the current filter set over your agents' historical command output: savings you could have had, plus the uncovered commands wasting the most tokens. <code>r</code> refreshes.</sub></td>
+</tr>
+<tr>
+<td colspan="2"><sub><b>Audit</b> — MCP/tool weight of the effective system prompt per agent, plus always-on context (instruction files and skills). <code>r</code> refreshes.</sub></td>
 </tr>
 <tr>
 <td colspan="2"><sub><b>Egress</b> — external DNS/IP destinations found in agent transcripts, with local reputation validation: safe hosts green, dangerous hosts red, unknown hosts yellow. Three-pane style like Secrets: group · destination · occurrence detail. Starts scoped to the current repo; <code>g</code> toggles all repos. <code>s</code> rotates host/rule/agent/file grouping · <code>r</code> rescans.</sub></td>
@@ -87,6 +96,51 @@ It does four jobs:
 | **Measure savings** | Logs hook decisions and reports measured token/cost reduction where the original output is known | You can see whether it is actually helping on your codebase |
 
 tokenix is not a cloud service, not a vector database server, and not a replacement for your AI assistant. It is a local repository index plus a set of CLI and hook integrations that make the assistant's context smaller and more targeted.
+
+---
+
+## 📊 Homologation — does it actually save?
+
+Every number below is reproducible from this repository with the command in the
+last column. Nothing here is an estimate.
+
+| What | Baseline → tokenix | Saved | Reproduce |
+|---|---|---|---|
+| **Real sessions** (7,807 hook calls) | 475,360 → 169,175 tokens | **67.4%** | `tokenix gain` |
+| Read interception, 31 real files | 346,892 → 58,154 tokens | **83.2%** | `tokenix benchmark` |
+| Task context vs reading the full file | 86,291 → 8,630 tokens | **90.0%** | `tokenix benchmark` |
+| Outline + targeted symbol workflow | 55,020 → 17,384 tokens | **68.4%** | `tokenix benchmark` |
+| Command filters, realistic verbose output | 1,891 → 369 tokens | **80.5%** | `cargo test verbose_real_output -- --nocapture` |
+| Command filters, full golden corpus (1,146 cases) | 47,237 → 27,836 tokens | **41.1%** | `cargo test filters_deliver_aggregate_token_savings -- --nocapture` |
+
+**Quality is measured alongside the savings, not assumed.** Compression is worth
+nothing if the agent then answers wrong, so the same benchmark checks retrieval:
+
+| Check | Result |
+|---|---|
+| Expected file in the top 3 results (8 labeled queries) | **8/8** |
+| Expected file ranked #1 | 6/8 |
+| Budgeted context still contained the expected file | **8/8**, 0 budget violations |
+| Golden filter cases reproducing byte-exact expected output | **1,146/1,146** |
+
+### Reading these numbers honestly
+
+- **67.4% is the one that matters.** It is this machine's actual hook log —
+  7,807 real tool calls across real sessions — not a synthetic scenario.
+- **The 41.1% corpus figure is deliberately pessimistic.** Half the golden
+  corpus is failure-path cases that a filter must pass through *unfiltered*, so
+  errors are never masked as success. Filters are not supposed to compress
+  those. On realistic verbose output the same filters cut 80.5% (per-command:
+  `pip install` 97%, `npm install` 96%, `cargo test` 95%, `cargo build` 91%).
+- **`tokenix benchmark`'s own command arm reports a low ~26%** because its
+  sample commands emit trivial output (27–148 tokens each, and `npm`/`docker`
+  may not even be installed on the machine running it). Compression has nothing
+  to work with there. Judge the command filters by the two rows above instead.
+- **Semantic Grep is never counted as savings.** The native grep output is
+  unknown before interception, so `tokenix gain` logs it as neutral usage. The
+  reduction figure only counts cases where the original size is known.
+- Hardware/repo affect the numbers. Run the commands above on your own
+  repository — that is the point of shipping them.
 
 ---
 
@@ -182,7 +236,7 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 | **Hook-based interception** | `PreToolUse` intercepts large reads and rewrites noisy Bash **and PowerShell** commands before execution; thresholds tunable via `[hook]` in `.tokenix.toml` |
 | **Structural output compression** | Fuzzy grouping, compact `git`/`cargo` filters, NDJSON/JSON compaction, ANSI/Emoji stripping, and typed base64/data-URI blob redaction — single-line and line-wrapped (PEM certs/keys, MIME), embedded PNG/JPEG images, PDF/tar/binary dumps, also on non-shell/MCP results |
 | **Local project filters** | Drop `.toml` files in `.tokenix/filters/` for project-scoped compression rules — highest priority over user and bundled filters |
-| **Output filters** | 386 TOML output filters embedded in the binary (each homologated against 800 golden cases) — auto-applied to Bash/PowerShell output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, `apt`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`, `pulumi`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test`, `bru`, `ps`, `cargo tree`, `npm ls`, `kubectl explain`, `lsof`, `ss`, `netstat`, `ip`, `systemctl list-*`, and more |
+| **Output filters** | 528 TOML output filters embedded in the binary (homologated against 1,146 embedded golden cases) — auto-applied to Bash/PowerShell output for `uv`, `cargo`, `terraform`, `ansible`, `docker`, `kubectl`, `git`, `npm`, `pnpm`, `bun`, `deno`, `vite`, `pip`, `poetry`, `go`, `rust`, `helm`, `apt`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`, `pulumi`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test`, `bru`, `ps`, `cargo tree`, `npm ls`, `kubectl explain`, `lsof`, `ss`, `netstat`, `ip`, `systemctl list-*`, and more |
 | **Filter generation** | `tokenix filter generate` writes a TOML filter for a command; `tokenix filter record` captures real output for richer generation, with a per-command **token-economy preview** (raw→filtered tokens, % saved, compression bar) shown by `record stop`/`status` |
 | **GPU acceleration (opt-in)** | Build with `--features directml` (Windows) or `--features cuda` to run embeddings on GPU; GPU is used by default at runtime with automatic CPU fallback, or force CPU with `--only-cpu` |
 | **Environment diagnostics** | `tokenix doctor` reports the compiled backend, detected GPU, CUDA/cuDNN status, model cache, and daemon |
@@ -212,9 +266,9 @@ The embedding model (`nomic-embed-text-v1.5`, ~130 MB) is downloaded automatical
 
 | Tool | Integration |
 |---|---|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `PreToolUse` hooks in `~/.claude/settings.json` or project `.claude/settings.local.json` |
+| [Claude Code](https://code.claude.com/docs) | `PreToolUse` hooks in `~/.claude/settings.json` or project `.claude/settings.local.json` |
 | [GitHub Copilot](https://docs.github.com/en/copilot) | `.github/copilot-instructions.md` + VS Code-compatible `.github/hooks/hooks.json` |
-| [OpenAI Codex CLI](https://help.openai.com/en/articles/11096431-openai-codex-cli-getting-started) | `~/.codex/hooks.json` for `PreToolUse` Bash rewrites + optional shell helpers |
+| [OpenAI Codex CLI](https://developers.openai.com/codex/cli) | `~/.codex/hooks.json` for `PreToolUse` Bash rewrites + optional shell helpers |
 | OpenCode | `tokenix install-hook --tool opencode` — registers `tokenix mcp` in a native `opencode.json` `mcp` block |
 | Antigravity | `tokenix install-hook --tool antigravity` — installs and validates a native `PreToolUse` plugin through `agy plugin` |
 | Any MCP client | `tokenix mcp` — Model Context Protocol server over stdin/stdout (`--tool mcp`) |
@@ -227,6 +281,40 @@ tokenix has two modes:
 
 1. **Manual mode**: run `tokenix query`, `tokenix read`, `tokenix context`, etc. directly when you want compact context.
 2. **Hook mode**: install hooks so supported AI tools call tokenix automatically before large reads and before noisy Bash commands execute.
+
+In hook mode you never type a tokenix command — the agent's own tool calls are intercepted before they run:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant CC as Claude Code
+    participant TX as tokenix PreToolUse hook
+    participant Idx as Local SQLite index
+
+    You->>CC: "fix the login refresh bug"
+
+    CC->>TX: Read(src/auth/middleware.rs)
+    alt file ≥ 200 lines, no line range
+        TX->>Idx: symbol outline
+        TX-->>CC: outline instead of file (exit 2)
+    else small file or explicit --lines
+        TX-->>CC: pass through untouched (exit 0)
+    end
+
+    CC->>TX: Grep("how does refresh rotation work")
+    TX->>Idx: hybrid search (BM25 + int8 vectors + RRF)
+    TX-->>CC: ranked chunks inside the token budget
+
+    CC->>TX: Bash("cargo test")
+    TX-->>CC: rewritten to `tokenix run` → filtered output + stash key
+
+    CC-->>You: answer, built from less context
+
+    Note over You,TX: tokenix gain / the dashboard report what was actually saved;<br/>tokenix retrieve KEY returns any compressed output verbatim
+```
+
+Every branch fails open: on a missing index, a parse error, or any internal failure the hook exits `0` and the original tool runs untouched.
 
 ### Output compression
 
@@ -596,7 +684,7 @@ tokenix install-hook --tool all
 
 | Command | Description |
 |---|---|
-| `tokenix` (no args) | Open the [interactive dashboard](#-interactive-dashboard) — Stats · Filters · Studio · Gain · Usage · Doctor · Tokenmap · Graph · Secrets · Egress tabs; piped/non-TTY falls back to help |
+| `tokenix` (no args) | Open the [interactive dashboard](#-interactive-dashboard) — Stats · Filters · Studio · Gain · Usage · Doctor · Tokenmap · Graph · Discover · Audit · Secrets · Egress tabs; piped/non-TTY falls back to help |
 | `tokenix filter` (no args) | Open the dashboard on the Filters tab; piped falls back to `filter list` |
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
 | `tokenix install-hook` | Install assistant hook/instructions (default `--tool all`) |
@@ -635,7 +723,7 @@ tokenix install-hook --tool all
 |---|---|
 | `tokenix hook` | `PreToolUse` handler — intercepts large reads, semantic grep, and noisy Bash/PowerShell commands (called by AI tools) |
 | `tokenix hook-post` | Legacy `PostToolUse` compatibility handler |
-| `tokenix run -- CMD` | Run a command and compress its output through tokenix filters |
+| `tokenix run "CMD"` | Run a command and compress its output through tokenix filters (`--shell` re-executes under pwsh for the PowerShell path) |
 | `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools (`--profile slim\|full`) |
 
 <details>
@@ -644,8 +732,9 @@ tokenix install-hook --tool all
 **Global**
 
 | Flag | Description |
-|---|---|---|
+|---|---|
 | `--only-cpu` | Force CPU embedding even on a GPU-enabled build (no-op on CPU-only builds) |
+| `--no-tui` | Print plain text instead of opening the dashboard (same as `TOKENIX_NO_TUI=1`) |
 | `TOKENIX_BRANCH_AWARE=true` | Env var: suffix SQLite DB per git branch (isolate indexes per branch) |
 
 **`tokenix index`** — `--force/-f`, `--cpu-profile <low\|default\|max>`, `--jobs N`, `--embed-batch N` (default 16 CPU / 64 GPU), `--if-stale`, `--path/-p`, `--model <id>`, `--no-low-priority` (indexing runs at below-normal OS priority by default; this flag or `TOKENIX_FOREGROUND=1` keeps normal priority)
@@ -660,11 +749,11 @@ tokenix install-hook --tool all
 
 **`tokenix grep`** — `--limit/-l` (20), `--ignore-case/-i`, `--file/-f`, `--path/-p`
 
-**`tokenix context`** — `--mode <plan\|debug\|audit\|security\|review>`, `--budget/-b` (1200), `--max-files`, `--budget-breakdown`, `--path/-p`
+**`tokenix context`** — `--mode <plan\|debug\|audit\|security\|review>`, `--budget/-b` (1200), `--max-files`, `--budget-breakdown`, `--json`, `--path/-p`
 
 **`tokenix impact`** — `--depth/-d` (2), `--limit/-l` (50), `--format <text\|html\|mermaid\|json>`, `--output/-o`, `--path/-p`
 
-**`tokenix flow`** — `--depth/-d` (3), `--format <text\|mermaid>`, `--output/-o`, `--path/-p`
+**`tokenix flow`** — `--depth/-d` (3), `--limit/-l` (50), `--format <text\|mermaid>`, `--path/-p`
 
 **`tokenix install-hook` / `remove-hook`** — `--tool <claude-code\|copilot\|codex\|mcp\|opencode\|antigravity\|all>` (default `all`), `--local` (Claude Code, Copilot, and Antigravity)
 
@@ -696,6 +785,8 @@ tokenix install-hook --tool all
 | JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | `function`, `class`, arrow functions |
 | Go | `.go` | `func`, `type` |
 | C / C++ | `.c`, `.cpp`, `.h`, `.hpp`, `.cc`, `.cxx` | `function`, `class`, `struct`, `namespace` |
+| VB6 / VBA | `.bas`, `.cls`, `.ctl`, `.frm`, `.vbp` | `Sub`, `Function`, `Property` (line-scanning chunker, no grammar) |
+| SQL / Oracle | `.sql`, `.fnc`, `.trg`, `.pkg`, `.prc`, `.tab`, `.vw` | `CREATE [OR REPLACE] <object>` (line-scanning chunker; UTF-16 BOM handled) |
 | Config / Docs | `.toml`, `.md`, `.txt`, `.sh`, `.bash` | line blocks |
 | Data files (opt-in) | `.json`, `.yaml`, `.yml` | Indexed only when `data_files = true` in `.tokenix.toml` |
 | **Custom** | any extension | Mapped to an existing parser via `.tokenix.toml` |
@@ -713,7 +804,7 @@ mts = "typescript"   # TypeScript module files
 lua = "generic"      # use sliding-window chunks
 ```
 
-Valid parser values: `rust`, `python`, `typescript`, `javascript`, `go`, `cpp`, `c`, `generic`.
+Valid parser values: `rust`, `python`, `typescript`, `javascript`, `go`, `cpp`/`c`, `vb`/`vb6`/`vba`/`visualbasic`, `sql`/`plsql`/`tsql`, `generic`.
 
 ### Hook tuning
 
@@ -738,6 +829,8 @@ tokenix reduces noisy shell output by rewriting matching `Bash` commands in `Pre
 
 1. **Local project filters** — `.toml` files in `.tokenix/filters/` inside the repo. Scoped to the project, committed to version control. **Trust-gated**: skipped until you approve them with `tokenix trust` (SHA-256 pinned; any edit revokes trust) — a cloned repository must not silently control what your agent sees.
 2. **User filters** — `.toml` files in `~/.tokenix/filters/`. Apply to all projects, override bundled filters.
+Filter resolution is lazy: the hook reads each file's `match_command` literal off the raw text and only parses the TOML of files whose literal can appear in the command at hand. User filters keep their prefilters in `~/.tokenix/filters/.prefilter-index.json`, rebuilt automatically whenever a filter file is added, edited, or removed. This is what keeps a `PreToolUse` rewrite decision at a few milliseconds even with hundreds of filters installed.
+
 3. **Bundled filters** — 528 TOML output filters shipped inside the binary (each homologated against 1146 embedded golden cases), covering `uv`, `cargo build`/`cargo run`/`cargo audit`, `git`, `gradle`, `terraform plan`, `make`, `npm`/`npm audit`, `pnpm`, `bun`, `deno`, `vite`, `node --test`, `poetry`, `docker`, `kubectl`/`kubectl top`, `helm`, `go`, `rust`, `python`, `dotnet`, `swift`, `apt`/`apt-get`, `journalctl`, `trivy`, `semgrep`, `bazel`, `ctest`, `tox`, `conda`/`mamba`, `pulumi up`/`preview`/`destroy`, `dnf`/`yum`, `pacman`, `apk`, `pip-audit`, `ng test` (Karma), `bru` (Bruno), `ps`, and more. Applied automatically — no setup needed.
 
 ### Filter format
@@ -762,6 +855,7 @@ on_empty = "uv: ok"
 | `strip_lines_matching` | Drop lines matching any of these regex patterns |
 | `keep_lines_matching` | Keep only lines matching these patterns |
 | `match_output` | Short-circuit: if output matches `pattern`, return `message` immediately; use `unless` for error/warning guards |
+| `uniform_success` | Whole-run summary for tools that report **per item** (`PASS - x`, `ok 1 - t`, `[200] url`). Collapses only when *every* significant line matches `pattern` and at least one did, so a single failed item leaves the real output in place. `{n}` in `message` becomes the item count — `conftest: 3 policies passed`, not a vague "all clear". `ignore_lines` skips banners/totals |
 | `max_lines` / `head_lines` / `tail_lines` | Truncate output. `head_lines` + `tail_lines` together keep a first+last window (header/context on top, verdict at the bottom) with an inline `[... N lines omitted ...]` marker in the middle |
 | `priority_lines` | Lines matching these regexes survive **every** sizing cut, even beyond the line budget — for verdict lines that must never be clipped (error summaries, totals) |
 | `category_caps` | `[{ pattern, max }]`: keep only the first `max` lines per category, collapsing the overflow into one count marker — bounds repetitive classes independently (e.g. 20 errors + 5 warnings) instead of a flat positional cut |
@@ -809,14 +903,23 @@ src/
 ├── artifacts.rs   Context artifacts — parse `.tokenix/artifacts.json`, read non-code content
 ├── hook.rs        PreToolUse handler — Claude-, Copilot-, and grep_search/run_in_terminal-style JSON input
 ├── daemon.rs      Background TCP server — holds model + in-memory embedding cache
-├── compress.rs    Legacy PostToolUse compatibility pipeline for tool-output rewriting
-├── filters.rs     FilterDef, load_local/user/bundled_filters(), priority merge, apply_filter()
-├── cmd_filter.rs  `tokenix filter` subcommands (list, active, generate, record)
+├── compress.rs    Output compression for `tokenix run` + legacy PostToolUse pipeline
+├── filters.rs     FilterDef, local/user/bundled loading, prefilter index, apply_filter()
+├── cmd_filter.rs  `tokenix filter` subcommands (list, active, generate, record, verify)
 ├── recordings.rs  Capture/replay real command output for filter generation
+├── recall.rs      Content-addressed stash, cross-call dedup, re-read suppression
+├── discover.rs    Replays current filters over transcript history (missed savings)
 ├── memory.rs      Global/project preference memory (editable Markdown)
 ├── gain.rs        Analytics from the hook log — per-model cost table
+├── usage.rs       Absolute spend + ≈USD from agent transcripts
+├── transcripts.rs Shared enumeration of local agent transcript files
 ├── benchmark.rs   Reproducible savings + retrieval-quality benchmark
 ├── doctor.rs      Backend / GPU / model-cache / daemon diagnostics
+├── tui.rs         The interactive dashboard — the only human-facing interface
+├── ui.rs          Shared terminal vocabulary for plain CLI output (boxes, tables, bars)
+├── secrets_scan.rs Credential scan over agent conversation transcripts
+├── egress_scan.rs  External DNS/IP destinations found in those transcripts
+├── conversation_audit.rs  Token-waste classification of local AI histories
 ├── mcp.rs         Model Context Protocol server (full and slim profiles)
 └── mcp_audit.rs   Multi-agent MCP config discovery + live tools/list introspection (prompt/session audit)
 
@@ -857,7 +960,7 @@ The background daemon (`tokenix serve`) keeps the ONNX model and project embeddi
 | Model | `nomic-embed-text-v1.5` (quantized) |
 | Dimensions | 768 |
 | File size | ~130 MB |
-| Cache location | `%LOCALAPPDATA%\tokenix\models` (Windows) / `~/.cache/tokenix/models` (Linux/macOS) |
+| Cache location | `<OS cache dir>/tokenix/models` — `%LOCALAPPDATA%\tokenix\models` (Windows), `~/.cache/tokenix/models` (Linux), `~/Library/Caches/tokenix/models` (macOS) |
 | Download | Automatic on first run |
 | Runtime | fastembed (ONNX Runtime, in-process) |
 
@@ -870,9 +973,11 @@ Index storage lives at `~/.tokenix/<project-id>.db` (one DB per project). Embedd
 tokenix's build and release pipeline is hardened against supply-chain attacks:
 SHA-pinned GitHub Actions, least-privilege workflow permissions, `cargo-deny`
 (advisories + license + crates.io-only sources), `zizmor` workflow analysis,
-OpenSSF Scorecard, SLSA build-provenance attestations, and tokenless crates.io
-publishing via OIDC. See [SECURITY.md](SECURITY.md) for the disclosure policy
-and release-verification steps.
+OpenSSF Scorecard, and SLSA build-provenance attestations. The release workflow
+publishes to crates.io through OIDC Trusted Publishing when the crate has it
+configured, and falls back to a repository secret otherwise. See
+[SECURITY.md](SECURITY.md) for the disclosure policy and release-verification
+steps.
 
 ---
 

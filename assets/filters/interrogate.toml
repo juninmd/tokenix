@@ -1,6 +1,7 @@
 [filters.interrogate]
 description = "Keep interrogate docstring-coverage result and per-file gaps, drop table borders"
 match_command = "^interrogate\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

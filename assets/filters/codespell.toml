@@ -1,6 +1,7 @@
 [filters.codespell]
 description = "Keep codespell misspelling findings (file:line + correction), drop noise"
 match_command = "^codespell\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

@@ -1,6 +1,7 @@
 [filters.tsup]
 description = "Keep tsup build outputs and result, drop per-chunk noise"
 match_command = "^(npx\\s+)?tsup\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

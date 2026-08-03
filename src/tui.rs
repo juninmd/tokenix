@@ -24,8 +24,14 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::filters::{self, ActiveFilter};
 
+/// Set to `1` by any tokenix process that must print instead of opening the
+/// shell: the TUI's own self-exec captures, and the user's `--no-tui` escape.
+pub const NO_TUI_ENV: &str = "TOKENIX_NO_TUI";
+
+/// A tab of the shell. Also the target a direct command redirects to, so
+/// `tokenix doctor` and the Doctor tab are one interface, not two.
 #[derive(Clone, Copy, PartialEq)]
-enum Cmd {
+pub enum Cmd {
     Stats,
     Filters,
     Studio,
@@ -34,12 +40,14 @@ enum Cmd {
     Doctor,
     Tokenmap,
     Graph,
+    Discover,
+    Audit,
     Secrets,
     Egress,
 }
 
 impl Cmd {
-    const ALL: [Cmd; 10] = [
+    const ALL: [Cmd; 12] = [
         Cmd::Stats,
         Cmd::Filters,
         Cmd::Studio,
@@ -48,6 +56,8 @@ impl Cmd {
         Cmd::Doctor,
         Cmd::Tokenmap,
         Cmd::Graph,
+        Cmd::Discover,
+        Cmd::Audit,
         Cmd::Secrets,
         Cmd::Egress,
     ];
@@ -66,6 +76,8 @@ impl Cmd {
             Cmd::Doctor => "Doctor",
             Cmd::Tokenmap => "Tokenmap",
             Cmd::Graph => "Graph",
+            Cmd::Discover => "Discover",
+            Cmd::Audit => "Audit",
             Cmd::Secrets => "Secrets",
             Cmd::Egress => "Egress",
         }
@@ -76,6 +88,8 @@ impl Cmd {
         match self {
             Cmd::Doctor => Some(&["doctor"]),
             Cmd::Tokenmap => Some(&["tokenmap"]),
+            Cmd::Discover => Some(&["discover"]),
+            Cmd::Audit => Some(&["prompt-audit"]),
             _ => None,
         }
     }
@@ -243,8 +257,63 @@ struct Shell {
     request_index: bool,
 }
 
+/// What a direct command carries into the shell. Keeping this a struct means a
+/// new redirect adds a field instead of another `run_*` entry point.
+#[derive(Clone, Copy)]
+pub struct Entry {
+    pub tab: Cmd,
+    /// Usage tab breakdown: index into daily|model|blocks|project|session.
+    pub usage_group: usize,
+    /// All-projects / all-repos scope (`--all-projects`, `--global`, and the
+    /// unscoped default of `scan-secrets` / `egress-audit`).
+    pub global: bool,
+    /// Gain tab: start with the per-model cost table open (`--cost-estimate`).
+    pub gain_cost: bool,
+}
+
+impl Default for Entry {
+    fn default() -> Self {
+        Entry {
+            tab: Cmd::Stats,
+            usage_group: 0,
+            global: false,
+            gain_cost: false,
+        }
+    }
+}
+
+impl Entry {
+    pub fn tab(tab: Cmd) -> Self {
+        Entry {
+            tab,
+            ..Entry::default()
+        }
+    }
+}
+
+/// True when this process may replace plain output with the shell: stdout is a
+/// terminal and nothing asked for machine-readable or captured output.
+/// Every direct command routes through here, so there is exactly one rule.
+pub fn should_open(machine_output: bool) -> bool {
+    use std::io::IsTerminal;
+    let disabled = std::env::var(NO_TUI_ENV).is_ok_and(|v| !v.is_empty() && v != "0");
+    !machine_output && !disabled && std::io::stdout().is_terminal()
+}
+
 /// Open the shell on the Stats dashboard. Used by bare `tokenix` and `tokenix filter`.
 pub fn run() -> Result<()> {
+    run_entry(Entry::default())
+}
+
+pub fn run_entry(entry: Entry) -> Result<()> {
+    let mut shell = new_shell(entry);
+    let mut terminal = ratatui::init();
+    let res = shell.event_loop(&mut terminal);
+    ratatui::restore();
+    res
+}
+
+fn new_shell(entry: Entry) -> Shell {
     let filters = filters::load_active_filters();
     let tool_groups = group_by(&filters, |f| tool_of(&f.name).to_string());
     let source_groups = group_by(&filters, |f| f.source.to_string());
@@ -257,8 +326,8 @@ pub fn run() -> Result<()> {
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| proj_root_disp.clone());
-    let mut shell = Shell {
-        cmd: Cmd::Stats,
+    Shell {
+        cmd: entry.tab,
         filters,
         tool_groups,
         source_groups,
@@ -275,17 +344,17 @@ pub fn run() -> Result<()> {
         stats_sel: 0,
         stats_confirm: false,
         stats_msg: None,
-        usage_group: 0,
-        usage_global: false,
+        usage_group: entry.usage_group,
+        usage_global: entry.global,
         gain_cache: None,
         gain_rx: None,
-        gain_cost: false,
-        gain_global: false,
+        gain_cost: entry.gain_cost,
+        gain_global: entry.global,
         proj_root_norm,
         proj_slug,
         proj_dir,
         secrets_all: None,
-        sec_global: false,
+        sec_global: entry.global,
         secrets: None,
         secrets_counts: Vec::new(),
         secrets_rx: None,
@@ -300,7 +369,7 @@ pub fn run() -> Result<()> {
         sec_msg: None,
         spinner: 0,
         egress_all: None,
-        egr_global: false,
+        egr_global: entry.global,
         egress: None,
         egress_counts: Vec::new(),
         egress_rx: None,
@@ -323,11 +392,7 @@ pub fn run() -> Result<()> {
         scroll: 0,
         max_scroll: Cell::new(0),
         request_index: false,
-    };
-    let mut terminal = ratatui::init();
-    let res = shell.event_loop(&mut terminal);
-    ratatui::restore();
-    res
+    }
 }
 
 impl Shell {
@@ -476,6 +541,7 @@ impl Shell {
                 println!("\nPress Enter to return to the dashboard…");
                 let _ = std::io::stdin().read_line(&mut String::new());
                 *terminal = ratatui::init();
+                self.reload_filters();
                 self.studio_msg = Some("Filter generation finished.".to_string());
             }
         }
@@ -488,7 +554,34 @@ impl Shell {
         self.scroll = 0;
         self.searching = false;
         self.search.clear();
+        self.disarm();
+    }
+
+    /// Re-read the filter set from disk after the shell itself changed it
+    /// (Studio generate / delete). Without this the Filters tab keeps listing a
+    /// deleted filter — and previewing it against a file that no longer exists
+    /// — and never shows a filter the user just generated.
+    fn reload_filters(&mut self) {
+        self.filters = filters::load_active_filters();
+        self.tool_groups = group_by(&self.filters, |f| tool_of(&f.name).to_string());
+        self.source_groups = group_by(&self.filters, |f| f.source.to_string());
+        self.samples = filters::sample_inputs();
+        self.g_sel = 0;
+        self.sel_group = 0;
+        self.f_sel = 0;
+        self.clamp();
+    }
+
+    /// Drop every armed "press again to confirm" state.
+    ///
+    /// These guard irreversible actions (writing `[REDACTED]` across transcript
+    /// files, deleting a saved filter, installing hooks). Leaving one armed
+    /// while the user is on another tab turns the *first* keypress after they
+    /// come back into the destructive one, with no visible prompt on screen.
+    fn disarm(&mut self) {
         self.stats_confirm = false;
+        self.sec_confirm = false;
+        self.studio_confirm_delete = false;
     }
 
     fn toggle_pane(&mut self) {
@@ -741,7 +834,8 @@ impl Shell {
                 };
                 if self.studio_confirm_delete {
                     let path = filters::filters_dir().join(format!("{name}.toml"));
-                    self.studio_msg = Some(match std::fs::remove_file(&path) {
+                    let removed = std::fs::remove_file(&path);
+                    self.studio_msg = Some(match &removed {
                         Ok(_) => format!("Deleted filter {name}."),
                         Err(e) => format!("Could not delete {name}: {e}"),
                     });
@@ -749,6 +843,11 @@ impl Shell {
                     let len = self.studio_saved().len();
                     if self.studio_saved_sel >= len {
                         self.studio_saved_sel = len.saturating_sub(1);
+                    }
+                    if removed.is_ok() {
+                        let msg = self.studio_msg.take();
+                        self.reload_filters();
+                        self.studio_msg = msg;
                     }
                 } else {
                     self.studio_confirm_delete = true;
@@ -3025,7 +3124,14 @@ fn capture(args: &[&str]) -> String {
         Ok(p) => p,
         Err(e) => return format!("cannot locate tokenix binary: {e}"),
     };
-    match std::process::Command::new(exe).args(args).output() {
+    match std::process::Command::new(exe)
+        .args(args)
+        // The child must print, never open another shell. Its stdout is a pipe
+        // (so the TTY gate already declines), but this makes it explicit and
+        // survives any future change to how the redirect is decided.
+        .env(NO_TUI_ENV, "1")
+        .output()
+    {
         Ok(o) => {
             let out = String::from_utf8_lossy(&o.stdout);
             if out.trim().is_empty() {
@@ -3052,7 +3158,10 @@ fn run_index_foreground() {
         return;
     };
     println!("\nIndexing this repository… (Ctrl-C to abort)\n");
-    let _ = std::process::Command::new(exe).arg("index").status();
+    let _ = std::process::Command::new(exe)
+        .arg("index")
+        .env(NO_TUI_ENV, "1")
+        .status();
     print!("\nPress Enter to return to tokenix…");
     let _ = std::io::stdout().flush();
     let mut line = String::new();
@@ -3227,5 +3336,39 @@ mod tests {
         // x occurs 3× (0,2,3) then y once (1).
         assert_eq!(d, vec![vec![0, 2, 3], vec![1]]);
         assert!(distinct_by(&[], |i: usize| i.to_string()).is_empty());
+    }
+
+    #[test]
+    fn switching_tabs_disarms_destructive_confirmations() {
+        // Regression: an armed confirmation used to survive a tab switch, so
+        // the first `x` after coming back wrote `[REDACTED]` across transcript
+        // files (or deleted a filter) with no prompt on screen.
+        let mut s = new_shell(Entry::tab(Cmd::Secrets));
+        s.sec_confirm = true;
+        s.studio_confirm_delete = true;
+        s.stats_confirm = true;
+        s.switch_tab(1);
+        assert!(!s.sec_confirm, "redaction stayed armed across tabs");
+        assert!(!s.studio_confirm_delete, "delete stayed armed across tabs");
+        assert!(!s.stats_confirm, "install stayed armed across tabs");
+    }
+
+    #[test]
+    fn entry_opens_the_requested_tab_and_scope() {
+        let s = new_shell(Entry {
+            tab: Cmd::Usage,
+            usage_group: 2,
+            global: true,
+            gain_cost: true,
+        });
+        assert!(s.cmd == Cmd::Usage);
+        assert_eq!(s.usage_group, 2);
+        assert!(s.usage_global && s.gain_global && s.sec_global && s.egr_global);
+        assert!(s.gain_cost);
+        // The seeded state must reach the captured argv, not just the struct.
+        assert_eq!(
+            s.dyn_argv().unwrap(),
+            vec!["usage", "blocks", "--all-projects"]
+        );
     }
 }

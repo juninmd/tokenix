@@ -1,6 +1,7 @@
 [filters.dagger]
 description = "Keep dagger pipeline results and errors, drop per-step spinners"
 match_command = "^dagger\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

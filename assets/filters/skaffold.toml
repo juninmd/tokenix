@@ -1,6 +1,7 @@
 [filters.skaffold]
 description = "Keep skaffold build/deploy results, drop progress and tag generation"
 match_command = "^skaffold\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

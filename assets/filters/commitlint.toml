@@ -1,6 +1,7 @@
 [filters.commitlint]
 description = "Keep commitlint problems and the result line"
 match_command = "\\bcommitlint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

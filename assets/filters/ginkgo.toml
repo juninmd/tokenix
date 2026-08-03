@@ -1,6 +1,7 @@
 [filters.ginkgo]
 description = "Keep ginkgo run totals and failures, drop dots and per-spec noise"
 match_command = "^ginkgo\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

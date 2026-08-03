@@ -1,6 +1,7 @@
 [filters.write-good]
 description = "Keep write-good suggestions, collapse clean prose"
 match_command = "^(npx\\s+)?write-good\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

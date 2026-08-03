@@ -1,6 +1,7 @@
 [filters.expo]
 description = "Keep expo/eas build results and errors, drop bundling progress"
 match_command = "^(npx\\s+)?(expo|eas)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

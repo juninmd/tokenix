@@ -1,6 +1,7 @@
 [filters.kube-score]
 description = "Keep kube-score critical/warning checks, drop OK checks and decoration"
 match_command = "^kube-score\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

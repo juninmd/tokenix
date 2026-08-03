@@ -1,6 +1,7 @@
 [filters.goose]
 description = "Compact goose DB migration output, keep results and status"
 match_command = "^goose\\s+(up|down|redo|status|version|create)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

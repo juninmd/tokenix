@@ -1,6 +1,7 @@
 [filters.cargo-publish]
 description = "Keep cargo publish package/upload steps and errors, drop compile noise"
 match_command = "^cargo\\s+publish\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

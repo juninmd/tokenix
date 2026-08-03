@@ -15,6 +15,8 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 60
+passthrough_when_emptied = true
+uniform_success = { pattern = "^PASS - ", message = "conftest: {n} policies passed" }
 on_empty = "conftest: all passed"
 token_budget = 2000
 
@@ -37,4 +39,4 @@ input = """
 PASS - deployment.yaml - main - good labels
 PASS - service.yaml - main - good labels
 """
-expected = "conftest: all passed"
+expected = "conftest: 2 policies passed"

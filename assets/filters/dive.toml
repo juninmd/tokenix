@@ -1,6 +1,7 @@
 [filters.dive]
 description = "Keep dive image efficiency results, drop layer-by-layer detail"
 match_command = "^dive\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

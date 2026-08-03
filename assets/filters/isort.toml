@@ -1,6 +1,7 @@
 [filters.isort]
 description = "Keep isort import-order violations"
 match_command = "^isort\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

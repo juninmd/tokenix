@@ -1,6 +1,7 @@
 [filters.autoflake]
 description = "Keep autoflake changed-file lines and diffs, collapse clean runs"
 match_command = "^autoflake\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

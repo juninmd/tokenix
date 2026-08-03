@@ -1,6 +1,7 @@
 [filters.terraform-docs]
 description = "Keep terraform-docs generated tables and headings, drop blanks"
 match_command = "^terraform-docs\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

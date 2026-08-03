@@ -56,7 +56,7 @@ fn compress_bash_output_for_stream(
     exit_ok: Option<bool>,
 ) -> String {
     // User-defined TOML filters take priority over built-in heuristics.
-    let user_filters = crate::filters::load_all_filters();
+    let user_filters = crate::filters::load_filters_for_command(cmd);
     if let Some(f) = crate::filters::find_filter(cmd, &user_filters) {
         if is_stderr && !f.filter_stderr {
             return compress_output(s);

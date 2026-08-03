@@ -1,6 +1,7 @@
 [filters.ansible-galaxy]
 description = "Keep ansible-galaxy install results and errors, drop download progress"
 match_command = "^ansible-galaxy\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

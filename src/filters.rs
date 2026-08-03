@@ -17,6 +17,20 @@ pub struct MatchOutput {
     pub unless: Option<String>,
 }
 
+/// See `FilterDef::uniform_success`.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct UniformSuccess {
+    /// The per-item pass shape every significant line must match.
+    pub pattern: String,
+    /// Summary to emit. `{n}` is replaced with the number of matched items,
+    /// so the agent gets a real count instead of a bare "all clear".
+    pub message: String,
+    /// Lines to ignore entirely when deciding uniformity (banners, totals).
+    #[serde(default)]
+    pub ignore_lines: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct FilterDef {
@@ -60,6 +74,16 @@ pub struct FilterDef {
     pub passthrough_when_emptied: bool,
     #[serde(default)]
     pub match_output: Vec<MatchOutput>,
+    /// Whole-run success assertion for tools that report **per item**
+    /// (`PASS - policy`, `ok 1 - test`, `[200] url`, `file is valid`).
+    ///
+    /// `match_output` is the wrong tool for those: it fires when *some* line
+    /// matches, so a run where item 3 failed would still be reported as
+    /// success. This collapses only when EVERY significant line matches the
+    /// pass shape and at least one did — a single dissenting line (a failure,
+    /// a warning, an unrecognized shape) leaves the normal pipeline in charge.
+    /// That makes the summary a claim about the run, not about one line.
+    pub uniform_success: Option<UniformSuccess>,
     pub truncate_lines_at: Option<usize>,
     #[serde(default)]
     #[allow(dead_code)]
@@ -221,7 +245,34 @@ pub fn filters_dir() -> PathBuf {
         .join("filters")
 }
 
+/// Content up to the first `[[tests.…]]` block. Golden cases are ~60% of the
+/// bytes in the bundled corpus and are never needed to *use* a filter, so the
+/// loader lexes only the head. Returns `None` when there is no test block.
+fn filter_defs_head(content: &str) -> Option<&str> {
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        let t = line.trim_start();
+        if t.starts_with("[[tests") || t.starts_with("[tests") {
+            return Some(&content[..offset]);
+        }
+        offset += line.len();
+    }
+    None
+}
+
 fn parse_filter_file_named(content: &str) -> Vec<(String, FilterDef)> {
+    // Fast path: parse only the definitions. Falls through to the full parse
+    // when the head does not parse (a multi-line value containing a `[[tests`
+    // line), yields nothing, or — the silent case — declares FEWER filters
+    // than the whole file, which means the cut landed before a later
+    // `[filters.x]` table and would have dropped it without any error.
+    if let Some(head) = filter_defs_head(content) {
+        if let Ok(f) = toml::from_str::<FilterFile>(head) {
+            if !f.filters.is_empty() {
+                return f.filters.into_iter().collect();
+            }
+        }
+    }
     match toml::from_str::<FilterFile>(content) {
         Ok(f) => f.filters.into_iter().collect(),
         Err(e) => {
@@ -336,6 +387,14 @@ pub fn set_local_filters_trust(root: &std::path::Path, trust: bool) -> std::io::
     Ok(count)
 }
 
+/// This repo's `.tokenix/filters` directory.
+pub fn local_filters_dir() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    crate::store::find_project_root(&cwd)
+        .join(".tokenix")
+        .join("filters")
+}
+
 pub fn load_local_filters_named() -> Vec<(String, FilterDef)> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let root = crate::store::find_project_root(&cwd);
@@ -388,10 +447,253 @@ pub fn load_bundled_filters_named() -> Vec<(String, FilterDef)> {
         .collect()
 }
 
-/// First embedded `[[tests.<name>]].input` for each bundled filter, keyed by
-/// filter name. The TUI uses these as representative sample output to preview how
-/// a filter transforms input (input → apply_filter → output).
-pub fn sample_inputs() -> HashMap<String, String> {
+/// Prefilters of every `match_command` in one filter file, read straight off
+/// the raw TOML text. `None` means "cannot be prefiltered" (a pattern shape
+/// this cheap scan does not recognize) and the file is always parsed.
+///
+/// The scan only ever produces a *shorter* literal than the parsed pattern
+/// would (escapes stop it early), so it can add work but never skip a file
+/// that would have matched.
+fn scan_bundled_anchors(content: &str) -> Option<Vec<Prefilter>> {
+    let mut anchors = Vec::new();
+    let mut headers = 0usize;
+    for line in content.lines() {
+        let t = line.trim_start();
+        if t.starts_with("[[tests") || t.starts_with("[tests") {
+            break; // golden cases live after the filter definitions
+        }
+        if t.starts_with("[filters.") {
+            headers += 1;
+            continue;
+        }
+        let Some(rest) = t.strip_prefix("match_command") else {
+            continue;
+        };
+        let rest = rest.trim_start().strip_prefix('=')?.trim_start();
+        let quote = rest.chars().next()?;
+        if quote != '"' && quote != '\'' {
+            return None; // multi-line/exotic string: fall back to parsing
+        }
+        let body = &rest[quote.len_utf8()..];
+        if quote == '\'' {
+            // Literal string: no escapes to undo.
+            anchors.push(prefilter_for(&body[..body.find('\'')?])?);
+            continue;
+        }
+        let end = {
+            let mut prev_escape = false;
+            let mut found = None;
+            for (i, c) in body.char_indices() {
+                if prev_escape {
+                    prev_escape = false;
+                    continue;
+                }
+                match c {
+                    '\\' => prev_escape = true,
+                    '"' => {
+                        found = Some(i);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            found?
+        };
+        // Basic string: undo the escapes a regex actually uses. Any other
+        // escape is left as-is, which can only stop the literal run earlier.
+        let unescaped = body[..end].replace("\\\\", "\\").replace("\\\"", "\"");
+        anchors.push(prefilter_for(&unescaped)?);
+    }
+    // Every `[filters.x]` block must have contributed exactly one prefilter,
+    // otherwise the scan missed a pattern and the file must be parsed.
+    (headers > 0 && anchors.len() == headers).then_some(anchors)
+}
+
+fn any_allows(anchors: &Option<Vec<Prefilter>>, candidates: &[String]) -> bool {
+    match anchors {
+        None => true,
+        Some(anchors) => anchors
+            .iter()
+            .any(|a| candidates.iter().any(|c| a.allows(c))),
+    }
+}
+
+/// One user filter file as recorded in the on-disk prefilter index. `mtime`
+/// and `len` are the validity stamp: any drift rebuilds the whole index.
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+struct UserFilterEntry {
+    file: String,
+    /// Nanoseconds since the epoch — see `user_filter_stats`.
+    mtime: u128,
+    len: u64,
+    /// `None` = pattern shape the scanner cannot prefilter; always parsed.
+    prefilters: Option<Vec<Prefilter>>,
+}
+
+fn user_filter_index_path(dir: &std::path::Path) -> PathBuf {
+    dir.join(".prefilter-index.json")
+}
+
+/// `(name, mtime, len)` for every `*.toml` in the user filter dir, sorted by
+/// name. One directory scan, no file reads.
+///
+/// `mtime` is nanoseconds, not seconds: two edits inside the same second that
+/// keep the byte length identical (a one-character pattern fix) would leave a
+/// second-resolution stamp unchanged, and the filter would silently keep
+/// matching by its stale prefilter.
+fn user_filter_stats(dir: &std::path::Path) -> Vec<(String, u128, u64)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
+    let mut stats: Vec<(String, u128, u64)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("toml") {
+                return None;
+            }
+            let name = path.file_name()?.to_str()?.to_string();
+            let meta = e.metadata().ok()?;
+            let mtime = meta
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_nanos();
+            Some((name, mtime, meta.len()))
+        })
+        .collect();
+    stats.sort();
+    stats
+}
+
+/// Prefilter index for the user filter dir, rebuilt whenever the directory
+/// listing drifts from what was recorded (added/removed/edited file).
+///
+/// Validity is decided from metadata only — reading every file is exactly the
+/// cost this index exists to avoid. Residual limitation: two writes that keep
+/// the byte length identical *and* land inside the same filesystem timestamp
+/// tick (~15 ms on Windows) are indistinguishable. The blast radius is bounded
+/// to a **missed** match — the `FilterDef` itself is always re-parsed from disk
+/// for entries the prefilter admits, so a stale entry can cost compression but
+/// can never apply the wrong filter to a command.
+fn user_filter_index(dir: &std::path::Path) -> Vec<UserFilterEntry> {
+    let stats = user_filter_stats(dir);
+    let cached: Vec<UserFilterEntry> = std::fs::read_to_string(user_filter_index_path(dir))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let matches_disk = cached.len() == stats.len()
+        && cached
+            .iter()
+            .zip(&stats)
+            .all(|(c, (name, mtime, len))| c.file == *name && c.mtime == *mtime && c.len == *len);
+    if matches_disk {
+        return cached;
+    }
+
+    use rayon::prelude::*;
+    let rebuilt: Vec<UserFilterEntry> = stats
+        .par_iter()
+        .map(|(name, mtime, len)| UserFilterEntry {
+            file: name.clone(),
+            mtime: *mtime,
+            len: *len,
+            prefilters: std::fs::read_to_string(dir.join(name))
+                .ok()
+                .and_then(|c| scan_bundled_anchors(&c)),
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_string(&rebuilt) {
+        let path = user_filter_index_path(dir);
+        // Per-process temp name: parallel hooks otherwise write the SAME temp
+        // file concurrently and rename an interleaved, corrupt index into
+        // place. (A corrupt index self-heals via the rebuild path, but it
+        // makes every hook pay the rebuild until someone wins the race.)
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        // Best effort: a failed write only costs the next run a rebuild.
+        if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    rebuilt
+}
+
+/// User filters (`~/.tokenix/filters`) that can match `candidates`.
+///
+/// A user with hundreds of generated filters otherwise pays ~15 ms of file
+/// I/O on every hook call just to discover that one of them matches. The
+/// index keeps the per-file prefilters on disk, so a hook only opens the
+/// files that can actually match.
+fn load_user_filters_matching(candidates: &[String]) -> Vec<FilterDef> {
+    let dir = filters_dir();
+    if !dir.exists() {
+        return vec![];
+    }
+    use rayon::prelude::*;
+    user_filter_index(&dir)
+        .par_iter()
+        .filter(|e| any_allows(&e.prefilters, candidates))
+        .filter_map(|e| {
+            let content = std::fs::read_to_string(dir.join(&e.file)).ok()?;
+            Some(parse_filter_file_named(&content))
+        })
+        .flatten()
+        .map(|(_, f)| f)
+        .collect()
+}
+
+/// Bundled files indexed by their prefilters, built once per process.
+fn bundled_anchor_index() -> &'static [(String, Option<Vec<Prefilter>>)] {
+    use std::sync::OnceLock;
+    static INDEX: OnceLock<Vec<(String, Option<Vec<Prefilter>>)>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        BundledFilters::iter()
+            .filter_map(|name| {
+                let file = BundledFilters::get(&name)?;
+                let content = std::str::from_utf8(file.data.as_ref()).ok()?;
+                Some((name.to_string(), scan_bundled_anchors(content)))
+            })
+            .collect()
+    })
+}
+
+/// Bundled filters whose file can possibly match one of `candidates`.
+///
+/// Parsing all 528 bundled TOML files costs ~29 ms; a hook process only ever
+/// needs the handful whose literals appear in the command it was handed. The
+/// prefilter is the same necessary condition `find_filter` applies per
+/// pattern, so the surviving set contains every filter the full load would
+/// have matched.
+fn load_bundled_filters_matching(candidates: &[String]) -> Vec<FilterDef> {
+    bundled_anchor_index()
+        .iter()
+        .filter(|(_, anchors)| any_allows(anchors, candidates))
+        .filter_map(|(name, _)| {
+            let file = BundledFilters::get(name)?;
+            let content = std::str::from_utf8(file.data.as_ref()).ok()?;
+            Some(parse_filter_file_named(content))
+        })
+        .flatten()
+        .map(|(_, f)| f)
+        .collect()
+}
+
+/// Local + user filters (always parsed — a handful of files) plus only the
+/// bundled filters that can match `cmd`. Drop-in replacement for
+/// `load_all_filters()` on the single-command hot path (hook rewrite,
+/// `tokenix run`), where the full bundled set is never needed.
+pub fn load_filters_for_command(cmd: &str) -> Vec<FilterDef> {
+    let candidates = prioritized_candidates(cmd);
+    let mut all = load_local_filters();
+    all.extend(load_user_filters_matching(&candidates));
+    all.extend(load_bundled_filters_matching(&candidates));
+    all
+}
+
+/// First embedded `[[tests.<name>]].input` of one filter file, keyed by filter
+/// name.
+fn samples_in(content: &str) -> HashMap<String, String> {
     #[derive(Deserialize)]
     struct SampleCase {
         input: String,
@@ -402,6 +704,50 @@ pub fn sample_inputs() -> HashMap<String, String> {
         tests: HashMap<String, Vec<SampleCase>>,
     }
     let mut map = HashMap::new();
+    if let Ok(parsed) = toml::from_str::<TestsOnly>(content) {
+        for (fname, cases) in parsed.tests {
+            if let Some(first) = cases.into_iter().next() {
+                map.entry(fname).or_insert(first.input);
+            }
+        }
+    }
+    map
+}
+
+/// Representative sample output per filter name, used by the shell's preview
+/// (input → `apply_filter` → output).
+///
+/// Covers user and project filters too, not just bundled ones: a filter the
+/// user just generated carries its own `[[tests]]` and would otherwise show
+/// "no embedded sample" in the one place built to inspect it. Local overrides
+/// user overrides bundled, matching filter precedence.
+pub fn sample_inputs() -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = crate::store::find_project_root(&cwd);
+    // Untrusted repo-local files are not just skipped as filters — their
+    // samples must not be shown either, or a cloned repo could put its own
+    // text in the preview pane under a bundled filter's name.
+    let mut dirs = vec![filters_dir()];
+    if local_filters_trusted(&root) {
+        dirs.insert(0, local_filters_dir());
+    }
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                for (name, input) in samples_in(&content) {
+                    map.entry(name).or_insert(input);
+                }
+            }
+        }
+    }
     for name in BundledFilters::iter() {
         let Some(file) = BundledFilters::get(&name) else {
             continue;
@@ -409,12 +755,8 @@ pub fn sample_inputs() -> HashMap<String, String> {
         let Ok(content) = std::str::from_utf8(file.data.as_ref()) else {
             continue;
         };
-        if let Ok(parsed) = toml::from_str::<TestsOnly>(content) {
-            for (fname, cases) in parsed.tests {
-                if let Some(first) = cases.into_iter().next() {
-                    map.entry(fname).or_insert(first.input);
-                }
-            }
+        for (name, input) in samples_in(content) {
+            map.entry(name).or_insert(input);
         }
     }
     map
@@ -523,18 +865,159 @@ fn cached_regex(pattern: &str) -> Option<Regex> {
     compiled
 }
 
+/// Length of the leading run of characters that are literal in a regex.
+/// `.` and `+` are metacharacters and must end the run — `^go.mod` matches
+/// `goXmod`, so treating the `.` as literal would let the prefilter reject a
+/// real match.
+fn literal_run(s: &str) -> usize {
+    s.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-')))
+        .unwrap_or(s.len())
+}
+
+/// True when `pattern` has a top-level `|` alternation — a `|` outside any
+/// group or character class, and not escaped.
+///
+/// This is what makes a leading-literal prefilter unsound: in
+/// `^Select-String\b|\|\s*Select-String\b` only the FIRST branch is anchored,
+/// so `Get-Content x | Select-String ERROR` is a real match that does not
+/// start with the literal. No single literal is necessary for such a pattern.
+fn has_top_level_alternation(pattern: &str) -> bool {
+    let (mut depth, mut in_class, mut escaped) = (0i32, false, false);
+    for c in pattern.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '[' if !in_class => in_class = true,
+            ']' if in_class => in_class = false,
+            '(' if !in_class => depth += 1,
+            ')' if !in_class => depth -= 1,
+            '|' if !in_class && depth <= 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Literal start-anchor of a pattern (`^cargo\s+test` → `cargo`) when the
 /// pattern begins with `^` followed by a plain literal. Cheap NECESSARY
 /// condition: a candidate that doesn't start with the literal can never match
-/// the anchored regex, so its compilation is skipped entirely. Patterns with
-/// any other shape (groups, `(?i)`, `\b...`) return None and are always
-/// evaluated — the prefilter can only skip work, never change results.
+/// the anchored regex, so its compilation is skipped entirely.
 fn literal_anchor(pattern: &str) -> Option<&str> {
     let rest = pattern.strip_prefix('^')?;
-    let end = rest
-        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '+' | '-')))
-        .unwrap_or(rest.len());
+    let end = literal_run(rest);
     (end >= 2).then(|| &rest[..end])
+}
+
+/// A cheap necessary condition for a pattern to match a candidate. Evaluating
+/// it costs a substring scan; failing it skips a regex compilation (~100 µs
+/// cold), which is what a short-lived hook process spends most of its time on.
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+enum Prefilter {
+    /// Anchored pattern: the candidate must start with this literal.
+    StartsWith(String),
+    /// Unanchored but mandatory literal: the candidate must contain it.
+    /// `bool` = case-insensitive (pattern carries a leading `(?i)`).
+    Contains(String, bool),
+}
+
+impl Prefilter {
+    fn allows(&self, candidate: &str) -> bool {
+        match self {
+            Prefilter::StartsWith(lit) => candidate.starts_with(lit.as_str()),
+            Prefilter::Contains(lit, false) => candidate.contains(lit.as_str()),
+            Prefilter::Contains(lit, true) => candidate.to_lowercase().contains(lit.as_str()),
+        }
+    }
+}
+
+/// First literal that every match of `pattern` must contain, for the shapes
+/// this repo's filters actually use: a leading `\b`, an optional group
+/// (`^(npx\s+)?eslint`), and `(?i)` flags. Everything else returns `None` and
+/// is evaluated by compiling the regex — the prefilter may only skip work.
+fn prefilter_for(pattern: &str) -> Option<Prefilter> {
+    // Checked once, up front: with a top-level alternation no single literal
+    // is mandatory, so neither the anchor nor the contains form is sound.
+    if has_top_level_alternation(pattern) {
+        return None;
+    }
+    if let Some(anchor) = literal_anchor(pattern) {
+        return Some(Prefilter::StartsWith(anchor.to_string()));
+    }
+    let mut s = pattern;
+    let mut ci = false;
+    if let Some(rest) = s.strip_prefix("(?i)") {
+        ci = true;
+        s = rest;
+    }
+    // Walk past zero-width assertions and optional groups: none of them can
+    // consume the mandatory literal that follows.
+    loop {
+        if let Some(r) = s.strip_prefix('^') {
+            s = r;
+        } else if let Some(r) = s.strip_prefix("\\b") {
+            s = r;
+        } else if s.starts_with('(') {
+            let close = s.find(')')?;
+            if s[1..close].contains('(') {
+                return None; // nested group: out of scope for this scanner
+            }
+            match s[close + 1..].strip_prefix('?') {
+                Some(rest) => s = rest, // optional group: skip it
+                None => return None,    // mandatory group (alternation)
+            }
+        } else {
+            break;
+        }
+    }
+    let end = literal_run(s);
+    let mut lit = &s[..end];
+    // A quantifier right after the run makes its last character optional.
+    if matches!(s[end..].chars().next(), Some('?') | Some('*') | Some('{')) {
+        lit = &lit[..lit.len().saturating_sub(1)];
+    }
+    (lit.len() >= 3).then(|| {
+        Prefilter::Contains(
+            if ci {
+                lit.to_lowercase()
+            } else {
+                lit.to_string()
+            },
+            ci,
+        )
+    })
+}
+
+/// Candidate strings a command is matched against, most specific first:
+/// per-segment (last segment first, effective form then raw), then the whole
+/// compound command. Shared by `find_filter` and the lazy bundled loader so
+/// both see exactly the same candidate set.
+fn prioritized_candidates(cmd: &str) -> Vec<String> {
+    let shell_body = unwrap_shell_runner(cmd);
+    let base = shell_body.as_deref().unwrap_or(cmd);
+    let segments = split_on_operators(base);
+
+    let mut candidates = Vec::new();
+
+    // 1. Segment-level candidates: last segment first
+    for segment in segments.iter().rev() {
+        let effective = get_effective_command(segment);
+        push_unique(&mut candidates, &effective);
+        push_unique(&mut candidates, segment);
+    }
+
+    // 2. Full compound candidates
+    let effective_full = get_effective_command(cmd);
+    push_unique(&mut candidates, &effective_full);
+    if let Some(body) = &shell_body {
+        let effective_body = get_effective_command(body);
+        push_unique(&mut candidates, &effective_body);
+        push_unique(&mut candidates, body);
+    }
+    push_unique(&mut candidates, cmd);
+    candidates
 }
 
 pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a FilterDef> {
@@ -650,28 +1133,7 @@ pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a Filter
         || effective.contains("--message-format=json")
         || effective.contains("--message-format json");
 
-    let shell_body = unwrap_shell_runner(cmd);
-    let base = shell_body.as_deref().unwrap_or(cmd);
-    let segments = split_on_operators(base);
-
-    let mut prioritized_candidates = Vec::new();
-
-    // 1. Segment-level candidates: last segment first
-    for segment in segments.iter().rev() {
-        let effective = get_effective_command(segment);
-        push_unique(&mut prioritized_candidates, &effective);
-        push_unique(&mut prioritized_candidates, segment);
-    }
-
-    // 2. Full compound candidates
-    let effective_full = get_effective_command(cmd);
-    push_unique(&mut prioritized_candidates, &effective_full);
-    if let Some(body) = &shell_body {
-        let effective_body = get_effective_command(body);
-        push_unique(&mut prioritized_candidates, &effective_body);
-        push_unique(&mut prioritized_candidates, body);
-    }
-    push_unique(&mut prioritized_candidates, cmd);
+    let prioritized_candidates = prioritized_candidates(cmd);
 
     // Find the first filter that matches any prioritized candidate, resolving collisions
     // by picking the one with the longest (most specific) match_command pattern.
@@ -680,11 +1142,11 @@ pub fn find_filter<'a>(cmd: &str, filters: &'a [FilterDef]) -> Option<&'a Filter
         let mut max_len = 0;
 
         for f in filters {
-            // Hot-path prefilter: skip compiling patterns whose literal
-            // `^prefix` can't match this candidate (the common case — one
+            // Hot-path prefilter: skip compiling patterns whose mandatory
+            // literal can't match this candidate (the common case — one
             // command vs hundreds of tool-anchored patterns).
-            if let Some(prefix) = literal_anchor(&f.match_command) {
-                if !candidate.starts_with(prefix) {
+            if let Some(pf) = prefilter_for(&f.match_command) {
+                if !pf.allows(candidate) {
                     continue;
                 }
             }
@@ -1427,6 +1889,29 @@ pub fn derive_command_candidates(cmd: &str) -> Vec<String> {
 /// omission notice). Byte length is a cheap, monotone proxy for tokens here.
 /// Genuinely empty raw is exempt so `on_empty` sentinels still fire for
 /// commands that print nothing.
+/// `Some(summary)` when every significant line of `output` matches the pass
+/// shape and at least one did. `None` means the run is not uniform — a single
+/// dissenting line is enough — and the normal pipeline must handle it.
+fn uniform_summary(output: &str, cfg: &UniformSuccess) -> Option<String> {
+    let pass = cached_regex(&cfg.pattern)?;
+    let ignore: Vec<Regex> = cfg
+        .ignore_lines
+        .iter()
+        .filter_map(|p| cached_regex(p))
+        .collect();
+    let mut matched = 0usize;
+    for line in output.lines() {
+        if line.trim().is_empty() || ignore.iter().any(|re| re.is_match(line)) {
+            continue;
+        }
+        if !pass.is_match(line) {
+            return None;
+        }
+        matched += 1;
+    }
+    (matched > 0).then(|| cfg.message.replace("{n}", &matched.to_string()))
+}
+
 fn never_worse(raw: &str, filtered: String) -> String {
     let raw_trim = raw.trim_end();
     if !raw_trim.is_empty() && filtered.len() > raw_trim.len() {
@@ -1466,12 +1951,12 @@ pub fn apply_filter_with_exit(output: &str, f: &FilterDef, exit_ok: Option<bool>
     // success sentinels by convention — never fire them on a known failure.
     if !failed {
         for mo in &f.match_output {
-            if let Ok(re) = Regex::new(&mo.pattern) {
+            if let Some(re) = cached_regex(&mo.pattern) {
                 if re.is_match(output) {
                     // `unless` guard: do not short-circuit when the output also matches
                     // this pattern, so errors/warnings are never masked as success.
                     if let Some(unless) = &mo.unless {
-                        if Regex::new(unless)
+                        if cached_regex(unless)
                             .map(|u| u.is_match(output))
                             .unwrap_or(false)
                         {
@@ -1490,13 +1975,25 @@ pub fn apply_filter_with_exit(output: &str, f: &FilterDef, exit_ok: Option<bool>
         output.to_string()
     };
 
+    // Whole-run success: every significant line agrees, so the summary is a
+    // statement about the run. Evaluated on the ANSI-stripped text (these
+    // tools colorize their per-item lines) and suppressed on a known failure
+    // like every other success sentinel.
+    if !failed {
+        if let Some(uniform) = &f.uniform_success {
+            if let Some(msg) = uniform_summary(&s, uniform) {
+                return never_worse(output, msg);
+            }
+        }
+    }
+
     let mut lines: Vec<String> = s.lines().map(|l| l.to_string()).collect();
 
     if !f.strip_lines_matching.is_empty() {
         let patterns: Vec<Regex> = f
             .strip_lines_matching
             .iter()
-            .filter_map(|p| Regex::new(p).ok())
+            .filter_map(|p| cached_regex(p))
             .collect();
         lines.retain(|l| !patterns.iter().any(|re| re.is_match(l)));
     }
@@ -1505,7 +2002,7 @@ pub fn apply_filter_with_exit(output: &str, f: &FilterDef, exit_ok: Option<bool>
         let patterns: Vec<Regex> = f
             .keep_lines_matching
             .iter()
-            .filter_map(|p| Regex::new(p).ok())
+            .filter_map(|p| cached_regex(p))
             .collect();
         lines.retain(|l| patterns.iter().any(|re| re.is_match(l)));
     }
@@ -1639,13 +2136,13 @@ fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Ve
     let content = lines.join("\n");
 
     for section in sections {
-        let start_re = match Regex::new(&section.start_pattern) {
-            Ok(r) => r,
-            Err(_) => continue,
+        let start_re = match cached_regex(&section.start_pattern) {
+            Some(r) => r,
+            None => continue,
         };
-        let end_re = match Regex::new(&section.end_pattern) {
-            Ok(r) => r,
-            Err(_) => continue,
+        let end_re = match cached_regex(&section.end_pattern) {
+            Some(r) => r,
+            None => continue,
         };
 
         let mut matches = 0;
@@ -1695,13 +2192,21 @@ fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Ve
 }
 
 fn apply_replace_patterns(lines: Vec<String>, patterns: &[[String; 2]]) -> Vec<String> {
+    // Compile once per pattern, not once per (pattern × line).
+    let compiled: Vec<(Regex, &str)> = patterns
+        .iter()
+        .filter_map(|[pattern, replacement]| {
+            cached_regex(pattern).map(|re| (re, replacement.as_str()))
+        })
+        .collect();
+    if compiled.is_empty() {
+        return lines;
+    }
     lines
         .into_iter()
         .map(|mut line| {
-            for [pattern, replacement] in patterns {
-                if let Ok(re) = Regex::new(pattern) {
-                    line = re.replace_all(&line, replacement.as_str()).to_string();
-                }
+            for (re, replacement) in &compiled {
+                line = re.replace_all(&line, *replacement).to_string();
             }
             line
         })
@@ -1710,9 +2215,9 @@ fn apply_replace_patterns(lines: Vec<String>, patterns: &[[String; 2]]) -> Vec<S
 
 fn apply_deduplicate_blocks(lines: Vec<String>, dedup: &DeduplicateBlocksDef) -> Vec<String> {
     let delimiter = dedup.block_delimiter.as_deref().unwrap_or(r"^\s*$");
-    let delim_re = match Regex::new(delimiter) {
-        Ok(r) => r,
-        Err(_) => return lines,
+    let delim_re = match cached_regex(delimiter) {
+        Some(r) => r,
+        None => return lines,
     };
 
     let mut blocks: Vec<Vec<String>> = Vec::new();
@@ -1811,7 +2316,7 @@ fn apply_semantic_filter_with_embeddings(
     let always_keep_patterns: Vec<Regex> = semantic
         .always_keep
         .iter()
-        .filter_map(|p| Regex::new(p).ok())
+        .filter_map(|p| cached_regex(p))
         .collect();
 
     let mut results = Vec::new();
@@ -1850,7 +2355,7 @@ fn apply_semantic_filter_keyword_fallback(
     let always_keep_patterns: Vec<Regex> = semantic
         .always_keep
         .iter()
-        .filter_map(|p| Regex::new(p).ok())
+        .filter_map(|p| cached_regex(p))
         .collect();
 
     lines
@@ -2039,7 +2544,7 @@ fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
 fn apply_category_caps(lines: Vec<String>, caps: &[CategoryCap]) -> Vec<String> {
     let compiled: Vec<(Regex, usize)> = caps
         .iter()
-        .filter_map(|c| Regex::new(&c.pattern).ok().map(|re| (re, c.max)))
+        .filter_map(|c| cached_regex(&c.pattern).map(|re| (re, c.max)))
         .collect();
     if compiled.is_empty() {
         return lines;
@@ -2125,7 +2630,7 @@ fn apply_sizing(lines: Vec<String>, f: &FilterDef) -> (Vec<String>, usize) {
         let priority: Vec<Regex> = f
             .priority_lines
             .iter()
-            .filter_map(|p| Regex::new(p).ok())
+            .filter_map(|p| cached_regex(p))
             .collect();
         if !priority.is_empty() {
             for (i, line) in lines.iter().enumerate() {
@@ -2385,6 +2890,340 @@ on_empty = "empty filter output"
     }
 
     #[test]
+    fn scanned_anchor_never_overshoots_parsed_pattern() {
+        // The lazy loader may only ever *under*-constrain: a scanned anchor must
+        // be a prefix of the anchor the fully parsed pattern would produce, or
+        // the file must be marked unprefilterable.
+        for (name, anchors) in bundled_anchor_index() {
+            let Some(anchors) = anchors else { continue };
+            let file = BundledFilters::get(name).expect("embedded file");
+            let content = std::str::from_utf8(file.data.as_ref()).expect("utf8");
+            let parsed = parse_filter_file_named(content);
+            assert_eq!(
+                parsed.len(),
+                anchors.len(),
+                "{name}: scan found {} anchors for {} filters",
+                anchors.len(),
+                parsed.len()
+            );
+            for (_, def) in &parsed {
+                let real = prefilter_for(&def.match_command);
+                assert!(
+                    real.as_ref().is_some_and(|r| anchors.contains(r)),
+                    "{name}: scan lost the prefilter for {:?}",
+                    def.match_command
+                );
+            }
+        }
+    }
+
+    /// Command corpus used to homologate the prefilter: it must never reject a
+    /// candidate the compiled regex would have matched.
+    fn prefilter_probe_commands() -> Vec<String> {
+        let mut cmds: Vec<String> = [
+            "cargo test --quiet",
+            "cargo build --release",
+            "npm install",
+            "npx eslint src/ --fix",
+            "pnpm run build",
+            "yarn dlx prettier --write .",
+            "uv run pytest -x",
+            "python -m ruff check .",
+            "git status",
+            "git -C /repo log --oneline",
+            "docker compose up -d",
+            "docker build -t app .",
+            "kubectl -n prod get pods",
+            "terraform plan",
+            "Get-Content big.log",
+            "Get-CimInstance Win32_Process",
+            "sudo apt-get install curl",
+            "sudo apk add curl",
+            "bash -c 'cd /app && actionlint'",
+            "npx cypress run --headless",
+            "timeout 300 bats tests/",
+            "gradlew build",
+            "./mvnw -q verify",
+            "cd web && npx astro build",
+            "zzz_nonexistent --foo",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        // Every bundled filter contributes its own literal as a probe, so a
+        // pattern shape nobody wrote a scenario for is still covered.
+        for f in load_bundled_filters() {
+            match prefilter_for(&f.match_command) {
+                Some(Prefilter::StartsWith(lit)) => cmds.push(format!("{lit} --flag arg")),
+                Some(Prefilter::Contains(lit, _)) => cmds.push(format!("npx {lit} --flag arg")),
+                None => {}
+            }
+        }
+        // Real invocations recorded in the corpus: these are the exact strings
+        // the golden suite asserts `match_command` matches, so they are the
+        // strongest available evidence that the prefilter admits real matches.
+        for asset in BundledFilters::iter() {
+            let Some(file) = BundledFilters::get(&asset) else {
+                continue;
+            };
+            let Ok(content) = std::str::from_utf8(file.data.as_ref()) else {
+                continue;
+            };
+            let Ok(parsed) = toml::from_str::<FilterTestFile>(content) else {
+                continue;
+            };
+            for cases in parsed.tests.values() {
+                cmds.extend(cases.iter().filter_map(|c| c.command.clone()));
+            }
+        }
+        cmds
+    }
+
+    #[test]
+    fn prefilter_never_rejects_a_real_match() {
+        // The whole optimization rests on this: the prefilter is a NECESSARY
+        // condition, so `regex matches` must imply `prefilter allows`.
+        let commands = prefilter_probe_commands();
+        let mut checked = 0usize;
+        for f in load_bundled_filters()
+            .iter()
+            .chain(load_user_filters().iter())
+        {
+            let Some(pf) = prefilter_for(&f.match_command) else {
+                continue;
+            };
+            let Some(re) = cached_regex(&f.match_command) else {
+                continue;
+            };
+            for cmd in &commands {
+                if re.is_match(cmd) {
+                    assert!(
+                        pf.allows(cmd),
+                        "prefilter {pf:?} rejected {cmd:?} which {:?} matches",
+                        f.match_command
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 100_000, "corpus too small: {checked} pairs");
+    }
+
+    #[test]
+    fn head_slice_never_drops_a_filter_declared_after_a_fake_tests_marker() {
+        // The head slice cuts at the first line starting with `[[tests`. If
+        // that line lives inside a multi-line value, the cut lands before a
+        // later `[filters.x]` table. What makes this safe is not a guard but
+        // TOML itself: the cut always leaves the string unterminated, so the
+        // head fails to parse and the full-file fallback runs. This test pins
+        // that reasoning down — if the fast path ever starts accepting a
+        // truncated head, it fails here instead of silently losing a filter.
+        let content = "\
+[filters.first]
+match_command = \"^first\\\\b\"
+on_empty = \"\"\"
+sample text
+[[tests.not-really]] this line is inside a string
+\"\"\"
+
+[filters.second]
+match_command = \"^second\\\\b\"
+
+[[tests.first]]
+input = \"\"
+expected = \"\"
+";
+        let parsed = parse_filter_file_named(content);
+        let names: Vec<&str> = parsed.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            parsed.len(),
+            2,
+            "head slice dropped a filter; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn user_filter_index_invalidates_on_same_length_edit() {
+        // Regression: the index stamp was seconds + length. Fixing a pattern
+        // without changing its byte length (`^alpha` -> `^bravo`) inside the
+        // same second left the stamp identical, so the hook kept prefiltering
+        // by the OLD pattern and the edited filter silently stopped matching.
+        let dir = std::env::temp_dir().join(format!("tokenix-idx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let file = dir.join("probe.toml");
+        let toml_for = |cmd: &str| {
+            format!("[filters.probe]\nmatch_command = \"^{cmd}\\\\b\"\nmax_lines = 10\n")
+        };
+
+        std::fs::write(&file, toml_for("alpha")).expect("write");
+        let first = user_filter_index(&dir);
+        let stamp_a = user_filter_stats(&dir)[0].1;
+
+        // Same byte length, a realistic edit interval later — the case a
+        // seconds-resolution stamp cannot see. The sleep clears the platform's
+        // file-time tick (Windows updates file times on the ~15 ms system
+        // clock tick, so sub-tick writes share a stamp on any resolution).
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        std::fs::write(&file, toml_for("bravo")).expect("rewrite");
+        let stamp_b = user_filter_stats(&dir)[0].1;
+        let second = user_filter_index(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            first[0].prefilters,
+            Some(vec![Prefilter::StartsWith("alpha".into())])
+        );
+        // The whole cache rests on this: the stamp MUST distinguish two
+        // consecutive same-length writes, or a filter edit is invisible to
+        // every later hook. A failure here means the filesystem's timestamp
+        // resolution is too coarse to validate the index by metadata.
+        assert_ne!(
+            stamp_a, stamp_b,
+            "mtime stamp cannot distinguish two same-length writes"
+        );
+        assert_eq!(
+            second[0].prefilters,
+            Some(vec![Prefilter::StartsWith("bravo".into())]),
+            "index served a stale prefilter after a same-length edit"
+        );
+    }
+
+    #[test]
+    fn piped_select_string_still_resolves_its_filter() {
+        // `^Select-String\b|\|\s*Select-String\b` has a top-level alternation,
+        // so only the FIRST branch is anchored. The leading-literal prefilter
+        // used to demand that the candidate start with "Select-String", which
+        // rejects the piped form the second branch exists for.
+        //
+        // In practice `split_on_operators` saved it: the segment candidate
+        // `Select-String -Pattern ERROR` matches branch 1 on its own. So this
+        // was a violated prefilter contract ("may only skip work, never change
+        // results"), one candidate-derivation change away from becoming a real
+        // miss — not a user-visible bug. This test pins the end-to-end shape;
+        // `top_level_alternation_detection` pins the contract itself.
+        let filters = load_bundled_filters();
+        let cmd = "Get-Content log.txt | Select-String -Pattern ERROR";
+        assert!(
+            find_filter(cmd, &filters).is_some(),
+            "piped Select-String must resolve a filter"
+        );
+    }
+
+    #[test]
+    fn top_level_alternation_detection() {
+        assert!(has_top_level_alternation(r"^a\b|\|\s*a\b"));
+        assert!(has_top_level_alternation("foo|bar"));
+        // Alternation contained in a group is fine — the group is mandatory,
+        // so the surrounding literal (if any) still applies.
+        assert!(!has_top_level_alternation(r"^git\s+(add|rm)\b"));
+        // `\|` is a literal pipe, `[|]` is a class member.
+        assert!(!has_top_level_alternation(r"^grep\s+\|"));
+        assert!(!has_top_level_alternation(r"^grep[|]x"));
+    }
+
+    #[test]
+    fn uniform_success_is_a_claim_about_the_run_not_one_line() {
+        // The reason `match_output` cannot express this: it fires on ANY
+        // matching line, so a run where item 3 failed still reports success.
+        let cfg = UniformSuccess {
+            pattern: "^PASS - ".to_string(),
+            message: "conftest: {n} policies passed".to_string(),
+            ignore_lines: vec!["^Summary".to_string()],
+        };
+
+        let all_pass = "PASS - a.yaml - main\nPASS - b.yaml - main\nPASS - c.yaml - main\n";
+        assert_eq!(
+            uniform_summary(all_pass, &cfg).as_deref(),
+            Some("conftest: 3 policies passed"),
+            "a uniform run must collapse, with the real item count"
+        );
+
+        // One dissenting line is enough to disqualify the whole run.
+        let mixed = "PASS - a.yaml - main\nFAIL - b.yaml - missing label\nPASS - c.yaml - main\n";
+        assert_eq!(
+            uniform_summary(mixed, &cfg),
+            None,
+            "a failed item must never be summarized as success"
+        );
+
+        // Unrecognized output is not a clean run either — this is what the 40
+        // absence-based sentinels used to get wrong.
+        assert_eq!(uniform_summary("some other tool output\n", &cfg), None);
+        // Nothing to summarize is not success.
+        assert_eq!(uniform_summary("\n  \n", &cfg), None);
+        // Ignored lines don't count as items, but don't disqualify either.
+        assert_eq!(
+            uniform_summary("Summary: 1 checks\nPASS - a.yaml - main\n", &cfg).as_deref(),
+            Some("conftest: 1 policies passed")
+        );
+    }
+
+    #[test]
+    fn prefilter_shapes() {
+        assert_eq!(
+            prefilter_for(r"^cargo\s+test"),
+            Some(Prefilter::StartsWith("cargo".into()))
+        );
+        assert_eq!(
+            prefilter_for(r"\bactionlint\b"),
+            Some(Prefilter::Contains("actionlint".into(), false))
+        );
+        assert_eq!(
+            prefilter_for(r"^(npx\s+)?eslint\b"),
+            Some(Prefilter::Contains("eslint".into(), false))
+        );
+        assert_eq!(
+            prefilter_for(r"(?i)^(get-ciminstance|gcim)\b"),
+            None,
+            "mandatory alternation cannot be reduced to one literal"
+        );
+        assert_eq!(
+            prefilter_for(r"^(?:sudo\s+)?apk\s+(add|del)\b"),
+            Some(Prefilter::Contains("apk".into(), false))
+        );
+        // `.` and `+` are metacharacters: the run must stop before them.
+        assert_eq!(
+            prefilter_for("^go.mod"),
+            Some(Prefilter::StartsWith("go".into()))
+        );
+        // A quantified last character is optional and must be dropped.
+        assert_eq!(
+            prefilter_for(r"\bmake?\b"),
+            Some(Prefilter::Contains("mak".into(), false))
+        );
+        // Too little literal left to be worth a scan.
+        assert_eq!(prefilter_for(r"\bgo?\b"), None);
+    }
+
+    #[test]
+    fn lazy_load_matches_full_load_for_commands() {
+        let all = load_all_filters();
+        let commands = [
+            "cargo test --quiet",
+            "npm install",
+            "git status",
+            "docker compose up -d",
+            "cd /app && pnpm run build",
+            "bash -c 'uv run pytest -q'",
+            "kubectl -n prod get pods",
+            "Get-Content big.log",
+            "zzz_nonexistent --foo",
+            "terraform plan",
+        ];
+        for cmd in commands.iter().map(|s| s.to_string()).chain(
+            // Reuse the wide probe corpus so the lazy loader is homologated
+            // against every bundled filter's own literal, not just scenarios.
+            prefilter_probe_commands(),
+        ) {
+            let lazy = load_filters_for_command(&cmd);
+            let full = find_filter(&cmd, &all).map(|f| f.match_command.clone());
+            let subset = find_filter(&cmd, &lazy).map(|f| f.match_command.clone());
+            assert_eq!(full, subset, "lazy load diverged for {cmd:?}");
+        }
+    }
+
+    #[test]
     fn timeout_wrapper_included_in_candidates() {
         // Reported: `timeout 180 pnpm run test` must produce `pnpm run test`
         // as a candidate so filters keyed on `pnpm run test` match.
@@ -2425,6 +3264,7 @@ on_empty = "empty filter output"
             passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: Some(4),
+            uniform_success: None,
             filter_stderr: false,
             replace_patterns: vec![],
             extract_sections: vec![],
@@ -2458,6 +3298,7 @@ on_empty = "empty filter output"
             passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: None,
+            uniform_success: None,
             filter_stderr: false,
             replace_patterns: vec![],
             extract_sections: vec![],
@@ -2536,6 +3377,7 @@ on_empty = "empty filter output"
             passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: None,
+            uniform_success: None,
             filter_stderr: false,
             replace_patterns: vec![],
             extract_sections: vec![],
@@ -2571,6 +3413,7 @@ on_empty = "empty filter output"
             passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: None,
+            uniform_success: None,
             filter_stderr: false,
             replace_patterns: vec![],
             extract_sections: vec![],
@@ -2597,6 +3440,7 @@ on_empty = "empty filter output"
             passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: None,
+            uniform_success: None,
             filter_stderr: false,
             replace_patterns: vec![],
             extract_sections: vec![],
@@ -2630,6 +3474,7 @@ on_empty = "empty filter output"
             passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: None,
+            uniform_success: None,
             filter_stderr: false,
             replace_patterns: vec![],
             extract_sections: vec![],
@@ -2711,6 +3556,7 @@ on_empty = "empty filter output"
             passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: None,
+            uniform_success: None,
             filter_stderr: false,
             replace_patterns: vec![],
             extract_sections: vec![],
@@ -2776,6 +3622,7 @@ on_empty = "empty filter output"
                 unless: Some("error|failed".to_string()),
             }],
             truncate_lines_at: None,
+            uniform_success: None,
             filter_stderr: false,
             replace_patterns: vec![],
             extract_sections: vec![],
@@ -2812,6 +3659,7 @@ on_empty = "empty filter output"
             passthrough_when_emptied: false,
             match_output: vec![],
             truncate_lines_at: None,
+            uniform_success: None,
             filter_stderr: false,
             replace_patterns: vec![],
             extract_sections: vec![],
@@ -3629,6 +4477,200 @@ keep_lines_matchin = ["oops"]
         );
     }
 
+    #[test]
+    #[ignore = "maintainer report; run with --ignored --nocapture"]
+    fn report_sentinel_evidence_candidates() {
+        // For each filter whose sentinel answers non-empty output, print the
+        // fixture that proves it. The success marker for a `match_output`
+        // (positive evidence) rule is almost always already in that text.
+        let unknown = "unrecognized tool output line one\n\
+                       some other shape the filter never saw\n\
+                       third line of genuine output\n";
+        for asset in BundledFilters::iter() {
+            let file = BundledFilters::get(&asset).expect("asset");
+            let content = std::str::from_utf8(file.data.as_ref()).expect("utf8");
+            let Ok(parsed) = toml::from_str::<FilterTestFile>(content) else {
+                continue;
+            };
+            for (fname, fdef) in &parsed.filters {
+                let Some(sentinel) = fdef.on_empty.as_deref() else {
+                    continue;
+                };
+                if apply_filter(unknown, fdef).trim() != sentinel.trim() {
+                    continue;
+                }
+                let Some(cases) = parsed.tests.get(fname) else {
+                    continue;
+                };
+                for c in cases {
+                    if !c.input.trim().is_empty() && c.expected.trim() == sentinel.trim() {
+                        println!(
+                            "@@@\t{fname}\t{asset}\t{}",
+                            c.input.replace('\n', " ⏎ ").trim()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn on_empty_sentinel_never_answers_unrecognized_output() {
+        // Per-filter homologation of the "filters must only filter, never
+        // invent responses" rule.
+        //
+        // An `on_empty` sentinel is legitimate in exactly two shapes:
+        //  a) the tool's clean run really is empty (a silent linter) — the
+        //     sentinel then answers *empty* output, and the filter must set
+        //     `passthrough_when_emptied` so that NON-empty output it does not
+        //     recognize is shown instead of being answered with a false "all
+        //     clear";
+        //  b) the filter deliberately collapses recognized verbose output into
+        //     a summary — proven by a golden case whose non-empty input yields
+        //     the sentinel.
+        //
+        // Anything else is a filter telling the agent a command succeeded when
+        // it has no evidence of that.
+        let unknown = "unrecognized tool output line one\n\
+                       some other shape the filter never saw\n\
+                       third line of genuine output\n";
+        let mut offenders = Vec::new();
+        for asset in BundledFilters::iter() {
+            let file = BundledFilters::get(&asset).expect("asset");
+            let content = std::str::from_utf8(file.data.as_ref()).expect("utf8");
+            let Ok(parsed) = toml::from_str::<FilterTestFile>(content) else {
+                continue;
+            };
+            for (fname, fdef) in &parsed.filters {
+                let Some(sentinel) = fdef.on_empty.as_deref() else {
+                    continue;
+                };
+                if apply_filter(unknown, fdef).trim() != sentinel.trim() {
+                    continue; // does not fabricate — nothing to prove
+                }
+                let summarizes = parsed.tests.get(fname).is_some_and(|cases| {
+                    cases
+                        .iter()
+                        .any(|c| !c.input.trim().is_empty() && c.expected.trim() == sentinel.trim())
+                });
+                if !summarizes {
+                    offenders.push(format!(
+                        "{asset} [{fname}]: answers unrecognized output with {sentinel:?}; \
+                         add `passthrough_when_emptied = true` (or a golden case proving it \
+                         legitimately summarizes non-empty output)"
+                    ));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "{} filter(s) fabricate a success sentinel over real output:\n{}",
+            offenders.len(),
+            offenders.join("\n")
+        );
+    }
+
+    /// Per-filter homologation report (one TSV row per bundled filter):
+    /// golden verdict, token economy, failure-path coverage, masking,
+    /// inflation, sentinel shape and prefilter class.
+    ///
+    /// Ignored by default because it is a report, not an assertion — the
+    /// invariants it surfaces are locked by the tests above. Run it with:
+    /// `cargo test --release --bin tokenix homologate -- --ignored --nocapture`
+    #[test]
+    #[ignore = "maintainer report; run with --ignored --nocapture"]
+    fn homologate_each_filter() {
+        use crate::chunker::count_tokens;
+        println!("FILTER\tASSET\tCASES\tGOLDEN\tRAW\tOUT\tSAVED%\tFAILCASE\tMASKS\tINFLATES\tON_EMPTY\tPASSTHRU\tPREFILTER\tFABRICATES\tSUMMARY");
+        for asset in BundledFilters::iter() {
+            let file = BundledFilters::get(&asset).expect("asset");
+            let content = std::str::from_utf8(file.data.as_ref()).expect("utf8");
+            let parsed: FilterTestFile = match toml::from_str(content) {
+                Ok(p) => p,
+                Err(e) => {
+                    println!("?\t{asset}\tPARSE_ERROR\t{e}");
+                    continue;
+                }
+            };
+            for (fname, fdef) in &parsed.filters {
+                let empty: Vec<GoldenCase> = Vec::new();
+                let cases = parsed.tests.get(fname).unwrap_or(&empty);
+                let (mut raw, mut out) = (0usize, 0usize);
+                let (mut golden_ok, mut fail_case, mut masks, mut inflates) =
+                    (true, false, false, false);
+                for case in cases {
+                    let got = apply_filter(&case.input, fdef);
+                    if got.trim_end() != case.expected.trim_end() {
+                        golden_ok = false;
+                    }
+                    raw += count_tokens(&case.input);
+                    out += count_tokens(&got);
+                    // `never_worse` only guards non-empty raw output: an
+                    // `on_empty` sentinel replacing genuinely empty output is
+                    // by design, not inflation.
+                    let raw_trim = case.input.trim_end();
+                    if !raw_trim.is_empty() && got.len() > raw_trim.len() {
+                        inflates = true;
+                    }
+                    // A failure-path case: the raw input carries a failure
+                    // signal. The filtered view must still carry one, or the
+                    // agent is told a failed command succeeded.
+                    if output_has_failure_signal(&case.input) {
+                        fail_case = true;
+                        if !output_has_failure_signal(&got) {
+                            masks = true;
+                        }
+                    }
+                }
+                let pct = if raw > 0 {
+                    100.0 * (raw.saturating_sub(out)) as f64 / raw as f64
+                } else {
+                    0.0
+                };
+                // The failure mode `passthrough_when_emptied` exists to stop:
+                // real, non-empty output the filter does not recognize being
+                // replaced by a fabricated success sentinel. Probe it with a
+                // benign payload carrying no failure signal.
+                let unknown = "unrecognized tool output line one\n\
+                               some other shape the filter never saw\n\
+                               third line of genuine output\n";
+                let probe = apply_filter(unknown, fdef);
+                let fabricates = fdef
+                    .on_empty
+                    .as_deref()
+                    .is_some_and(|sentinel| probe.trim() == sentinel.trim());
+
+                // Does any golden case reach the sentinel from NON-EMPTY input?
+                // If not, the sentinel only ever answers a genuinely empty run
+                // (a clean linter), and `passthrough_when_emptied` can be added
+                // without changing a single documented behavior.
+                let sentinel_from_nonempty = fdef.on_empty.as_deref().is_some_and(|sentinel| {
+                    cases
+                        .iter()
+                        .any(|c| !c.input.trim().is_empty() && c.expected.trim() == sentinel.trim())
+                });
+
+                let pf = match prefilter_for(&fdef.match_command) {
+                    Some(Prefilter::StartsWith(_)) => "anchor",
+                    Some(Prefilter::Contains(_, _)) => "contains",
+                    None => "none",
+                };
+                println!(
+                    "{fname}\t{asset}\t{}\t{}\t{raw}\t{out}\t{pct:.0}\t{}\t{}\t{}\t{}\t{}\t{pf}\t{}\t{}",
+                    cases.len(),
+                    if golden_ok { "ok" } else { "FAIL" },
+                    if fail_case { "yes" } else { "NO" },
+                    if masks { "MASKS" } else { "-" },
+                    if inflates { "INFLATES" } else { "-" },
+                    if fdef.on_empty.is_some() { "on_empty" } else { "-" },
+                    if fdef.passthrough_when_emptied { "pass" } else { "-" },
+                    if fabricates { "FABRICATES" } else { "-" },
+                    if sentinel_from_nonempty { "SUMMARY" } else { "-" },
+                );
+            }
+        }
+    }
+
     /// Iterate every bundled filter's embedded golden cases, applying the real
     /// pipeline. Yields `(asset, filter_name, input, filtered_output)`.
     fn for_each_golden_case<F: FnMut(&str, &str, &str, &str)>(mut visit: F) {
@@ -3865,6 +4907,7 @@ keep_lines_matchin = ["oops"]
                 passthrough_when_emptied: false,
                 match_output: vec![],
                 truncate_lines_at: None,
+                uniform_success: None,
                 filter_stderr: false,
                 replace_patterns: vec![],
                 extract_sections: vec![],
@@ -3891,6 +4934,7 @@ keep_lines_matchin = ["oops"]
                 passthrough_when_emptied: false,
                 match_output: vec![],
                 truncate_lines_at: None,
+                uniform_success: None,
                 filter_stderr: false,
                 replace_patterns: vec![],
                 extract_sections: vec![],
@@ -3917,6 +4961,7 @@ keep_lines_matchin = ["oops"]
                 passthrough_when_emptied: false,
                 match_output: vec![],
                 truncate_lines_at: None,
+                uniform_success: None,
                 filter_stderr: false,
                 replace_patterns: vec![],
                 extract_sections: vec![],
@@ -3943,6 +4988,7 @@ keep_lines_matchin = ["oops"]
                 passthrough_when_emptied: false,
                 match_output: vec![],
                 truncate_lines_at: None,
+                uniform_success: None,
                 filter_stderr: false,
                 replace_patterns: vec![],
                 extract_sections: vec![],
@@ -3969,6 +5015,7 @@ keep_lines_matchin = ["oops"]
                 passthrough_when_emptied: false,
                 match_output: vec![],
                 truncate_lines_at: None,
+                uniform_success: None,
                 filter_stderr: false,
                 replace_patterns: vec![],
                 extract_sections: vec![],
@@ -4000,6 +5047,7 @@ keep_lines_matchin = ["oops"]
                 passthrough_when_emptied: false,
                 match_output: vec![],
                 truncate_lines_at: None,
+                uniform_success: None,
                 filter_stderr: false,
                 replace_patterns: vec![],
                 extract_sections: vec![],
@@ -4026,6 +5074,7 @@ keep_lines_matchin = ["oops"]
                 passthrough_when_emptied: false,
                 match_output: vec![],
                 truncate_lines_at: None,
+                uniform_success: None,
                 filter_stderr: false,
                 replace_patterns: vec![],
                 extract_sections: vec![],
@@ -4052,6 +5101,7 @@ keep_lines_matchin = ["oops"]
                 passthrough_when_emptied: false,
                 match_output: vec![],
                 truncate_lines_at: None,
+                uniform_success: None,
                 filter_stderr: false,
                 replace_patterns: vec![],
                 extract_sections: vec![],
@@ -4078,6 +5128,7 @@ keep_lines_matchin = ["oops"]
                 passthrough_when_emptied: false,
                 match_output: vec![],
                 truncate_lines_at: None,
+                uniform_success: None,
                 filter_stderr: false,
                 replace_patterns: vec![],
                 extract_sections: vec![],

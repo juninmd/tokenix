@@ -1,6 +1,7 @@
 [filters.sam]
 description = "Keep AWS SAM build/deploy results and stack outputs, drop event stream noise"
 match_command = "^sam\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

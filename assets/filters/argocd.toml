@@ -1,6 +1,7 @@
 [filters.argocd]
 description = "Keep argocd app sync/health status and errors, drop verbose resource tree"
 match_command = "^argocd\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 keep_lines_matching = [
   "^Name:",

@@ -1,6 +1,7 @@
 [filters.retire]
 description = "Keep retire.js vulnerability findings, collapse clean runs"
 match_command = "^retire\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

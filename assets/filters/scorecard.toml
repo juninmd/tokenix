@@ -1,6 +1,7 @@
 [filters.scorecard]
 description = "Keep OSSF scorecard aggregate score and per-check scores, drop details"
 match_command = "^scorecard\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

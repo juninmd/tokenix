@@ -16,6 +16,8 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 100
+passthrough_when_emptied = true
+uniform_success = { pattern = "^\\s*PASS ", message = "prowler: {n} checks passed" }
 on_empty = "prowler: no failed checks"
 token_budget = 2000
 
@@ -36,4 +38,4 @@ input = """
 PASS us-east-1 iam_root_mfa_enabled
 PASS us-east-1 ec2_ebs_encryption
 """
-expected = "prowler: no failed checks"
+expected = "prowler: 2 checks passed"

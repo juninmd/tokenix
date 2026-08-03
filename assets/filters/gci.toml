@@ -1,6 +1,7 @@
 [filters.gci]
 description = "Keep gci import-order diffs/changed files, collapse clean runs"
 match_command = "^gci\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

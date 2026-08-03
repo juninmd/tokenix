@@ -1,6 +1,7 @@
 [filters.mlflow]
 description = "Keep mlflow run result and errors, drop INFO setup logs"
 match_command = "^mlflow\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

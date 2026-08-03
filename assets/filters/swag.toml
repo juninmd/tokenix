@@ -1,6 +1,7 @@
 [filters.swag]
 description = "Keep swag generation result and errors, drop per-file progress"
 match_command = "^swag\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

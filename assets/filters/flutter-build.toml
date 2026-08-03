@@ -1,6 +1,7 @@
 [filters.flutter-build]
 description = "Keep flutter build result artifact and errors, drop Gradle/Xcode progress"
 match_command = "^flutter\\s+build\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

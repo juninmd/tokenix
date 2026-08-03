@@ -1,6 +1,7 @@
 [filters.proselint]
 description = "Keep proselint findings, collapse clean prose"
 match_command = "^proselint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

@@ -1,6 +1,7 @@
 [filters.textlint]
 description = "Keep textlint findings and problem total, drop filename headers"
 match_command = "^(npx\\s+)?textlint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

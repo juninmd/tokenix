@@ -1,6 +1,7 @@
 [filters.clang-format]
 description = "Keep clang-format dry-run violations"
 match_command = "\\bclang-format\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

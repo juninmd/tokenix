@@ -16,6 +16,10 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 80
+match_output = [
+  { pattern = "didn't find any unused dependencies", message = "cargo-machete: no unused dependencies", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "cargo-machete: no unused dependencies"
 
 [[tests.cargo-machete]]

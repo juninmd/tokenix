@@ -1,6 +1,7 @@
 [filters.dbmate]
 description = "Keep dbmate applied/rolled-back migrations and errors"
 match_command = "^dbmate\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

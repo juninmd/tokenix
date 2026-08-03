@@ -1,6 +1,7 @@
 [filters.dart-test]
 description = "Keep dart test final result and failures, drop passing tick lines"
 match_command = "^dart\\s+test\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

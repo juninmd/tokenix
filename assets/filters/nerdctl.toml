@@ -1,6 +1,7 @@
 [filters.nerdctl]
 description = "Keep nerdctl table rows and results, drop layer download progress"
 match_command = "^nerdctl\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

@@ -1,6 +1,7 @@
 [filters.size-limit]
 description = "Keep size-limit package size/limit/time lines, drop decoration"
 match_command = "^(npx\\s+)?size-limit\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

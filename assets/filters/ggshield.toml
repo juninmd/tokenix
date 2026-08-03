@@ -14,6 +14,10 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 80
+match_output = [
+  { pattern = "No secrets have been found", message = "ggshield: no secrets found", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "ggshield: no secrets found"
 token_budget = 2000
 

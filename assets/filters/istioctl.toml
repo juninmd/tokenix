@@ -14,6 +14,10 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 80
+match_output = [
+  { pattern = "No validation issues found", message = "istioctl: no issues found", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "istioctl: no issues found"
 
 [[tests.istioctl]]

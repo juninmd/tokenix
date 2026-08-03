@@ -1,6 +1,7 @@
 [filters.podman-build]
 description = "Keep podman build STEP/COMMIT lines and errors, drop layer noise"
 match_command = "^podman\\s+build\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

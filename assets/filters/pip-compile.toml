@@ -1,6 +1,7 @@
 [filters.pip-compile]
 description = "Keep pip-compile pinned requirements, drop comment provenance lines"
 match_command = "^pip-compile\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

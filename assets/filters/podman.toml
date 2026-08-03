@@ -1,6 +1,7 @@
 [filters.podman]
 description = "Keep podman ps/images/inspect table rows, drop blanks"
 match_command = "^podman\\s+(ps|images|image\\s+ls|container\\s+ls|inspect|pull|push)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

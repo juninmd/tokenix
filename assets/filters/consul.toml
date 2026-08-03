@@ -1,6 +1,7 @@
 [filters.consul]
 description = "Keep consul members/status rows and errors, drop blanks"
 match_command = "^consul\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

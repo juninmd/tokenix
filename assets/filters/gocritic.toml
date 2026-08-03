@@ -1,6 +1,7 @@
 [filters.gocritic]
 description = "Keep gocritic findings, collapse clean runs"
 match_command = "^gocritic\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

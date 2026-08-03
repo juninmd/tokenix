@@ -1,6 +1,7 @@
 [filters.serverless]
 description = "Keep serverless deploy endpoints/functions/result, drop upload progress"
 match_command = "^(serverless|sls)\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

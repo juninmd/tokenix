@@ -15,6 +15,10 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 80
+match_output = [
+  { pattern = "No issues found", message = "osv-scanner: no vulnerabilities found", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "osv-scanner: no vulnerabilities found"
 token_budget = 2000
 

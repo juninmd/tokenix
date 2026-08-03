@@ -18,6 +18,8 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 80
+passthrough_when_emptied = true
+uniform_success = { pattern = "^\\s*\\[200\\]", message = "lychee: {n} links ok" }
 on_empty = "lychee: all links ok"
 token_budget = 2000
 
@@ -42,4 +44,4 @@ input = """
 [200] http://localhost:1234/a/
 [200] http://localhost:1234/b/
 """
-expected = "lychee: all links ok"
+expected = "lychee: 2 links ok"

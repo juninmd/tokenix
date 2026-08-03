@@ -1,6 +1,7 @@
 [filters.vulture]
 description = "Keep vulture dead-code findings"
 match_command = "^vulture\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

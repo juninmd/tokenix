@@ -1,6 +1,7 @@
 [filters.great-expectations]
 description = "Keep Great Expectations validation result and failed expectations"
 match_command = "^great_expectations\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

@@ -1,6 +1,7 @@
 [filters.vault]
 description = "Keep vault status/secret key-value rows and errors, drop blanks"
 match_command = "^vault\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

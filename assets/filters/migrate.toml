@@ -1,6 +1,7 @@
 [filters.migrate]
 description = "Keep golang-migrate applied versions and errors"
 match_command = "^migrate\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

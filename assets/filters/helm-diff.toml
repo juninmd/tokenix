@@ -1,6 +1,7 @@
 [filters.helm-diff]
 description = "Compact helm diff output: keep changed resources and +/- lines"
 match_command = "^helm\\s+diff\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 keep_lines_matching = [
   "has changed:",

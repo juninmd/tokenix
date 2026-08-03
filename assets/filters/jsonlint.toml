@@ -1,6 +1,7 @@
 [filters.jsonlint]
 description = "Keep jsonlint parse errors, collapse valid files"
 match_command = "^(npx\\s+)?jsonlint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

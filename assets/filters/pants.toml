@@ -1,6 +1,7 @@
 [filters.pants]
 description = "Keep pants results and failures, drop per-target INFO progress"
 match_command = "^(\\./)?pants\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

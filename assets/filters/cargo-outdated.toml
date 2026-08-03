@@ -14,6 +14,10 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 80
+match_output = [
+  { pattern = "All dependencies are up to date", message = "cargo-outdated: all up to date", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "cargo-outdated: all up to date"
 
 [[tests.cargo-outdated]]

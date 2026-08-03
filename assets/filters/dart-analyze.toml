@@ -13,6 +13,10 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 100
+match_output = [
+  { pattern = "No issues found", message = "dart analyze: no issues", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "dart analyze: no issues"
 
 [[tests.dart-analyze]]

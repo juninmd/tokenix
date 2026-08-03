@@ -16,6 +16,10 @@ keep_lines_matching = [
   "(?i)error",
 ]
 max_lines = 60
+match_output = [
+  { pattern = "No problems found", message = "attw: no problems found", unless = "(?i)\\b(error|fatal|failed)\\b" },
+]
+passthrough_when_emptied = true
 on_empty = "attw: no problems found"
 
 [[tests.attw]]

@@ -1,6 +1,7 @@
 [filters.earthly]
 description = "Keep earthly result banner and output artifacts, drop per-step logs"
 match_command = "^earthly\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

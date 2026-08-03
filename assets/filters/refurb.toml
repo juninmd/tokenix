@@ -1,6 +1,7 @@
 [filters.refurb]
 description = "Keep refurb suggestions (FURB codes), drop blanks"
 match_command = "^refurb\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

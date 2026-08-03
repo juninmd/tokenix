@@ -1,6 +1,7 @@
 [filters.protolint]
 description = "Keep protolint findings, collapse clean protos"
 match_command = "^protolint\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

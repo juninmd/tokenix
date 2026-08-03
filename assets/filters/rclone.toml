@@ -1,6 +1,7 @@
 [filters.rclone]
 description = "Keep rclone final transfer stats and errors, drop interim progress"
 match_command = "^rclone\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",

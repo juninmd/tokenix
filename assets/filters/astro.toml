@@ -1,6 +1,7 @@
 [filters.astro]
 description = "Keep astro build totals and errors, drop per-page generated lines"
 match_command = "^(npx\\s+)?astro\\b"
+passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
