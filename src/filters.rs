@@ -964,10 +964,9 @@ fn prefilter_for(pattern: &str) -> Option<Prefilter> {
             if s[1..close].contains('(') {
                 return None; // nested group: out of scope for this scanner
             }
-            match s[close + 1..].strip_prefix('?') {
-                Some(rest) => s = rest, // optional group: skip it
-                None => return None,    // mandatory group (alternation)
-            }
+            // Only an OPTIONAL group can be skipped; a mandatory one (an
+            // alternation) means no single literal is guaranteed, so bail.
+            s = s[close + 1..].strip_prefix('?')?;
         } else {
             break;
         }
