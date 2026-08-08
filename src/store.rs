@@ -29,25 +29,61 @@ pub fn acquire_index_lock(repo_root: &Path) -> Result<IndexLockGuard> {
     std::fs::create_dir_all(&global)?;
     let lock_path = global.join(format!("{}.lock", project_id(repo_root)));
 
-    if let Ok(content) = std::fs::read_to_string(&lock_path) {
-        if let Ok(pid) = content.trim().parse::<u32>() {
-            if is_pid_alive(pid) {
-                anyhow::bail!("index already running (PID {pid}). Use `tokenix stop` or wait.");
+    let pid = std::process::id();
+    // Atomic acquire: a read-then-write check let two indexers both see no lock
+    // and both open the same SQLite DB for writing.
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                f.write_all(pid.to_string().as_bytes())?;
+                return Ok(IndexLockGuard {
+                    path: lock_path,
+                    pid,
+                });
             }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let holder = std::fs::read_to_string(&lock_path)
+                    .ok()
+                    .and_then(|c| c.trim().parse::<u32>().ok());
+                match holder {
+                    Some(p) if is_pid_alive(p) => {
+                        anyhow::bail!(
+                            "index already running (PID {p}). Use `tokenix stop` or wait."
+                        );
+                    }
+                    // Stale lock (holder died, or the file is unreadable/garbage):
+                    // clear it and retry the atomic create.
+                    _ => {
+                        std::fs::remove_file(&lock_path)?;
+                    }
+                }
+            }
+            Err(e) => return Err(e.into()),
         }
     }
-    let pid = std::process::id();
-    std::fs::write(&lock_path, pid.to_string())?;
-    Ok(IndexLockGuard { path: lock_path })
 }
 
 pub struct IndexLockGuard {
     path: PathBuf,
+    pid: u32,
 }
 
 impl Drop for IndexLockGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        // Only drop a lock this process still owns — otherwise the first
+        // finisher would delete a lock a second indexer had just taken.
+        let owned = std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|c| c.trim().parse::<u32>().ok())
+            == Some(self.pid);
+        if owned {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -194,8 +230,12 @@ pub fn open_db(repo_root: &Path, create: bool) -> Result<Option<Connection>> {
         }
     }
     let conn = Connection::open(&path).context("opening sqlite db")?;
+    // foreign_keys is OFF per-connection by default, so the schema's
+    // `ON DELETE CASCADE` clauses never fired and deleting a file left orphaned
+    // chunks/embeddings/graph rows behind.
     conn.execute_batch(
-        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; \
+         PRAGMA foreign_keys=ON;",
     )?;
     Ok(Some(conn))
 }
@@ -425,31 +465,57 @@ pub fn insert_embedding(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> 
 /// Returns the number of converted rows. Cheap (pure CPU re-encode), so it
 /// runs opportunistically at index time.
 pub fn backfill_quantized_embeddings(conn: &Connection) -> Result<usize> {
-    let legacy: Vec<(i64, Vec<u8>)> = {
-        let mut stmt =
-            conn.prepare("SELECT chunk_id, embedding FROM embeddings WHERE scale IS NULL")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })?;
-        rows.filter_map(|r| r.ok()).collect()
-    };
-    if legacy.is_empty() {
+    // Migrate in bounded batches. Materializing the whole legacy table pulled
+    // every f32 blob into RAM at once (~3 KB per chunk — over a GB on a large
+    // old index) right before Phase 1 starts allocating.
+    const BATCH: usize = 5_000;
+    let mut count = 0usize;
+    loop {
+        let legacy: Vec<(i64, Vec<u8>)> = {
+            let mut stmt = conn.prepare(
+                "SELECT chunk_id, embedding FROM embeddings WHERE scale IS NULL LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![BATCH as i64], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        if legacy.is_empty() {
+            break;
+        }
+        count += legacy.len();
+        migrate_legacy_batch(conn, legacy)?;
+    }
+    if count == 0 {
         return Ok(0);
     }
-    let count = legacy.len();
+    // VACUUM rewrites the entire DB and needs ~2x the disk; make it opt-in
+    // rather than a mandatory blocking step at the start of every index run.
+    if std::env::var("TOKENIX_VACUUM_AFTER_MIGRATION").as_deref() == Ok("1") {
+        if let Err(e) = conn.execute_batch("VACUUM") {
+            eprintln!("tokenix: VACUUM after embedding migration failed: {e}");
+        }
+    }
+    Ok(count)
+}
+
+fn migrate_legacy_batch(conn: &Connection, legacy: Vec<(i64, Vec<u8>)>) -> Result<()> {
     conn.execute_batch("BEGIN IMMEDIATE")?;
     for (chunk_id, blob) in legacy {
         let (q8, scale) = quantize_q8(&deserialize_vec(&blob));
-        conn.execute(
+        // Roll back explicitly on error: a bare `?` here left the transaction
+        // open on the connection, so every later write joined a doomed
+        // transaction (or hit "cannot start a transaction within a transaction").
+        if let Err(e) = conn.execute(
             "UPDATE embeddings SET embedding=?2, scale=?3 WHERE chunk_id=?1",
             params![chunk_id, q8, scale],
-        )?;
+        ) {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(e.into());
+        }
     }
     conn.execute_batch("COMMIT")?;
-    // One-time space reclaim: the f32→i8 rewrite frees ~3/4 of the embedding
-    // pages, but only VACUUM returns them to the filesystem.
-    let _ = conn.execute_batch("VACUUM");
-    Ok(count)
+    Ok(())
 }
 
 /// Read-only probe: does this index have the `scale` column yet? Query paths
@@ -525,6 +591,22 @@ pub fn upsert_embedding_cache(
         params![content_hash, serialize_vec(embedding), now],
     )?;
     Ok(())
+}
+
+/// Age out cache entries no recent index run touched. Nothing ever deleted from
+/// this table — every chunk hash ever seen was kept forever, so a repo with
+/// churn grew the DB by ~3 KB per historical chunk with no ceiling.
+pub fn prune_embedding_cache(conn: &Connection, max_age_days: f64) -> Result<usize> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let cutoff = now - max_age_days * 86_400.0;
+    let removed = conn.execute(
+        "DELETE FROM embedding_cache WHERE updated_at IS NOT NULL AND updated_at < ?1",
+        params![cutoff],
+    )?;
+    Ok(removed)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1641,9 +1723,33 @@ pub fn log_hook_event(repo_root: &Path, event: &HookEvent) -> Result<()> {
     // Fail-open like the rest of the hook path: a rotation error must never
     // block logging (worst case the log keeps growing until the next attempt).
     if std::fs::metadata(&log).is_ok_and(|m| m.len() > HOOK_LOG_MAX_BYTES) {
-        let rotated = rotated_log_path(&log);
-        let _ = std::fs::remove_file(&rotated);
-        let _ = std::fs::rename(&log, &rotated);
+        // Serialize rotation across hook processes: every command spawns its
+        // own tokenix, so two of them could both `remove_file` + `rename` and
+        // lose a whole generation of events. Whoever wins the atomic lock
+        // rotates; the others just append this round.
+        let guard = log.with_extension("rotating");
+        if let Ok(f) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&guard)
+        {
+            drop(f);
+            // Re-check under the lock: a racing process may have just rotated.
+            if std::fs::metadata(&log).is_ok_and(|m| m.len() > HOOK_LOG_MAX_BYTES) {
+                let rotated = rotated_log_path(&log);
+                let _ = std::fs::remove_file(&rotated);
+                let _ = std::fs::rename(&log, &rotated);
+            }
+            let _ = std::fs::remove_file(&guard);
+        } else if std::fs::metadata(&guard)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|e| e.as_secs() > 30)
+        {
+            // Crashed mid-rotation: clear the stale guard for the next caller.
+            let _ = std::fs::remove_file(&guard);
+        }
     }
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new()

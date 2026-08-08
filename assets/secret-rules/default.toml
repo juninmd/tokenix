@@ -79,7 +79,11 @@ pattern = '\bsk-or-v1-[0-9a-f]{64}\b'
 
 [[rules]]
 id = "llm-api-key"
+# Entropy-gated like every other unbounded `{N,}` rule: without it any hyphenated
+# `sk-`-prefixed name in dev chatter (`sk-env-configuration-server-abc`) was
+# reported as a live API key on every scan.
 pattern = '\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}\b'
+min_entropy = 3.5
 
 [[rules]]
 id = "huggingface-token"
@@ -275,20 +279,26 @@ pattern = '\bAGE-SECRET-KEY-1[0-9A-Z]{58}\b'
 
 [[rules]]
 id = "jwt"
-pattern = '\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'
+# Only the HEADER is reliably `eyJ` (base64 of `{"`). Requiring it on the payload
+# too missed every token whose claims are `[...]`, `{}`, or a non-JSON body.
+pattern = '\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'
 
 # Credentials embedded in a URL or DB connection string — redact the password.
 # Scheme is restricted to credential-bearing protocols to avoid matching arbitrary
 # `foo://a:b@c` strings that appear in prose/logs.
 [[rules]]
 id = "basic-auth-url"
-pattern = '(?i)(?:https?|ftps?|smtps?|ldaps?)://[^\s/:@]{1,64}:([^\s/:@${}<>%][^\s/:@]{5,63})@[^\s/]+'
+# Password class allows `@` and `%` (both legal, and common in pasted
+# credentials); the greedy run plus the trailing `@[^\s/@]+` host makes the match
+# split on the LAST `@`, the way URL parsers do. Excluding them meant
+# `https://user:p@ss@host` matched nothing at all.
+pattern = '(?i)(?:https?|ftps?|smtps?|ldaps?)://[^\s/:@]{1,64}:([^\s/:${}<>]{5,63})@[^\s/@]+'
 capture = 1
 min_entropy = 3.5
 
 [[rules]]
 id = "db-connection-uri"
-pattern = '(?i)(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^\s:@/]+:([^\s:@/${}<>%][^\s:@/]{3,})@'
+pattern = '(?i)(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^\s:@/]+:([^\s:/${}<>]{4,})@[^\s/@]+'
 capture = 1
 min_entropy = 2.8
 

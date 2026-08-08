@@ -71,12 +71,10 @@ pub fn query_index_multi(
         if let Some(results) = query_index(root, query_text, budget, k * 2, file_filter)? {
             for r in results {
                 // Deduplicate by path+start_line+content prefix
-                let key = format!(
-                    "{}:{}:{}",
-                    r.path,
-                    r.start_line,
-                    &r.content[..r.content.len().min(40)]
-                );
+                // Take chars, not bytes: a byte slice panics when offset 40
+                // lands inside a multi-byte character (accents, CJK).
+                let prefix: String = r.content.chars().take(40).collect();
+                let key = format!("{}:{}:{}", r.path, r.start_line, prefix);
                 if seen_ids.insert(key) {
                     merged.push(r);
                 }
@@ -267,11 +265,16 @@ fn lexical_boost(result: &SearchResult, terms: &[String]) -> f32 {
     boost += intent_boost(&path, &symbol, &content, terms);
     boost += domain_boost(&path, &symbol, &content, terms);
     boost += language_boost(&path, terms);
-    boost += benchmark_leak_penalty(&path, terms);
-    boost += test_leak_penalty(&symbol, &content, terms);
-    boost += markdown_doc_penalty(&path, terms);
-    boost += non_code_asset_penalty(&path, terms);
-    boost.min(LEXICAL_BOOST_CAP)
+    // Clamp the positives first, then subtract. Summing penalties *before* the
+    // clamp made them inert exactly when they matter: a test/doc file that also
+    // matches the query lexically pushes the positive sum past the cap, and the
+    // clamp then erases the penalty that was supposed to demote it.
+    let positive = boost.min(LEXICAL_BOOST_CAP);
+    positive
+        + benchmark_leak_penalty(&path, terms)
+        + test_leak_penalty(&symbol, &content, terms)
+        + markdown_doc_penalty(&path, terms)
+        + non_code_asset_penalty(&path, terms)
 }
 
 fn intent_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f32 {
@@ -966,6 +969,16 @@ mod tests {
             token_count: crate::chunker::count_tokens(content),
             distance: 0.1,
         }
+    }
+
+    #[test]
+    fn dedup_key_survives_multibyte_content() {
+        // Regression: the key sliced content at byte 40, which panics when that
+        // offset lands inside a multi-byte char — `query --link` aborted (101).
+        let content = format!("{}é rest of the line", "x".repeat(39));
+        let r = make_result("a.rs", 1, 9, "f", &content);
+        let prefix: String = r.content.chars().take(40).collect();
+        assert_eq!(prefix.chars().count(), 40);
     }
 
     #[test]

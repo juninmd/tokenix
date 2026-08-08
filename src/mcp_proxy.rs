@@ -135,22 +135,26 @@ pub fn run_proxy(name: &str, command: &[String]) -> Result<i32> {
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
     let mut reader = BufReader::new(child_stdout);
-    let mut line = String::new();
+    // Read bytes, not a String: `read_line` errors out on the first non-UTF-8
+    // byte a server emits, and the proxy would tear down the whole MCP session
+    // over one stray byte instead of forwarding it untouched.
+    let mut raw: Vec<u8> = Vec::new();
     let enabled = proxy_enabled();
 
     loop {
-        line.clear();
-        match reader.read_line(&mut line) {
+        raw.clear();
+        match reader.read_until(b'\n', &mut raw) {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
 
-        let mut forwarded = line.clone();
+        let line = String::from_utf8_lossy(&raw).into_owned();
+        let mut forwarded_raw = raw.clone();
         if enabled {
             if let Ok(mut response) = serde_json::from_str::<Value>(line.trim()) {
                 if let Some((original, compressed)) = compress_result_in_place(&mut response) {
                     if let Ok(rewritten) = serde_json::to_string(&response) {
-                        forwarded = format!("{rewritten}\n");
+                        forwarded_raw = format!("{rewritten}\n").into_bytes();
                         let _ = log_hook_event(
                             &repo_root,
                             &HookEvent {
@@ -171,7 +175,7 @@ pub fn run_proxy(name: &str, command: &[String]) -> Result<i32> {
             }
         }
 
-        if out.write_all(forwarded.as_bytes()).is_err() || out.flush().is_err() {
+        if out.write_all(&forwarded_raw).is_err() || out.flush().is_err() {
             break;
         }
     }

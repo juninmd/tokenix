@@ -317,6 +317,34 @@ Status of the 528 bundled filters at the last full pass:
 | Fabricates a sentinel over unrecognized output | **36** (was 141) |
 | Golden cases include a failure-path input | 204/528 |
 
+**Engine-level guarantee (since the 2026-08 audit).** The masking rules above are
+no longer carried by per-filter opt-ins alone:
+
+- `match_output` and `uniform_success` are suppressed whenever the raw output
+  matches `output_has_failure_signal()`, not only on a known-nonzero exit. A
+  filter without `unless` can no longer answer a failing run with a success
+  sentinel.
+- An unparseable `unless` regex **fails closed** (the sentinel is skipped)
+  instead of silently dropping the guard.
+- The bounded-fallback path no longer requires `on_empty` to be set: any filter
+  that empties output carrying a failure signal falls back to a bounded view of
+  the real text.
+- Invalid regexes in a filter are reported on stderr instead of making the
+  filter a silent no-op.
+
+`unless` remains worth writing — it is more precise than the generic signal —
+but it is now a refinement, not the only line of defence.
+
+Two related engine changes from the same audit:
+
+- **Source precedence is real.** Local > user > bundled is resolved by group
+  (`load_filter_groups_for_command` + `find_filter_ranked`); the
+  longest-`match_command` tie-break now only applies *within* a source, so a
+  long bundled pattern can no longer outrank a user filter written to override
+  it.
+- **`semantic_filter` embeds in one batch** via `embed_documents` instead of one
+  round-trip per line.
+
 Two findings from that pass are worth carrying forward:
 
 1. **The 89 filters fixed.** A filter whose sentinel only ever answers a

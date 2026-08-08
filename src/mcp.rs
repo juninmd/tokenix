@@ -2,11 +2,96 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum McpProfile {
     Slim,
     Full,
+}
+
+/// Wall-clock cap for `tokenix_run`, overridable per environment.
+fn run_timeout_secs() -> u64 {
+    std::env::var("TOKENIX_MCP_RUN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(300)
+}
+
+/// Run a child with a wall-clock cap. The MCP server is single-threaded, so an
+/// interactive or hung command would otherwise block every tokenix tool for the
+/// rest of the session with no way to recover.
+fn run_with_timeout(
+    mut cmd: std::process::Command,
+    timeout: Duration,
+) -> Result<std::process::Output> {
+    let child = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(res) => res.map_err(Into::into),
+        Err(_) => {
+            kill_pid(pid);
+            Err(anyhow!(
+                "command exceeded the {}s timeout and was terminated",
+                timeout.as_secs()
+            ))
+        }
+    }
+}
+
+/// Kill by pid — the `Child` has been moved into the waiting thread, so
+/// `Child::kill` is not reachable from here.
+fn kill_pid(pid: u32) {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+/// Resolve a tool-supplied path against the repo root and reject anything that
+/// escapes it: absolute paths, `..` traversal, or a symlink pointing outside.
+/// A non-existent (but in-bounds) path is returned so the caller can report
+/// "File not found" instead of a confinement error.
+fn confine_to_repo(repo_root: &Path, file: &str) -> Result<PathBuf> {
+    use std::path::Component;
+    let rel = Path::new(file);
+    if rel.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    }) {
+        return Err(anyhow!(
+            "path must be relative to the repository root: {}",
+            file
+        ));
+    }
+    let candidate = repo_root.join(rel);
+    let root = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
+    match candidate.canonicalize() {
+        Ok(c) if c.starts_with(&root) => Ok(c),
+        Ok(_) => Err(anyhow!("path escapes the repository root: {}", file)),
+        Err(_) => Ok(candidate),
+    }
 }
 
 fn find_repo_root(path: &Path) -> PathBuf {
@@ -559,14 +644,11 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
             let symbol = args.get("symbol").and_then(|s| s.as_str());
             let lines = args.get("lines").and_then(|l| l.as_str());
 
-            let fp = {
-                let p = Path::new(file);
-                if p.exists() {
-                    p.to_path_buf()
-                } else {
-                    repo_root.join(file)
-                }
-            };
+            // The schema documents `file` as a repo-relative path. Honour that:
+            // an absolute path or a `..` escape reaching over the MCP wire would
+            // be an unlogged read of anything the process can open (~/.claude.json,
+            // .env, SSH keys).
+            let fp = confine_to_repo(&repo_root, file)?;
 
             if !fp.exists() {
                 return Err(anyhow!("File not found: {}", file));
@@ -579,9 +661,18 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 let parts: Vec<&str> = range.split('-').collect();
                 if parts.len() == 2 {
                     if let (Ok(s), Ok(e)) = (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
-                        let slice =
-                            file_lines[s.saturating_sub(1)..e.min(file_lines.len())].join("\n");
-                        return Ok(slice);
+                        // Validate like the CLI does: a descending range slices
+                        // with start > end, which panics and — with no
+                        // `catch_unwind` anywhere — kills the whole MCP server.
+                        let total = file_lines.len();
+                        if s == 0 || e == 0 || s > total || e > total || s > e {
+                            return Err(anyhow!(
+                                "Invalid line range. File has {} lines (1-{})",
+                                total,
+                                total
+                            ));
+                        }
+                        return Ok(file_lines[s - 1..e].join("\n"));
                     }
                 }
                 return Err(anyhow!("Invalid 'lines' range format. Use: N-M"));
@@ -738,7 +829,7 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 return Err(anyhow!("Cannot run tokenix recursively via MCP"));
             }
 
-            let mut cmd = if cfg!(windows) {
+            let cmd = if cfg!(windows) {
                 let mut c = std::process::Command::new("cmd");
                 c.args(["/C", command]);
                 c
@@ -748,7 +839,7 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 c
             };
 
-            let output = cmd.output()?;
+            let output = run_with_timeout(cmd, Duration::from_secs(run_timeout_secs()))?;
             let stdout_raw = String::from_utf8_lossy(&output.stdout);
             let stderr_raw = String::from_utf8_lossy(&output.stderr);
 
@@ -935,10 +1026,34 @@ fn parse_context_mode(mode: &str) -> Result<crate::query::ContextMode> {
 }
 
 fn invokes_tokenix_binary(command: &str) -> bool {
-    command
+    if command
         .split(['&', '|', ';'])
         .filter_map(first_shell_word)
         .any(|word| is_tokenix_executable(&word))
+    {
+        return true;
+    }
+    // A shell runner hides the real program from the first-word test:
+    // `sh -c "tokenix gain"` and `cmd /C "tokenix gain"` contain no split
+    // operator, so the guard saw only `sh`/`cmd` and let the recursion through.
+    // Scan every word once a shell runner is in play.
+    let mut words = command.split_whitespace();
+    let Some(prog) = words.next() else {
+        return false;
+    };
+    let prog = prog
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(prog)
+        .trim_end_matches(".exe")
+        .to_ascii_lowercase();
+    if !matches!(
+        prog.as_str(),
+        "sh" | "bash" | "zsh" | "cmd" | "pwsh" | "powershell"
+    ) {
+        return false;
+    }
+    words.any(|w| is_tokenix_executable(w.trim_matches(|c| c == '"' || c == '\'')))
 }
 
 fn first_shell_word(segment: &str) -> Option<String> {

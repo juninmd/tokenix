@@ -48,10 +48,19 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
+  # Windows is a first-class target here (the hook rewrites PowerShell, quotes
+  # for cmd, and handles `C:\` paths), and none of that code was ever executed
+  # in CI while every leg ran on ubuntu only.
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Harden runner
+        # harden-runner is Linux-only; skip it on the Windows leg.
+        if: runner.os == 'Linux'
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
           egress-policy: audit

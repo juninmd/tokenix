@@ -173,9 +173,16 @@ pub fn find_identical(content: &str, tokens: usize) -> Option<RecentOutput> {
         return None;
     }
     let key = digest(content);
-    let hit = load_index().into_iter().find(|e| e.key == key)?;
+    let mut hit = load_index().into_iter().find(|e| e.key == key)?;
     if retrieve(&hit.key).as_deref() != Some(content) {
         return None;
+    }
+    // The marker prefers `raw_key` (the pre-compression blob), but that blob is
+    // pruned independently of this one. Advertising a key `tokenix retrieve`
+    // cannot resolve sends the agent to a dead end, so fall back to the verified
+    // key when the raw blob is gone.
+    if !hit.raw_key.is_empty() && retrieve(&hit.raw_key).is_none() {
+        hit.raw_key = String::new();
     }
     Some(hit)
 }

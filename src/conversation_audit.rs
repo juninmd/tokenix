@@ -296,6 +296,13 @@ fn scan_jsonl_file(
     filters: &[filters::FilterDef],
     findings: &mut Vec<Finding>,
 ) {
+    // Bound the read: transcripts are normally a few MB, but a stray multi-GB
+    // file would be pulled entirely into memory (the walker applies no size
+    // filter). `scan-secrets` already caps at the same size.
+    const MAX_TRANSCRIPT_BYTES: u64 = 50 * 1024 * 1024;
+    if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_TRANSCRIPT_BYTES {
+        return;
+    }
     let Ok(raw) = std::fs::read_to_string(path) else {
         return;
     };
@@ -349,6 +356,13 @@ fn scan_text_file(
 ) {
     let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("");
     if matches!(ext, "jsonl" | "json") {
+        return;
+    }
+    // Bound the read: transcripts are normally a few MB, but a stray multi-GB
+    // file would be pulled entirely into memory (the walker applies no size
+    // filter). `scan-secrets` already caps at the same size.
+    const MAX_TRANSCRIPT_BYTES: u64 = 50 * 1024 * 1024;
+    if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_TRANSCRIPT_BYTES {
         return;
     }
     let Ok(raw) = std::fs::read_to_string(path) else {
@@ -738,17 +752,56 @@ fn push_finding(
         chars: text.len(),
         tokens: count_tokens(text),
         tool,
-        command,
+        // Commands are transcript data too: `git push https://<token>@…` and
+        // `curl -H "Authorization: Bearer …"` are exactly what shows up here.
+        // The human path already trims to 76 chars; JSON printed them in full.
+        command: command.as_deref().map(redact_credentials),
         filter,
         preview: preview(text),
     });
 }
 
 fn preview(text: &str) -> String {
-    text.chars()
-        .take(180)
-        .collect::<String>()
-        .replace(['\r', '\n', '\t'], " ")
+    redact_credentials(
+        &text
+            .chars()
+            .take(180)
+            .collect::<String>()
+            .replace(['\r', '\n', '\t'], " "),
+    )
+}
+
+/// Mask credential shapes before anything from a transcript is printed or
+/// serialized. This report is routinely piped into logs and pastes, and
+/// transcripts carry `https://<token>@host`, `Authorization: Bearer …` and
+/// `token=…` verbatim — `scan-secrets` redacts by default, so must this.
+pub fn redact_credentials(s: &str) -> String {
+    use std::sync::OnceLock;
+    static RULES: OnceLock<Vec<regex::Regex>> = OnceLock::new();
+    let rules = RULES.get_or_init(|| {
+        [
+            // userinfo in a URL: https://user:token@host
+            r"(?i)://[^/\s@]+@",
+            // Authorization / api-key headers
+            r"(?i)(authorization|x-api-key|api-key)\s*:\s*\S+",
+            r"(?i)\bbearer\s+[A-Za-z0-9._\-]+",
+            // token=… / key=… / password=… in query strings or env assignments
+            r#"(?i)\b(token|api[_-]?key|secret|password|passwd|pwd)\s*[=:]\s*[^\s&"']+"#,
+            // PEM bodies
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+        ]
+        .iter()
+        .filter_map(|p| regex::Regex::new(p).ok())
+        .collect()
+    });
+    let mut out = s.to_string();
+    for (i, re) in rules.iter().enumerate() {
+        out = match i {
+            0 => re.replace_all(&out, "://[REDACTED]@").into_owned(),
+            _ => re.replace_all(&out, "[REDACTED]").into_owned(),
+        };
+    }
+    out
 }
 
 fn summarize(findings: &[Finding]) -> Vec<ScenarioSummary> {

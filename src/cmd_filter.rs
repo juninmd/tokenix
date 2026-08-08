@@ -294,12 +294,14 @@ pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<
         } else {
             // No recordings — re-run the latest real invocation from the log, or the
             // base command as-is (NEVER `--help`; it has the wrong noise profile).
-            let full_cmd_to_run = find_latest_unfiltered_command(repo_root, &base_cmd)
-                .unwrap_or_else(|| base_cmd.clone());
+            let full_cmd_to_run = find_latest_unfiltered_command(&base_cmd)
+                .as_deref()
+                .and_then(sample_argv)
+                .unwrap_or_else(|| vec![base_cmd.clone()]);
             println!(
                 "  {} running `{}` for sample output...",
                 "→".cyan(),
-                full_cmd_to_run
+                full_cmd_to_run.join(" ")
             );
             run_command_sample(&full_cmd_to_run)
         };
@@ -427,8 +429,13 @@ fn preview_and_confirm_sample(cmd: &str, sample: String) -> Result<String> {
     }
 }
 
-fn find_latest_unfiltered_command(repo_root: &Path, base_cmd: &str) -> Option<String> {
-    let log_path = repo_root.join(".tokenix").join("unfiltered_cmds.log");
+/// Read the log `compress::log_unfiltered_cmd` writes — the *home* directory,
+/// never a repo-local path. A repo-local file would be authored by whatever
+/// repository the user happens to be in, and the line it yields is executed.
+fn find_latest_unfiltered_command(base_cmd: &str) -> Option<String> {
+    let log_path = dirs::home_dir()?
+        .join(".tokenix")
+        .join("unfiltered_cmds.log");
     if !log_path.exists() {
         return None;
     }
@@ -447,20 +454,37 @@ fn find_latest_unfiltered_command(repo_root: &Path, base_cmd: &str) -> Option<St
     latest_match
 }
 
-fn run_command_sample(full_cmd: &str) -> String {
-    let output = if cfg!(windows) {
-        Command::new("cmd")
-            .args(["/C", full_cmd])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
+/// Split a logged command line into argv. Returns `None` when the line carries
+/// shell metacharacters: those would need a shell to run, and a shell must never
+/// see a command line we did not build ourselves.
+fn sample_argv(full_cmd: &str) -> Option<Vec<String>> {
+    const SHELL_META: &[char] = &[
+        '&', '|', ';', '<', '>', '$', '`', '(', ')', '{', '}', '\'', '"', '\n', '\r', '%', '^',
+        '*', '?', '~', '!', '#',
+    ];
+    if full_cmd.contains(SHELL_META) {
+        return None;
+    }
+    let parts: Vec<String> = full_cmd.split_whitespace().map(str::to_string).collect();
+    if parts.is_empty() {
+        None
     } else {
-        Command::new("sh")
-            .args(["-c", full_cmd])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
+        Some(parts)
+    }
+}
+
+/// Run the sample command directly (no shell): argv elements reach the child
+/// verbatim, so nothing in the logged line can be re-interpreted as syntax.
+fn run_command_sample(argv: &[String]) -> String {
+    let full_cmd = argv.join(" ");
+    let Some(program) = resolve_program(&argv[0]) else {
+        return format!("(could not run `{}`)", full_cmd);
     };
+    let output = Command::new(program)
+        .args(&argv[1..])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
 
     match output {
         Ok(o) => {
@@ -513,19 +537,38 @@ pub fn is_gh_available() -> bool {
     is_cli_available("gh")
 }
 
+/// Resolve an executable through PATH/PATHEXT without routing it through
+/// `cmd /C`. `cmd` re-parses the joined command line, so `& | > < ^ %` in an
+/// argument stay live even when Rust passes that argument as its own argv slot
+/// — and the prompt here embeds repo-controlled sample output.
+fn resolve_program(name: &str) -> Option<std::path::PathBuf> {
+    if !cfg!(windows) {
+        return Some(std::path::PathBuf::from(name));
+    }
+    let out = Command::new("where")
+        .arg(name)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
 fn invoke_ai_cli(name: &str, flag: &str, prompt: &str) -> Result<String> {
-    // On Windows, CLIs are often .cmd/.bat wrappers — must invoke via cmd /C.
-    // Rust's Command API passes args directly without shell interpretation,
-    // so special chars in prompt are safe.
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/C", name, flag, prompt]);
-        c
-    } else {
-        let mut c = Command::new(name);
-        c.args([flag, prompt]);
-        c
-    };
+    // On Windows these CLIs are usually .cmd/.bat shims, which is why PATHEXT
+    // resolution is needed — but resolve the path and spawn it directly instead
+    // of handing the whole line to `cmd /C` (see `resolve_program`).
+    let program = resolve_program(name)
+        .ok_or_else(|| anyhow::anyhow!("could not resolve {} on PATH", name))?;
+    let mut cmd = Command::new(program);
+    cmd.args([flag, prompt]);
     let child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -647,13 +690,11 @@ fn create_pr(cmd: &str, toml_content: &str) -> Result<()> {
 
 /// Run a `gh` subcommand, optionally in a working directory.
 fn gh_run(args: &[&str], cwd: &std::path::Path) -> Result<()> {
-    let ok = if cfg!(windows) {
-        let mut full = vec!["/C", "gh"];
-        full.extend_from_slice(args);
-        Command::new("cmd").args(&full).current_dir(cwd).status()?
-    } else {
-        Command::new("gh").args(args).current_dir(cwd).status()?
-    };
+    // Direct spawn, not `cmd /C`: the PR body carries AI-generated TOML built
+    // from repo-controlled sample output.
+    let program =
+        resolve_program("gh").ok_or_else(|| anyhow::anyhow!("could not resolve gh on PATH"))?;
+    let ok = Command::new(program).args(args).current_dir(cwd).status()?;
     if ok.success() {
         Ok(())
     } else {

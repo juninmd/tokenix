@@ -208,7 +208,13 @@ fn collect_audit(
     let mut reports: Vec<(Agent, String, Status)> = Vec::new();
     for spec in &specs {
         let status = match &spec.transport {
-            Transport::Http { url } => Status::Unknown(format!("HTTP/SSE not introspected: {url}")),
+            // MCP HTTP endpoints routinely carry an API key in userinfo or the
+            // query string; printing the raw URL turned the audit report into a
+            // credential leak.
+            Transport::Http { url } => Status::Unknown(format!(
+                "HTTP/SSE not introspected: {}",
+                crate::conversation_audit::redact_credentials(url)
+            )),
             Transport::Stdio { command, args, env } => {
                 let key = format!("{command}\u{0}{}", args.join("\u{0}"));
                 cache

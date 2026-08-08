@@ -119,11 +119,27 @@ pub fn capture(repo_root: &Path, command: &str, stdout: &str, stderr: &str) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let n = count_captures(&dir);
-    if n >= MAX_CAPTURES_PER_CMD {
-        return;
+    // Claim the slot atomically. The hook rewrites every in-scope command into
+    // its own `tokenix run` process, so two concurrent runs of the same base
+    // command both computed the same `n` and one silently overwrote the other's
+    // sample. `create_new` fails on collision; step to the next free number.
+    let mut n = count_captures(&dir);
+    while n < MAX_CAPTURES_PER_CMD {
+        let path = dir.join(format!("{:03}.out", n + 1));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                let _ = f.write_all(body.as_bytes());
+                return;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(_) => return,
+        }
     }
-    let _ = std::fs::write(dir.join(format!("{:03}.out", n + 1)), body);
 }
 
 /// Concatenate recorded samples for `base`, capped at `max_bytes`. Returns
@@ -213,11 +229,14 @@ fn unscaffold(sample: &str) -> (Option<String>, String) {
     let mut command = None;
     let mut raw = String::new();
     for line in sample.lines() {
-        if command.is_none() {
-            if let Some(rest) = line.strip_prefix("$ ") {
+        // Strip EVERY `$ ` echo line, not just the first. Callers concatenate
+        // several samples before calling this, so later samples' echo lines used
+        // to survive into `raw` and inflate the reported raw→filtered savings.
+        if let Some(rest) = line.strip_prefix("$ ") {
+            if command.is_none() {
                 command = Some(rest.trim().to_string());
-                continue;
             }
+            continue;
         }
         if line == "--- stderr ---" || line.starts_with("... (truncated at ") {
             continue;

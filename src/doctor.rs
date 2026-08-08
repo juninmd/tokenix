@@ -273,14 +273,27 @@ fn daemon_running() -> bool {
 }
 
 fn dir_size(dir: &std::path::Path) -> Option<u64> {
+    dir_size_bounded(dir, 0)
+}
+
+/// `symlink_metadata` + a depth cap: `metadata()` follows links, so a symlink
+/// pointing at an ancestor made this walk recurse until the stack blew.
+fn dir_size_bounded(dir: &std::path::Path, depth: usize) -> Option<u64> {
+    const MAX_DEPTH: usize = 32;
+    if depth > MAX_DEPTH {
+        return Some(0);
+    }
     let mut total = 0u64;
     let rd = std::fs::read_dir(dir).ok()?;
     for e in rd.flatten() {
-        if let Ok(meta) = e.metadata() {
+        if let Ok(meta) = e.path().symlink_metadata() {
+            if meta.file_type().is_symlink() {
+                continue;
+            }
             if meta.is_file() {
                 total += meta.len();
             } else if meta.is_dir() {
-                total += dir_size(&e.path()).unwrap_or(0);
+                total += dir_size_bounded(&e.path(), depth + 1).unwrap_or(0);
             }
         }
     }

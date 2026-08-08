@@ -156,11 +156,31 @@ pub fn update_symbol_graph_incremental(conn: &Connection, changed_paths: &[Strin
 
     // (2) Inbound edges: FTS narrows unchanged chunks that mention the changed
     // files' symbol names; only their edges INTO changed files are re-inserted.
+    // The FTS cap bounds work per symbol name, but silently dropping the tail
+    // means a hot symbol's callers past the cap keep stale edges forever (the
+    // incremental path never revisits them). Report when that happens so the
+    // gap is visible instead of looking like a complete repair.
+    const FTS_CANDIDATE_CAP: usize = 400;
     let mut candidate_ids: HashSet<i64> = HashSet::new();
+    let mut capped: Vec<&str> = Vec::new();
     for chunk in &chunks {
-        for (id, _) in store::search_fts(conn, &chunk.name, 400, None).unwrap_or_default() {
+        let hits =
+            store::search_fts(conn, &chunk.name, FTS_CANDIDATE_CAP, None).unwrap_or_default();
+        if hits.len() >= FTS_CANDIDATE_CAP {
+            capped.push(chunk.name.as_str());
+        }
+        for (id, _) in hits {
             candidate_ids.insert(id);
         }
+    }
+    if !capped.is_empty() {
+        capped.sort_unstable();
+        capped.dedup();
+        eprintln!(
+            "tokenix: inbound-edge repair hit the {FTS_CANDIDATE_CAP}-candidate cap for {}; \
+             run `tokenix index --force` to rebuild the graph fully",
+            capped.join(", ")
+        );
     }
     let changed_ids: HashSet<i64> = chunks.iter().map(|c| c.chunk_id).collect();
     for cand_id in candidate_ids {
@@ -236,7 +256,21 @@ fn pagerank(node_ids: &[i64], edges: &[(i64, i64)]) -> Vec<(i64, f32)> {
 
 /// Detect circular dependencies using Tarjan's SCC algorithm.
 /// Returns cycles (SCCs with size > 1) as lists of symbol names.
+///
+/// Runs on a dedicated 64 MB-stack thread: `strongconnect` recurses once per
+/// edge along a chain, and a deep call graph overflowed the default 8 MB main
+/// stack — an abort with no recoverable error, since there is no unwinding.
 pub fn detect_cycles(edges: &[store::GraphEdgeRow]) -> Vec<Vec<String>> {
+    const STACK_BYTES: usize = 64 * 1024 * 1024;
+    let owned: Vec<store::GraphEdgeRow> = edges.to_vec();
+    std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(move || detect_cycles_inner(&owned))
+        .and_then(|h| h.join().map_err(|_| std::io::Error::other("panic")))
+        .unwrap_or_default()
+}
+
+fn detect_cycles_inner(edges: &[store::GraphEdgeRow]) -> Vec<Vec<String>> {
     let mut adj: HashMap<i64, Vec<i64>> = HashMap::new();
     let mut node_names: HashMap<i64, String> = HashMap::new();
     let mut node_labels: HashMap<i64, String> = HashMap::new();
@@ -398,23 +432,32 @@ fn resolve_reference_targets<'a>(
 
     let qualifiers = reference_qualifiers(reference);
     if qualifiers.is_empty() {
+        // Linking a bare `render()` to all 20 same-named definitions in the repo
+        // invents caller/callee relations and fabricates cycles between files
+        // that only share a name. Below the threshold the guess is usually
+        // right and useful; above it there is no evidence at all, so record
+        // nothing rather than something false.
+        if targets.len() > MAX_AMBIGUOUS_TARGETS {
+            return Vec::new();
+        }
         return targets.iter().collect();
     }
 
-    let preferred: Vec<&SymbolTarget> = targets
+    // Qualifiers are positive evidence: when none of the candidates match them,
+    // falling back to "all candidates" contradicts the very hint we were given.
+    targets
         .iter()
         .filter(|target| {
             qualifiers
                 .iter()
                 .any(|qualifier| path_matches_qualifier(&target.path, qualifier))
         })
-        .collect();
-    if preferred.is_empty() {
-        targets.iter().collect()
-    } else {
-        preferred
-    }
+        .collect()
 }
+
+/// How many same-named definitions an unqualified reference may resolve to
+/// before it is treated as ambiguous and dropped.
+const MAX_AMBIGUOUS_TARGETS: usize = 8;
 
 fn short_reference_name(reference: &str) -> String {
     reference

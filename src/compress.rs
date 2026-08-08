@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunker::count_tokens;
@@ -56,8 +56,8 @@ fn compress_bash_output_for_stream(
     exit_ok: Option<bool>,
 ) -> String {
     // User-defined TOML filters take priority over built-in heuristics.
-    let user_filters = crate::filters::load_filters_for_command(cmd);
-    if let Some(f) = crate::filters::find_filter(cmd, &user_filters) {
+    let user_filters = crate::filters::load_filter_groups_for_command(cmd);
+    if let Some(f) = crate::filters::find_filter_ranked(cmd, &user_filters) {
         if is_stderr && !f.filter_stderr {
             return compress_output(s);
         }
@@ -75,7 +75,9 @@ fn compress_bash_output_for_stream(
     if is_status_poll_output(&raw_lines) {
         let out = compress_status_poll(&raw_lines);
         if out.len() < s.len() {
-            return out;
+            // Early return still owes the global ceiling: this path skips
+            // `compress_output`, where `enforce_token_budget` normally runs.
+            return enforce_token_budget(&out);
         }
     }
 
@@ -467,6 +469,13 @@ fn compress_git_diff(lines: &[&str]) -> String {
     if files == 0 && hunks == 0 {
         return lines.join("\n");
     }
+    // A header-only summary throws away every changed line, which is the whole
+    // point of running `git diff`. Only worth it when the diff is big enough
+    // that reading it in full is the actual problem.
+    const DIFF_SUMMARY_MIN_LINES: usize = 200;
+    if lines.len() < DIFF_SUMMARY_MIN_LINES {
+        return lines.join("\n");
+    }
     format!(
         "git diff: files={files} hunks={hunks} +{additions} -{deletions}\n{}",
         keep.join("\n")
@@ -608,8 +617,11 @@ fn compress_kubectl(lines: &[&str]) -> String {
             return out.join("\n");
         }
         if t.starts_with("Name:") || t.starts_with("Namespace:") {
-            // kubectl describe - very verbose, summarize
-            return "kubectl describe: <resource details> (use filter for full output)".to_string();
+            // kubectl describe: verbose, but the reason anyone runs it is the
+            // Events/conditions tail. Replacing it with a fixed placeholder
+            // fabricated a response and destroyed exactly that; keep a bounded
+            // head/tail view instead.
+            return truncate_head_tail(lines, 20, 25);
         }
     }
     lines.join("\n")
@@ -664,16 +676,19 @@ fn compress_pkg_manager(lines: &[&str]) -> String {
             }
         } else {
             in_progress = false;
-            let is_important = t.starts_with("error")
-                || t.starts_with("warning")
-                || t.starts_with("FAIL")
-                || t.starts_with("Success")
-                || t.starts_with("Done")
-                || t.starts_with("added")
-                || t.starts_with("removed")
-                || t.starts_with("updated")
-                || t.contains("vulnerab")
-                || t.contains("audit");
+            // Case-insensitive: package managers print `ERROR:`, `Error`, and
+            // `npm ERR!` — a case-sensitive `starts_with("error")` dropped every
+            // one of them once the first 30 lines were used up.
+            let lower = t.to_ascii_lowercase();
+            let is_important = [
+                "error", "err!", "warning", "warn", "fail", "success", "done", "added", "removed",
+                "updated", "npm err",
+            ]
+            .iter()
+            .any(|p| lower.starts_with(p))
+                || lower.contains("err!")
+                || lower.contains("vulnerab")
+                || lower.contains("audit");
             if is_important || result.len() < 30 {
                 result.push(line.to_string());
             }
@@ -999,26 +1014,48 @@ fn compress_ps(lines: &[&str]) -> String {
             .join("\n");
     }
     let header = nonempty[0];
-    // %CPU is the 3rd whitespace column in `ps aux` (USER PID %CPU ...).
-    let cpu_of = |l: &str| -> f32 {
-        l.split_whitespace()
-            .nth(2)
-            .and_then(|c| c.parse::<f32>().ok())
-            .unwrap_or(0.0)
-    };
+    // Locate the CPU column from the header instead of assuming index 2: that
+    // holds for `ps aux` (USER PID %CPU …) but not for `ps -ef` (UID PID PPID C
+    // …) or a custom `ps -eo`, where index 2 is PPID and the "sorted by %CPU"
+    // claim was simply false.
+    let cpu_col = header
+        .split_whitespace()
+        .position(|h| h.eq_ignore_ascii_case("%cpu"))
+        .or_else(|| {
+            header
+                .split_whitespace()
+                .position(|h| h.eq_ignore_ascii_case("c"))
+        });
     let mut rows: Vec<&str> = nonempty[1..].to_vec();
-    rows.sort_by(|a, b| {
-        cpu_of(b)
-            .partial_cmp(&cpu_of(a))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    let sorted = match cpu_col {
+        Some(col) => {
+            let cpu_of = |l: &str| -> f32 {
+                l.split_whitespace()
+                    .nth(col)
+                    .and_then(|c| c.parse::<f32>().ok())
+                    .unwrap_or(0.0)
+            };
+            rows.sort_by(|a, b| {
+                cpu_of(b)
+                    .partial_cmp(&cpu_of(a))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            true
+        }
+        None => false,
+    };
     let mut out = vec![trunc(header)];
     for r in rows.iter().take(TOP) {
         out.push(trunc(r));
     }
     out.push(format!(
-        "... {} more process(es) (sorted by %CPU, top {} shown)",
+        "... {} more process(es) ({}, top {} shown)",
         rows.len() - TOP,
+        if sorted {
+            "sorted by CPU"
+        } else {
+            "original order"
+        },
         TOP
     ));
     out.join("\n")
@@ -1142,7 +1179,11 @@ fn looks_like_base64(run: &[u8]) -> bool {
     let mut has_upper = false;
     for &b in run {
         match b {
-            b'+' | b'/' | b'=' | b'-' | b'_' => return true,
+            // `+ / =` cannot appear in an identifier, so they are proof on their
+            // own. `-` and `_` are NOT: treating them as proof made the very
+            // first hyphen of a lowercase kebab chain end the scan with "base64"
+            // before the mixed-case test could spare it.
+            b'+' | b'/' | b'=' => return true,
             b'a'..=b'z' => has_lower = true,
             b'A'..=b'Z' => has_upper = true,
             _ => {}
@@ -1606,17 +1647,16 @@ fn compact_json(s: &str) -> String {
     }
 
     // Case 1: entire output is a JSON object or array
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if let Ok(compact) = serde_json::to_string(&v) {
-                if compact.len() < trimmed.len() {
-                    return if s.ends_with('\n') {
-                        compact + "\n"
-                    } else {
-                        compact
-                    };
-                }
-            }
+    if (trimmed.starts_with('{') || trimmed.starts_with('['))
+        && serde_json::from_str::<serde::de::IgnoredAny>(trimmed).is_ok()
+    {
+        let compact = strip_json_whitespace(trimmed);
+        if compact.len() < trimmed.len() {
+            return if s.ends_with('\n') {
+                compact + "\n"
+            } else {
+                compact
+            };
         }
     }
 
@@ -1637,11 +1677,7 @@ fn compact_json(s: &str) -> String {
                 if t.is_empty() {
                     return None;
                 }
-                Some(
-                    serde_json::from_str::<serde_json::Value>(t)
-                        .and_then(|v| serde_json::to_string(&v))
-                        .unwrap_or_else(|_| t.to_string()),
-                )
+                Some(strip_json_whitespace(t))
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -1656,6 +1692,38 @@ fn compact_json(s: &str) -> String {
     }
 
     s.to_string()
+}
+
+/// Drop insignificant whitespace from *already-validated* JSON text, preserving
+/// the bytes that matter. Re-serializing through `serde_json::Value` would be
+/// lossy: integers past `u64` degrade to floats in scientific notation,
+/// duplicate keys collapse, and key order is rewritten.
+fn strip_json_whitespace(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for c in json.chars() {
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                out.push(c);
+            }
+            c if c.is_ascii_whitespace() => {}
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn compress_command_streams(
@@ -1725,13 +1793,24 @@ pub(crate) fn strip_ansi(s: &str) -> String {
                     i += 1;
                 }
             }
+            b if b.is_ascii() => {
+                i += 1; // single-char sequence: ESC + one ASCII byte
+            }
             _ => {
-                i += 1; // single-char sequence: ESC + one byte
+                // ESC followed by a non-ASCII byte is not an escape sequence.
+                // Consuming it would split a multi-byte character and make the
+                // whole result invalid UTF-8 — which used to blank the entire
+                // output via `unwrap_or_default()`. Drop the stray ESC only.
             }
         }
     }
     // ANSI sequences are pure ASCII; remaining bytes are still valid UTF-8.
-    String::from_utf8(result).unwrap_or_default()
+    // Fall back to lossy rather than an empty string: losing one character is
+    // recoverable, losing the whole command output is not.
+    match String::from_utf8(result) {
+        Ok(s) => s,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    }
 }
 
 /// Remove emoji characters by unicode code-point range.
@@ -2171,7 +2250,7 @@ fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Opti
     Some(path)
 }
 
-pub fn run_command_and_compress(command_str: &str, shell: &str) -> Result<i32> {
+pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Path>) -> Result<i32> {
     let is_powershell = matches!(shell, "pwsh" | "powershell");
     let mut cmd = if is_powershell {
         // Force UTF-8 so captured bytes decode cleanly (Windows PowerShell 5.1
@@ -2190,6 +2269,11 @@ pub fn run_command_and_compress(command_str: &str, shell: &str) -> Result<i32> {
         c.args(["-c", command_str]);
         c
     };
+
+    // `tokenix run --path <dir>` must actually run there.
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
 
     // Capture stdout and stderr
     let output = cmd.output()?;
@@ -2279,6 +2363,75 @@ pub fn run_command_and_compress(command_str: &str, shell: &str) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_json_is_lossless() {
+        // Regression: round-tripping through serde_json::Value turned integers
+        // past u64 into scientific notation, collapsed duplicate keys, and
+        // alphabetized the object.
+        let big = r#"{ "id" : 123456789012345678901234567890 , "b" : 1 , "a" : 2 }"#;
+        let out = compact_json(big);
+        assert!(out.contains("123456789012345678901234567890"), "{out}");
+        assert!(out.starts_with(r#"{"id":"#), "key order changed: {out}");
+        // Whitespace inside strings is preserved.
+        assert_eq!(compact_json(r#"{ "k" : "a  b" }"#), r#"{"k":"a  b"}"#);
+    }
+
+    #[test]
+    fn strip_ansi_does_not_blank_output_on_esc_before_multibyte() {
+        // Regression: ESC + a UTF-8 lead byte consumed half a character, so
+        // `from_utf8` failed and `unwrap_or_default()` wiped the whole output.
+        let raw = String::from_utf8(vec![b'o', b'k', 0x1b, 0xC3, 0xA9, b'!']).unwrap();
+        let out = strip_ansi(&raw);
+        assert!(out.starts_with("ok"), "output was blanked: {out:?}");
+        assert!(out.ends_with('!'), "tail lost: {out:?}");
+    }
+
+    #[test]
+    fn pkg_manager_keeps_uppercase_error_lines() {
+        // Regression: `starts_with("error")` was case-sensitive, so `ERROR:` and
+        // `npm ERR!` were dropped once the first 30 lines were used up.
+        let mut lines: Vec<&str> = (0..40).map(|_| "added 1 package").collect();
+        lines.push("ERROR: could not resolve dependency");
+        lines.push("npm ERR! code ERESOLVE");
+        let out = compress_pkg_manager(&lines);
+        assert!(out.contains("ERROR: could not resolve"), "{out}");
+        assert!(out.contains("npm ERR!"), "{out}");
+    }
+
+    #[test]
+    fn kebab_identifier_chain_is_not_redacted_as_base64() {
+        // Regression: `-` counted as proof of base64, so the scan returned true
+        // on the first hyphen of a lowercase slug chain.
+        let run = "build-step-one-build-step-two-build-step-three".repeat(20);
+        assert!(!looks_like_base64(run.as_bytes()));
+        // A real base64url payload is mixed-case and still detected.
+        let b64 = "aGVsbG9Xb3JsZFRoaXNJc0Jhc2U2NA".repeat(20);
+        assert!(looks_like_base64(b64.as_bytes()));
+    }
+
+    #[test]
+    fn small_git_diff_keeps_its_changed_lines() {
+        let diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new";
+        let lines: Vec<&str> = diff.lines().collect();
+        let out = compress_git_diff(&lines);
+        assert!(out.contains("+new") && out.contains("-old"), "{out}");
+    }
+
+    #[test]
+    fn kubectl_describe_is_not_replaced_by_a_placeholder() {
+        let mut lines = vec!["Name:         my-pod", "Namespace:    default"];
+        for i in 0..80 {
+            lines.push(if i == 79 {
+                "  Warning  BackOff  pod crashlooping"
+            } else {
+                "  filler: value"
+            });
+        }
+        let out = compress_kubectl(&lines);
+        assert!(!out.contains("<resource details>"), "fabricated: {out}");
+        assert!(out.contains("BackOff"), "events tail lost: {out}");
+    }
 
     #[test]
     fn strips_data_uri_image_blob() {
