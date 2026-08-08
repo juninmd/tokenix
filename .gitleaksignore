@@ -1,0 +1,11 @@
+# Fingerprints of verified false positives, in `commit:file:rule:line` form.
+# Entries here are exempted from the gitleaks scan forever, so each one needs a
+# reason. Never add a fingerprint for a value that was ever a live credential —
+# rotate it and rewrite history instead.
+
+# Test fixture for tokenix's own PEM redaction, not a key. The regression test
+# for `redact_occurrences` spelled out the `-----BEGIN RSA PRIVATE KEY-----`
+# marker as a literal so the assertion could target it; the following commit
+# (f30f021) reworked the test to assemble both markers at runtime, so only this
+# commit's diff still trips the `private-key` rule.
+0ff3562eded07d238dde950a218a109e1c70967d:src/secrets_scan.rs:private-key:1049
