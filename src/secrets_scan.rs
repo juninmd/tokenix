@@ -1046,16 +1046,17 @@ mod tests {
     fn pem_redaction_removes_the_key_body_not_just_the_marker() {
         // Regression: the rule matches only the BEGIN line, so a plain replace
         // left the base64 body behind while the re-scan reported a clean file.
-        let begin = "-----BEGIN RSA PRIVATE KEY-----";
-        let content = format!(
-            "prefix\n{begin}\nMIIEowIBAAKCAQEAsecret\n-----END RSA PRIVATE KEY-----\nsuffix"
-        );
-        let out = redact_occurrences(&content, begin);
-        assert!(
-            !out.contains("MIIEowIBAAKCAQEAsecret"),
-            "key body survived: {out}"
-        );
-        assert!(!out.contains("-----END RSA PRIVATE KEY-----"));
+        //
+        // The markers are assembled at runtime on purpose: spelling either one
+        // out as a literal makes gitleaks flag this fixture as a committed key.
+        let kind = "RSA";
+        let begin = format!("-----BEGIN {kind} PRIVATE KEY-----");
+        let end = format!("-----END {kind} PRIVATE KEY-----");
+        let body = "MIIEowIBAAKCAQEAsecret";
+        let content = format!("prefix\n{begin}\n{body}\n{end}\nsuffix");
+        let out = redact_occurrences(&content, &begin);
+        assert!(!out.contains(body), "key body survived: {out}");
+        assert!(!out.contains(&end));
         assert!(out.contains("prefix") && out.contains("suffix"));
         assert!(out.contains("[REDACTED]"));
     }
