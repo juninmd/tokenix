@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1008 612" width="1008" height="612" font-family="ui-monospace,'SF Mono','Cascadia Mono',Consolas,'DejaVu Sans Mono',monospace" font-size="14">
+<rect width="100%" height="100%" rx="6" fill="#0d1117"/>
+<text xml:space="preserve" x="0.00" y="13.60" fill="#e6edf3">┌ tokenix ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text xml:space="preserve" x="0.00" y="31.60" fill="#e6edf3">│ Stats │ Filters │ Studio │ Gain │ Usage │ Doctor │ </text>
+<text xml:space="preserve" x="445.20" y="31.60" fill="#39c5cf" font-weight="bold">Tokenmap</text>
+<text xml:space="preserve" x="512.40" y="31.60" fill="#e6edf3"> │ Graph │ Discover │ Audit │ Secrets │ Egress            │</text>
+<text xml:space="preserve" x="0.00" y="49.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ tokenmap ────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│tokenix (275,971 tokens)                                                                                              │</text>
+<text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│├──  [██████░░] src (200,064 tokens, 72.5%)                                                                           │</text>
+<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">││   ├──  [█░░░░░░░] main.rs (31,929 tokens, 11.6%)                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">││   ├──  [█░░░░░░░] tui.rs (29,608 tokens, 10.7%)                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">││   ├──  [█░░░░░░░] store.rs (18,162 tokens, 6.6%)                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">││   ├──  [░░░░░░░░] filters.rs (16,737 tokens, 6.1%)                                                                  │</text>
+<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">││   ├──  [░░░░░░░░] graph.rs (13,304 tokens, 4.8%)                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">││   ├──  [░░░░░░░░] chunker.rs (10,056 tokens, 3.6%)                                                                  │</text>
+<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">││   ├──  [░░░░░░░░] query.rs (9,492 tokens, 3.4%)                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">││   ├──  [░░░░░░░░] benchmark.rs (9,347 tokens, 3.4%)                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">││   ├──  [░░░░░░░░] mcp.rs (9,263 tokens, 3.4%)                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">││   ├──  [░░░░░░░░] compress.rs (7,929 tokens, 2.9%)                                                                  │</text>
+<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">││   ├──  [░░░░░░░░] daemon.rs (7,623 tokens, 2.8%)                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">││   ├──  [░░░░░░░░] hook.rs (7,062 tokens, 2.6%)                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">││   ├──  [░░░░░░░░] cmd_filter.rs (6,545 tokens, 2.4%)                                                                │</text>
+<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">││   ├──  [░░░░░░░░] mcp_audit.rs (6,245 tokens, 2.3%)                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">││   ├──  [░░░░░░░░] indexer.rs (5,898 tokens, 2.1%)                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">││   ├──  [░░░░░░░░] memory.rs (3,384 tokens, 1.2%)                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">││   ├──  [░░░░░░░░] doctor.rs (2,150 tokens, 0.8%)                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">││   ├──  [░░░░░░░░] embed.rs (2,019 tokens, 0.7%)                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">││   ├──  [░░░░░░░░] recordings.rs (1,980 tokens, 0.7%)                                                                │</text>
+<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">││   └──  [░░░░░░░░] gain.rs (1,331 tokens, 0.5%)                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│├──  [█░░░░░░░] assets (23,518 tokens, 8.5%)                                                                          │</text>
+<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">││   └──  [█░░░░░░░] filters (23,518 tokens, 8.5%)                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">││       ├──  [░░░░░░░░] xcodebuild.toml (934 tokens, 0.3%)                                                            │</text>
+<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">││       ├──  [░░░░░░░░] fnm.toml (863 tokens, 0.3%)                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">││       ├──  [░░░░░░░░] liquibase.toml (762 tokens, 0.3%)                                                             │</text>
+<text xml:space="preserve" x="0.00" y="589.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓/PgUp/PgDn: scroll · r: refresh · q: quit                                                                   </text>
+</svg>

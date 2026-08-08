@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1008 612" width="1008" height="612" font-family="ui-monospace,'SF Mono','Cascadia Mono',Consolas,'DejaVu Sans Mono',monospace" font-size="14">
+<rect width="100%" height="100%" rx="6" fill="#0d1117"/>
+<text xml:space="preserve" x="0.00" y="13.60" fill="#e6edf3">┌ tokenix ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text xml:space="preserve" x="0.00" y="31.60" fill="#e6edf3">│ </text>
+<text xml:space="preserve" x="16.80" y="31.60" fill="#39c5cf" font-weight="bold">Stats</text>
+<text xml:space="preserve" x="58.80" y="31.60" fill="#e6edf3"> │ Filters │ Studio │ Gain │ Usage │ Doctor │ Tokenmap │ Graph │ Discover │ Audit │ Secrets │ Egress            │</text>
+<text xml:space="preserve" x="0.00" y="49.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ stats ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="85.60" fill="#39c5cf" font-weight="bold"> _        _              _      </text>
+<text xml:space="preserve" x="277.20" y="85.60" fill="#e6edf3">                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="103.60" fill="#39c5cf" font-weight="bold">| |_ ___ | | _____ _ __ (_)_  __</text>
+<text xml:space="preserve" x="277.20" y="103.60" fill="#e6edf3">                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="121.60" fill="#39c5cf" font-weight="bold">| __/ _ \| |/ / _ \ '_ \| \ \/ /</text>
+<text xml:space="preserve" x="277.20" y="121.60" fill="#e6edf3">                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="139.60" fill="#39c5cf" font-weight="bold">| || (_) |   &lt;  __/ | | | |&gt;  &lt; </text>
+<text xml:space="preserve" x="277.20" y="139.60" fill="#e6edf3">                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="157.60" fill="#39c5cf" font-weight="bold"> \__\___/|_|\_\___|_| |_|_/_/\_\</text>
+<text xml:space="preserve" x="277.20" y="157.60" fill="#e6edf3">                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="175.60" fill="#d29922"> ($)  minimize LLM context, keep the signal</text>
+<text xml:space="preserve" x="369.60" y="175.60" fill="#e6edf3">                                                                           │</text>
+<text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│version   0.62.1                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="247.60" fill="#e6edf3" font-weight="bold">hooks</text>
+<text xml:space="preserve" x="50.40" y="247.60" fill="#e6edf3">                                                                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="265.60" fill="#3fb950">  ✓ </text>
+<text xml:space="preserve" x="42.00" y="265.60" fill="#e6edf3">Claude Code  global                                                                                               │</text>
+<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="283.60" fill="#3fb950">  ✓ </text>
+<text xml:space="preserve" x="42.00" y="283.60" fill="#e6edf3">Copilot      global + local                                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="301.60" fill="#3fb950">  ✓ </text>
+<text xml:space="preserve" x="42.00" y="301.60" fill="#e6edf3">Codex        global                                                                                               │</text>
+<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="319.60" fill="#e5534b">  ✗ </text>
+<text xml:space="preserve" x="42.00" y="319.60" fill="#e6edf3">OpenCode     not installed                                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="337.60" fill="#3fb950">  ✓ </text>
+<text xml:space="preserve" x="42.00" y="337.60" fill="#e6edf3">Antigravity  global                                                                                               │</text>
+<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="373.60" fill="#e6edf3" font-weight="bold">index (this repo)</text>
+<text xml:space="preserve" x="151.20" y="373.60" fill="#e6edf3">                                                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│  files     115                                                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│  chunks    1443                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│  tokens    275,971                                                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="463.60" fill="#e6edf3" font-weight="bold">actions</text>
+<text xml:space="preserve" x="67.20" y="463.60" fill="#e6edf3">                                                                                                               │</text>
+<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="481.60" fill="#39c5cf" font-weight="bold">▸ Index repository    </text>
+<text xml:space="preserve" x="193.20" y="481.60" fill="#e6edf3">reindex this repo (115 files)                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│  Install hooks (all) wire 1 missing agent(s) · writes config files                                                   │</text>
+<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│  Install binary (PATH)already global · C:\Users\jr_ac\AppData\Local\tokenix\bin                                      │</text>
+<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│  Generate ignore filescopy .gitignore to 14 agent ignore files                                                       │</text>
+<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="589.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓: action · PgUp/PgDn: scroll · Enter: run · q: quit                                                         </text>
+</svg>

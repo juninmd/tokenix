@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1008 612" width="1008" height="612" font-family="ui-monospace,'SF Mono','Cascadia Mono',Consolas,'DejaVu Sans Mono',monospace" font-size="14">
+<rect width="100%" height="100%" rx="6" fill="#0d1117"/>
+<text xml:space="preserve" x="0.00" y="13.60" fill="#e6edf3">┌ tokenix ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text xml:space="preserve" x="0.00" y="31.60" fill="#e6edf3">│ Stats │ Filters │ Studio │ Gain │ Usage │ </text>
+<text xml:space="preserve" x="369.60" y="31.60" fill="#39c5cf" font-weight="bold">Doctor</text>
+<text xml:space="preserve" x="420.00" y="31.60" fill="#e6edf3"> │ Tokenmap │ Graph │ Discover │ Audit │ Secrets │ Egress            │</text>
+<text xml:space="preserve" x="0.00" y="49.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ doctor ──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│tokenix doctor                                                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│  environment &amp; acceleration diagnostics                                                                              │</text>
+<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">│Build                                                                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│  version:               0.62.1                                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">│  gpu support compiled:  none — CPU-only build                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">│GPU                                                                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">│  nvidia gpu:            NVIDIA GeForce RTX 4060 Ti (driver 610.88)                                                   │</text>
+<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">│  cuda toolkit:          not found                                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│  cudnn:                 not found                                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">│Embedding model                                                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│  active:                nomic-v1.5 (768d · English · quantized · default)                                            │</text>
+<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│  this repo's index:     nomic-v1.5                                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│  int8 quantization:     1443/1443 embeddings                                                                         │</text>
+<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│  available:             nomic-v1.5, bge-small, bge-base, minilm-l6, e5-small, jina-code                              │</text>
+<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│  cache:                 ready (685 MB at C:\Users\jr_ac\AppData\Local\tokenix\models)                                │</text>
+<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│Filters                                                                                                               │</text>
+<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│  bundled:               528 filters · 1146 embedded golden cases                                                     │</text>
+<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│  user/local filters:    231 loaded, no config issues                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│Recordings                                                                                                            │</text>
+<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│  session:               none — start with `tokenix filter record start`                                              │</text>
+<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│Daemon                                                                                                                │</text>
+<text xml:space="preserve" x="0.00" y="589.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓/PgUp/PgDn: scroll · r: refresh · q: quit                                                                   </text>
+</svg>

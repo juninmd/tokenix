@@ -6,6 +6,10 @@ mod compress;
 mod conversation_audit;
 mod daemon;
 mod discover;
+/// Documentation screenshots are a test-time artifact, so this never ships in
+/// the binary. See `tui::tests::render_docs_svg`.
+#[cfg(test)]
+mod docshot;
 mod doctor;
 mod egress_scan;
 mod embed;

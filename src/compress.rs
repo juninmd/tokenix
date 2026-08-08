@@ -1311,7 +1311,44 @@ fn redact_base64_blobs(s: &str) -> String {
     strip_wrapped_base64(&strip_base64_blobs(s))
 }
 
+/// The line terminator that dominates `s`.
+///
+/// Every `\r\n` also contains a `\n`, so CRLF dominates when it accounts for
+/// more than half of all newlines.
+pub(crate) fn dominant_eol(s: &str) -> &'static str {
+    let crlf = s.matches("\r\n").count();
+    let lf = s.matches('\n').count();
+    if crlf > 0 && crlf * 2 > lf {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+/// Restore `eol` over output that the line pipeline has normalized to LF.
+///
+/// Every transform in this crate splits with `.lines()` — which consumes `\r\n`
+/// and `\n` alike — and rejoins with `"\n"`. On a CRLF input that silently hands
+/// the agent a copy where *every* line ending differs from the bytes on disk. If
+/// the agent then quotes those lines into an exact-match edit (SEARCH/REPLACE,
+/// `str_replace`), the anchor cannot match: measured elsewhere as successful
+/// patch application dropping from 27/40 to 15/40 when compression rewrote the
+/// bytes an edit tool has to reproduce. Windows is this project's primary
+/// platform, so this is the common case, not the corner case.
+pub(crate) fn restore_eol(out: String, eol: &str) -> String {
+    if eol != "\r\n" || out.is_empty() {
+        return out;
+    }
+    // Normalize first so a partially-CRLF result cannot become `\r\r\n`.
+    out.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
 pub fn compress_output(s: &str) -> String {
+    let eol = dominant_eol(s);
+    restore_eol(compress_output_inner(s), eol)
+}
+
+fn compress_output_inner(s: &str) -> String {
     // Redact embedded base64 blobs first: a data URI inside a JSON string would
     // otherwise survive JSON compaction at full weight.
     let stripped = redact_base64_blobs(s);
@@ -1331,6 +1368,49 @@ pub fn compress_output(s: &str) -> String {
 
     // Additional generic aggressive compression
     enforce_token_budget(&generic_aggressive_compress(&s))
+}
+
+#[cfg(test)]
+mod eol_tests {
+    use super::*;
+
+    #[test]
+    fn crlf_survives_the_compression_pipeline() {
+        // Regression: `.lines()` + `join("\n")` laundered CRLF into LF, so every
+        // line the agent got back differed from disk by one byte.
+        let src = "fn main() {\r\n    println!(\"hi\");\r\n}\r\n";
+        let out = compress_output(src);
+        assert!(
+            out.contains("\r\n"),
+            "CRLF input must come back CRLF, got {out:?}"
+        );
+        assert!(
+            !out.replace("\r\n", "").contains('\n'),
+            "no bare LF may survive in a CRLF payload: {out:?}"
+        );
+    }
+
+    #[test]
+    fn lf_input_stays_lf() {
+        let src = "fn main() {\n    println!(\"hi\");\n}\n";
+        assert!(!compress_output(src).contains('\r'));
+    }
+
+    #[test]
+    fn dominant_eol_picks_the_majority() {
+        assert_eq!(dominant_eol("a\r\nb\r\nc\r\n"), "\r\n");
+        assert_eq!(dominant_eol("a\nb\nc\n"), "\n");
+        assert_eq!(dominant_eol(""), "\n");
+        // Mixed endings: a lone CRLF in a mostly-LF payload must not flip it.
+        assert_eq!(dominant_eol("a\nb\nc\r\nd\n"), "\n");
+    }
+
+    #[test]
+    fn restore_eol_is_idempotent() {
+        let once = restore_eol("a\nb\n".to_string(), "\r\n");
+        assert_eq!(once, "a\r\nb\r\n");
+        assert_eq!(restore_eol(once.clone(), "\r\n"), once);
+    }
 }
 
 /// Absolute ceiling on how many tokens any single compressed output may cost.

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1008 612" width="1008" height="612" font-family="ui-monospace,'SF Mono','Cascadia Mono',Consolas,'DejaVu Sans Mono',monospace" font-size="14">
+<rect width="100%" height="100%" rx="6" fill="#0d1117"/>
+<text xml:space="preserve" x="0.00" y="13.60" fill="#e6edf3">┌ tokenix ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text xml:space="preserve" x="0.00" y="31.60" fill="#e6edf3">│ Stats │ Filters │ Studio │ Gain │ Usage │ Doctor │ Tokenmap │ </text>
+<text xml:space="preserve" x="537.60" y="31.60" fill="#39c5cf" font-weight="bold">Graph</text>
+<text xml:space="preserve" x="579.60" y="31.60" fill="#e6edf3"> │ Discover │ Audit │ Secrets │ Egress            │</text>
+<text xml:space="preserve" x="0.00" y="49.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ graph ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│# Repo graph — 1209 symbols, 3976 edges                                                                               │</text>
+<text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│## God nodes (most connected)                                                                                         │</text>
+<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">│- as_str (↑81 ↓1)  src/main.rs:121                                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">│- Cmd (↑54 ↓2)  src/tui.rs:35                                                                                         │</text>
+<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│- run (↑4 ↓52)  src/tui.rs:156                                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">│- Cmd (↑55 ↓0)  src/tui.rs:26                                                                                         │</text>
+<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│- Shell (↑2 ↓46)  src/tui.rs:204                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">│- start (↑38 ↓5)  src/recordings.rs:47                                                                                │</text>
+<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">│- main (↑2 ↓40)  src/main.rs:659                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">│- cmd_install_binary (↑2 ↓39)  src/main.rs:2336                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│- status (↑38 ↓2)  src/tui.rs:1880                                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│- format_num (↑39 ↓0)  src/benchmark.rs:1214                                                                          │</text>
+<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">│- format_num (↑39 ↓0)  src/cmd_filter.rs:54                                                                           │</text>
+<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│- Status (↑38 ↓0)  src/mcp_audit.rs:98                                                                                │</text>
+<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│- User (↑35 ↓3)  benchmark/samples/user_service.rs:18                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│- label (↑37 ↓0)  src/mcp_audit.rs:49                                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│- Tool (↑36 ↓0)  src/main.rs:69                                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│- User (↑34 ↓2)  benchmark/samples/database_client.ts:26                                                              │</text>
+<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│- all (↑34 ↓2)  src/mcp_audit.rs:40                                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│- title (↑36 ↓0)  src/tui.rs:49                                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│- User (↑35 ↓0)  benchmark/samples/api_handler.go:207                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│- main (↑2 ↓30)  src/main.rs:659                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│- Role (↑25 ↓6)  benchmark/samples/user_service.rs:39                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│- UserService (↑2 ↓29)  benchmark/samples/user_service.rs:136                                                         │</text>
+<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│- count_tokens (↑30 ↓0)  src/chunker.rs:87                                                                            │</text>
+<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│- Chunk (↑28 ↓0)  src/chunker.rs:71                                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│- Agent (↑27 ↓0)  src/mcp_audit.rs:32                                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="589.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓: scroll · r: refresh · q: quit                                                                             </text>
+</svg>

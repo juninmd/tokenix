@@ -286,19 +286,28 @@ pattern = '\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'
 # Credentials embedded in a URL or DB connection string — redact the password.
 # Scheme is restricted to credential-bearing protocols to avoid matching arbitrary
 # `foo://a:b@c` strings that appear in prose/logs.
-[[rules]]
-id = "basic-auth-url"
 # Password class allows `@` and `%` (both legal, and common in pasted
 # credentials); the greedy run plus the trailing `@[^\s/@]+` host makes the match
 # split on the LAST `@`, the way URL parsers do. Excluding them meant
 # `https://user:p@ss@host` matched nothing at all.
-pattern = '(?i)(?:https?|ftps?|smtps?|ldaps?)://[^\s/:@]{1,64}:([^\s/:${}<>]{5,63})@[^\s/@]+'
+#
+# Entropy floors here are bounded by string length: Shannon entropy over the
+# observed distribution maxes out at log2(n) for an n-char string, so a
+# threshold above log2(min_match_len) can NEVER be reached and silently kills
+# the rule for short passwords. The old pair (`{5,63}` @ 3.5) needed 12+ chars
+# and (`{4,}` @ 2.8) needed 7+, so 5-11 and 4-6 char passwords were unreportable
+# by arithmetic rather than by choice. Both now sit at 2.8 with a matching 7-char
+# floor: reachable at the shortest match, and still below `password`/`changeme`
+# (both ~2.75), which stay rejected.
+[[rules]]
+id = "basic-auth-url"
+pattern = '(?i)(?:https?|ftps?|smtps?|ldaps?)://[^\s/:@]{1,64}:([^\s/:${}<>]{7,63})@[^\s/@]+'
 capture = 1
-min_entropy = 3.5
+min_entropy = 2.8
 
 [[rules]]
 id = "db-connection-uri"
-pattern = '(?i)(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^\s:@/]+:([^\s:/${}<>]{4,})@[^\s/@]+'
+pattern = '(?i)(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^\s:@/]+:([^\s:/${}<>]{7,})@[^\s/@]+'
 capture = 1
 min_entropy = 2.8
 

@@ -1964,6 +1964,15 @@ pub fn apply_filter(output: &str, f: &FilterDef) -> String {
 /// (`match_output` messages, `on_empty`) are suppressed — text heuristics
 /// alone miss failing commands with quiet or unusual output.
 pub fn apply_filter_with_exit(output: &str, f: &FilterDef, exit_ok: Option<bool>) -> String {
+    // Every path below splits with `.lines()` and rejoins with "\n", which
+    // launders CRLF into LF. On Windows that hands the agent a copy whose line
+    // endings differ from disk on every line — fatal if it later quotes them
+    // into an exact-match edit. Detect once here, restore once on the way out.
+    let eol = crate::compress::dominant_eol(output);
+    crate::compress::restore_eol(apply_filter_with_exit_inner(output, f, exit_ok), eol)
+}
+
+fn apply_filter_with_exit_inner(output: &str, f: &FilterDef, exit_ok: Option<bool>) -> String {
     let failed = exit_ok == Some(false);
     if failed {
         if let Some(policy) = &f.on_failure {
