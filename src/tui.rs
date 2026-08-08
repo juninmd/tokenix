@@ -408,56 +408,66 @@ fn new_shell(entry: Entry) -> Shell {
 }
 
 impl Shell {
+    /// Spawn whatever the current tab needs and collect whatever finished.
+    ///
+    /// Returns `true` while background work is still in flight, which is what
+    /// drives both the spinner poll below and the headless doc renderer — the
+    /// renderer pumps until this goes quiet so it captures content instead of a
+    /// loading frame.
+    fn pump(&mut self) -> bool {
+        self.ensure_report();
+        self.ensure_gain();
+        self.ensure_secrets();
+        self.ensure_egress();
+
+        // Collect a finished background secret scan, if any.
+        let done = self.secrets_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+        if let Some((findings, counts)) = done {
+            self.secrets_all = Some(findings);
+            self.secrets_counts = counts;
+            self.secrets_rx = None;
+            self.apply_sec_scope();
+        }
+
+        // Collect a finished background egress scan, if any.
+        let done = self.egress_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+        if let Some((findings, counts)) = done {
+            self.egress_all = Some(findings);
+            self.egress_counts = counts;
+            self.egress_rx = None;
+            self.apply_egr_scope();
+        }
+
+        // Collect a finished background report capture, if any.
+        let done = self
+            .report_rx
+            .as_ref()
+            .and_then(|(i, rx)| rx.try_recv().ok().map(|body| (*i, body)));
+        if let Some((idx, body)) = done {
+            self.reports.insert(idx, body);
+            self.report_rx = None;
+        }
+
+        // Collect a finished background gain computation, if any.
+        let done = self.gain_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+        if let Some(view) = done {
+            self.gain_cache = Some(view);
+            self.gain_rx = None;
+        }
+
+        self.secrets_rx.is_some()
+            || self.egress_rx.is_some()
+            || self.report_rx.is_some()
+            || self.gain_rx.is_some()
+    }
+
     fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         loop {
-            self.ensure_report();
-            self.ensure_gain();
-            self.ensure_secrets();
-            self.ensure_egress();
-
-            // Collect a finished background secret scan, if any.
-            let done = self.secrets_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-            if let Some((findings, counts)) = done {
-                self.secrets_all = Some(findings);
-                self.secrets_counts = counts;
-                self.secrets_rx = None;
-                self.apply_sec_scope();
-            }
-
-            // Collect a finished background egress scan, if any.
-            let done = self.egress_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-            if let Some((findings, counts)) = done {
-                self.egress_all = Some(findings);
-                self.egress_counts = counts;
-                self.egress_rx = None;
-                self.apply_egr_scope();
-            }
-
-            // Collect a finished background report capture, if any.
-            let done = self
-                .report_rx
-                .as_ref()
-                .and_then(|(i, rx)| rx.try_recv().ok().map(|body| (*i, body)));
-            if let Some((idx, body)) = done {
-                self.reports.insert(idx, body);
-                self.report_rx = None;
-            }
-
-            // Collect a finished background gain computation, if any.
-            let done = self.gain_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-            if let Some(view) = done {
-                self.gain_cache = Some(view);
-                self.gain_rx = None;
-            }
-
-            terminal.draw(|f| self.draw(f))?;
-
             // While any background work runs, poll so the shared spinner animates;
             // otherwise block until the next key.
-            let loading = self.secrets_rx.is_some()
-                || self.egress_rx.is_some()
-                || self.report_rx.is_some()
-                || self.gain_rx.is_some();
+            let loading = self.pump();
+
+            terminal.draw(|f| self.draw(f))?;
             let timeout = if loading {
                 Duration::from_millis(120)
             } else {
@@ -3163,9 +3173,15 @@ fn short_path(p: &str) -> String {
 /// Run the tokenix binary again with `args` and return its stdout (stderr if
 /// stdout is empty). Output is plain text — colors auto-disable off a TTY.
 fn capture(args: &[&str]) -> String {
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => return format!("cannot locate tokenix binary: {e}"),
+    // `TOKENIX_SELF_EXE` overrides the self-exec target. Needed by the headless
+    // doc renderer: under `cargo test` the current exe is the test harness, so
+    // re-execing it yields nothing and report tabs render empty.
+    let exe = match std::env::var_os("TOKENIX_SELF_EXE") {
+        Some(p) => std::path::PathBuf::from(p),
+        None => match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => return format!("cannot locate tokenix binary: {e}"),
+        },
     };
     match std::process::Command::new(exe)
         .args(args)
@@ -3394,6 +3410,81 @@ mod tests {
         assert!(!s.sec_confirm, "redaction stayed armed across tabs");
         assert!(!s.studio_confirm_delete, "delete stayed armed across tabs");
         assert!(!s.stats_confirm, "install stayed armed across tabs");
+    }
+
+    /// Regenerate the README screenshots:
+    /// `cargo test --bin tokenix render_docs_svg -- --ignored --nocapture`
+    ///
+    /// Only tabs whose content is public by construction are rendered here —
+    /// bundled filters, this repo's own symbols and files, and build info. Tabs
+    /// backed by transcripts (Secrets, Egress, Usage, Gain) are deliberately
+    /// excluded until they are seeded with synthetic fixtures: rendering them
+    /// from a real machine is exactly the leak this whole approach exists to
+    /// avoid.
+    // The doc comment has to precede the attributes: between `#[test]` and
+    // `#[ignore]` it makes rustc re-apply `#[test]` in the expansion
+    // (`duplicate_macro_attributes`), which fails the `-D warnings` gate.
+    #[test]
+    #[ignore = "writes .github/prints/*.svg; run explicitly"]
+    fn render_docs_svg() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        const SAFE_TABS: &[(Cmd, &str)] = &[
+            (Cmd::Filters, "filters"),
+            (Cmd::Stats, "stats"),
+            (Cmd::Doctor, "doctor"),
+            (Cmd::Tokenmap, "tokenmap"),
+            (Cmd::Graph, "graph"),
+        ];
+
+        // Report tabs self-exec. Under `cargo test` the current exe is the test
+        // harness, so point them at the real binary sitting two levels up from
+        // `target/<profile>/deps/`.
+        let harness = std::env::current_exe().expect("current exe");
+        let bin = harness
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("target dir")
+            .join(format!("tokenix{}", std::env::consts::EXE_SUFFIX));
+        assert!(
+            bin.is_file(),
+            "build the binary first (`cargo build`): {} not found",
+            bin.display()
+        );
+        std::env::set_var("TOKENIX_SELF_EXE", &bin);
+
+        let out = std::path::Path::new(".github/prints");
+        std::fs::create_dir_all(out).expect("prints dir");
+
+        for (tab, name) in SAFE_TABS {
+            let mut shell = new_shell(Entry {
+                tab: *tab,
+                usage_group: 0,
+                global: false,
+                gain_cost: false,
+            });
+
+            // Doctor, Graph and Tokenmap load on a background thread, so a frame
+            // drawn immediately captures the spinner. Pump until the loaders go
+            // quiet — bounded, because a hung child must fail the render rather
+            // than block the suite forever.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while shell.pump() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{name}: background load did not settle in 60s"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+
+            let mut term = Terminal::new(TestBackend::new(120, 34)).expect("test terminal");
+            term.draw(|f| shell.draw(f)).expect("draw");
+            let svg = crate::docshot::buffer_to_svg(term.backend().buffer());
+            let path = out.join(format!("{name}.svg"));
+            std::fs::write(&path, svg).expect("write svg");
+            println!("wrote {}", path.display());
+        }
     }
 
     #[test]

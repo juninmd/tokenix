@@ -1171,6 +1171,64 @@ mod tests {
     }
 
     #[test]
+    fn entropy_floors_are_reachable_at_the_shortest_match() {
+        // Shannon entropy over the observed distribution maxes out at log2(n)
+        // for an n-char string, so a `min_entropy` above log2(min_match_len) can
+        // never be satisfied and silently disables the rule. Regression: the URI
+        // rules paired a 5-char (resp. 4-char) floor with a 3.5 (resp. 2.8)
+        // threshold, needing 12 (resp. 7) chars — so short passwords were
+        // unreportable by arithmetic, not by choice.
+        for (label, s) in [("4 chars", "abcd"), ("7 chars", "abcdefg")] {
+            let max = (s.chars().count() as f64).log2();
+            assert!(
+                shannon_entropy(s) <= max + f64::EPSILON,
+                "{label}: entropy must be bounded by log2(len)"
+            );
+        }
+
+        // An 8-char random password in a credential-bearing URI is a real leak
+        // and must be reported by both URI rules. Residual limit worth knowing:
+        // at 8 chars the 2.8 floor still needs ~7 distinct characters, so a
+        // leet-ish password like `s3cr3t99` (6 distinct, entropy 2.5) stays
+        // missed. Closing that needs length-normalized entropy or structural
+        // scoring, not a lower constant.
+        let hits = scan_content(
+            "https://svc:Xk9mQ2vp@example.com/api\n", // gitleaks:allow synthetic test fixture
+            &bundled_rules(),
+        );
+        assert!(
+            hits.iter().any(|h| h.rule == "basic-auth-url"),
+            "8-char basic-auth password should be reported: {:?}",
+            hits.iter().map(|h| h.rule.as_str()).collect::<Vec<_>>()
+        );
+
+        let hits = scan_content(
+            "postgres://admin:Xk9mQ2vp@db.internal:5432/app\n", // gitleaks:allow synthetic test fixture
+            &bundled_rules(),
+        );
+        assert!(
+            hits.iter().any(|h| h.rule == "db-connection-uri"),
+            "8-char db password should be reported: {:?}",
+            hits.iter().map(|h| h.rule.as_str()).collect::<Vec<_>>()
+        );
+
+        // The floor still has to reject the common placeholders it was there
+        // for: `password` and `changeme` both sit at ~2.75 bits/char.
+        for placeholder in ["password", "changeme"] {
+            assert!(
+                shannon_entropy(placeholder) < 2.8,
+                "{placeholder} must stay below the 2.8 floor"
+            );
+            let uri = format!("postgres://admin:{placeholder}@localhost:5432/app\n");
+            let hits = scan_content(&uri, &bundled_rules());
+            assert!(
+                !hits.iter().any(|h| h.rule == "db-connection-uri"),
+                "{placeholder} placeholder should not be reported"
+            );
+        }
+    }
+
+    #[test]
     fn clean_conversation_yields_no_findings() {
         let hits = scan_content(
             "how do I configure the API client?\nuse the SDK.\n",

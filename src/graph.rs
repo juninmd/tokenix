@@ -573,7 +573,11 @@ pub fn repo_hotspots(edges: &[store::GraphEdgeRow], top: usize) -> Vec<Hotspot> 
     by_degree.sort_by(|a, b| {
         let da = indeg.get(a).unwrap_or(&0) + outdeg.get(a).unwrap_or(&0);
         let db = indeg.get(b).unwrap_or(&0) + outdeg.get(b).unwrap_or(&0);
-        db.cmp(&da)
+        // Break ties on (name, path). The candidates come out of a HashMap, so
+        // without this the order among equal-degree symbols is whatever the
+        // hash seed produced — and since `candidate_cap` then truncates the
+        // list, two runs over an unchanged index reported different hotspots.
+        db.cmp(&da).then_with(|| label[a].cmp(&label[b]))
     });
 
     let candidate_cap = (top * 3).max(top);
