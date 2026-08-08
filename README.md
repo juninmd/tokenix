@@ -723,7 +723,7 @@ tokenix install-hook --tool all
 |---|---|
 | `tokenix hook` | `PreToolUse` handler — intercepts large reads, semantic grep, and noisy Bash/PowerShell commands (called by AI tools) |
 | `tokenix hook-post` | Legacy `PostToolUse` compatibility handler |
-| `tokenix run "CMD"` | Run a command and compress its output through tokenix filters (`--shell` re-executes under pwsh for the PowerShell path) |
+| `tokenix run "CMD"` | Run a command and compress its output through tokenix filters (`--shell` re-executes under pwsh for the PowerShell path; `--path/-p` runs it in another directory) |
 | `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools (`--profile slim\|full`) |
 
 <details>
@@ -751,7 +751,7 @@ tokenix install-hook --tool all
 
 **`tokenix context`** — `--mode <plan\|debug\|audit\|security\|review>`, `--budget/-b` (1200), `--max-files`, `--budget-breakdown`, `--json`, `--path/-p`
 
-**`tokenix impact`** — `--depth/-d` (2), `--limit/-l` (50), `--format <text\|html\|mermaid\|json>`, `--output/-o`, `--path/-p`
+**`tokenix impact`** — `--depth/-d` (2), `--limit/-l` (50), `--format <text\|html\|mermaid\|json>`, `--output/-o` (write to a file; without it html/mermaid print to stdout), `--path/-p`
 
 **`tokenix flow`** — `--depth/-d` (3), `--limit/-l` (50), `--format <text\|mermaid>`, `--path/-p`
 
@@ -868,6 +868,8 @@ on_empty = "uv: ok"
 Engine invariants:
 - **Never worse** — a filter never makes output more expensive than the raw it replaces. If the filtered result (including any sentinel message or truncation notice) would cost more bytes than the raw output, the engine emits the raw output instead.
 - **Exit-code aware** — `tokenix run` passes the command's real exit status into filtering: on nonzero exit, success sentinels are suppressed (text heuristics alone miss quiet failures) and the filter's `on_failure` policy applies.
+- **Failure signal beats every sentinel** — `match_output` and `uniform_success` are also suppressed when the raw output carries a generic failure signal, even if the exit status is unknown (the PostToolUse/audit paths never see one). A filter's `unless` guard refines that; it is not the only thing preventing a failed run from reading as success. An `unless` regex that fails to compile fails *closed* — the sentinel is skipped rather than silently unguarded.
+- **Source precedence** — local filters beat user filters beat bundled ones. Within a source, the longest (most specific) `match_command` wins; a long bundled pattern can no longer outrank the user filter meant to override it.
 - **Failure tee** — when a failed command's compressed view dropped content, the full raw output is saved under `~/.tokenix/tee/` (20 files, 1 MB cap, disable with `TOKENIX_TEE=0`) and the output ends with `[full output: <path>]`, so recovery is a targeted Read instead of a full re-run.
 - **Fail loudly** — filter files reject unknown fields (a typo'd key prints a warning instead of silently disabling the filter). Validate your own filters anytime with `tokenix filter verify`.
 - **Escape hatch** — prefix any command with `TOKENIX_DISABLED=1` to skip the rewrite for that command only. Bypasses are logged and `tokenix gain` warns when ≥10% of commands dodge the filter.

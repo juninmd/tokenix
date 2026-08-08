@@ -10,15 +10,18 @@
 #               target hostname, IP, or fully-qualified domain (required)
 #   label       descriptive label for the type of request (optional)
 
+# The optional `[^/@\s]+@` prefix keeps userinfo (`https://<token>@host/…`)
+# outside the capture group, so group 1 is always the DNS name. Without it the
+# username was captured as the host and the real destination never reported.
 [[rules]]
 id = "https-url"
 label = "HTTPS request"
-pattern = 'https://([A-Za-z0-9.-]+)(?::\d+)?(?:/[^\s"<>|;#]*)?'
+pattern = 'https://(?:[^/@\s"<>]+@)?([A-Za-z0-9.-]+)(?::\d+)?(?:/[^\s"<>|;#]*)?'
 
 [[rules]]
 id = "http-url"
 label = "HTTP request"
-pattern = 'http://([A-Za-z0-9.-]+)(?::\d+)?(?:/[^\s"<>|;#]*)?'
+pattern = 'http://(?:[^/@\s"<>]+@)?([A-Za-z0-9.-]+)(?::\d+)?(?:/[^\s"<>|;#]*)?'
 
 [[rules]]
 id = "ipv4-address"
@@ -33,7 +36,7 @@ pattern = 'ssh://([A-Za-z0-9.-]+)(?::\d+)?'
 [[rules]]
 id = "git-remote-https"
 label = "Git remote (HTTPS)"
-pattern = 'git clone https?://([A-Za-z0-9.-]+)/\S+'
+pattern = 'git clone https?://(?:[^/@\s"<>]+@)?([A-Za-z0-9.-]+)/\S+'
 
 [[rules]]
 id = "git-remote-ssh"

@@ -277,6 +277,25 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         );
     }
 
+    // Only ever buffer a regular file of bounded size. A FIFO/device would block
+    // `read_to_string` until the harness kills the hook, and a huge file would be
+    // held in memory twice (here and in `measured_original_tokens`).
+    const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
+    match std::fs::metadata(&full_path) {
+        Ok(m) if !m.is_file() => {
+            return (false, String::new(), "not a regular file".to_string());
+        }
+        Ok(m) if m.len() > MAX_READ_BYTES => {
+            return (
+                false,
+                String::new(),
+                "file too large to outline".to_string(),
+            );
+        }
+        Ok(_) => {}
+        Err(_) => return (false, String::new(), format!("read error: {}", file_path)),
+    }
+
     let content = match std::fs::read_to_string(&full_path) {
         Ok(c) => c,
         Err(_) => return (false, String::new(), format!("read error: {}", file_path)),
@@ -751,10 +770,32 @@ fn exit_success() -> ! {
     std::process::exit(0);
 }
 
-/// Quote a string for use as a shell argument (bash and PowerShell native-exe calls).
-/// Wraps in double quotes and escapes internal double-quotes as `\"`.
+/// True when the command actually *invokes* tokenix — a `tokenix` program token
+/// immediately followed by one of its subcommands. A plain substring test also
+/// matched `grep -r tokenix .` or `cat tokenix.toml` and silently left those
+/// commands uncompressed; requiring the subcommand keeps the recursion guard
+/// while letting ordinary mentions through. Token-wise rather than
+/// first-word-only so it survives quoted exe paths containing spaces and
+/// PowerShell's `& 'C:/…/tokenix.exe' run` call form.
+fn invokes_tokenix(command: &str) -> bool {
+    const SUBCOMMANDS: &[&str] = &["run", "mcp-proxy", "hook", "hook-post", "mcp"];
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    tokens.windows(2).any(|w| {
+        let prog = w[0].trim_matches(|c| c == '"' || c == '\'');
+        let stem = prog
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(prog)
+            .trim_end_matches(".exe");
+        stem.eq_ignore_ascii_case("tokenix") && SUBCOMMANDS.contains(&w[1])
+    })
+}
+
+/// Quote a string as a POSIX single-quoted literal. Double quotes would leave
+/// `$`, backticks and `\` live, so the agent's shell would expand them while
+/// rewriting — `echo '$(id)'` would reach `tokenix run` already substituted.
 fn shell_quote(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\\\""))
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 /// Quote a string as a PowerShell single-quoted literal: no `$`/backtick
@@ -863,8 +904,11 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
             pass_through(antigravity);
         }
 
-        // Avoid infinite recursion: do not rewrite if it's already a tokenix command execution
-        if command.contains("tokenix") {
+        // Avoid infinite recursion: do not rewrite a command that already *is* a
+        // tokenix invocation. Matched structurally — a substring test also
+        // skipped `grep -r tokenix .` and `cat tokenix.toml`, silently leaving
+        // a whole class of commands uncompressed.
+        if invokes_tokenix(command) {
             pass_through(antigravity);
         }
 
@@ -937,7 +981,13 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
 
         let status_re = regex::Regex::new(r"^git\s+status(\s+.*)?$").unwrap();
         if status_re.is_match(command) && !command.contains("-") {
-            let trimmed = command.strip_prefix("git status").unwrap_or("").trim();
+            // Strip whitespace-aware: the matcher accepts `git  status <path>`,
+            // but `strip_prefix("git status")` would miss the double space and
+            // silently drop the path argument.
+            let trimmed = command
+                .split_once("status")
+                .map(|(_, rest)| rest.trim())
+                .unwrap_or("");
             let rewritten = if trimmed.is_empty() {
                 "git status --short".to_string()
             } else {
@@ -974,9 +1024,9 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
         // 2. Otherwise check for other active filters to wrap in tokenix run
         let unwrapped =
             crate::filters::unwrap_shell_runner(command).unwrap_or_else(|| command.to_string());
-        let filters = crate::filters::load_filters_for_command(&unwrapped);
+        let filters = crate::filters::load_filter_groups_for_command(&unwrapped);
 
-        if crate::filters::find_filter(&unwrapped, &filters).is_some() {
+        if crate::filters::find_filter_ranked(&unwrapped, &filters).is_some() {
             let exe_path = std::env::current_exe()
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| "tokenix".to_string());
@@ -1026,7 +1076,7 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
             pass_through(antigravity);
         }
         // Avoid recursion: the rewrite itself invokes tokenix under pwsh.
-        if command.contains("tokenix") {
+        if invokes_tokenix(command) {
             pass_through(antigravity);
         }
 
@@ -1051,8 +1101,8 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
             pass_through(antigravity);
         }
 
-        let filters = crate::filters::load_filters_for_command(command);
-        if crate::filters::find_filter(command, &filters).is_some() {
+        let filters = crate::filters::load_filter_groups_for_command(command);
+        if crate::filters::find_filter_ranked(command, &filters).is_some() {
             let exe_path = std::env::current_exe()
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| "tokenix".to_string());
@@ -1191,6 +1241,46 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_quote_keeps_command_literal_through_the_outer_shell() {
+        // Regression: double-quote wrapping left `$`, `$(…)` and backticks live,
+        // so the agent's shell expanded them *while rewriting* and `tokenix run`
+        // received a different command than the agent asked for.
+        let q = shell_quote("echo '$HOME and $(id -un)'");
+        assert!(q.starts_with('\'') && q.ends_with('\''));
+        assert!(
+            q.contains("$(id -un)"),
+            "substitution must stay literal: {q}"
+        );
+        // Embedded single quotes are re-opened, not left dangling.
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+    }
+
+    #[test]
+    fn recursion_guard_matches_invocations_not_mentions() {
+        assert!(invokes_tokenix("tokenix run 'git status'"));
+        assert!(invokes_tokenix("'C:/tools/tokenix.exe' run 'git status'"));
+        assert!(invokes_tokenix(
+            "& 'C:/tools/tokenix.exe' run --shell pwsh 'ls'"
+        ));
+        assert!(invokes_tokenix("cd repo && tokenix mcp-proxy -- npx srv"));
+        // Regression: these merely mention the word and used to skip compression.
+        assert!(!invokes_tokenix("grep -r tokenix ."));
+        assert!(!invokes_tokenix("cat tokenix.toml"));
+        assert!(!invokes_tokenix("git log --grep=tokenix"));
+    }
+
+    #[test]
+    fn git_status_rewrite_keeps_path_arg_with_extra_spaces() {
+        // Regression: `strip_prefix("git status")` missed the double space and
+        // silently widened `git  status src` to a whole-repo status.
+        let trimmed = "git  status src"
+            .split_once("status")
+            .map(|(_, rest)| rest.trim())
+            .unwrap_or("");
+        assert_eq!(trimmed, "src");
+    }
 
     #[test]
     fn powershell_routing_targets_command_tools_not_read_grep() {

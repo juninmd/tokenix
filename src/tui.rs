@@ -136,6 +136,7 @@ enum StudioPane {
 /// One row in the Studio candidate list: a command that was recorded and/or is a
 /// token sink, with the data the UI badges read (`✓` filtered, `⚠` unfiltered
 /// waste, `●` recorded only).
+#[derive(Clone)]
 struct StudioRow {
     base: String,
     captures: usize,
@@ -233,6 +234,8 @@ struct Shell {
     repo_root: PathBuf,
     studio_pane: StudioPane,
     studio_rec_sel: usize,
+    /// Memo for `studio_candidates` (see its doc comment).
+    studio_cache: std::cell::RefCell<Option<(std::time::Instant, Vec<StudioRow>)>>,
     studio_saved_sel: usize,
     studio_msg: Option<String>,
     /// Arms the `x` delete of the selected saved filter (second press confirms).
@@ -308,7 +311,15 @@ pub fn run() -> Result<()> {
 pub fn run_entry(entry: Entry) -> Result<()> {
     let mut shell = new_shell(entry);
     let mut terminal = ratatui::init();
+    // A panic inside the event loop or a draw would otherwise leave the terminal
+    // in raw mode on the alternate screen, with the backtrace invisible.
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        ratatui::restore();
+        previous_hook(info);
+    }));
     let res = shell.event_loop(&mut terminal);
+    let _ = std::panic::take_hook();
     ratatui::restore();
     res
 }
@@ -383,6 +394,7 @@ fn new_shell(entry: Entry) -> Shell {
         repo_root: proj_root,
         studio_pane: StudioPane::Recordings,
         studio_rec_sel: 0,
+        studio_cache: std::cell::RefCell::new(None),
         studio_saved_sel: 0,
         studio_msg: None,
         studio_confirm_delete: false,
@@ -744,7 +756,35 @@ impl Shell {
     /// (`cmd_filter::suggest_filters`). Sorted so the biggest *unfiltered waste*
     /// floats to the top, then heaviest recordings — both render and the key
     /// handler iterate this so selection stays in sync.
+    /// Memoized: the uncached body walks the recordings directory and parses the
+    /// whole hook log (up to ~10 MB of NDJSON), and it used to run inside
+    /// `terminal.draw` — on every keypress and on every 120 ms poll tick while
+    /// any background scan was in flight, freezing the event loop each time.
     fn studio_candidates(&self) -> Vec<StudioRow> {
+        const TTL: std::time::Duration = std::time::Duration::from_millis(1500);
+        if let Ok(cache) = self.studio_cache.try_borrow() {
+            if let Some((at, rows)) = cache.as_ref() {
+                if at.elapsed() < TTL {
+                    return rows.clone();
+                }
+            }
+        }
+        let rows = self.studio_candidates_uncached();
+        if let Ok(mut cache) = self.studio_cache.try_borrow_mut() {
+            *cache = Some((std::time::Instant::now(), rows.clone()));
+        }
+        rows
+    }
+
+    /// Drop the memo so the next draw reflects a just-started/stopped recording
+    /// or a deleted capture instead of waiting out the TTL.
+    fn invalidate_studio_cache(&self) {
+        if let Ok(mut cache) = self.studio_cache.try_borrow_mut() {
+            *cache = None;
+        }
+    }
+
+    fn studio_candidates_uncached(&self) -> Vec<StudioRow> {
         let mut rows: HashMap<String, StudioRow> = HashMap::new();
         for (base, captures, bytes) in self.studio_recordings() {
             rows.insert(
@@ -798,6 +838,12 @@ impl Shell {
     }
 
     fn key_studio(&mut self, code: KeyCode) {
+        // Any Studio key can change what the candidate list should show
+        // (arm/stop a recording, delete a capture), so drop the memo up front
+        // rather than waiting out its TTL.
+        if !matches!(code, KeyCode::Up | KeyCode::Down | KeyCode::Char('j' | 'k')) {
+            self.invalidate_studio_cache();
+        }
         match code {
             KeyCode::Char('r') => {
                 self.studio_msg = Some(if crate::recordings::is_active(&self.repo_root) {
@@ -1875,25 +1921,22 @@ impl Shell {
 
         // Index capability: how many tokens are indexed for semantic search.
         lines.push(Line::from("index".bold()));
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let root = crate::store::find_project_root(&cwd);
-        let index_info = crate::store::open_db(&root, false)
-            .ok()
-            .flatten()
-            .and_then(|conn| crate::store::count_stats(&conn).ok());
-        if let Some(idx) = &index_info {
+        // Reuse the cached counts. Opening SQLite and re-running the stats
+        // queries here blocked the event loop on every single frame — including
+        // every 120 ms tick while another tab was still loading.
+        if let Some((files, chunks, total_tokens)) = self.index_stats {
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  {:>12}  ", crate::ui::format_num(idx.total_tokens)),
+                    format!("  {:>12}  ", crate::ui::format_num(total_tokens)),
                     Style::default().cyan().add_modifier(bold),
                 ),
                 Span::styled("tokens indexed", Style::default().dim()),
             ]));
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:>12}  ", idx.files), Style::default().cyan()),
+                Span::styled(format!("  {:>12}  ", files), Style::default().cyan()),
                 Span::styled("files", Style::default().dim()),
                 Span::raw("  ·  "),
-                Span::styled(format!("{}", idx.chunks), Style::default().cyan()),
+                Span::styled(format!("{}", chunks), Style::default().cyan()),
                 Span::styled(" chunks", Style::default().dim()),
             ]));
         } else {

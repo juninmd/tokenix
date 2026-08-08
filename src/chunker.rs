@@ -90,9 +90,14 @@ pub fn file_hash(content: &[u8]) -> String {
 }
 
 pub fn count_tokens(text: &str) -> usize {
-    // Fast approximation: ~4 chars per token (Claude/GPT tokenizers)
-    // Accurate enough for budget decisions without shipping tiktoken in Rust
-    text.len().div_ceil(4)
+    // Fast approximation: ~4 chars per token (Claude/GPT tokenizers).
+    // Counts CHARS, not bytes: `len()` would charge 2-4x for any non-ASCII
+    // content (accented log lines, box-drawing in TUI captures, emoji, CJK),
+    // inflating every budget decision and every reported saving. Identical to
+    // `len()` for ASCII, which is the overwhelmingly common case.
+    // `chars().count()` is specialized to count non-continuation bytes, so this
+    // stays a single cheap scan on the hook hot path.
+    text.chars().count().div_ceil(4)
 }
 
 static SECRET_RE: OnceCell<Vec<Regex>> = OnceCell::new();
@@ -336,6 +341,13 @@ pub fn chunk_file(path: &str, content: &str) -> Vec<Chunk> {
             chunk_by_lines(&lines, path)
         }
     };
+    // Every symbol can fall under MIN_CHUNK_TOKENS (a file of one-line
+    // functions), which would drop the file from the index entirely. Fall back
+    // to line chunks so a non-empty file is always searchable.
+    if chunks.is_empty() && !content.trim().is_empty() {
+        let lines: Vec<&str> = content.lines().collect();
+        return enforce_token_cap(chunk_by_lines(&lines, path));
+    }
     enforce_token_cap(chunks)
 }
 
@@ -346,7 +358,10 @@ pub fn chunk_file(path: &str, content: &str) -> Vec<Chunk> {
 /// PC-freeze trigger. Here we split such chunks by character windows (never
 /// truncating), preserving 100% of the content.
 fn enforce_token_cap(chunks: Vec<Chunk>) -> Vec<Chunk> {
-    let max_chars = MAX_CHUNK_TOKENS * 4; // count_tokens(s) == s.len().div_ceil(4)
+    // Windowing is done on BYTES while `count_tokens` counts chars. Since
+    // chars <= bytes, a window of `max_chars` bytes always yields a chunk of at
+    // most `MAX_CHUNK_TOKENS` — conservative for non-ASCII, never over budget.
+    let max_chars = MAX_CHUNK_TOKENS * 4;
     let mut out = Vec::with_capacity(chunks.len());
     for chunk in chunks {
         if chunk.content.len() <= max_chars {
@@ -463,7 +478,9 @@ fn chunk_with_parser(
     }
 
     let mut chunks = Vec::new();
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(symbols.len());
     for sym in symbols {
+        spans.push((sym.start_line, sym.end_line));
         flush_chunk(
             &lines,
             path,
@@ -474,7 +491,37 @@ fn chunk_with_parser(
             &mut chunks,
         );
     }
+    // Symbol bodies alone leave module-level code — `use`/`import`/`const`/
+    // `#define`/`package` lines and top-level statements — out of the index
+    // entirely. Emit the uncovered ranges too, so a file is fully searchable
+    // (the same guarantee `chunk_by_symbol_lines` already gives VB/SQL).
+    for (start, end) in uncovered_ranges(&spans, lines.len()) {
+        flush_chunk(&lines, path, start, end, "<module>", "module", &mut chunks);
+    }
+    chunks.sort_by_key(|c| (c.start_line, c.end_line));
     chunks
+}
+
+/// Line ranges (0-based, inclusive) not covered by any symbol span. Spans may
+/// overlap or nest (an `impl` contains its `fn`s), so they are merged first.
+fn uncovered_ranges(spans: &[(usize, usize)], total_lines: usize) -> Vec<(usize, usize)> {
+    if total_lines == 0 {
+        return Vec::new();
+    }
+    let mut sorted: Vec<(usize, usize)> = spans.to_vec();
+    sorted.sort_unstable();
+    let mut gaps = Vec::new();
+    let mut cursor = 0usize;
+    for (start, end) in sorted {
+        if start > cursor {
+            gaps.push((cursor, start - 1));
+        }
+        cursor = cursor.max(end.saturating_add(1));
+    }
+    if cursor < total_lines {
+        gaps.push((cursor, total_lines - 1));
+    }
+    gaps
 }
 
 fn is_rust_symbol(kind: &str) -> Option<&'static str> {
@@ -576,7 +623,13 @@ fn heuristic_ts_js_symbols(content: &str) -> Vec<SymbolNode> {
         };
         let kind = cap.get(1).map(|m| m.as_str()).unwrap_or("symbol");
         let name = cap.get(2).map(|m| m.as_str()).unwrap_or("anonymous");
-        let start_line = content[..mat.start()].lines().count();
+        // Count newlines, not `lines()`: a match starting mid-line makes
+        // `lines()` count the partial prefix as a whole line, pushing the chunk
+        // one line past the symbol (and past EOF for a match on the last line).
+        let start_line = content[..mat.start()]
+            .bytes()
+            .filter(|b| *b == b'\n')
+            .count();
         let end_line = find_block_end(&lines, start_line);
         symbols.push(SymbolNode {
             start_line,
@@ -768,6 +821,9 @@ fn flush_chunk(
     kind: &str,
     out: &mut Vec<Chunk>,
 ) {
+    if start > end || lines.is_empty() {
+        return;
+    }
     let total = end.saturating_sub(start) + 1;
     if total > MAX_CHUNK_TOKENS {
         // Split large chunk with sliding-window overlap
@@ -1183,11 +1239,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn module_level_code_is_indexed_not_just_symbols() {
+        // Regression: the tree-sitter path emitted chunks for symbol bodies only,
+        // so `use`/`const` preambles never reached the index at all.
+        let body: String = (1..=25).map(|i| format!("    let v{i} = {i};\n")).collect();
+        let src = format!(
+            "pub const ZORBLAX_SENTINEL: &str = \"marker\";\n\
+             use std::collections::HashMap;\n\
+             use std::path::PathBuf;\n\
+             pub fn payload() -> u32 {{\n{body}    42\n}}\n"
+        );
+        let chunks = chunk_file("c.rs", &src);
+        assert!(
+            chunks
+                .iter()
+                .any(|c| c.content.contains("ZORBLAX_SENTINEL")),
+            "module-level const missing from chunks: {:?}",
+            chunks.iter().map(|c| &c.symbol).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn ts_symbol_at_end_of_last_line_does_not_panic_or_misattribute() {
+        // Regression: `lines().count()` on a mid-line match counted the partial
+        // prefix as a whole line, pushing the chunk past the symbol (and past EOF).
+        let head: String = (1..=30)
+            .map(|i| format!("export function f{i}() {{ return {i}; }}\n"))
+            .collect();
+        let src = format!("{head}const tail = 1; type Alias = string");
+        let chunks = chunk_file("a.ts", &src);
+        // The point is that this returns at all; also assert no chunk was built
+        // from an inverted range.
+        assert!(chunks.iter().all(|c| c.start_line <= c.end_line));
+        assert!(!chunks.is_empty(), "a 31-line file must not vanish");
+    }
+
+    #[test]
+    fn uncovered_ranges_handles_nested_and_adjacent_spans() {
+        // impl (0..10) containing fn (2..5), then a gap, then a trailing gap.
+        assert_eq!(uncovered_ranges(&[(0, 10), (2, 5)], 20), vec![(11, 19)]);
+        assert_eq!(uncovered_ranges(&[(3, 5)], 10), vec![(0, 2), (6, 9)]);
+        assert_eq!(uncovered_ranges(&[], 4), vec![(0, 3)]);
+    }
+
+    #[test]
     fn count_tokens_basic() {
         assert_eq!(count_tokens(""), 0);
         assert_eq!(count_tokens("abcd"), 1);
         assert_eq!(count_tokens("abcde"), 2);
         assert_eq!(count_tokens("hello world"), 3); // 11 chars → (11+3)/4 = 3
+    }
+
+    #[test]
+    fn count_tokens_counts_chars_not_bytes() {
+        // Regression: `text.len()` charged per byte, so non-ASCII inflated the
+        // count 2-4x and poisoned every budget decision downstream.
+        assert_eq!("çãô".len(), 6); // 6 bytes
+        assert_eq!(count_tokens("çãô"), 1); // but 3 chars → 1 token, not 2
+        assert_eq!("日本語テキスト".len(), 21); // 21 bytes
+        assert_eq!(count_tokens("日本語テキスト"), 2); // 7 chars → 2 tokens, not 6
+
+        // ASCII is unchanged, so existing measurements do not move.
+        assert_eq!(count_tokens("abcd"), "abcd".len().div_ceil(4));
     }
 
     #[test]

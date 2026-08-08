@@ -384,7 +384,13 @@ fn download_model_file(client: &Client, repo: &str, file: &str, dest: &Path) -> 
         .bytes()
         .map_err(|e| anyhow!("read {url} failed: {e}"))?
         .to_vec();
-    let _ = std::fs::write(dest, &bytes);
+    // Write to a temp file and rename: a download interrupted mid-write would
+    // otherwise leave a truncated file that the `!bytes.is_empty()` cache check
+    // happily reuses forever.
+    let tmp = dest.with_extension("part");
+    if std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, dest).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
     Ok(bytes)
 }
 

@@ -156,6 +156,12 @@ pub struct Economics {
 /// cache read ≈ 0.1× — Anthropic's price ratios), then multiplied by the
 /// measured saved tokens (which land on the input/cache side as tool
 /// results). Returns None when no transcript usage is available.
+///
+/// The ratios are Anthropic's. `mix.cost_usd` itself comes from each record's
+/// own model price, so the total spend is right for any provider, but the
+/// weighting that splits it into a per-input-token rate is approximate when the
+/// transcripts are dominated by a non-Anthropic model. The output is an
+/// estimate and is presented as one.
 pub fn economics(tokens_saved: i64) -> Option<Economics> {
     let mix = crate::usage::spend_mix()?;
     let units = mix.input as f64
@@ -170,7 +176,10 @@ pub fn economics(tokens_saved: i64) -> Option<Economics> {
     Some(Economics {
         spend_usd: mix.cost_usd,
         saved_usd,
-        pct_of_spend: saved_usd / mix.cost_usd * 100.0,
+        // Cap at 100%: this is "savings measured against what was actually
+        // spent", and a long filtering history against a short billing window
+        // could otherwise print a nonsensical 300%.
+        pct_of_spend: (saved_usd / mix.cost_usd * 100.0).min(100.0),
         total_tokens: mix.input + mix.output + mix.cache_read + mix.cache_write,
         saved_tokens: tokens_saved.max(0),
     })

@@ -464,9 +464,18 @@ fn report_blocks(records: &[Record], opts: &Options) -> Result<()> {
             let (burn, proj) = if active {
                 let mins = (now - start).num_minutes().max(1) as f64;
                 let burn = tok as f64 / mins;
-                let remaining = (end - now).num_minutes().max(0) as f64;
-                let proj = cost + (cost / mins) * remaining;
-                (Some(burn), Some(proj))
+                // Extrapolating from a minutes-old sample over a 5-hour block
+                // produces headline numbers dominated by noise (one request at
+                // minute 1 projected 300× its cost). Only project once there is
+                // enough of the block observed for the rate to mean something.
+                const MIN_MINUTES_FOR_PROJECTION: f64 = 15.0;
+                let proj = if mins >= MIN_MINUTES_FOR_PROJECTION {
+                    let remaining = (end - now).num_minutes().max(0) as f64;
+                    Some(cost + (cost / mins) * remaining)
+                } else {
+                    None
+                };
+                (Some(burn), proj)
             } else {
                 (None, None)
             };
@@ -608,19 +617,18 @@ fn print_statusline(records: &[Record], mode: CostMode) {
         tokens += r.tokens();
     }
     // Active-block burn rate.
-    let block_start = records
-        .iter()
-        .rev()
-        .find(|r| now - r.ts < Duration::hours(BLOCK_HOURS))
-        .map(|_| floor_hour(now - Duration::hours(BLOCK_HOURS)));
-    let burn = block_start.map(|_| {
-        let win_start = now - Duration::hours(BLOCK_HOURS);
+    let win_start = now - Duration::hours(BLOCK_HOURS);
+    // Divide by the minutes actually observed, not the full 5-hour window: a
+    // session 10 minutes old reported ~1/30th of its real rate, and disagreed
+    // with the same number in `report_blocks`.
+    let burn = records.iter().find(|r| r.ts >= win_start).map(|first| {
         let tok: u64 = records
             .iter()
             .filter(|r| r.ts >= win_start)
             .map(|r| r.tokens())
             .sum();
-        tok as f64 / (BLOCK_HOURS * 60) as f64
+        let mins = (now - first.ts).num_minutes().max(1) as f64;
+        tok as f64 / mins
     });
     let mut parts = vec![
         format!("{} today", fmt_cost(cost)),

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -202,7 +202,11 @@ impl CacheState {
 }
 
 struct DaemonState {
-    cache: Mutex<CacheState>,
+    /// `RwLock`, not `Mutex`: a search holds this for the whole O(N) cosine scan
+    /// over a project's embeddings, which under a mutex blocked every other
+    /// client — including `health`/`status` — for the duration of the heaviest
+    /// query. Reads now run concurrently; only a cache reload takes the writer.
+    cache: RwLock<CacheState>,
     started: std::time::Instant,
     port: u16,
 }
@@ -317,7 +321,7 @@ pub fn run_serve(port: Option<u16>) -> Result<()> {
     }
 
     let state = Arc::new(DaemonState {
-        cache: Mutex::new(CacheState::new()),
+        cache: RwLock::new(CacheState::new()),
         started: std::time::Instant::now(),
         port,
     });
@@ -443,6 +447,19 @@ pub fn run_stop() -> Result<()> {
         .ok_or_else(|| anyhow!("daemon not running (no pid file)"))?;
     let pid: u32 = pid_str.trim().parse()?;
 
+    // Never force-kill a pid we have not confirmed is tokenix: the pid file
+    // outlives a crash, and the OS recycles pids.
+    if !is_tokenix_process(pid) {
+        if let Some(p) = pid_path() {
+            let _ = std::fs::remove_file(p);
+        }
+        if let Some(p) = port_path() {
+            let _ = std::fs::remove_file(p);
+        }
+        println!("daemon not running (stale pid file for {pid} removed)");
+        return Ok(());
+    }
+
     #[cfg(unix)]
     std::process::Command::new("kill")
         .arg(pid.to_string())
@@ -527,30 +544,50 @@ pub fn daemon_search_with_autostart(
 }
 
 fn spawn_daemon() -> bool {
-    // Prevent race: if PID file exists and process is alive, skip spawn.
+    let mut spawn_lock: Option<PathBuf> = None;
+    // Prevent race: if PID file exists and it really is our daemon, skip spawn.
     if let Some(pid_file) = pid_path() {
         if let Ok(s) = std::fs::read_to_string(&pid_file) {
             if let Ok(pid) = s.trim().parse::<u32>() {
-                if is_process_alive(pid) {
+                if is_tokenix_process(pid) {
                     return true;
                 }
             }
         }
-        // Spawn lock: if another hook is already spawning, wait and skip.
+        // Spawn lock, acquired atomically: `exists()` then `write()` let two
+        // hooks both see no lock and both spawn, the second dying on
+        // EADDRINUSE after a ~130 MB process start.
         let lock = pid_file.with_extension("spawning");
-        if lock.exists() {
-            let stale = std::fs::metadata(&lock)
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.elapsed().ok())
-                .map(|e| e.as_secs() >= 10)
-                .unwrap_or(true);
-            if !stale {
-                return true; // another hook is already spawning
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                let _ = f.write_all(std::process::id().to_string().as_bytes());
+                spawn_lock = Some(lock);
+            }
+            Err(_) => {
+                let stale = std::fs::metadata(&lock)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|e| e.as_secs() >= 10)
+                    .unwrap_or(true);
+                if !stale {
+                    return true; // another hook is already spawning
+                }
+                // Stale lock from a crashed spawn: take it over.
+                let _ = std::fs::remove_file(&lock);
+                let _ = std::fs::write(&lock, std::process::id().to_string());
+                spawn_lock = Some(lock);
             }
         }
-        let _ = std::fs::write(&lock, std::process::id().to_string());
     }
+    // Always release the lock — leaving it behind blocked every other hook from
+    // spawning for the full staleness window after a failed attempt.
+    let _release = SpawnLockGuard(spawn_lock);
 
     let exe = match std::env::current_exe() {
         Ok(e) => e,
@@ -583,6 +620,65 @@ fn spawn_daemon() -> bool {
     }
 
     cmd.spawn().is_ok()
+}
+
+struct SpawnLockGuard(Option<PathBuf>);
+
+impl Drop for SpawnLockGuard {
+    fn drop(&mut self) {
+        if let Some(p) = &self.0 {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// True when `pid` is alive AND is a tokenix process. The pid file survives a
+/// crash, so trusting it alone meant `tokenix stop` could `kill -9` whatever
+/// unrelated process later inherited that pid, and `spawn_daemon` would treat
+/// it as a healthy daemon and never respawn.
+fn is_tokenix_process(pid: u32) -> bool {
+    if !is_process_alive(pid) {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output();
+        match out {
+            Ok(o) => String::from_utf8_lossy(&o.stdout)
+                .to_ascii_lowercase()
+                .contains("tokenix"),
+            Err(_) => false,
+        }
+    }
+    #[cfg(unix)]
+    {
+        if let Ok(exe) = std::fs::read_link(format!("/proc/{pid}/exe")) {
+            return exe
+                .file_name()
+                .map(|n| n.to_string_lossy().contains("tokenix"))
+                .unwrap_or(false);
+        }
+        // macOS and other non-procfs systems.
+        std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("tokenix"))
+            .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn own_process_is_recognized_as_tokenix() {
+        // The test binary is `tokenix-<hash>.exe`, which is what the daemon's
+        // pid-identity check must accept; a recycled unrelated pid must not be.
+        assert!(is_tokenix_process(std::process::id()));
+    }
 }
 
 fn is_process_alive(pid: u32) -> bool {
@@ -618,13 +714,17 @@ fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) -> Result<()> {
     stream.set_nodelay(true)?;
 
     let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    let reader = BufReader::new(stream);
+    // Bound the request: `read_line` on a raw socket will happily buffer until
+    // the peer stops sending, so a single client could exhaust memory.
+    const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
     let mut line = String::new();
+    let mut reader = reader.take(MAX_REQUEST_BYTES);
     reader.read_line(&mut line)?;
 
     let response_str = match serde_json::from_str::<Request>(line.trim()) {
         Ok(Request::Health) => {
-            let lock = state.cache.lock().unwrap();
+            let lock = state.cache.read().unwrap();
             let cached_projects = lock.projects.len();
             let chunks = lock.projects.values().map(|c| c.entries.len()).sum();
             serde_json::to_string(&RespHealth {
@@ -634,7 +734,7 @@ fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) -> Result<()> {
             })?
         }
         Ok(Request::Status) => {
-            let lock = state.cache.lock().unwrap();
+            let lock = state.cache.read().unwrap();
             let cached_projects = lock.projects.len();
             let chunks: usize = lock.projects.values().map(|c| c.entries.len()).sum();
             let cache_bytes: u64 = lock
@@ -660,7 +760,21 @@ fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) -> Result<()> {
             k,
             budget,
             file,
-        }) => search_handler(&state, &project_root, &query, k, budget, file.as_deref()),
+        }) => {
+            // Clamp client-supplied sizing: `k` drives the FTS/cosine scan and
+            // `budget` the formatting, so unbounded values let any local process
+            // pin the daemon's CPU and memory.
+            const MAX_K: usize = 500;
+            const MAX_BUDGET: usize = 200_000;
+            search_handler(
+                &state,
+                &project_root,
+                &query,
+                k.clamp(1, MAX_K),
+                budget.min(MAX_BUDGET),
+                file.as_deref(),
+            )
+        }
         Err(e) => serde_json::to_string(&RespErr {
             ok: false,
             error: e.to_string(),
@@ -705,32 +819,40 @@ fn search_handler(
     let sparse_results =
         store::search_fts(&conn, query, sparse_limit, file_filter).unwrap_or_default();
 
-    // Acquire lock, reload cache if stale, run cosine search + RRF merge, release lock.
-    let top_ids: Vec<(usize, f32, i64)> = {
-        let mut cache_lock = state.cache.lock().unwrap();
-        let needs_reload = cache_lock
-            .projects
+    // Reload under the writer only when actually stale; the scan itself runs
+    // under a shared read lock so concurrent searches do not serialize.
+    let needs_reload = {
+        let r = state.cache.read().unwrap();
+        r.projects
             .get(&root_key)
             .map(|c| db_mtime != c.db_mtime)
-            .unwrap_or(true);
-
-        if needs_reload {
-            match ProjectCache::load(&conn, db_mtime) {
-                Ok(c) => {
-                    eprintln!(
-                        "[tokenix] cache loaded: {} chunks for {}",
-                        c.entries.len(),
-                        root_key
-                    );
-                    cache_lock.insert(root_key.clone(), c);
-                }
-                Err(e) => return err_json(format!("cache load: {e}")),
+            .unwrap_or(true)
+    };
+    if needs_reload {
+        // Load outside the lock — this reads the entire embeddings table.
+        match ProjectCache::load(&conn, db_mtime) {
+            Ok(c) => {
+                eprintln!(
+                    "[tokenix] cache loaded: {} chunks for {}",
+                    c.entries.len(),
+                    root_key
+                );
+                state.cache.write().unwrap().insert(root_key.clone(), c);
             }
-        } else {
-            cache_lock.touch(&root_key);
+            Err(e) => return err_json(format!("cache load: {e}")),
         }
+    } else {
+        state.cache.write().unwrap().touch(&root_key);
+    }
 
-        let pc = &cache_lock.projects[&root_key];
+    let top_ids: Vec<(usize, f32, i64)> = {
+        let cache_lock = state.cache.read().unwrap();
+        // A concurrent eviction can drop the project between the reload above
+        // and this read; fall back to an empty result rather than panicking on
+        // the index.
+        let Some(pc) = cache_lock.projects.get(&root_key) else {
+            return err_json("cache evicted mid-request; retry".into());
+        };
         let candidate_k = (k.saturating_mul(5)).max(50);
         let dense_results = pc.search_ids(&query_vec, candidate_k, file_filter);
 
@@ -775,7 +897,8 @@ fn search_handler(
     // Populate content: check in-memory cache first, fetch missing from SQLite.
     let chunk_ids: Vec<i64> = top_ids.iter().map(|(_, _, id)| *id).collect();
 
-    let mut cache_lock = state.cache.lock().unwrap();
+    // Writer: this path memoizes fetched chunk content back into the cache.
+    let mut cache_lock = state.cache.write().unwrap();
     let pc = match cache_lock.projects.get_mut(&root_key) {
         Some(p) => p,
         None => return err_json("cache evicted during search".into()),

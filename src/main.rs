@@ -410,10 +410,9 @@ enum Commands {
         #[arg(
             short,
             long,
-            help = "Output file path for html/mermaid format",
-            default_value = "impact.html"
+            help = "Write html/mermaid output to this file instead of stdout"
         )]
-        output: String,
+        output: Option<String>,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -1057,6 +1056,26 @@ fn find_repo_root(start: &Path) -> PathBuf {
     store::find_project_root(start)
 }
 
+/// Load an agent's JSON config for in-place editing. An unreadable/invalid file
+/// is an error, never an empty object: falling back to `{}` here would make the
+/// subsequent write silently replace the user's whole configuration.
+fn load_agent_config(path: &Path) -> Result<serde_json::Value> {
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let raw = std::fs::read_to_string(path)?;
+    if raw.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(&raw).map_err(|e| {
+        anyhow::anyhow!(
+            "{} is not valid JSON ({e}) — refusing to overwrite it. \
+             Fix or move the file, then re-run.",
+            path.display()
+        )
+    })
+}
+
 /// Returns the tokenix binary path, normalized for use in config files.
 /// On Windows returns forward-slash path so shell scripts work cross-platform.
 fn tokenix_bin_path() -> Result<String> {
@@ -1077,6 +1096,15 @@ fn main() -> Result<()> {
         .after_help(help_catalog());
     let matches = cmd.clone().get_matches();
     let cli = Cli::from_arg_matches(&matches)?;
+
+    // `tokenix ... | head` closes stdout early; the default SIGPIPE handling in
+    // Rust turns the next `println!` into a panic (exit 101) with an ugly
+    // "failed printing to stdout" message. Restore the Unix default so the
+    // process just ends quietly, like every other CLI in a pipeline.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
 
     // Must be set before the embedding model is first initialized.
     let only_cpu = cli.only_cpu;
@@ -1108,8 +1136,11 @@ fn main() -> Result<()> {
     // swallow" test — JSON, a status line, a file/HTML target, or a flag the
     // tab cannot express. Agent-facing commands (hook, run, mcp, query, …) are
     // deliberately absent from this table.
+    // Route the TUI through the same error handler as everything else — a bare
+    // `return` here propagated to `fn main`'s `Result`, which Rust reports by
+    // panicking-style exit 101 instead of the documented exit 1.
     if let Some(entry) = tui_entry_for(&command) {
-        return tui::run_entry(entry);
+        finish(tui::run_entry(entry));
     }
 
     let res = match command {
@@ -1223,7 +1254,7 @@ fn main() -> Result<()> {
             format,
             output,
             path,
-        } => cmd_impact(&symbol, depth, limit, &format, &output, &path),
+        } => cmd_impact(&symbol, depth, limit, &format, output.as_deref(), &path),
         Commands::Flow {
             symbol,
             depth,
@@ -1309,7 +1340,18 @@ fn main() -> Result<()> {
             format,
             output,
         } => cmd_tokenmap(&path, &format, &output),
-        Commands::Serve { port } => daemon::run_serve(port),
+        Commands::Serve { port } => {
+            // Set before any handler thread exists. `build_text_embedding` also
+            // sets it lazily, but there it runs while other handler threads may
+            // be reading the environment — `set_var` concurrent with `var` is UB.
+            #[allow(unused_unsafe)]
+            unsafe {
+                if std::env::var("OMP_NUM_THREADS").is_err() {
+                    std::env::set_var("OMP_NUM_THREADS", "1");
+                }
+            }
+            daemon::run_serve(port)
+        }
         Commands::Stop => daemon::run_stop(),
         Commands::Daemon { action } => match action {
             DaemonAction::Status => daemon::run_status(),
@@ -1346,10 +1388,13 @@ fn main() -> Result<()> {
         Commands::Untrust => cmd_filter::cmd_untrust(),
         Commands::Run {
             command,
-            path: _,
+            path,
             shell,
         } => {
-            let code = compress::run_command_and_compress(&command, &shell)?;
+            // `--path` defaults to "."; only pass a real override through so the
+            // normal case keeps the caller's cwd untouched.
+            let cwd = (path != Path::new(".")).then_some(path);
+            let code = compress::run_command_and_compress(&command, &shell, cwd.as_deref())?;
             std::process::exit(code);
         }
         Commands::McpProxy { name, command } => {
@@ -1518,12 +1563,16 @@ fn main() -> Result<()> {
         Commands::GenerateIgnores { path } => cmd_generate_ignores(&path),
     };
 
+    finish(res)
+}
+
+/// Single exit path: print the error and exit 1, or exit 0. Never returns.
+fn finish(res: Result<()>) -> ! {
     if let Err(ref e) = res {
         eprintln!("Error: {:?}", e);
         std::process::exit(1);
-    } else {
-        std::process::exit(0);
     }
+    std::process::exit(0);
 }
 
 fn set_env_default(key: &str, value: impl ToString) {
@@ -2067,26 +2116,35 @@ fn cmd_impact(
     depth: usize,
     limit: usize,
     format_str: &str,
-    output: &str,
+    output: Option<&str>,
     path: &Path,
 ) -> Result<()> {
     let conn = open_existing_index(path)?;
     let relations = store::graph_impact(&conn, symbol, depth, limit)?;
+    let title = format!("Impact graph for `{symbol}`");
+    // One policy for both formats: write only when `--output` is given, else
+    // print. Previously `html` always created `impact.html` (a file the user
+    // never asked for) while `mermaid` compared against that literal default and
+    // printed even when `--output impact.html` was passed explicitly.
     if format_str.eq_ignore_ascii_case("json") {
         println!("{}", serde_json::to_string_pretty(&relations)?);
     } else if format_str.eq_ignore_ascii_case("html") {
-        let html =
-            graph::export_relations_to_html(&relations, &format!("Impact graph for `{symbol}`"));
-        std::fs::write(output, html)?;
-        println!("{} HTML graph exported to {}", "ok".green(), output);
+        let html = graph::export_relations_to_html(&relations, &title);
+        match output {
+            Some(dest) => {
+                std::fs::write(dest, html)?;
+                println!("{} HTML graph exported to {}", "ok".green(), dest);
+            }
+            None => println!("{html}"),
+        }
     } else if format_str.eq_ignore_ascii_case("mermaid") {
-        let mermaid =
-            graph::format_relations_mermaid(&relations, &format!("Impact graph for `{symbol}`"));
-        if output != "impact.html" {
-            std::fs::write(output, &mermaid)?;
-            println!("{} Mermaid diagram exported to {}", "ok".green(), output);
-        } else {
-            println!("{}", mermaid);
+        let mermaid = graph::format_relations_mermaid(&relations, &title);
+        match output {
+            Some(dest) => {
+                std::fs::write(dest, &mermaid)?;
+                println!("{} Mermaid diagram exported to {}", "ok".green(), dest);
+            }
+            None => println!("{mermaid}"),
         }
     } else {
         println!(
@@ -3187,6 +3245,7 @@ fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
             install_copilot(local)?;
             install_codex()?;
             install_mcp_server()?;
+            install_opencode()?;
             install_antigravity(local)?;
         }
     }
@@ -3202,12 +3261,7 @@ fn install_claude_code(local: bool) -> Result<()> {
 
     let tokenix_bin = tokenix_bin_path()?;
 
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        let raw = std::fs::read_to_string(&settings_path)?;
-        serde_json::from_str(&raw).unwrap_or(serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
+    let mut settings: serde_json::Value = load_agent_config(&settings_path)?;
 
     ensure_hooks_object(&mut settings);
     let removed_legacy_auto_index = remove_legacy_claude_auto_index_hook(&mut settings);
@@ -3632,7 +3686,7 @@ exit 0
 
 #[cfg(windows)]
 fn install_codex_hooks_json_windows(hooks_path: &Path, hook_ps1_path: &Path) -> Result<()> {
-    let mut hooks = load_codex_hooks_json(hooks_path);
+    let mut hooks = load_codex_hooks_json(hooks_path)?;
     let command = format!(
         "powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
         hook_ps1_path.to_string_lossy().replace('\\', "/")
@@ -3650,7 +3704,7 @@ fn install_codex_hooks_json_windows(hooks_path: &Path, hook_ps1_path: &Path) -> 
 
 #[cfg(not(windows))]
 fn install_codex_hooks_json_unix(hooks_path: &Path, tokenix_bin: &str) -> Result<()> {
-    let mut hooks = load_codex_hooks_json(hooks_path);
+    let mut hooks = load_codex_hooks_json(hooks_path)?;
     upsert_codex_hook(
         &mut hooks["hooks"]["PreToolUse"],
         serde_json::json!({
@@ -3662,17 +3716,12 @@ fn install_codex_hooks_json_unix(hooks_path: &Path, tokenix_bin: &str) -> Result
     Ok(())
 }
 
-fn load_codex_hooks_json(hooks_path: &Path) -> serde_json::Value {
-    let mut hooks: serde_json::Value = if hooks_path.exists() {
-        let raw = std::fs::read_to_string(hooks_path).unwrap_or_default();
-        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
+fn load_codex_hooks_json(hooks_path: &Path) -> Result<serde_json::Value> {
+    let mut hooks = load_agent_config(hooks_path)?;
     if !hooks["hooks"].is_object() {
         hooks["hooks"] = serde_json::json!({});
     }
-    hooks
+    Ok(hooks)
 }
 
 fn upsert_codex_hook(slot: &mut serde_json::Value, hook: serde_json::Value) {
@@ -3705,6 +3754,7 @@ fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
             remove_copilot(local)?;
             remove_codex()?;
             remove_mcp_server()?;
+            remove_opencode()?;
             remove_antigravity(local)?;
         }
     }
@@ -3905,12 +3955,7 @@ fn install_mcp_server() -> Result<()> {
 
     let tokenix_bin = tokenix_bin_path()?;
 
-    let mut config: serde_json::Value = if config_path.exists() {
-        let raw = std::fs::read_to_string(&config_path)?;
-        serde_json::from_str(&raw).unwrap_or(serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
+    let mut config: serde_json::Value = load_agent_config(&config_path)?;
 
     if !config["mcpServers"].is_object() {
         config["mcpServers"] = serde_json::json!({});
@@ -4463,6 +4508,13 @@ fn help_catalog() -> String {
         ),
         ("pack", "", "Bundle focused context for hookless tools"),
         ("memory", "", "Store/list agent preference memory"),
+        ("deps", "<file>", "File-level import dependencies"),
+        ("graph", "", "Symbol-graph overview and hotspots"),
+        (
+            "retrieve",
+            "<key>",
+            "Print the raw output behind a compression marker",
+        ),
     ];
     let human: &[(&str, &str, &str)] = &[
         ("index", "[path]", "Index a repository for semantic search"),
@@ -4515,6 +4567,24 @@ fn help_catalog() -> String {
         ("artifacts", "", "Manage non-code context artifacts"),
         ("cycles", "", "Detect circular dependencies"),
         ("rebuild-graph", "", "Rebuild the symbol graph from chunks"),
+        ("usage", "", "Absolute token spend from agent transcripts"),
+        ("discover", "", "Find commands worth filtering in this repo"),
+        (
+            "trust / untrust",
+            "",
+            "Allow or revoke this repo's local filters",
+        ),
+        (
+            "mcp-proxy",
+            "-- <cmd>",
+            "Wrap an MCP server and compress its tool results",
+        ),
+        ("install-binary", "", "Install the tokenix binary on PATH"),
+        (
+            "generate-ignores",
+            "",
+            "Write .gitignore entries for tokenix artifacts",
+        ),
     ];
 
     let mut out = String::new();

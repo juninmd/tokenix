@@ -260,6 +260,16 @@ fn filter_defs_head(content: &str) -> Option<&str> {
     None
 }
 
+/// Number of `[filters.x]` tables declared anywhere in the file. Used to detect
+/// a head slice that cut before a later declaration; a line scan is enough
+/// because a `[filters.` at line start is always a table header in TOML.
+fn count_filter_tables(content: &str) -> usize {
+    content
+        .lines()
+        .filter(|l| l.trim_start().starts_with("[filters."))
+        .count()
+}
+
 fn parse_filter_file_named(content: &str) -> Vec<(String, FilterDef)> {
     // Fast path: parse only the definitions. Falls through to the full parse
     // when the head does not parse (a multi-line value containing a `[[tests`
@@ -268,7 +278,12 @@ fn parse_filter_file_named(content: &str) -> Vec<(String, FilterDef)> {
     // `[filters.x]` table and would have dropped it without any error.
     if let Some(head) = filter_defs_head(content) {
         if let Ok(f) = toml::from_str::<FilterFile>(head) {
-            if !f.filters.is_empty() {
+            // Enforce the guard the comment above promises. A `[filters.x]` table
+            // declared *after* a `[[tests]]` block leaves the head slice parsing
+            // cleanly while silently dropping `x`, so compare declaration counts
+            // first — a line scan, not a second full TOML parse, to keep the
+            // hot path cheap.
+            if !f.filters.is_empty() && count_filter_tables(content) == f.filters.len() {
                 return f.filters.into_iter().collect();
             }
         }
@@ -683,12 +698,23 @@ fn load_bundled_filters_matching(candidates: &[String]) -> Vec<FilterDef> {
 /// bundled filters that can match `cmd`. Drop-in replacement for
 /// `load_all_filters()` on the single-command hot path (hook rewrite,
 /// `tokenix run`), where the full bundled set is never needed.
-pub fn load_filters_for_command(cmd: &str) -> Vec<FilterDef> {
+/// Filters that can match `cmd`, kept in their source groups:
+/// `[local, user, bundled]`. `find_filter` resolves collisions by pattern
+/// length, which alone would let a long bundled pattern beat a user filter that
+/// was meant to override it — so precedence has to live in the grouping.
+pub fn load_filter_groups_for_command(cmd: &str) -> Vec<Vec<FilterDef>> {
     let candidates = prioritized_candidates(cmd);
-    let mut all = load_local_filters();
-    all.extend(load_user_filters_matching(&candidates));
-    all.extend(load_bundled_filters_matching(&candidates));
-    all
+    vec![
+        load_local_filters(),
+        load_user_filters_matching(&candidates),
+        load_bundled_filters_matching(&candidates),
+    ]
+}
+
+/// First group (local > user > bundled) that yields a match wins; within a
+/// group the longest — most specific — `match_command` still wins.
+pub fn find_filter_ranked<'a>(cmd: &str, groups: &'a [Vec<FilterDef>]) -> Option<&'a FilterDef> {
+    groups.iter().find_map(|g| find_filter(cmd, g))
 }
 
 /// First embedded `[[tests.<name>]].input` of one filter file, keyed by filter
@@ -858,7 +884,16 @@ fn cached_regex(pattern: &str) -> Option<Regex> {
     if let Some(hit) = cache.read().ok().and_then(|c| c.get(pattern).cloned()) {
         return hit;
     }
-    let compiled = Regex::new(pattern).ok();
+    let compiled = match Regex::new(pattern) {
+        Ok(re) => Some(re),
+        Err(e) => {
+            // Warn once per pattern (the cache makes this idempotent). A typo'd
+            // regex used to make the filter silently no-op with no diagnostic
+            // anywhere — the file loaded "successfully" and simply never worked.
+            eprintln!("tokenix: ignoring invalid filter regex {pattern:?}: {e}");
+            None
+        }
+    };
     if let Ok(mut c) = cache.write() {
         c.insert(pattern.to_string(), compiled.clone());
     }
@@ -1947,19 +1982,24 @@ pub fn apply_filter_with_exit(output: &str, f: &FilterDef, exit_ok: Option<bool>
     }
 
     // match_output short-circuits before any other transformation. These are
-    // success sentinels by convention — never fire them on a known failure.
-    if !failed {
+    // success sentinels by convention — never fire them on a known failure, and
+    // never on output carrying a generic failure signal either: `unless` is
+    // opt-in and only 30 of the bundled filters declare one, so it cannot be the
+    // only thing standing between a failed run and a "success" sentinel.
+    let signals_failure = failed || output_has_failure_signal(output);
+    if !signals_failure {
         for mo in &f.match_output {
             if let Some(re) = cached_regex(&mo.pattern) {
                 if re.is_match(output) {
                     // `unless` guard: do not short-circuit when the output also matches
                     // this pattern, so errors/warnings are never masked as success.
+                    // Fails closed — an unparseable `unless` skips the sentinel
+                    // rather than silently dropping the guard.
                     if let Some(unless) = &mo.unless {
-                        if cached_regex(unless)
-                            .map(|u| u.is_match(output))
-                            .unwrap_or(false)
-                        {
-                            continue;
+                        match cached_regex(unless) {
+                            Some(u) if u.is_match(output) => continue,
+                            None => continue,
+                            Some(_) => {}
                         }
                     }
                     return never_worse(output, mo.message.clone());
@@ -1978,7 +2018,7 @@ pub fn apply_filter_with_exit(output: &str, f: &FilterDef, exit_ok: Option<bool>
     // statement about the run. Evaluated on the ANSI-stripped text (these
     // tools colorize their per-item lines) and suppressed on a known failure
     // like every other success sentinel.
-    if !failed {
+    if !signals_failure {
         if let Some(uniform) = &f.uniform_success {
             if let Some(msg) = uniform_summary(&s, uniform) {
                 return never_worse(output, msg);
@@ -2082,7 +2122,10 @@ pub fn apply_filter_with_exit(output: &str, f: &FilterDef, exit_ok: Option<bool>
         //    tool's native error format would be masked as the success
         //    `on_empty` message — the same "never mask errors" rule the
         //    `match_output.unless` guard enforces.
-        let masks_failure = f.on_empty.is_some() && (failed || output_has_failure_signal(output));
+        // Not gated on `on_empty`: a filter whose keep/strip rules swallowed the
+        // error text leaves the agent with nothing at all, which is the same
+        // masking failure the sentinel guard exists to prevent.
+        let masks_failure = failed || output_has_failure_signal(output);
         if !output.trim().is_empty() && (f.passthrough_when_emptied || masks_failure) {
             let cap = f.max_lines.unwrap_or(40);
             let fallback: Vec<String> = s
@@ -2318,28 +2361,48 @@ fn apply_semantic_filter_with_embeddings(
         .filter_map(|p| cached_regex(p))
         .collect();
 
+    // Two passes so the embeddings go through `embed_documents` in ONE batch.
+    // Embedding line-by-line meant a round-trip per line (daemon hop or model
+    // call), multiplying latency on the hook path by the line count — and one
+    // failing line aborted the whole filter into the keyword fallback.
     let mut results = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    let mut slots: Vec<Option<usize>> = Vec::with_capacity(lines.len());
 
     for line in lines {
-        // Always keep lines matching always_keep patterns
         if always_keep_patterns.iter().any(|re| re.is_match(line)) {
+            slots.push(None);
             results.push(line.clone());
             continue;
         }
-
-        // Skip very short lines
         if line.trim().len() < 5 {
+            slots.push(None);
             continue;
         }
+        slots.push(Some(pending.len()));
+        pending.push(line.clone());
+    }
 
-        // Embed the line
-        let line_vec = embed_query(line)?;
+    if pending.is_empty() {
+        return Ok(results);
+    }
+    let vecs = crate::embed::embed_documents(&pending)?;
 
-        // Compute cosine similarity
-        let similarity = cosine_similarity(&query_vec, &line_vec);
-
-        if similarity >= semantic.threshold {
-            results.push(line.clone());
+    results.clear();
+    for (line, slot) in lines.iter().zip(slots) {
+        match slot {
+            None => {
+                if always_keep_patterns.iter().any(|re| re.is_match(line)) {
+                    results.push(line.clone());
+                }
+            }
+            Some(i) => {
+                if let Some(v) = vecs.get(i) {
+                    if cosine_similarity(&query_vec, v) >= semantic.threshold {
+                        results.push(line.clone());
+                    }
+                }
+            }
         }
     }
 
@@ -2398,39 +2461,52 @@ fn apply_summarize_json(lines: Vec<String>, summarize: &SummarizeJsonDef) -> Vec
         return lines;
     };
 
-    summarize_json_value(&mut value, summarize, 0);
+    summarize_json_value(&mut value, summarize, 0, "");
 
     let result = serde_json::to_string_pretty(&value).unwrap_or(content);
     result.lines().map(|l| l.to_string()).collect()
 }
 
-fn summarize_json_value(value: &mut serde_json::Value, summarize: &SummarizeJsonDef, depth: usize) {
+/// `parent` is the dotted path of the enclosing object (empty at the root), so
+/// `always_include`/`exclude` can address nested fields the way the field docs
+/// promise (`outer.inner`). Keying on the recursion depth instead produced
+/// paths like `1.inner`, which no configured value could ever match.
+fn summarize_json_value(
+    value: &mut serde_json::Value,
+    summarize: &SummarizeJsonDef,
+    depth: usize,
+    parent: &str,
+) {
     if depth >= summarize.max_depth {
         return;
     }
+    let path_of = |k: &str| {
+        if parent.is_empty() {
+            k.to_string()
+        } else {
+            format!("{parent}.{k}")
+        }
+    };
 
     match value {
         serde_json::Value::Object(map) => {
-            let keys_to_remove: Vec<String> =
-                map.keys()
-                    .filter(|k| {
-                        let path = if depth == 0 { k.as_str() } else { "" };
-                        summarize.exclude.iter().any(|ex| {
-                            k.as_str() == ex.as_str() || (depth == 0 && path == ex.as_str())
-                        })
-                    })
-                    .cloned()
-                    .collect();
+            let keys_to_remove: Vec<String> = map
+                .keys()
+                .filter(|k| {
+                    let full = path_of(k);
+                    summarize
+                        .exclude
+                        .iter()
+                        .any(|ex| k.as_str() == ex.as_str() || &full == ex)
+                })
+                .cloned()
+                .collect();
             for k in keys_to_remove {
                 map.remove(&k);
             }
 
             for (k, v) in map.iter_mut() {
-                let full_path = if depth == 0 {
-                    k.clone()
-                } else {
-                    format!("{}.{}", depth, k)
-                };
+                let full_path = path_of(k);
                 if summarize
                     .always_include
                     .iter()
@@ -2438,7 +2514,7 @@ fn summarize_json_value(value: &mut serde_json::Value, summarize: &SummarizeJson
                 {
                     continue;
                 }
-                summarize_json_value(v, summarize, depth + 1);
+                summarize_json_value(v, summarize, depth + 1, &full_path);
             }
         }
         serde_json::Value::Array(arr) => {
@@ -2451,7 +2527,7 @@ fn summarize_json_value(value: &mut serde_json::Value, summarize: &SummarizeJson
                 )));
             }
             for item in arr.iter_mut() {
-                summarize_json_value(item, summarize, depth + 1);
+                summarize_json_value(item, summarize, depth + 1, parent);
             }
         }
         _ => {}
@@ -3215,7 +3291,7 @@ expected = \"\"
             // against every bundled filter's own literal, not just scenarios.
             prefilter_probe_commands(),
         ) {
-            let lazy = load_filters_for_command(&cmd);
+            let lazy = load_filter_groups_for_command(&cmd).concat();
             let full = find_filter(&cmd, &all).map(|f| f.match_command.clone());
             let subset = find_filter(&cmd, &lazy).map(|f| f.match_command.clone());
             assert_eq!(full, subset, "lazy load diverged for {cmd:?}");
@@ -3642,6 +3718,58 @@ expected = \"\"
 
     /// Minimal `FilterDef` with everything off — scenario tests flip only the
     /// one field under test instead of repeating the full struct literal.
+    #[test]
+    fn head_fast_path_keeps_filter_declared_after_a_tests_block() {
+        // Regression: the head slice cut at the first `[[tests` and returned
+        // early, silently dropping `second`.
+        let content = r#"
+[filters.first]
+match_command = "^first\\b"
+
+[[tests.first]]
+input = "x"
+expect = "x"
+
+[filters.second]
+match_command = "^second\\b"
+"#;
+        let names: Vec<String> = parse_filter_file_named(content)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert!(names.contains(&"second".to_string()), "got {names:?}");
+    }
+
+    #[test]
+    fn match_output_does_not_mask_a_failing_run() {
+        // Regression: the sentinel fired on any output containing the success
+        // marker, with the opt-in `unless` as the only guard.
+        let mut f = base_filter();
+        f.match_output = vec![MatchOutput {
+            pattern: "no leaks found".to_string(),
+            message: "gitleaks: no leaks found".to_string(),
+            unless: None,
+        }];
+        let failing = "no leaks found\nerror: failed to push some refs";
+        let out = apply_filter(failing, &f);
+        assert!(
+            out.contains("error"),
+            "failure text must survive, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn unparseable_unless_fails_closed() {
+        let mut f = base_filter();
+        f.match_output = vec![MatchOutput {
+            pattern: "done".to_string(),
+            message: "ok".to_string(),
+            unless: Some("(?i".to_string()), // never compiles
+        }];
+        let out = apply_filter("done", &f);
+        assert_ne!(out, "ok", "a broken guard must not enable the sentinel");
+    }
+
     fn base_filter() -> FilterDef {
         FilterDef {
             description: None,

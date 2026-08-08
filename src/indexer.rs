@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -477,9 +477,7 @@ where
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
-    let new_embeddings = if embed_jobs.is_empty() {
-        vec![]
-    } else {
+    if !embed_jobs.is_empty() {
         let cached_hits = candidate_count.saturating_sub(embed_jobs.len());
         // A leftover checkpoint means the previous run died mid-embed. Its
         // completed batches were committed to the embedding cache per batch,
@@ -503,7 +501,6 @@ where
                 .unwrap()
                 .progress_chars("=>-"),
         );
-        let mut all: Vec<Vec<f32>> = Vec::with_capacity(embed_jobs.len());
         let total_batches = embed_jobs.len().div_ceil(embed_batch);
         for (batch_idx, batch) in embed_jobs.chunks(embed_batch).enumerate() {
             embed_pb.set_message(format!("batch {}/{}", batch_idx + 1, total_batches));
@@ -525,7 +522,15 @@ where
                 upsert_embedding_cache(&conn, &job.cache_key, embedding)?;
             }
             conn.execute_batch("COMMIT")?;
-            all.extend(batch_embs);
+            // Move each vector straight into its file slot. Accumulating the
+            // whole repo's embeddings here and cloning them again in a later
+            // pass held two full copies in RAM at once — the batch knob caps
+            // the ONNX buffers, not that.
+            for (job, embedding) in batch.iter().zip(batch_embs) {
+                if let Some(file_embs) = file_embeddings.get_mut(&job.file_idx) {
+                    file_embs[job.chunk_idx] = Some(embedding);
+                }
+            }
             embed_pb.inc(batch.len() as u64);
             save_checkpoint(&conn, "embed", batch_idx + 1)?;
             if embed_sleep > 0 && batch_idx + 1 < total_batches {
@@ -533,15 +538,6 @@ where
             }
         }
         embed_pb.finish_and_clear();
-        all
-    };
-
-    // Phase 4: pair new embeddings back with files (cache was already updated
-    // per batch in Phase 3 for crash durability).
-    for (job, embedding) in embed_jobs.iter().zip(new_embeddings.iter()) {
-        if let Some(file_embs) = file_embeddings.get_mut(&job.file_idx) {
-            file_embs[job.chunk_idx] = Some(embedding.clone());
-        }
     }
 
     // Phase 5: write to SQLite in a single transaction
@@ -549,7 +545,11 @@ where
     let mut skipped = 0usize;
     let mut errors = 0usize;
 
-    let _ = conn.execute_batch("BEGIN IMMEDIATE");
+    // Surface transaction failures instead of swallowing them: a failed BEGIN
+    // means every write below runs in autocommit, and a failed COMMIT means the
+    // whole phase was rolled back while the run still reported success.
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .context("failed to open the index write transaction")?;
     for (fi, f) in chunked.iter().enumerate() {
         if f.skipped {
             skipped += 1;
@@ -573,7 +573,14 @@ where
             }
         };
 
-        let _ = delete_chunks_for_file(&conn, file_id);
+        // Skip the re-insert if the old rows could not be cleared: inserting on
+        // top of them leaves duplicate chunks and orphaned graph edges in the
+        // index (FK cascades are not enabled), which is worse than a stale file.
+        if let Err(e) = delete_chunks_for_file(&conn, file_id) {
+            errors += 1;
+            progress_cb(&format!("ERR {}: could not clear old chunks: {e}", f.rel));
+            continue;
+        }
 
         for (ci, chunk) in f.chunks.iter().enumerate() {
             let chunk_id = match insert_chunk(
@@ -599,7 +606,16 @@ where
 
         indexed += 1;
     }
-    let _ = conn.execute_batch("COMMIT");
+    conn.execute_batch("COMMIT")
+        .context("failed to commit the index write transaction")?;
+
+    // Bound the embedding cache: entries older than this were never referenced
+    // by any run in that window, so keeping them only grows the DB.
+    const EMBED_CACHE_MAX_AGE_DAYS: f64 = 90.0;
+    match crate::store::prune_embedding_cache(&conn, EMBED_CACHE_MAX_AGE_DAYS) {
+        Ok(n) if n > 0 => progress_cb(&format!("pruned {n} stale embedding cache entr(ies)")),
+        _ => {}
+    }
 
     // Phase 6: clean up removed files from index
     let mut removed = false;

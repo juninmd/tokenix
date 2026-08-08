@@ -33,7 +33,24 @@ pub fn load_artifacts(repo_root: &Path) -> Result<ArtifactsConfig> {
 }
 
 pub fn read_artifact_content(repo_root: &Path, entry: &ArtifactEntry) -> Result<String> {
-    let path = repo_root.join(&entry.path);
+    // `artifacts.json` is repo data, so its `path` is untrusted input: an
+    // absolute path or `..` chain would read anything the process can open.
+    let rel = Path::new(&entry.path);
+    if rel.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::Prefix(_)
+                | std::path::Component::RootDir
+        )
+    }) {
+        anyhow::bail!(
+            "artifact '{}' has path {:?} — artifact paths must stay inside the repository",
+            entry.name,
+            entry.path
+        );
+    }
+    let path = repo_root.join(rel);
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read artifact file at {}", path.display()))?;
     Ok(content)

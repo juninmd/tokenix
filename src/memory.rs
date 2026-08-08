@@ -128,16 +128,17 @@ pub fn edit_preference(
 }
 
 pub fn preferences_for_context(repo_root: &Path, task: &str, max_items: usize) -> Result<String> {
+    // Read BOTH scopes, project first. The old loop broke out as soon as the
+    // global file alone filled `max_items`, so a user with 8+ global preferences
+    // never had their repo-specific rules read at all — the most relevant scope
+    // was the one systematically dropped.
     let mut lines = Vec::new();
     for path in [
-        global_preferences_path()?,
         project_preferences_path(repo_root)?,
+        global_preferences_path()?,
     ] {
         let content = fs::read_to_string(path).unwrap_or_default();
         lines.extend(extract_preference_lines(&content));
-        if lines.len() >= max_items {
-            break;
-        }
     }
     // Rank by embedding similarity to the task; fall back to keyword scoring when
     // the model is unavailable (e.g. not downloaded yet) so memory still works.

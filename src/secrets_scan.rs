@@ -259,7 +259,10 @@ fn scan_content(content: &str, rules: &[Rule]) -> Vec<RawMatch> {
                     continue;
                 }
                 let redacted = redact(secret);
-                if seen.insert((idx + 1, redacted.clone())) {
+                // Dedup on the full secret, not its redacted preview: two
+                // distinct live credentials sharing a prefix/suffix collapse to
+                // one finding and the second is never reported.
+                if seen.insert((idx + 1, secret.to_string())) {
                     line_hits.push(RawMatch {
                         line: idx + 1,
                         rule: rule.id.clone(),
@@ -706,6 +709,70 @@ pub fn scan_findings() -> (Vec<ScanFinding>, Vec<(String, usize)>) {
 /// rewriting text files in place. SQLite databases are skipped — a raw byte edit
 /// would corrupt them — so those must be cleared by the owning tool (or the
 /// credential rotated). Returns `(files_edited, files_skipped)`.
+/// Replace `secret` with `[REDACTED]`, expanding PEM headers to the whole block.
+/// The `private-key-block` rule matches only the `-----BEGIN … PRIVATE KEY-----`
+/// line, so a plain substring replace leaves the base64 key body in the file
+/// while the re-scan — which looks for the BEGIN marker — reports it clean.
+fn redact_occurrences(content: &str, secret: &str) -> String {
+    if !(secret.trim_start().starts_with("-----BEGIN") && secret.contains("PRIVATE KEY")) {
+        // Boundary-anchored replace. A blind substring replace rewrote every
+        // occurrence anywhere, so a short generic secret that also appears
+        // inside an identifier or log line mangled unrelated text in the very
+        // file this routine reports as safely "redacted".
+        return replace_at_boundaries(content, secret);
+    }
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(idx) = rest.find(secret) {
+        out.push_str(&rest[..idx]);
+        out.push_str("[REDACTED]");
+        let after = &rest[idx + secret.len()..];
+        rest = match after.find("-----END") {
+            Some(e) => {
+                let tail = &after[e + "-----END".len()..];
+                match tail.find("-----") {
+                    Some(t) => &tail[t + "-----".len()..],
+                    None => "",
+                }
+            }
+            None => after,
+        };
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Replace `needle` only where it is not glued to an adjacent identifier
+/// character on either side — i.e. the same "whole token" notion `\b` gives,
+/// extended so `-`/`.`-bearing secrets still match.
+fn replace_at_boundaries(content: &str, needle: &str) -> String {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let bytes = content.as_bytes();
+    let mut out = String::with_capacity(content.len());
+    let mut cursor = 0usize;
+    while let Some(rel) = content[cursor..].find(needle) {
+        let start = cursor + rel;
+        let end = start + needle.len();
+        let before_ok = content[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_ident(c));
+        let after_ok = content[end..].chars().next().is_none_or(|c| !is_ident(c));
+        out.push_str(&content[cursor..start]);
+        if before_ok && after_ok {
+            out.push_str("[REDACTED]");
+        } else {
+            out.push_str(&content[start..end]);
+        }
+        cursor = end;
+        if cursor >= bytes.len() {
+            break;
+        }
+    }
+    out.push_str(&content[cursor..]);
+    out
+}
+
 pub fn redact_in_files(secret: &str, paths: &[PathBuf]) -> (usize, usize) {
     let mut edited = 0;
     let mut skipped = 0;
@@ -725,7 +792,7 @@ pub fn redact_in_files(secret: &str, paths: &[PathBuf]) -> (usize, usize) {
         }
         match std::fs::read_to_string(path) {
             Ok(content) if content.contains(secret) => {
-                let replaced = content.replace(secret, "[REDACTED]");
+                let replaced = redact_occurrences(&content, secret);
                 if std::fs::write(path, replaced).is_ok() {
                     edited += 1;
                 } else {
@@ -866,7 +933,9 @@ pub fn run(opts: Options) -> Result<usize> {
         }
         GroupMode::Value => {
             // One block per distinct secret, with its occurrence locations.
-            let groups = group_by(&findings, |f| format!("{}\u{1}{}", f.rule, f.redacted));
+            // Keyed on the real value — the redacted preview keeps only a few
+            // characters, so distinct credentials would merge into one block.
+            let groups = group_by(&findings, |f| format!("{}\u{1}{}", f.rule, f.secret));
             for (_, members) in &groups {
                 let first = members[0];
                 let mut agents: Vec<&str> = members.iter().map(|m| m.agent).collect();
@@ -972,6 +1041,40 @@ pub fn run(opts: Options) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pem_redaction_removes_the_key_body_not_just_the_marker() {
+        // Regression: the rule matches only the BEGIN line, so a plain replace
+        // left the base64 body behind while the re-scan reported a clean file.
+        //
+        // The markers are assembled at runtime on purpose: spelling either one
+        // out as a literal makes gitleaks flag this fixture as a committed key.
+        let kind = "RSA";
+        let begin = format!("-----BEGIN {kind} PRIVATE KEY-----");
+        let end = format!("-----END {kind} PRIVATE KEY-----");
+        let body = "MIIEowIBAAKCAQEAsecret";
+        let content = format!("prefix\n{begin}\n{body}\n{end}\nsuffix");
+        let out = redact_occurrences(&content, &begin);
+        assert!(!out.contains(body), "key body survived: {out}");
+        assert!(!out.contains(&end));
+        assert!(out.contains("prefix") && out.contains("suffix"));
+        assert!(out.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn non_pem_redaction_is_a_plain_replace() {
+        let out = redact_occurrences("token=abc123 end", "abc123");
+        assert_eq!(out, "token=[REDACTED] end");
+    }
+
+    #[test]
+    fn redaction_does_not_mangle_text_that_merely_contains_the_secret() {
+        // Regression: a blind substring replace also rewrote the occurrence
+        // glued inside an identifier, corrupting unrelated content in the file
+        // it then reported as safely redacted.
+        let out = redact_occurrences("key=s3cret and fn s3cretHandler()", "s3cret");
+        assert_eq!(out, "key=[REDACTED] and fn s3cretHandler()");
+    }
 
     fn finding(agent: &'static str, rule: &str, redacted: &str) -> Finding {
         Finding {
