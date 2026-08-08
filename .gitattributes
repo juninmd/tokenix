@@ -1,0 +1,20 @@
+# Check every text file out with LF, on every platform.
+#
+# The bundled filter corpus (assets/filters/*.toml) carries byte-exact golden
+# cases: each `expect` string is compared verbatim against filter output built
+# from `\n`. A Windows checkout with autocrlf rewrote those assets to CRLF, so
+# all 526 golden cases failed on the windows-latest CI leg while passing on
+# Linux — a checkout artifact, not a product bug, but one that makes the corpus
+# untestable on Windows.
+* text=auto eol=lf
+
+# Binary assets must never be touched by line-ending normalization.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.onnx binary
