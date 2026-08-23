@@ -1003,6 +1003,34 @@ fn is_keyword(name: &str) -> bool {
     KEYWORDS.iter().any(|kw| kw.eq_ignore_ascii_case(name))
 }
 
+/// Escape text destined for HTML *element* content. Symbol names and paths reach
+/// this file from the repository, so a name containing `<` must not become markup.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Serialize for embedding inside a `<script>` block. JSON escaping alone is not
+/// enough: `serde_json` leaves `/` untouched, so a path or symbol containing
+/// `</script>` would close the block and everything after it would be parsed as
+/// HTML. Escaping the slash keeps the value identical to JavaScript while making
+/// the sequence unrepresentable.
+fn script_safe_json(value: &[serde_json::Value]) -> String {
+    serde_json::to_string_pretty(value)
+        .unwrap_or_else(|_| "[]".to_string())
+        .replace("</", "<\\/")
+}
+
 pub fn export_relations_to_html(relations: &[GraphRelation], title: &str) -> String {
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
@@ -1049,15 +1077,24 @@ pub fn export_relations_to_html(relations: &[GraphRelation], title: &str) -> Str
         }));
     }
 
-    let nodes_json = serde_json::to_string_pretty(&nodes).unwrap_or_else(|_| "[]".to_string());
-    let edges_json = serde_json::to_string_pretty(&edges).unwrap_or_else(|_| "[]".to_string());
+    let nodes_json = script_safe_json(&nodes);
+    let edges_json = script_safe_json(&edges);
+    let title = html_escape(title);
 
     format!(
         r#"<!DOCTYPE html>
 <html>
 <head>
     <title>Tokenix Impact Graph - {}</title>
-    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <!-- Version-pinned with an SRI digest: the unversioned URL resolved to
+         whatever unpkg served at open time, so a compromised or breaking
+         upstream release executed here with no way to notice. `integrity`
+         makes the browser refuse a modified file. -->
+    <script type="text/javascript"
+            src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"
+            integrity="sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ"
+            crossorigin="anonymous"
+            referrerpolicy="no-referrer"></script>
     <style type="text/css">
         body {{
             background-color: #0f172a;
@@ -1093,6 +1130,15 @@ pub fn export_relations_to_html(relations: &[GraphRelation], title: &str) -> Str
     </div>
     <div id="network"></div>
     <script type="text/javascript">
+        // The renderer is a remote script: offline, or on an integrity mismatch,
+        // it simply never defines `vis` and the page would be blank with no
+        // explanation. Say so instead.
+        if (typeof vis === 'undefined') {{
+            document.getElementById('network').textContent =
+                'vis-network could not be loaded (offline, blocked, or integrity mismatch). ' +
+                'The graph data is in the page source.';
+            throw new Error('vis-network unavailable');
+        }}
         var nodes = new vis.DataSet({});
         var edges = new vis.DataSet({});
         var container = document.getElementById('network');
@@ -1408,6 +1454,36 @@ mod tests {
     use super::*;
     use crate::store::{init_schema, insert_chunk, upsert_file, NewChunk};
     use rusqlite::Connection;
+
+    #[test]
+    fn exported_html_escapes_the_title() {
+        // The impact target is user input and reaches both <title> and <h1>.
+        let html = export_relations_to_html(&[], "<img src=x onerror=alert(1)>");
+        assert!(
+            !html.contains("<img src=x"),
+            "raw markup reached the document"
+        );
+        assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    }
+
+    #[test]
+    fn embedded_json_cannot_close_the_script_block() {
+        // A path or symbol containing `</script>` would end the block and let the
+        // remainder be parsed as HTML. serde_json does not escape `/`, so we do.
+        let payload = vec![serde_json::json!({ "label": "a</script><b>" })];
+        let json = script_safe_json(&payload);
+        assert!(!json.contains("</script>"), "{json}");
+        assert!(json.contains("<\\/script>"), "{json}");
+    }
+
+    #[test]
+    fn html_escape_covers_the_five_significant_characters() {
+        assert_eq!(
+            html_escape(r#"&<>"'"#),
+            "&amp;&lt;&gt;&quot;&#39;",
+            "ampersand must be escaped first or the others double-encode"
+        );
+    }
 
     #[test]
     fn incremental_update_matches_full_rebuild() {

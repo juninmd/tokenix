@@ -9,10 +9,19 @@ User-facing docs live in `README.md`; this file is the engineering contract.
 
 ```bash
 cargo build --release
-cargo test --bin tokenix          # 379 unit + golden tests
+cargo test --bin tokenix          # 411 unit + golden tests (427 with the e2e targets)
 cargo fmt --check                 # CI runs fmt FIRST — run it before pushing
 cargo clippy --bin tokenix --all-features
 ```
+
+MSRV is `1.88` (`rust-version` in Cargo.toml). The floor is not cosmetic:
+`Command` only quotes arguments safely for Windows `.cmd`/`.bat` shims from
+1.77.2 on (CVE-2024-24576), and `cmd_filter` spawns exactly those shims with
+repo-controlled argv.
+
+Model-gated tests (`--features model-tests`: ONNX inference, query cache,
+retrieval hit-rate eval) are **not** part of `cargo test`. `deep-verify.yml` runs
+them weekly and on demand — that is the only place they execute.
 
 ## Key files
 
@@ -37,8 +46,15 @@ cargo clippy --bin tokenix --all-features
 | `secrets_scan.rs` / `egress_scan.rs` | Transcript forensics — credentials and outbound destinations |
 | `discover.rs` | Replays current filters over historical agent output |
 | `transcripts.rs` | Per-agent history roots and parsers |
+| `conversation_audit.rs` | `conversation-audit` + `redact_credentials()` — the single credential masker every persisted view goes through |
+| `recordings.rs` | `filter record` sessions — captures raw output for filter authoring |
+| `memory.rs` | Cross-session notes surfaced back into context |
+| `benchmark.rs` | Retrieval benchmark harness (`tokenix benchmark`) |
+| `doctor.rs` | Environment diagnosis — GPU/EP probe, cache sizes, daemon reachability |
+| `artifacts.rs` | Reads build artifacts referenced by agent output |
+| `docshot.rs` | `#[cfg(test)]` only — renders README screenshots as SVG, never ships in the binary |
 | `tui.rs` | Ratatui shell — the only human interface |
-| `daemon.rs` | Background embedding server, port 47392 |
+| `daemon.rs` | Background embedding server, port 47392, capability-token authenticated |
 
 ## SQLite schema
 
@@ -116,10 +132,24 @@ formatting stripped. Truncated previews are forbidden.
 
 **Never break hook fallback.** `run_hook()` must `exit(0)` on any error — missing
 index, stale index, parse failure, embed error. Breaking a session is worse than
-missing a saving.
+missing a saving. This covers **panics too**: `main::guard_hook` wraps every hook
+entry point in `catch_unwind`, because an unwind used to exit 101 (and skip
+Antigravity's `decision:allow`), which is the one outcome the contract exists to
+prevent. The MCP server has the same guard per `tools/call`
+(`mcp::call_tool_guarded`) — one bad request must not take the session's server
+down with it.
 
 **Hook exit codes:** `0` = pass through · `2` = block tool (stderr becomes the
 agent's context). Never exit `1`.
+
+**Nothing persisted carries a raw credential.** `store::log_hook_event`
+(`command`, `input_preview`) and the failure tee run through
+`conversation_audit::redact_credentials` before writing; `~/.tokenix` files and
+directories are created `0600`/`0700` (`store::restrict_to_owner`, no-op on
+Windows). The one exception is `recall`'s blobs: `retrieve` promises the exact
+original bytes and `find_identical` verifies against them, so those are protected
+by permissions only. Add a masking rule in **one** place — `redact_credentials`
+— and every writer inherits it.
 
 **Never mask a failure.** Non-zero exit suppresses success sentinels
 (`match_output`, `on_empty`). A filter that can empty a failure payload must keep
@@ -147,6 +177,15 @@ extensions and breaks traversal.
 **Daemon is optional.** If `tokenix serve` is not running, `handle_grep()`
 autostarts it and retries once (800 ms), then falls back to in-process embed.
 
+**The daemon socket is authenticated.** `serve` writes a fresh 32-hex capability
+token to `~/.tokenix/daemon.token` (`0600`) before it binds, and every `search`
+request must present it. `127.0.0.1` is not access control: on a shared host any
+local account can reach the port, and `search` returns indexed *source* for any
+`project_root` the caller names. A missing or stale token is rejected, and the
+client degrades exactly as it does for an unreachable daemon (in-process embed).
+`health`/`status` stay open — they carry no repository content. `serve` refuses to
+start if it cannot write the token; never add an unauthenticated fallback.
+
 **Cross-platform paths:** `tokenix_bin_path()` normalizes to forward slashes for
 shell/JSON config strings.
 
@@ -161,6 +200,20 @@ measurement. Published work found token reduction and provider-billed cost are
 close to uncorrelated (r = 0.15) because cache traffic dominates a real bill. Do
 not add a savings-in-dollars headline until cache-aware accounting lands. See
 `docs/research/2026-08-token-economy.md`.
+
+**`gain`'s denominator includes the runs that saved nothing.** Every command that
+goes through `tokenix run` is logged — `action="intercepted"` when it shrank,
+`action="pass"` when it did not — and `pct_saved` divides by both. Logging only
+the wins made the headline "how much do we save when we save", a number that
+cannot go down. Never reintroduce a `if saved > 0` guard around `log_hook_event`.
+
+**`gain` reports session shape alongside tokens.** `gain::session_stats`
+sessionizes the hook log by time gaps (no session id is stored) and reports
+sessions, mean calls/session, and within-session re-requests of the same
+tool+subject — the measurable share of the "+13.8% turns" mechanism by which
+compression savings invert (arXiv 2607.12161). These are diagnostics: without a
+holdout control group no causal Δturns claim is possible, so `SessionStats` must
+stay descriptive and never feed a headline number.
 
 **Keep docs in sync.** Every new or changed user-facing feature MUST update both
 `README.md` (Commands, and any affected section) and this file in the same change.
@@ -189,8 +242,10 @@ passthrough only takes over when filtering emptied *non-empty* output.
 
 Repo-local filters are trust-gated (`tokenix trust`, SHA-256 in
 `~/.tokenix/trusted_filters.json`) and skipped until approved. Failed commands
-with clipped output tee raw text to `~/.tokenix/tee/` with a `[full output: path]`
-hint (`TOKENIX_TEE=0` disables). `TOKENIX_DISABLED=1` bypasses the hook for one
+with clipped output tee raw text to `~/.tokenix/tee/` with a
+`[full output (credentials masked): path]` hint (`TOKENIX_TEE=0` disables). The
+hint says "masked" on purpose — the file is redacted, so the agent must not read a
+`[REDACTED]` as the literal value. `TOKENIX_DISABLED=1` bypasses the hook for one
 command (logged as `action="bypassed"`).
 
 **Adding a filter:** create `assets/filters/<slug>.toml` with **≥2 embedded
@@ -226,6 +281,21 @@ from a `[tokenix: ...]` marker in the compressed output. Re-read suppression use
 **exact hashes only** — fuzzy/similarity dedup is refused on purpose, because
 hiding *altered* output makes the agent act on a reality that no longer exists.
 
+The key is advertised on the **first** clipped run, not only on a later dedup hit:
+a successful command that dropped ≥ `RECOVERY_HINT_MIN_DROPPED_BYTES` (500) gets
+`[tokenix: N bytes not shown — tokenix retrieve <key> ...]` appended. Before that,
+the raw blob was stashed and the key thrown away, so the single output most worth
+recovering — a big first result the caps just trimmed — had no way back except
+re-running the command. Failures take the tee path instead.
+
+Cross-call dedup is scoped to the **project** and to `TOKENIX_DEDUP_TTL`
+(default 3600 s, `recall::reusable`). The index lives in `~/.tokenix` and outlives
+both the session and the checkout, and the marker claims the output "is already in
+this conversation" — a hit from another repository, or from yesterday, cannot
+honour that. Entries written before scoping existed deserialize with an empty
+`project` and therefore never match. Re-read suppression keeps its own 900 s TTL
+(`TOKENIX_READ_DEDUP_TTL`).
+
 ## One interface
 
 A bare `tokenix` or any human report command on a TTY opens the ratatui shell on
@@ -245,10 +315,14 @@ per-grammar identifier node kinds (`constant` Ruby, `name` PHP,
 `simple_identifier` Kotlin/Swift) in `find_first_identifier`.
 
 **New embedding model:** append a `ModelSpec` to `embed.rs::MODELS`. Built-in uses
-`ModelSource::BuiltIn`; custom uses `ModelSource::Custom { hf_repo, onnx_file, pooling }`
-(downloaded to `<model_cache>/custom/<id>/`). The active model is **stamped in the
-index `meta`** and read back by query/hook/daemon, so vectors always match. It is
-sticky across re-indexes; an explicit switch forces a full re-embed. Cache keys are
+`ModelSource::BuiltIn`; custom uses
+`ModelSource::Custom { hf_repo, revision, onnx_file, pooling }` (downloaded to
+`<model_cache>/custom/<id>/`). `revision` must be a **commit SHA, never a branch**:
+`resolve/main` let the same tokenix build load different weights on two machines
+with no signal, while a commit is content-addressed — which is why there is no
+separate digest list to maintain. The active model is **stamped in the index
+`meta`** and read back by query/hook/daemon, so vectors always match. It is sticky
+across re-indexes; an explicit switch forces a full re-embed. Cache keys are
 namespaced by model id.
 
 **New secret rule:** `assets/secret-rules/*.toml`, `[[rules]]` with `id`,
@@ -268,9 +342,36 @@ echo '{"toolName":"view","toolArgs":"{\"path\":\"src/main.rs\"}"}' | tokenix hoo
 tokenix gain --history
 ```
 
+## Project config
+
+`.tokenix.toml` (or `tokenix.toml`) at the project root, `[hook]` and `[index]`
+sections. Both are `deny_unknown_fields`, and a parse error is reported on stderr
+instead of silently falling back to defaults — the previous `.ok()` swallow left
+users convinced a misspelled `read_min_lines` was active. A bad config still
+degrades to defaults rather than failing the hook.
+
+## CI topology
+
+| Workflow | Trigger | Gate? |
+|---|---|---|
+| `rust.yml` | push/PR | fmt + clippy (Linux), `cargo test` on **Linux + Windows** |
+| `homologation.yml` | push/PR | release build, CLI smoke, hook/Copilot scripts, aarch64 sanity |
+| `supply-chain.yml` | push/PR + weekly | cargo-deny, zizmor, install-path egress audit |
+| `security.yml` | push to main | gitleaks (reusable workflow, SHA-pinned) |
+| `release.yml` | push to main | CI gate on **Linux + Windows**, then bump → build → attest → release → crates.io |
+| `deep-verify.yml` | weekly + dispatch | `--features model-tests`; filter reports as artifacts (not a gate) |
+| `scorecard.yml` / `release-drafter.yml` / `cflite_pr.yml` | — | posture, notes, fuzzing |
+
+The release CI gate runs the Windows leg too. It did not, and `release.yml` fires
+independently of `rust.yml`, so a Windows-only failure still shipped binaries —
+on the platform where the PowerShell rewriting, cmd quoting and `C:\` handling are
+the only code paths that execute.
+
 ## Release
 
 `feat:` / `fix:` / `perf:` on `main` auto-cuts a public GitHub release and bumps
-`Cargo.toml`. Use `test:` / `ci:` / `chore:` to avoid one. CI runs `cargo fmt`
-first, so an unformatted push fails before anything else. Never quote GitHub's
-auto-skip phrase in a commit body — it skips every workflow.
+`Cargo.toml`. Use `test:` / `ci:` / `chore:` to avoid one. The type prefix is read
+from the commit **subject** only (`%s`); the body (`%b`) is scanned solely for
+`BREAKING CHANGE:`, so quoting "fix: …" inside a body no longer cuts a release.
+CI runs `cargo fmt` first, so an unformatted push fails before anything else. Never
+quote GitHub's auto-skip phrase in a commit body — it skips every workflow.

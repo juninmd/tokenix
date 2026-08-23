@@ -521,7 +521,7 @@ pub fn run_mcp_server(profile: McpProfile) -> Result<()> {
                     let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
                     let tool_args = params.get("arguments").cloned().unwrap_or(Value::Null);
 
-                    match handle_tool_call(tool_name, tool_args) {
+                    match call_tool_guarded(tool_name, tool_args) {
                         Ok(text) => {
                             json!({
                                 "jsonrpc": "2.0",
@@ -573,6 +573,24 @@ pub fn run_mcp_server(profile: McpProfile) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// `handle_tool_call` behind a panic guard. A panic anywhere below this point —
+/// a slice out of range in a chunker grammar arm, an arithmetic overflow, a
+/// regex assertion — used to unwind out of the stdio loop and kill the server,
+/// taking every subsequent tool call in the session with it. One bad request is
+/// now one `isError` response.
+fn call_tool_guarded(name: &str, args: Value) -> Result<String> {
+    let name_owned = name.to_string();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        handle_tool_call(&name_owned, args)
+    })) {
+        Ok(result) => result,
+        Err(_) => Err(anyhow!(
+            "internal error: tool '{name}' panicked (the server stayed up; \
+             please report this input)"
+        )),
+    }
 }
 
 fn handle_tool_call(name: &str, args: Value) -> Result<String> {

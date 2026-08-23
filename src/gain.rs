@@ -203,6 +203,66 @@ pub struct GainStats {
     pub indexed_queries: usize,
     /// Commands that skipped filtering via the TOKENIX_DISABLED escape hatch.
     pub bypassed: usize,
+    /// Per-session hook-call shape: sessions, mean/max calls per session, and
+    /// within-session re-requests of the same tool+subject.
+    pub sessions: SessionStats,
+}
+
+/// Hook calls per session and within-session re-requests — the measurable share
+/// of the "+13.8% turns" mechanism by which compression savings invert
+/// (arXiv 2607.12161): a compressed observation can make the agent re-request
+/// the same file or command, adding turns instead of saving them. Sessions are
+/// inferred from time gaps in the hook log (no session id is stored);
+/// `re_requests` counts a (tool, subject) pair requested more than once in one
+/// session, where `subject` is the parsed command for Bash and the file path
+/// for Read/Grep. This is a diagnostic, not a causal Δ: without a holdout
+/// control group no claim of a *caused* turn change is possible.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SessionStats {
+    pub sessions: usize,
+    pub calls_per_session: f64,
+    pub calls_per_session_max: usize,
+    pub re_requests: usize,
+}
+
+/// A gap longer than this between consecutive hook events starts a new session.
+const SESSION_GAP_SECS: f64 = 30.0 * 60.0;
+
+pub fn session_stats(events: &[HookEvent]) -> SessionStats {
+    let mut sorted: Vec<&HookEvent> = events.iter().collect();
+    sorted.sort_by(|a, b| a.ts.total_cmp(&b.ts));
+    let mut stats = SessionStats::default();
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut cur = 0usize;
+    let mut prev_ts: Option<f64> = None;
+    for e in &sorted {
+        if prev_ts.is_some_and(|p| e.ts - p > SESSION_GAP_SECS) {
+            stats.sessions += 1;
+            stats.calls_per_session_max = stats.calls_per_session_max.max(cur);
+            cur = 0;
+            seen.clear();
+        }
+        cur += 1;
+        let subject = if e.command.is_empty() {
+            e.input_preview.clone()
+        } else {
+            e.command.clone()
+        };
+        if !seen.insert((e.tool.clone(), subject)) {
+            stats.re_requests += 1;
+        }
+        prev_ts = Some(e.ts);
+    }
+    if cur > 0 {
+        stats.sessions += 1;
+        stats.calls_per_session_max = stats.calls_per_session_max.max(cur);
+    }
+    stats.calls_per_session = if stats.sessions > 0 {
+        sorted.len() as f64 / stats.sessions as f64
+    } else {
+        0.0
+    };
+    stats
 }
 
 /// Aggregate stats across all projects, with per-project breakdown.
@@ -247,8 +307,16 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
 
     let bypassed = events.iter().filter(|e| e.action == "bypassed").count();
     let tokens_saved: i64 = intercepted_events.iter().map(|e| e.saved_tokens).sum();
-    let tokens_used: i64 = intercepted_events.iter().map(|e| e.actual_tokens).sum();
-    let tokens_original: i64 = intercepted_events.iter().map(|e| e.original_estimate).sum();
+
+    // Rate over every run that was actually measured, not only the ones that
+    // won. A pass-through carries `original_estimate == actual_tokens` when the
+    // payload was measured (a command that ran through `tokenix run` and did not
+    // shrink) and zeros otherwise, so including them widens the denominator by
+    // exactly the runs that saved nothing — the ones a "60-90% saved" headline
+    // has to account for.
+    let measured = intercepted_events.iter().chain(passed_events.iter());
+    let tokens_used: i64 = measured.clone().map(|e| e.actual_tokens).sum();
+    let tokens_original: i64 = measured.map(|e| e.original_estimate).sum();
 
     let pct_saved = if tokens_original > 0 {
         (tokens_saved as f64 / tokens_original as f64) * 100.0
@@ -334,6 +402,7 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         by_command,
         indexed_queries,
         bypassed,
+        sessions: session_stats(&events),
     }
 }
 
@@ -450,6 +519,92 @@ mod tests {
         assert_eq!(stats.by_phase[0], ("post".to_string(), 1, 100));
         // ev1 carries no command → counted as an indexed query.
         assert_eq!(stats.indexed_queries, 1);
+        // Two events one second apart → one session, two calls.
+        assert_eq!(stats.sessions.sessions, 1);
+        assert!((stats.sessions.calls_per_session - 2.0).abs() < 1e-9);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn session_stats_splits_by_gap_and_counts_re_requests() {
+        let mk = |ts: f64, tool: &str, preview: &str, command: &str| HookEvent {
+            ts,
+            tool: tool.to_string(),
+            action: "pass".to_string(),
+            phase: "pre".to_string(),
+            reason: String::new(),
+            saved_tokens: 0,
+            actual_tokens: 0,
+            original_estimate: 0,
+            input_preview: preview.to_string(),
+            command: command.to_string(),
+        };
+        let events = vec![
+            // Session 1: reading the same file twice = one re-request.
+            mk(0.0, "Read", "src/a.rs", ""),
+            mk(60.0, "Read", "src/a.rs", ""),
+            mk(120.0, "Bash", "", "cargo test"),
+            // Session 2 (gap > 30 min): same command again — not a re-request,
+            // it starts a fresh session.
+            mk(3_700.0, "Bash", "", "cargo test"),
+        ];
+        let s = session_stats(&events);
+        assert_eq!(s.sessions, 2);
+        assert_eq!(s.calls_per_session_max, 3);
+        assert!((s.calls_per_session - 2.0).abs() < 1e-9);
+        assert_eq!(s.re_requests, 1, "only the repeated Read counts");
+    }
+
+    #[test]
+    fn pct_saved_counts_runs_that_saved_nothing() {
+        // The number people read as "tokenix saves X%". Measuring it only over
+        // runs where compression already worked made it un-lowerable and wrong:
+        // a command that went through `tokenix run` and came back the same size
+        // is a real measurement and belongs in the denominator.
+        let temp_dir = create_test_temp_dir("honest_pct");
+
+        let win = HookEvent {
+            ts: 1.0,
+            tool: "Bash".to_string(),
+            action: "intercepted".to_string(),
+            phase: "ToolOutputCompressed".to_string(),
+            reason: "compressed command output".to_string(),
+            saved_tokens: 500,
+            actual_tokens: 500,
+            original_estimate: 1000,
+            input_preview: "".to_string(),
+            command: "cargo test".to_string(),
+        };
+        // Same payload size in and out: measured, not skipped.
+        let no_win = HookEvent {
+            ts: 2.0,
+            tool: "Bash".to_string(),
+            action: "pass".to_string(),
+            phase: "ToolOutputCompressed".to_string(),
+            reason: "no reduction available".to_string(),
+            saved_tokens: 0,
+            actual_tokens: 1000,
+            original_estimate: 1000,
+            input_preview: "".to_string(),
+            command: "cargo build".to_string(),
+        };
+
+        log_hook_event(&temp_dir, &win).unwrap();
+        log_hook_event(&temp_dir, &no_win).unwrap();
+
+        let stats = compute_gain(&temp_dir);
+        assert_eq!(stats.tokens_saved, 500);
+        assert_eq!(
+            stats.tokens_original, 2000,
+            "both measured runs must be in the denominator"
+        );
+        assert_eq!(stats.tokens_used, 1500);
+        assert!(
+            (stats.pct_saved - 25.0).abs() < 0.01,
+            "expected 500/2000 = 25%, got {}",
+            stats.pct_saved
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

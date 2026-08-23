@@ -94,6 +94,12 @@ benchmark checks retrieval:
   work with there.
 - **Semantic Grep is never counted as savings.** The native grep output is unknown
   before interception, so `tokenix gain` logs it as neutral usage.
+- **Runs that saved nothing are in the denominator.** Every command routed through
+  `tokenix run` is measured, including the ones that came back the same size.
+  Earlier builds logged only the runs that shrank, which answered "how much do we
+  save when we save" — a percentage that cannot go down. The 67.4% row above was
+  measured under the old method and reads high for that reason; it will be
+  re-measured before the next release.
 - **Savings depend on your codebase, file sizes, and agent behavior.** Run
   `tokenix gain` to see measured numbers on your machine rather than ours.
 
@@ -369,7 +375,7 @@ repo-local `opencode.json` MCP registration.
 | `tokenix doctor` | Diagnose embedding backend, GPU, model cache, daemon, filter inventory, and filter config |
 | `tokenix serve` / `stop` | Start or stop the background embedding daemon |
 | `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |
-| `tokenix gain` | Tokens removed, split by source — Read interception vs command filters; semantic Grep counts as neutral usage (`--cost-estimate`, `--economics`) |
+| `tokenix gain` | Tokens removed, split by source — Read interception vs command filters; semantic Grep counts as neutral usage. Reports session shape (sessions, calls/session, within-session re-requests — the measurable share of the "+turns" inversion mechanism) and (`--cost-estimate`, `--economics`) |
 | `tokenix discover` | Replay current filters over historical agent output — measured recoverable savings plus uncovered commands (`--agent`, `--top`, `--json`) |
 | `tokenix retrieve KEY` | Print the exact original output a compressed run stashed; the key comes from a `[tokenix: ...]` marker |
 | `tokenix trust` / `untrust` | Approve (SHA-256 pinned) or revoke this repo's `.tokenix/filters` (`--status`) |
@@ -403,6 +409,14 @@ repo-local `opencode.json` MCP registration.
 the dashboard, same as `TOKENIX_NO_TUI=1`), `TOKENIX_BRANCH_AWARE=true` (suffix the
 SQLite DB per git branch), `TOKENIX_DISABLED=1` (bypass the hook for one command),
 `TOKENIX_MAX_OUTPUT_TOKENS` (global output ceiling, default 8000, `0` disables).
+
+**Dedup** — repeated identical command output collapses to a one-line pointer.
+`TOKENIX_DEDUP=0` disables it, `TOKENIX_DEDUP_MIN_TOKENS` sets the floor (default
+200), `TOKENIX_DEDUP_TTL` how long an earlier run stays usable (default 3600 s).
+Matches are scoped to the current project and verified byte-for-byte against the
+stash, so a pointer is only emitted for output this checkout really produced.
+Re-read suppression is separate: `TOKENIX_READ_DEDUP=0`,
+`TOKENIX_READ_DEDUP_TTL` (900 s), `TOKENIX_READ_DEDUP_MIN_TOKENS` (1500).
 
 **`tokenix index`** — `--force/-f`, `--cpu-profile <low|default|max>`, `--jobs N`,
 `--embed-batch N` (default 16 CPU / 64 GPU), `--if-stale`, `--path/-p`,
@@ -493,7 +507,11 @@ cases**, enforced in CI along with never-mask-failure and no-inflation checks.
 pipeline.
 
 Failed commands with clipped output tee the raw text to `~/.tokenix/tee/` with a
-`[full output: path]` hint (`TOKENIX_TEE=0` disables).
+`[full output (credentials masked): path]` hint (`TOKENIX_TEE=0` disables).
+
+A **successful** command whose output was clipped by more than 500 bytes gets a
+recovery hint instead: `[tokenix: N bytes not shown — tokenix retrieve <key> …]`.
+Compression is never a one-way door — the raw text is stashed either way.
 
 ---
 
@@ -528,21 +546,37 @@ language mapping in `.tokenix.toml`.
   embeddings, FTS5 for lexical search.
 - **Embeddings** — in-process ONNX via `fastembed`. No daemon required; if
   `tokenix serve` is running it keeps the model in RAM and answers over a local
-  socket, otherwise the hook embeds in-process.
+  socket, otherwise the hook embeds in-process. The socket is bound to
+  `127.0.0.1` **and** authenticated with a capability token in
+  `~/.tokenix/daemon.token` (mode `0600`, regenerated on every start), because on
+  a shared host loopback alone would let any other local account read your
+  indexed source.
 - **GPU (opt-in)** — DirectML on Windows, CUDA 12.x + cuDNN 9.x on Linux/Windows.
   `tokenix doctor` reports what is detected.
+- **Local data** — everything tokenix writes lives under `~/.tokenix/`. Command
+  lines and command output are masked for credential shapes before they are
+  persisted (hook log, failure tee), and files are created owner-only (`0600`).
+  `tokenix retrieve` blobs are the deliberate exception: they must return the
+  exact original bytes, so they rely on permissions alone.
 
 ---
 
 ## 🔒 Security
 
 - **Everything is local.** No code, prompt, or transcript leaves your machine. The
-  only network access is the one-time embedding-model download.
+  only network access is the one-time embedding-model download, pinned to a commit
+  SHA on the hub so the weights you get are the weights we tested.
 - **Repo-local filters are untrusted by default** and skipped until `tokenix trust`
   pins their SHA-256 — a cloned repository cannot silently rewrite what your agent
   sees.
 - **Secrets are never indexed.** `.env`, `.pem`, and similar files are excluded,
   and `tokenix scan-secrets` redacts by default.
+- **Credentials are masked before anything is persisted.** Command lines and
+  failing-command output are the places tokens actually appear, so the hook log and
+  the failure tee are redacted on write, and `~/.tokenix` is owner-only (`0600`).
+- **The embedding daemon is authenticated**, not merely bound to loopback: on a
+  shared host any local account can reach a `127.0.0.1` port, so `search` requires
+  the capability token from `~/.tokenix/daemon.token`.
 - **Supply chain** — releases publish `sha256sums.txt` and SLSA provenance;
   workflows are SHA-pinned and covered by `cargo-deny`, `zizmor`, and OpenSSF
   Scorecard. See [SECURITY.md](SECURITY.md).

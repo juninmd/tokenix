@@ -25,6 +25,13 @@ pub enum ModelSource {
     /// not ship (e.g. code-specialized ones) without a new inference backend.
     Custom {
         hf_repo: &'static str,
+        /// Git commit SHA on the hub, never a branch name. `resolve/main` is a
+        /// moving target: the same tokenix build could load different weights on
+        /// two machines, or different weights before and after an upstream push,
+        /// with no signal that anything changed. A commit is content-addressed,
+        /// so pinning it is the integrity check — there is nothing left for a
+        /// separate digest list to catch.
+        revision: &'static str,
         onnx_file: &'static str,
         pooling: Pooling,
     },
@@ -88,6 +95,9 @@ pub const MODELS: &[ModelSpec] = &[
         id: "jina-code",
         source: ModelSource::Custom {
             hf_repo: "jinaai/jina-embeddings-v2-base-code",
+            // main @ 2025-01-06. Bumping this invalidates nothing on disk (the
+            // cache is keyed by model id), so re-check the weights when you do.
+            revision: "516f4baf13dec4ddddda8631e019b5737c8bc250",
             onnx_file: "onnx/model.onnx",
             pooling: Pooling::Mean,
         },
@@ -257,9 +267,10 @@ fn model_for(id: &str) -> Result<&'static TextEmbedding> {
         ModelSource::BuiltIn(m) => build_text_embedding(m.clone()),
         ModelSource::Custom {
             hf_repo,
+            revision,
             onnx_file,
             pooling,
-        } => build_custom_embedding(id, hf_repo, onnx_file, pooling.clone()),
+        } => build_custom_embedding(id, hf_repo, revision, onnx_file, pooling.clone()),
     }
     .map_err(|e| anyhow!("Embedding model '{id}' init failed: {e}"))?;
     // Leak once: the model lives for the rest of the process anyway.
@@ -309,6 +320,7 @@ fn build_text_embedding(model: EmbeddingModel) -> Result<TextEmbedding> {
 fn build_custom_embedding(
     id: &str,
     repo: &str,
+    revision: &str,
     onnx_file: &str,
     pooling: Pooling,
 ) -> Result<TextEmbedding> {
@@ -322,27 +334,17 @@ fn build_custom_embedding(
         .timeout(Duration::from_secs(600))
         .build()?;
 
-    let onnx = download_model_file(&client, repo, onnx_file, &dir.join("model.onnx"))?;
+    let fetch =
+        |file: &str, dest: PathBuf| download_model_file(&client, repo, revision, file, &dest);
+    let onnx = fetch(onnx_file, dir.join("model.onnx"))?;
     let tokenizer_files = TokenizerFiles {
-        tokenizer_file: download_model_file(
-            &client,
-            repo,
-            "tokenizer.json",
-            &dir.join("tokenizer.json"),
-        )?,
-        config_file: download_model_file(&client, repo, "config.json", &dir.join("config.json"))?,
-        special_tokens_map_file: download_model_file(
-            &client,
-            repo,
+        tokenizer_file: fetch("tokenizer.json", dir.join("tokenizer.json"))?,
+        config_file: fetch("config.json", dir.join("config.json"))?,
+        special_tokens_map_file: fetch(
             "special_tokens_map.json",
-            &dir.join("special_tokens_map.json"),
+            dir.join("special_tokens_map.json"),
         )?,
-        tokenizer_config_file: download_model_file(
-            &client,
-            repo,
-            "tokenizer_config.json",
-            &dir.join("tokenizer_config.json"),
-        )?,
+        tokenizer_config_file: fetch("tokenizer_config.json", dir.join("tokenizer_config.json"))?,
     };
 
     let udm = UserDefinedEmbeddingModel::new(onnx, tokenizer_files).with_pooling(pooling);
@@ -367,15 +369,23 @@ fn build_custom_embedding(
     TextEmbedding::try_new_from_user_defined(udm, options).map_err(|e| anyhow!("{e}"))
 }
 
-/// Download a single HF repo file to `dest`, returning its bytes. Cached: if a
-/// non-empty file already exists at `dest` it is reused (no network).
-fn download_model_file(client: &Client, repo: &str, file: &str, dest: &Path) -> Result<Vec<u8>> {
+/// Download a single HF repo file at `revision` to `dest`, returning its bytes.
+/// Cached: if a non-empty file already exists at `dest` it is reused (no network).
+fn download_model_file(
+    client: &Client,
+    repo: &str,
+    revision: &str,
+    file: &str,
+    dest: &Path,
+) -> Result<Vec<u8>> {
     if let Ok(bytes) = std::fs::read(dest) {
         if !bytes.is_empty() {
             return Ok(bytes);
         }
     }
-    let url = format!("https://huggingface.co/{repo}/resolve/main/{file}");
+    // `revision` is a commit SHA (see `ModelSource::Custom`), so this URL names
+    // immutable content instead of whatever the branch points at today.
+    let url = format!("https://huggingface.co/{repo}/resolve/{revision}/{file}");
     let bytes = client
         .get(&url)
         .send()
@@ -384,6 +394,11 @@ fn download_model_file(client: &Client, repo: &str, file: &str, dest: &Path) -> 
         .bytes()
         .map_err(|e| anyhow!("read {url} failed: {e}"))?
         .to_vec();
+    // A 200 with an empty body is not a model file. Failing here beats handing
+    // fastembed a zero-byte ONNX graph and reading the error out of ORT.
+    if bytes.is_empty() {
+        return Err(anyhow!("download {url} returned an empty body"));
+    }
     // Write to a temp file and rename: a download interrupted mid-write would
     // otherwise leave a truncated file that the `!bytes.is_empty()` cache check
     // happily reuses forever.

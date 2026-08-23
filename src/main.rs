@@ -1520,7 +1520,7 @@ fn main() -> Result<()> {
                 std::env::set_var("OMP_NUM_THREADS", "1");
                 std::env::set_var("RAYON_NUM_THREADS", "1");
             }
-            if let Err(e) = hook::run_hook(false) {
+            if let Err(e) = guard_hook(|| hook::run_hook(false)) {
                 eprintln!("tokenix hook fail-open: {e:?}");
             }
             std::process::exit(0);
@@ -1531,7 +1531,7 @@ fn main() -> Result<()> {
                 std::env::set_var("OMP_NUM_THREADS", "1");
                 std::env::set_var("RAYON_NUM_THREADS", "1");
             }
-            if let Err(e) = hook::run_hook(true) {
+            if let Err(e) = guard_hook(|| hook::run_hook(true)) {
                 println!(
                     "{}",
                     serde_json::json!({
@@ -1547,7 +1547,7 @@ fn main() -> Result<()> {
             unsafe {
                 std::env::set_var("RAYON_NUM_THREADS", "1")
             };
-            if let Err(e) = compress::run_hook_post() {
+            if let Err(e) = guard_hook(compress::run_hook_post) {
                 eprintln!("tokenix hook-post fail-open: {e:?}");
             }
             std::process::exit(0);
@@ -1568,6 +1568,25 @@ fn main() -> Result<()> {
     };
 
     finish(res)
+}
+
+/// Run a hook entry point so a panic becomes an ordinary `Err`.
+///
+/// The fail-open contract is "exit 0 on any error", but it was only wired for
+/// `Err`: a panic unwound past these arms and the process exited 101 with a
+/// Rust backtrace on stderr. For Claude Code that is a non-blocking error the
+/// user sees for every command; for Antigravity the `decision:allow` line never
+/// gets printed, which is the one outcome the contract exists to prevent.
+///
+/// The panic message still reaches stderr through the default hook, so nothing
+/// is swallowed — it just no longer decides the exit code. `run_hook` calls
+/// `process::exit` on its own success paths, and an `exit` inside
+/// `catch_unwind` terminates normally, so the guard is transparent there.
+fn guard_hook(f: impl FnOnce() -> Result<()>) -> Result<()> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(res) => res,
+        Err(_) => Err(anyhow::anyhow!("panicked (failing open)")),
+    }
 }
 
 /// Single exit path: print the error and exit 1, or exit 0. Never returns.
@@ -2525,6 +2544,34 @@ fn cmd_generate_ignores(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Session-shape diagnostics appended to the HOOK CALLS column: sessions
+/// inferred from time gaps, mean calls per session, and within-session
+/// re-requests of the same tool+subject — the measurable share of the
+/// "+13.8% turns" mechanism by which savings invert (arXiv 2607.12161).
+fn print_session_stats(s: &gain::SessionStats) {
+    println!(
+        "  {:<26} {:>14}    {:<22} {:>8}",
+        "",
+        "",
+        "Sessions",
+        format_num(s.sessions as i64)
+    );
+    println!(
+        "  {:<26} {:>14}    {:<22} {:>8}",
+        "",
+        "",
+        "Calls/session",
+        format!("{:.1}", s.calls_per_session)
+    );
+    println!(
+        "  {:<26} {:>14}    {:<22} {:>8}",
+        "",
+        "",
+        "Re-requests",
+        format_num(s.re_requests as i64).dimmed()
+    );
+}
+
 /// Render the `gain --economics` section: real $ saved priced against the
 /// user's own transcript spend mix (vs the list-price hypotheticals of
 /// --cost-estimate).
@@ -2647,6 +2694,7 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool, economics: bool) ->
         "Reduction",
         format!("{:.1}%  {}", stats.pct_saved, bar).green().bold()
     );
+    print_session_stats(&stats.sessions);
 
     // ── index capability ──────────────────────────────────────────────────────
     if let Ok(Some(conn)) = store::open_db(&repo_root, false) {
@@ -2928,6 +2976,7 @@ fn cmd_gain_global(history: bool, cost_estimate: bool, economics: bool) -> Resul
         "Reduction",
         format!("{:.1}%  {}", stats.pct_saved, bar).green().bold()
     );
+    print_session_stats(&stats.sessions);
 
     // ── cost estimate ─────────────────────────────────────────────────────────
     if cost_estimate {
@@ -4677,6 +4726,23 @@ fn format_ts(ts: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guard_hook_turns_a_panic_into_a_recoverable_error() {
+        // The fail-open contract is "exit 0 on any error". Before the guard, a
+        // panic unwound past the hook arms and the process exited 101 — which for
+        // Antigravity also means the `decision:allow` line is never printed.
+        let panicked = guard_hook(|| panic!("boom"));
+        assert!(panicked.is_err(), "a panic must arrive as Err, not unwind");
+
+        // A panic carrying a non-string payload must be caught just the same.
+        let odd_payload = guard_hook(|| std::panic::panic_any(42u32));
+        assert!(odd_payload.is_err());
+
+        // And the guard must be transparent for both ordinary outcomes.
+        assert!(guard_hook(|| Ok(())).is_ok());
+        assert!(guard_hook(|| Err(anyhow::anyhow!("ordinary failure"))).is_err());
+    }
 
     /// Parse a real argv through clap so the tests exercise the same
     /// `Commands` values `main` dispatches on.
