@@ -209,6 +209,9 @@ struct DaemonState {
     cache: RwLock<CacheState>,
     started: std::time::Instant,
     port: u16,
+    /// Capability token every `Search` must present. Regenerated per daemon
+    /// start, so a stale token from a previous generation is rejected.
+    token: String,
 }
 
 // ---- Protocol ---------------------------------------------------------------
@@ -217,6 +220,10 @@ struct DaemonState {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Request {
     Search {
+        /// Capability token from `~/.tokenix/daemon.token`. Required: `Search`
+        /// returns indexed source for an arbitrary `project_root`.
+        #[serde(default)]
+        token: String,
         project_root: String,
         query: String,
         #[serde(default = "default_k")]
@@ -285,6 +292,88 @@ fn port_path() -> Option<PathBuf> {
     Some(dirs::home_dir()?.join(".tokenix").join("daemon.port"))
 }
 
+fn token_path() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".tokenix").join("daemon.token"))
+}
+
+/// A 32-hex-char secret shared between this user's tokenix processes.
+///
+/// `127.0.0.1` is not an access control: on a shared host (build box, CI runner,
+/// jump host) every local account can reach the port, and `Search` returns
+/// indexed *source code* for any `project_root` the caller names. The token file
+/// is created `0600`, so possession of it means "runs as the user who owns the
+/// index" — which is exactly the intended audience.
+///
+/// Not a cryptographic protocol: it is a capability file, so unpredictability is
+/// all that is required of the value.
+fn generate_token() -> String {
+    use sha2::{Digest, Sha256};
+    // /dev/urandom where it exists; otherwise mix sources an unrelated local
+    // process cannot observe or replay (nanosecond clock, pid, two live
+    // addresses) and hash them.
+    //
+    // Read exactly 16 bytes: `/dev/urandom` is an endless stream, so a
+    // read-to-EOF helper never returns.
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+            let mut buf = [0u8; 16];
+            if f.read_exact(&mut buf).is_ok() {
+                return hex::encode(buf);
+            }
+        }
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let stack = &nanos as *const u128 as usize;
+    let heap = Box::new(0u8);
+    let heap_addr = &*heap as *const u8 as usize;
+    let digest = Sha256::digest(
+        format!("{nanos}:{}:{stack:x}:{heap_addr:x}", std::process::id()).as_bytes(),
+    );
+    hex::encode(&digest[..16])
+}
+
+/// Write a fresh token for this daemon generation and return it. A failure to
+/// persist is fatal for the token, not for the daemon: `None` means clients
+/// cannot authenticate, so `run_serve` refuses to start rather than silently
+/// serving an unauthenticated socket.
+fn write_token() -> Option<String> {
+    let path = token_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+        crate::store::restrict_to_owner(parent);
+    }
+    let token = generate_token();
+    std::fs::write(&path, &token).ok()?;
+    crate::store::restrict_to_owner(&path);
+    Some(token)
+}
+
+/// Read the running daemon's token. `None` when no daemon has started yet.
+fn read_token() -> Option<String> {
+    let raw = std::fs::read_to_string(token_path()?).ok()?;
+    let token = raw.trim().to_string();
+    (!token.is_empty()).then_some(token)
+}
+
+/// Constant-time-ish comparison. The token is a local capability rather than a
+/// network secret, but comparing lengths first and folding every byte avoids
+/// leaking a prefix through timing to another local process.
+fn token_matches(expected: &str, got: &str) -> bool {
+    if expected.len() != got.len() {
+        return false;
+    }
+    expected
+        .bytes()
+        .zip(got.bytes())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
+}
+
 // ---- Server -----------------------------------------------------------------
 
 pub fn run_serve(port: Option<u16>) -> Result<()> {
@@ -320,10 +409,17 @@ pub fn run_serve(port: Option<u16>) -> Result<()> {
         let _ = std::fs::write(&p, port.to_string());
     }
 
+    // Refuse to serve without a token rather than fall back to an open socket:
+    // an unauthenticated daemon exposes indexed source to every local account,
+    // and a silent downgrade is the kind of failure nobody notices.
+    let token = write_token()
+        .ok_or_else(|| anyhow!("could not write ~/.tokenix/daemon.token; refusing to serve"))?;
+
     let state = Arc::new(DaemonState {
         cache: RwLock::new(CacheState::new()),
         started: std::time::Instant::now(),
         port,
+        token,
     });
 
     let pool = Arc::new(
@@ -477,6 +573,10 @@ pub fn run_stop() -> Result<()> {
     if let Some(p) = port_path() {
         let _ = std::fs::remove_file(p);
     }
+    // Drop the capability with the daemon it belonged to.
+    if let Some(p) = token_path() {
+        let _ = std::fs::remove_file(p);
+    }
     println!("daemon stopped (pid {pid})");
     Ok(())
 }
@@ -502,6 +602,10 @@ pub fn daemon_search(
 
     let req = serde_json::json!({
         "type": "search",
+        // Empty when no daemon has ever started; the server rejects it, and the
+        // caller falls back to in-process embedding exactly as it does when the
+        // daemon is unreachable.
+        "token": read_token().unwrap_or_default(),
         "project_root": project_root.to_string_lossy(),
         "query": query,
         "k": k,
@@ -755,11 +859,27 @@ fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) -> Result<()> {
             })?
         }
         Ok(Request::Search {
+            token,
             project_root,
             query,
             k,
             budget,
             file,
+        }) if !token_matches(&state.token, &token) => {
+            let _ = (project_root, query, k, budget, file);
+            serde_json::to_string(&RespErr {
+                ok: false,
+                error: "unauthorized: missing or stale token (see ~/.tokenix/daemon.token)"
+                    .to_string(),
+            })?
+        }
+        Ok(Request::Search {
+            project_root,
+            query,
+            k,
+            budget,
+            file,
+            ..
         }) => {
             // Clamp client-supplied sizing: `k` drives the FTS/cosine scan and
             // `budget` the formatting, so unbounded values let any local process
@@ -970,6 +1090,42 @@ fn err_json(msg: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_tokens_are_hex_and_unpredictable() {
+        let a = generate_token();
+        let b = generate_token();
+        assert_eq!(a.len(), 32, "{a}");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()), "{a}");
+        assert_ne!(a, b, "two daemons must not share a capability");
+    }
+
+    #[test]
+    fn token_comparison_rejects_wrong_and_truncated_values() {
+        let expected = "a".repeat(32);
+        assert!(token_matches(&expected, &expected));
+        assert!(!token_matches(&expected, ""), "empty must never pass");
+        assert!(
+            !token_matches(&expected, &"a".repeat(31)),
+            "a prefix must never pass"
+        );
+        assert!(!token_matches(&expected, &"b".repeat(32)));
+    }
+
+    #[test]
+    fn search_without_the_token_is_rejected() {
+        // The wire contract: `token` defaults to empty when absent, so an older
+        // client (or any other local process) lands on the unauthorized arm
+        // rather than reaching `search_handler`.
+        let req: Request =
+            serde_json::from_str(r#"{"type":"search","project_root":"/repo","query":"anything"}"#)
+                .expect("parses without a token field");
+        let Request::Search { token, .. } = req else {
+            panic!("expected a search request");
+        };
+        assert!(token.is_empty());
+        assert!(!token_matches(&"a".repeat(32), &token));
+    }
 
     #[test]
     fn test_dot_product() {

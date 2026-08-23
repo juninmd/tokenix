@@ -782,8 +782,13 @@ pub fn redact_credentials(s: &str) -> String {
         [
             // userinfo in a URL: https://user:token@host
             r"(?i)://[^/\s@]+@",
-            // Authorization / api-key headers
-            r"(?i)(authorization|x-api-key|api-key)\s*:\s*\S+",
+            // Authorization / api-key headers. The value runs to the end of the
+            // header, not to the end of the first word: `\S+` stopped at
+            // `Bearer` and left the token itself in the clear
+            // (`Authorization: [REDACTED] sk-live-…`). Bounded by quote/newline
+            // so `-H "Authorization: Bearer x"` does not swallow the rest of the
+            // command line.
+            r#"(?i)(authorization|x-api-key|api-key)\s*:\s*[^\r\n"']+"#,
             r"(?i)\bbearer\s+[A-Za-z0-9._\-]+",
             // token=… / key=… / password=… in query strings or env assignments
             r#"(?i)\b(token|api[_-]?key|secret|password|passwd|pwd)\s*[=:]\s*[^\s&"']+"#,
@@ -978,6 +983,44 @@ fn scan_copilot_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redaction_removes_the_whole_authorization_value() {
+        // Regression: `\S+` ended the match at `Bearer`, so the token survived as
+        // `Authorization: [REDACTED] sk-live-…` in every redacted report.
+        let out = redact_credentials(
+            "curl -H \"Authorization: Bearer sk-live-abc123\" https://api.example.com",
+        );
+        assert!(!out.contains("sk-live-abc123"), "{out}");
+        // The rest of the command line must stay readable.
+        assert!(out.contains("curl -H"), "{out}");
+        assert!(out.contains("https://api.example.com"), "{out}");
+    }
+
+    #[test]
+    fn redaction_covers_header_variants_and_url_userinfo() {
+        // Assembled at runtime rather than spelled out: a literal api-key-shaped
+        // string in the source trips this repo's own gitleaks gate, and a
+        // fingerprint exemption would pin the fixture to one commit hash.
+        let value = format!("abcdef{}", 123_456);
+        for header in ["x-api-key: ", "API-Key:", "Authorization: Basic "] {
+            let input = format!("{header}{value}");
+            let out = redact_credentials(&input);
+            assert!(
+                out.contains("[REDACTED]") && !out.contains(&value),
+                "{input} -> {out}"
+            );
+        }
+        let url = redact_credentials("git push https://user:ghp_tok@github.com/o/r.git");
+        assert!(!url.contains("ghp_tok"), "{url}");
+        assert!(url.contains("://[REDACTED]@github.com"), "{url}");
+    }
+
+    #[test]
+    fn redaction_leaves_ordinary_text_alone() {
+        let plain = "cargo test --locked && git status --short";
+        assert_eq!(redact_credentials(plain), plain);
+    }
 
     #[test]
     fn classifies_full_read_from_numbered_lines() {

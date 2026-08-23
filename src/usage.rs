@@ -170,7 +170,7 @@ pub fn run(opts: Options) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        print_table(&rows, &total, &opts);
+        print_table(&rows, &total, &opts, &records);
     }
     Ok(())
 }
@@ -410,11 +410,8 @@ fn month_forecast(records: &[Record], mode: CostMode) -> f64 {
         .map(|r| r.cost(mode))
         .sum();
     let days_in_month = days_in_month(now.year(), now.month());
-    let day = now.day().max(1);
-    if day == 0 {
-        return month_cost;
-    }
-    month_cost / day as f64 * days_in_month as f64
+    // `day()` is 1-based, so no zero guard is needed (the old one was dead code).
+    month_cost / now.day() as f64 * days_in_month as f64
 }
 
 fn days_in_month(year: i32, month: u32) -> u32 {
@@ -552,7 +549,7 @@ fn floor_hour(ts: DateTime<Local>) -> DateTime<Local> {
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn print_table(rows: &[Row], total: &Row, opts: &Options) {
+fn print_table(rows: &[Row], total: &Row, opts: &Options, records: &[Record]) {
     let title = format!("Usage — {:?}", opts.group).to_lowercase();
     println!("{}", title.bold());
     if rows.is_empty() {
@@ -589,22 +586,14 @@ fn print_table(rows: &[Row], total: &Row, opts: &Options) {
         fmt_cost(total.cost_usd).bold()
     );
     if matches!(opts.group, Group::Daily | Group::Monthly | Group::Weekly) {
-        // Forecast needs the unfiltered-by-group records; recompute cheaply here.
-        let forecast = total_month_forecast(opts);
-        if let Some(f) = forecast {
-            println!(
-                "  {} {}",
-                "month-end forecast:".dimmed(),
-                fmt_cost(f).yellow()
-            );
-        }
+        // The caller already holds the records this needs. Re-collecting here
+        // re-read every transcript on disk a second time for one number.
+        println!(
+            "  {} {}",
+            "month-end forecast:".dimmed(),
+            fmt_cost(month_forecast(records, opts.cost_mode)).yellow()
+        );
     }
-}
-
-fn total_month_forecast(opts: &Options) -> Option<f64> {
-    // Recollect is cheap relative to I/O already done; reuse collection.
-    let records = collect_records(opts).ok()?;
-    Some(month_forecast(&records, opts.cost_mode))
 }
 
 fn print_statusline(records: &[Record], mode: CostMode) {
@@ -665,5 +654,161 @@ fn fmt_cost(c: f64) -> String {
         format!("${:.2}", c)
     } else {
         format!("${:.4}", c)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(model: &str, input: u64, cache_read: u64, logged: Option<f64>) -> Record {
+        Record {
+            ts: Local::now(),
+            model: model.to_string(),
+            project: "proj".to_string(),
+            session: "sess".to_string(),
+            input,
+            output: 0,
+            cache_read,
+            cache_write: 0,
+            logged_cost: logged,
+        }
+    }
+
+    #[test]
+    fn tokens_counts_every_category() {
+        // Cache reads and writes are billed tokens; leaving them out of the total
+        // understates real spend by the category that usually dominates it.
+        let r = Record {
+            cache_write: 4,
+            output: 2,
+            ..rec("claude-sonnet-4-6", 1, 3, None)
+        };
+        assert_eq!(r.tokens(), 10);
+    }
+
+    #[test]
+    fn cost_modes_pick_logged_or_calculated() {
+        // sonnet: input $3/1M, cache read $0.30/1M.
+        // 1_000_000 input + 1_000_000 cache_read = 3.00 + 0.30.
+        let r = rec("claude-sonnet-4-6", 1_000_000, 1_000_000, Some(9.99));
+        assert!((r.cost(CostMode::Calculate) - 3.30).abs() < 1e-9);
+        assert_eq!(r.cost(CostMode::Display), 9.99);
+        // Auto prefers what the agent actually logged.
+        assert_eq!(r.cost(CostMode::Auto), 9.99);
+
+        let unlogged = rec("claude-sonnet-4-6", 1_000_000, 0, None);
+        assert!((unlogged.cost(CostMode::Auto) - 3.00).abs() < 1e-9);
+        // Display-only means "show nothing we did not receive", not "estimate".
+        assert_eq!(unlogged.cost(CostMode::Display), 0.0);
+    }
+
+    #[test]
+    fn unknown_model_costs_zero_rather_than_guessing() {
+        let r = rec("some-local-llama", 1_000_000, 0, None);
+        assert_eq!(r.cost(CostMode::Calculate), 0.0);
+    }
+
+    #[test]
+    fn days_in_month_handles_leap_years_and_december() {
+        assert_eq!(days_in_month(2026, 1), 31);
+        assert_eq!(days_in_month(2026, 2), 28);
+        assert_eq!(days_in_month(2024, 2), 29); // leap
+        assert_eq!(days_in_month(2026, 4), 30);
+        assert_eq!(days_in_month(2026, 12), 31); // year rollover path
+    }
+
+    #[test]
+    fn month_forecast_extrapolates_from_days_elapsed() {
+        // One record in the current month, priced deterministically.
+        let r = rec("claude-sonnet-4-6", 1_000_000, 0, Some(10.0));
+        let now = Local::now();
+        let expected = 10.0 / now.day() as f64 * days_in_month(now.year(), now.month()) as f64;
+        assert!((month_forecast(&[r], CostMode::Auto) - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn month_forecast_ignores_other_months() {
+        let mut old = rec("claude-sonnet-4-6", 1_000_000, 0, Some(10.0));
+        old.ts = Local::now() - Duration::days(400);
+        assert_eq!(month_forecast(&[old], CostMode::Auto), 0.0);
+    }
+
+    #[test]
+    fn totals_sum_every_record() {
+        let rows = vec![
+            rec("claude-sonnet-4-6", 10, 5, Some(1.0)),
+            rec("claude-sonnet-4-6", 20, 0, Some(2.5)),
+        ];
+        let t = totals(&rows, CostMode::Auto);
+        assert_eq!(t.input, 30);
+        assert_eq!(t.cache_read, 5);
+        assert_eq!(t.tokens, 35);
+        assert!((t.cost_usd - 3.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn floor_hour_drops_minutes_seconds_and_nanos() {
+        let ts = Local::now()
+            .with_minute(43)
+            .unwrap()
+            .with_second(21)
+            .unwrap();
+        let floored = floor_hour(ts);
+        assert_eq!(floored.minute(), 0);
+        assert_eq!(floored.second(), 0);
+        assert_eq!(floored.hour(), ts.hour());
+    }
+
+    #[test]
+    fn duplicate_usage_lines_are_counted_once() {
+        // Transcripts replay the same assistant message (resume, fork), and both
+        // copies carry the same usage block. Counting both double-bills the user.
+        let line = serde_json::json!({
+            "timestamp": "2026-08-01T10:00:00Z",
+            "requestId": "req-1",
+            "message": {
+                "id": "msg-1",
+                "model": "claude-sonnet-4-6",
+                "usage": { "input_tokens": 100, "output_tokens": 5 }
+            }
+        });
+        let mut seen = HashSet::new();
+        assert!(record_from_value(&line, "fallback", &mut seen).is_some());
+        assert!(
+            record_from_value(&line, "fallback", &mut seen).is_none(),
+            "the same (message id, requestId) must not be billed twice"
+        );
+    }
+
+    #[test]
+    fn records_without_usage_are_skipped() {
+        let mut seen = HashSet::new();
+        let no_usage = serde_json::json!({ "message": { "model": "claude-sonnet-4-6" } });
+        assert!(record_from_value(&no_usage, "f", &mut seen).is_none());
+        // All-zero usage carries no information either.
+        let zeros = serde_json::json!({
+            "message": { "usage": { "input_tokens": 0, "output_tokens": 0 } }
+        });
+        assert!(record_from_value(&zeros, "f", &mut seen).is_none());
+    }
+
+    #[test]
+    fn cache_fields_are_read_from_the_usage_block() {
+        let mut seen = HashSet::new();
+        let v = serde_json::json!({
+            "message": {
+                "model": "claude-sonnet-4-6",
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 2,
+                    "cache_read_input_tokens": 30,
+                    "cache_creation_input_tokens": 40
+                }
+            }
+        });
+        let r = record_from_value(&v, "f", &mut seen).expect("record");
+        assert_eq!((r.cache_read, r.cache_write), (30, 40));
+        assert_eq!(r.tokens(), 73);
     }
 }

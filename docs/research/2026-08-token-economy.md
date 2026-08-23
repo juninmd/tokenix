@@ -690,3 +690,77 @@ n=20 is not.
 - TACO's headline is **1–4% accuracy gain**, not a large compression number, and
   the "200 hand-curated rules plateaued" figure could not be extracted from the
   paper — treat as unverified positioning.
+
+---
+
+## Deep sweep (pass 4) — implementation audit + August literature, 2026-08-22
+
+Status of the Tier 0–3 decision list in the actual tree (working tree has the
+WIP uncommitted; `cargo test --bin tokenix` = **411 passed / 0 failed / 10
+ignored**, 18.3 s).
+
+### Implementation vs decision list
+
+| Decision item | Status | Evidence in tree |
+|---|---|---|
+| T0.1 bytes→chars tokenizer | **DONE** | `chunker.rs:92` counts chars; test `count_tokens_counts_chars_not_bytes` |
+| T0.1 accurate tokenizer | **DONE, deviated** | `embed.rs:179` uses HF `tokenizers` (not `bpe`); query display only, hot path keeps chars/4 |
+| T0.2 billed-cost in `gain` | **DONE, half** | `MODELS` pricing incl. cache_read/write (`gain.rs:10-101`), `usage_cost`, `economics()` blended cpt from real usage mix, `gain --economics` (`main.rs:2745`). **Δturns NOT reported** — the documented inversion mechanism is still unmeasured |
+| T0.3 holdout mode | **MISSING** | no `TOKENIX_HOLDOUT` anywhere |
+| T0.4 OTLP receiver | **MISSING** | no otlp usage in daemon |
+| T1.5 edit-anchor (CRLF) | **DONE** | `restore_eol`/`dominant_eol` (`compress.rs:1318-1344`, `filters.rs:1971`) — pass-3 hazard #1 closed |
+| T1.5 edit-anchor (signature) | **OPEN** | `extract_full_signature` (`chunker.rs:912`) still normalizes whitespace + truncates with `…` — re-derived, quotable-looking, not a verbatim slice |
+| T1.6 shell-consumer guard | **MISSING** | no `IsTerminal` on the `tokenix run` path (only `tui.rs:301`) |
+| T1.7 NAP harness | **MISSING** | no action-preservation in `cmd_filter.rs` |
+| T2.8 PostToolUse `updatedToolOutput` | **MISSING** | no reference in `hook.rs` |
+| T2.9 `prompt-audit --recommend` | **DONE** | `mcp_audit.rs:1201` `recommendations_for_agent`, wired `main.rs:1431` |
+| T2.10 code embedding swap | **HALF** | `jina-code` registered (`embed.rs:95`); default remains `nomic-v1.5` |
+| T3.11 CORE-Bench | **MISSING** | `benchmark.rs` is still the internal harness |
+| Pass-3 secrets entropy fix | **DONE** | both bundled rules at 2.8 with 7-char floors |
+
+### New literature since pass 3
+
+1. **Don't Break the Cache** ([2601.06007](https://arxiv.org/abs/2601.06007),
+   Lumer et al., PwC) — 500+ agent sessions, DeepResearchBench, OpenAI/Anthropic/
+   Google. Caching cuts cost **41–80%**; naive full-context caching can
+   *increase* latency; dynamic content must append strictly at the **end**;
+   tool-schema drift mid-session breaks the cache. Third independent confirmation
+   that the only safe place to compress is **write time** — and that `prompt-audit`
+   (schema-stability) sits on the same axis the paper names.
+2. **TokenPilot** ([2606.17016](https://arxiv.org/abs/2606.17016), June 2026) —
+   cache continuity vs text sparsity, prefix stabilization at ingestion:
+   **61%/87%** cost cuts in isolated/continuous mode. Same conclusion: mutating
+   the cached prefix is the expensive failure mode. tokenix's "compress at write
+   time, never rewrite history" is exactly their mechanism.
+3. **SkillReducer** ([2603.29919](https://arxiv.org/abs/2603.29919), March 2026) —
+   optimizing agent *skills* for token efficiency. The always-on context lane
+   pass 2 measured (13k tokens of skills on this machine) now has a named
+   research thread — `prompt-audit --recommend` is the local expression.
+4. **CAPC** ([2607.15516](https://arxiv.org/abs/2607.15516)) — already cited;
+   new detail worth recording: Sonnet 4.6 cache has a **two-tier threshold near
+   3,500 tokens**, below which ρ plateaus at ~0.83 — compression that pushes the
+   cached prefix into the hot tier loses more than it saves.
+
+### Verdict
+
+The architecture is on the correct side of every line the 2026 literature draws:
+write-time compression (before the observation enters history), never rewriting a
+cached prefix (2601.06007 / 2606.17016 / 2607.12161 all converge here),
+deterministic rules over learned compressors, exact-hash dedup only, CRLF
+byte-exactness. **No architectural correction is needed.**
+
+The gap is measurement, exactly as pass 2 predicted: `gain` remains an L1 claim
+(tokens removed), holdout and NAP are absent, Δturns is absent. Cheapest closes,
+in order: **Δturns in `gain`** (hours), **verbatim signature slice** in
+`extract_full_signature` (hours, closes the last open anchor hazard), **holdout
+mode** (a day, the bar for any causal claim). PostToolUse, OTLP and CORE-Bench
+stay ranked behind those.
+
+**Closed same day (2026-08-22):** the two hour-scale items. `generate_outline`
+now slices the declaration verbatim from the file's own bytes
+(`extract_signature_verbatim` + `line_starts` in `chunker.rs`), preserving
+indentation, line breaks and CRLF — the re-derived, truncating `…` form is gone.
+`gain` now prints session shape (`gain::session_stats`): sessions inferred from
+time gaps, mean/max calls per session, and within-session re-requests of the
+same tool+subject — the measurable share of the "+13.8% turns" inversion
+mechanism — as a diagnostic that stays descriptive until holdout lands.

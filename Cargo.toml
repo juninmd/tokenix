@@ -2,6 +2,13 @@
 name = "tokenix"
 version = "0.63.0"
 edition = "2021"
+# Floor, not a preference. Two things break silently below it: `Command` only
+# quotes arguments safely for Windows `.cmd`/`.bat` shims since 1.77.2
+# (CVE-2024-24576), and `cmd_filter` spawns exactly those shims with
+# repo-controlled argv. 1.88 is where the dependency tree already lands
+# (ratatui, image, time), so this costs nothing and makes the assumption fail
+# at build time instead of at exploit time.
+rust-version = "1.88"
 description = "Semantic search, symbol graphs, secrets scanning, output filters, and CLI hooks that save 60-90% LLM tokens"
 license = "MIT"
 repository = "https://github.com/juninmd/tokenix"

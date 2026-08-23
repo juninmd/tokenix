@@ -124,7 +124,12 @@ pub fn redact_secrets(content: &str) -> String {
     out
 }
 
+/// `deny_unknown_fields` for the same reason `FilterDef` has it: a typo'd key
+/// that silently does nothing is worse than a loud failure, because the user
+/// believes the setting is active. A misspelled `read_min_lines` left the hook
+/// on its 200-line default with no way to notice.
 #[derive(serde::Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
 struct ProjectConfig {
     #[serde(default)]
     languages: std::collections::HashMap<String, String>,
@@ -137,6 +142,7 @@ struct ProjectConfig {
 /// `[hook]` section of `.tokenix.toml`. All fields optional; defaults live at
 /// the use sites in hook.rs so the fail-open contract is untouched.
 #[derive(serde::Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct HookConfig {
     /// Read intercept: files with at least this many lines return an outline
     /// instead of full content (default 200).
@@ -153,6 +159,7 @@ pub fn hook_config() -> HookConfig {
 
 /// `[index]` section of `.tokenix.toml`. All fields optional.
 #[derive(serde::Deserialize, Default, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct IndexConfig {
     /// Extra directory names to ignore, in addition to the built-in list.
     #[serde(default)]
@@ -175,43 +182,44 @@ pub fn index_config() -> IndexConfig {
     load_project_config().map(|c| c.index).unwrap_or_default()
 }
 
+/// Parse the project config from disk. A malformed or typo'd file is reported on
+/// stderr rather than swallowed: silently falling back to defaults left users
+/// convinced a setting was active when it never parsed. Still returns `None` so
+/// every caller keeps its documented default — a bad config degrades, it does
+/// not break the hook's fail-open contract.
+fn read_project_config() -> Option<ProjectConfig> {
+    let cwd = std::env::current_dir().ok()?;
+    let root = crate::store::find_project_root(&cwd);
+    for name in [".tokenix.toml", "tokenix.toml"] {
+        let path = root.join(name);
+        if !path.exists() {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path).ok()?;
+        return match toml::from_str(&content) {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                eprintln!(
+                    "[tokenix] ignoring {} (using defaults): {e}",
+                    path.display()
+                );
+                None
+            }
+        };
+    }
+    None
+}
+
 fn load_project_config() -> Option<ProjectConfig> {
+    // Tests mutate `.tokenix.toml` between cases, so they must not memoize.
     #[cfg(test)]
     {
-        let cwd = std::env::current_dir().ok()?;
-        let root = crate::store::find_project_root(&cwd);
-        let config_path = root.join(".tokenix.toml");
-        if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path).ok()?;
-            return toml::from_str(&content).ok();
-        }
-        let config_path2 = root.join("tokenix.toml");
-        if config_path2.exists() {
-            let content = std::fs::read_to_string(&config_path2).ok()?;
-            return toml::from_str(&content).ok();
-        }
-        None
+        read_project_config()
     }
     #[cfg(not(test))]
     {
         static PROJECT_CONFIG: OnceCell<Option<ProjectConfig>> = OnceCell::new();
-        PROJECT_CONFIG
-            .get_or_init(|| {
-                let cwd = std::env::current_dir().ok()?;
-                let root = crate::store::find_project_root(&cwd);
-                let config_path = root.join(".tokenix.toml");
-                if config_path.exists() {
-                    let content = std::fs::read_to_string(&config_path).ok()?;
-                    return toml::from_str(&content).ok();
-                }
-                let config_path2 = root.join("tokenix.toml");
-                if config_path2.exists() {
-                    let content = std::fs::read_to_string(&config_path2).ok()?;
-                    return toml::from_str(&content).ok();
-                }
-                None
-            })
-            .clone()
+        PROJECT_CONFIG.get_or_init(read_project_config).clone()
     }
 }
 
@@ -899,39 +907,81 @@ pub fn chunk_by_lines(lines: &[&str], path: &str) -> Vec<Chunk> {
     out
 }
 
-/// Extract the full declaration signature up to (but not including) the body opening.
-/// Joins multi-line parameter lists and normalizes whitespace.
-fn extract_full_signature(content: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        parts.push(trimmed);
-        // Body starts at `{` on its own or at end of line, or Python `:` ending the def
-        if trimmed.ends_with('{') || trimmed == "{" {
-            break;
-        }
-        if trimmed.ends_with(':')
-            && !trimmed.starts_with("//")
-            && !trimmed.starts_with('#')
-            && !trimmed.contains("=>")
+/// Longest a declaration may run before the scan gives up looking for a body
+/// opener. Bounds `extract_signature_verbatim` so a language whose bodies open
+/// on none of its markers cannot turn one outline entry into the rest of the file.
+const MAX_SIGNATURE_LINES: usize = 12;
+
+/// Byte offset of every line start in `content`, computed from the raw bytes so
+/// CRLF files keep their `\r\n` in verbatim slices (`.lines()` would strip it).
+fn line_starts(content: &str) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut off = 0usize;
+    for chunk in content.split_inclusive('\n') {
+        starts.push(off);
+        off += chunk.len();
+    }
+    starts
+}
+
+/// Verbatim slice of the declaration that opens at `start_line` (1-based),
+/// taken directly from the file's own bytes up to the body-opening line.
+/// Indentation, spacing and line endings survive unchanged, so anything the
+/// agent quotes from an outline matches disk exactly. The previous
+/// whitespace-normalized re-derivation was the most quotable-looking, least
+/// quotable thing an outline could emit: measured elsewhere, rewriting the
+/// bytes an edit tool must reproduce dropped successful patch application
+/// from 27/40 to 15/40.
+fn extract_signature_verbatim(
+    content: &str,
+    start_line: usize,
+    end_line: usize,
+    line_starts: &[usize],
+) -> String {
+    let Some(&start) = line_starts.get(start_line.saturating_sub(1)) else {
+        return String::new();
+    };
+    // Never scan past the declaration's own chunk, and never past a handful of
+    // lines within it. Not every language opens its body on one of the markers
+    // below - VB (Sub ... End Sub) opens on none of them, and a Python def with
+    // a trailing comment hides its colon - so an unbounded scan would splice the
+    // whole rest of the file into one outline entry.
+    let limit_line = end_line
+        .max(start_line)
+        .min(start_line + MAX_SIGNATURE_LINES - 1);
+    let limit = line_starts
+        .get(limit_line)
+        .copied()
+        .unwrap_or(content.len());
+    let mut end = start;
+    let mut opened = false;
+    for chunk in content[start..limit].split_inclusive('\n') {
+        let trimmed = chunk.trim_end();
+        end += chunk.len();
+        // Body opens on `{` (brace languages), on `:` ending a Python `def`
+        // (but not a comment or a dict-literal line), or on a `;`-terminated
+        // statement. The opening line itself stays in the slice, verbatim.
+        if trimmed.ends_with('{')
+            || trimmed.ends_with(';')
+            || (trimmed.ends_with(':')
+                && !trimmed.starts_with("//")
+                && !trimmed.starts_with('#')
+                && !trimmed.contains("=>"))
         {
-            break;
-        }
-        if trimmed.ends_with(';') {
+            opened = true;
             break;
         }
     }
-    let joined = parts.join(" ");
-    // Strip trailing `{` or `:` left by the loop-break line
-    let sig = joined.trim_end_matches('{').trim_end_matches(':').trim();
-    // Collapse internal whitespace runs
-    let sig: String = sig.split_whitespace().collect::<Vec<_>>().join(" ");
-    if sig.chars().count() > 200 {
-        let truncated: String = sig.chars().take(197).collect();
-        format!("{}…", truncated)
-    } else {
-        sig
+    if !opened {
+        // No recognizable body opener: the declaration line alone, still
+        // verbatim, beats an arbitrary slab of the file.
+        end = line_starts
+            .get(start_line)
+            .copied()
+            .unwrap_or(content.len())
+            .min(limit);
     }
+    content[start..end].to_string()
 }
 
 /// Look for a single-line doc comment on the line immediately before the chunk.
@@ -1195,6 +1245,7 @@ pub fn generate_outline(content: &str, path: &str) -> String {
     }
 
     let lines: Vec<&str> = content.lines().collect();
+    let starts = line_starts(content);
     let chunks = chunk_file(path, content);
 
     if chunks.is_empty() {
@@ -1214,7 +1265,7 @@ pub fn generate_outline(content: &str, path: &str) -> String {
     )];
 
     for c in &chunks {
-        let sig = extract_full_signature(&c.content);
+        let sig = extract_signature_verbatim(content, c.start_line, c.end_line, &starts);
         let doc = extract_doc_comment(&lines, c.start_line);
         let doc_suffix = doc.map(|d| format!("  // {}", d)).unwrap_or_default();
         let label = if c.symbol.is_empty() {
@@ -1481,6 +1532,27 @@ create or replace view saldo_vw as select * from clientes;
     }
 
     #[test]
+    fn project_config_rejects_typos_instead_of_ignoring_them() {
+        // Parsed directly rather than through a file: `load_project_config` reads
+        // a fixed path in the cwd, and a second test doing that would race with
+        // `custom_extension_indexing_and_detection`.
+        let good: Result<ProjectConfig, _> = toml::from_str("[hook]\nread_min_lines = 120\n");
+        assert!(good.is_ok(), "{:?}", good.err());
+        assert_eq!(good.unwrap().hook.read_min_lines, Some(120));
+
+        // The failure this locks: a misspelled key used to parse fine and do
+        // nothing, so the hook silently stayed on its 200-line default.
+        let typo: Result<ProjectConfig, _> = toml::from_str("[hook]\nread_min_line = 120\n");
+        assert!(typo.is_err(), "a typo'd key must not parse silently");
+
+        let bad_section: Result<ProjectConfig, _> = toml::from_str("[hooks]\nx = 1\n");
+        assert!(bad_section.is_err(), "an unknown section must not parse");
+
+        let bad_index: Result<ProjectConfig, _> = toml::from_str("[index]\nredact_secret = true\n");
+        assert!(bad_index.is_err(), "[index] must be strict too");
+    }
+
+    #[test]
     fn should_index_rejects_minified() {
         assert!(!should_index(std::path::Path::new("bundle.min.js")));
         assert!(!should_index(std::path::Path::new("app.min.css")));
@@ -1677,6 +1749,49 @@ void globalFunc() {
             "outline: {}",
             &out[..200.min(out.len())]
         );
+    }
+
+    #[test]
+    fn outline_signature_is_a_verbatim_slice() {
+        // A multi-line parameter list keeps its original indentation and line
+        // breaks — a whitespace-normalized copy would not match disk bytes, and
+        // an agent quoting it into an exact-match edit would fail to apply.
+        let code = "fn add(\n    a: i32,\n    b: i32,\n) -> i32 {\n    0\n}\n";
+        let out = generate_outline(code, "src/x.rs");
+        assert!(
+            out.contains("fn add(\n    a: i32,\n    b: i32,\n) -> i32 {"),
+            "outline must quote the exact declaration, got: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn outline_signature_preserves_crlf_verbatim() {
+        // Windows files come back CRLF; the outline must keep `\r\n` so a quoted
+        // signature matches the bytes on disk byte-for-byte.
+        let code = "fn add(\r\n    a: i32,\r\n) -> i32 {\r\n    0\r\n}\r\n";
+        let out = generate_outline(code, "src/x.rs");
+        assert!(
+            out.contains("fn add(\r\n    a: i32,\r\n) -> i32 {"),
+            "outline must preserve CRLF, got: {}",
+            out.replace('\r', "␍")
+        );
+    }
+
+    #[test]
+    fn outline_signature_is_bounded_when_no_body_opener_exists() {
+        // VB bodies open on none of the markers the scan looks for, so an
+        // unbounded scan walked past the declaration and spliced the rest of the
+        // file into the first outline entry.
+        let code = "Sub First()\n".to_string()
+            + &"    Debug.Print 1\n".repeat(50)
+            + "End Sub\n\nSub Second()\n    Debug.Print 2\nEnd Sub\n";
+        let out = generate_outline(&code, "src/x.bas");
+        assert!(
+            !out.contains("End Sub"),
+            "a signature must not swallow the body, got: {out}"
+        );
+        assert!(out.contains("Sub First()"), "{out}");
     }
 
     #[test]

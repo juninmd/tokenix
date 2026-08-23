@@ -1715,10 +1715,57 @@ fn default_phase() -> String {
 /// so `gain` still sees recent history while the log stays bounded.
 const HOOK_LOG_MAX_BYTES: u64 = 5_000_000;
 
+/// Restrict a path tokenix created to its owner (`0600` for files, `0700` for
+/// directories). Everything under `~/.tokenix` is derived from command lines and
+/// command output, so on a shared host the default umask made one user's shell
+/// history readable by every other account. No-op on Windows, where the parent
+/// profile directory already carries the equivalent ACL.
+pub fn restrict_to_owner(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let Ok(meta) = std::fs::metadata(path) else {
+            return;
+        };
+        let mode = if meta.is_dir() { 0o700 } else { 0o600 };
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+/// Copy of `event` with credential shapes masked out of the two free-text fields.
+///
+/// `command` and `input_preview` are verbatim shell input, and shell input is
+/// where credentials actually live: `curl -H "Authorization: Bearer …"`,
+/// `psql postgres://user:pw@host`, `export API_KEY=…`. The log is long-lived
+/// (rotated, not deleted), machine-wide, and read back by `gain`, so the raw
+/// values had no business being on disk. `scan-secrets` and `session-audit`
+/// already redact before printing — the writer must do the same.
+fn redacted_event(event: &HookEvent) -> HookEvent {
+    use crate::conversation_audit::redact_credentials;
+    HookEvent {
+        ts: event.ts,
+        tool: event.tool.clone(),
+        action: event.action.clone(),
+        reason: event.reason.clone(),
+        saved_tokens: event.saved_tokens,
+        actual_tokens: event.actual_tokens,
+        original_estimate: event.original_estimate,
+        input_preview: redact_credentials(&event.input_preview),
+        phase: event.phase.clone(),
+        command: redact_credentials(&event.command),
+    }
+}
+
 pub fn log_hook_event(repo_root: &Path, event: &HookEvent) -> Result<()> {
+    let event = &redacted_event(event);
     let log = log_path(repo_root);
     if let Some(parent) = log.parent() {
         std::fs::create_dir_all(parent)?;
+        restrict_to_owner(parent);
     }
     // Fail-open like the rest of the hook path: a rotation error must never
     // block logging (worst case the log keeps growing until the next attempt).
@@ -1752,11 +1799,15 @@ pub fn log_hook_event(repo_root: &Path, event: &HookEvent) -> Result<()> {
         }
     }
     use std::io::Write;
+    let existed = log.exists();
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log)?;
     writeln!(f, "{}", serde_json::to_string(event)?)?;
+    if !existed {
+        restrict_to_owner(&log);
+    }
     Ok(())
 }
 
@@ -1923,6 +1974,58 @@ pub fn get_file_graph_ranks(conn: &Connection) -> Result<HashMap<String, f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn event_with(command: &str, preview: &str) -> HookEvent {
+        HookEvent {
+            ts: 1.0,
+            tool: "Bash".to_string(),
+            action: "intercepted".to_string(),
+            reason: "r".to_string(),
+            saved_tokens: 10,
+            actual_tokens: 5,
+            original_estimate: 15,
+            input_preview: preview.to_string(),
+            phase: "pre".to_string(),
+            command: command.to_string(),
+        }
+    }
+
+    #[test]
+    fn logged_events_mask_credentials_in_command_and_preview() {
+        // The hook log is machine-wide, rotated rather than deleted, and read
+        // back by `gain`. Shell input is exactly where credentials live, so the
+        // raw value must never be what lands on disk.
+        let e = event_with(
+            "curl -H \"Authorization: Bearer sk-live-abc123\" https://api.example.com",
+            "git push https://user:ghp_secret@github.com/org/repo.git",
+        );
+        let red = redacted_event(&e);
+        assert!(!red.command.contains("sk-live-abc123"), "{}", red.command);
+        assert!(red.command.contains("[REDACTED]"));
+        assert!(
+            !red.input_preview.contains("ghp_secret"),
+            "{}",
+            red.input_preview
+        );
+        // Measurements and routing fields must survive untouched, or `gain`
+        // silently changes meaning.
+        assert_eq!(red.saved_tokens, 10);
+        assert_eq!(red.actual_tokens, 5);
+        assert_eq!(red.original_estimate, 15);
+        assert_eq!(red.action, "intercepted");
+        assert_eq!(red.tool, "Bash");
+        assert_eq!(red.phase, "pre");
+    }
+
+    #[test]
+    fn redaction_leaves_ordinary_commands_byte_identical() {
+        // `filter list` groups by this string; rewriting a benign command would
+        // fragment the buckets.
+        let e = event_with("cargo test --locked", "cargo test --locked");
+        let red = redacted_event(&e);
+        assert_eq!(red.command, "cargo test --locked");
+        assert_eq!(red.input_preview, "cargo test --locked");
+    }
 
     #[test]
     fn test_cosine_similarity_to_bytes() {

@@ -1441,8 +1441,10 @@ fn enforce_token_budget(s: &str) -> String {
         return s.to_string();
     }
 
-    // Convert the token budget into a char budget using this payload's own
-    // observed density, rather than assuming a fixed chars-per-token ratio.
+    // Convert the token budget into a char budget. `count_tokens` is chars/4
+    // rounded up, so this ratio is ~4 by construction — it is written as a
+    // division rather than a constant so the conversion stays correct if
+    // `count_tokens` ever becomes a real BPE count (roadmap).
     let char_count = s.chars().count();
     let chars_per_token = (char_count as f64 / tokens as f64).max(1.0);
     let char_budget = (budget as f64 * chars_per_token) as usize;
@@ -2263,6 +2265,9 @@ fn powershell_program() -> &'static str {
     })
 }
 
+/// Below this, the recovery hint costs more than the content it points at.
+const RECOVERY_HINT_MIN_DROPPED_BYTES: usize = 500;
+
 const TEE_MAX_FILES: usize = 20;
 const TEE_MAX_BYTES: usize = 1_000_000;
 const TEE_MIN_RAW_BYTES: usize = 500;
@@ -2278,6 +2283,7 @@ fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Opti
     }
     let dir = dirs::home_dir()?.join(".tokenix").join("tee");
     std::fs::create_dir_all(&dir).ok()?;
+    crate::store::restrict_to_owner(&dir);
 
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2292,7 +2298,13 @@ fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Opti
         .to_string();
     let path = dir.join(format!("{epoch}_{slug}.log"));
 
-    let mut body = format!("$ {command_str}\n");
+    // The command line itself is the most reliable place to find a credential in
+    // a failing run (`curl -H "Authorization: …"`, `psql postgres://u:pw@h`), and
+    // this file outlives the session. Mask it like every other persisted view.
+    let mut body = format!(
+        "$ {}\n",
+        crate::conversation_audit::redact_credentials(command_str)
+    );
     let mut push_stream = |label: &str, raw: &str| {
         if !raw.trim().is_empty() {
             body.push_str(&format!("--- {label} ---\n"));
@@ -2300,7 +2312,11 @@ fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Opti
             while cut > 0 && !raw.is_char_boundary(cut) {
                 cut -= 1;
             }
-            body.push_str(&raw[..cut]);
+            // A failing command is exactly the one that dumps its environment or
+            // echoes an auth header. The masking is shape-targeted (auth headers,
+            // URL userinfo, `token=`/`password=`, PEM headers), so stack traces
+            // and compiler errors — the reason this file exists — survive intact.
+            body.push_str(&crate::conversation_audit::redact_credentials(&raw[..cut]));
             if cut < raw.len() {
                 body.push_str("\n[tee capped at 1MB]");
             }
@@ -2312,6 +2328,7 @@ fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Opti
     push_stream("stdout", stdout_raw);
     push_stream("stderr", stderr_raw);
     std::fs::write(&path, &body).ok()?;
+    crate::store::restrict_to_owner(&path);
 
     // Rotation: keep the newest TEE_MAX_FILES logs (epoch prefix sorts).
     if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -2376,9 +2393,20 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
     let compressed_len = stdout_compressed.len() + stderr_compressed.len();
     if !output.status.success() && raw_len >= TEE_MIN_RAW_BYTES && compressed_len + 80 < raw_len {
         if let Some(path) = tee_raw_output(command_str, &stdout_raw, &stderr_raw) {
-            stderr_compressed.push_str(&format!("\n[full output: {}]\n", path.display()));
+            // Say "credentials masked" rather than implying a byte-for-byte copy:
+            // the agent must not conclude a redacted token was the literal value.
+            stderr_compressed.push_str(&format!(
+                "\n[full output (credentials masked): {}]\n",
+                path.display()
+            ));
         }
     }
+
+    let repo_root = find_repo_root();
+    // Dedup and recall are scoped per project: the index is machine-wide, and a
+    // pointer to "the identical output you already have" is only true within the
+    // checkout that produced it.
+    let project = repo_root.to_string_lossy().to_string();
 
     // Cross-call dedup: agents re-run `git status`/`cargo check`/`kubectl get`
     // and pay full price for byte-identical output every time. Only on success
@@ -2387,7 +2415,9 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
     let mut deduped_against: Option<String> = None;
     if output.status.success() {
         let stdout_tokens = count_tokens(&stdout_compressed);
-        if let Some(hit) = crate::recall::find_identical(&stdout_compressed, stdout_tokens) {
+        if let Some(hit) =
+            crate::recall::find_identical(&project, &stdout_compressed, stdout_tokens, now_ts())
+        {
             let marker = crate::recall::dedup_marker(&hit, now_ts());
             // Never trade a short output for a longer marker.
             if marker.len() < stdout_compressed.len() {
@@ -2396,13 +2426,30 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
             }
         }
         if deduped_against.is_none() && stdout_tokens >= 1 {
-            crate::recall::remember(
+            let dropped = stdout_raw.len().saturating_sub(stdout_compressed.len());
+            let key = crate::recall::remember(
+                &project,
                 command_str,
                 &stdout_compressed,
                 &stdout_raw,
                 stdout_tokens,
                 now_ts(),
             );
+            // Advertise the recovery key on the *first* clipped run, not only on a
+            // later dedup hit. Compression is reversible by design, but the key
+            // was being stashed and never shown, so the one output most worth
+            // recovering — a big first result the caps just trimmed — had no way
+            // back short of re-running the command.
+            if let Some(key) = key {
+                if dropped >= RECOVERY_HINT_MIN_DROPPED_BYTES {
+                    if !stdout_compressed.ends_with('\n') {
+                        stdout_compressed.push('\n');
+                    }
+                    stdout_compressed.push_str(&format!(
+                        "[tokenix: {dropped} bytes not shown — `tokenix retrieve {key}` returns the full output]\n"
+                    ));
+                }
+            }
         }
     }
 
@@ -2411,7 +2458,6 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
     eprint!("{}", stderr_compressed);
 
     // Write log event of the actual execution savings
-    let repo_root = find_repo_root();
     // Capture raw output if a `tokenix filter record` session is active.
     crate::recordings::capture(&repo_root, command_str, &stdout_raw, &stderr_raw);
     let original_tokens = (count_tokens(&stdout_raw) + count_tokens(&stderr_raw)) as i64;
@@ -2419,23 +2465,33 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
         (count_tokens(&stdout_compressed) + count_tokens(&stderr_compressed)) as i64;
     let saved = (original_tokens - actual_tokens).max(0);
 
-    if saved > 0 {
-        let _ = log_hook_event(
-            &repo_root,
-            &HookEvent {
-                ts: now_ts(),
-                tool: if is_powershell { "PowerShell" } else { "Bash" }.to_string(),
-                action: "intercepted".to_string(),
-                phase: "ToolOutputCompressed".to_string(),
-                reason: "compressed command output".to_string(),
-                saved_tokens: saved,
-                actual_tokens,
-                original_estimate: original_tokens,
-                input_preview: command_str.chars().take(200).collect(),
-                command: command_str.to_string(),
-            },
-        );
-    }
+    // Log every measured run, including the ones that saved nothing.
+    //
+    // Skipping `saved == 0` made `gain`'s denominator the set of commands where
+    // compression already worked, so `pct_saved` answered "how much do we save
+    // when we save" — a number that cannot go down and is not the savings rate
+    // anyone reads it as. A run that went through `tokenix run` and came back
+    // the same size is a real measurement and belongs in the sample.
+    let (action, reason) = if saved > 0 {
+        ("intercepted", "compressed command output")
+    } else {
+        ("pass", "no reduction available")
+    };
+    let _ = log_hook_event(
+        &repo_root,
+        &HookEvent {
+            ts: now_ts(),
+            tool: if is_powershell { "PowerShell" } else { "Bash" }.to_string(),
+            action: action.to_string(),
+            phase: "ToolOutputCompressed".to_string(),
+            reason: reason.to_string(),
+            saved_tokens: saved,
+            actual_tokens,
+            original_estimate: original_tokens,
+            input_preview: command_str.chars().take(200).collect(),
+            command: command_str.to_string(),
+        },
+    );
 
     Ok(output.status.code().unwrap_or(0))
 }

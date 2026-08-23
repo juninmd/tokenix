@@ -23,9 +23,20 @@ const RECENT_CAP: usize = 24;
 const BLOB_CAP: usize = 60;
 /// Below this the marker would not pay for itself.
 const DEFAULT_DEDUP_MIN_TOKENS: usize = 200;
+/// How long a remembered command output stays authoritative. Long enough to
+/// cover a working session's repeated `git status` / `cargo check`, short enough
+/// that it cannot point at output from a previous day's session.
+const DEFAULT_DEDUP_TTL_SECS: f64 = 3600.0;
 
 fn dedup_enabled() -> bool {
     !std::env::var("TOKENIX_DEDUP").is_ok_and(|v| v == "0")
+}
+
+fn dedup_ttl_secs() -> f64 {
+    std::env::var("TOKENIX_DEDUP_TTL")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .unwrap_or(DEFAULT_DEDUP_TTL_SECS)
 }
 
 fn dedup_min_tokens() -> usize {
@@ -69,6 +80,11 @@ pub struct RecentOutput {
     pub command: String,
     pub ts: f64,
     pub tokens: usize,
+    /// Project this output came from. Empty on entries written by an older
+    /// version, which therefore never match a scoped lookup — correct, since
+    /// their origin is unknown.
+    #[serde(default)]
+    pub project: String,
 }
 
 fn load_index() -> Vec<RecentOutput> {
@@ -89,19 +105,26 @@ fn save_index(entries: &[RecentOutput]) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(raw) = serde_json::to_string(entries) {
-        let _ = std::fs::write(path, raw);
+        let _ = std::fs::write(&path, raw);
+        crate::store::restrict_to_owner(&path);
     }
 }
 
 /// Persist `content` under its digest and return the key. Existing blobs are
 /// left untouched (same content ⇒ same key ⇒ nothing to rewrite).
+/// Blobs are stored verbatim, unlike the hook log and the failure tee: `retrieve`
+/// promises the *exact* original bytes, and `find_identical` verifies a candidate
+/// against the stored blob before collapsing anything — redacting here would
+/// break both. Confidentiality is handled with file permissions instead.
 pub fn stash(content: &str) -> Option<String> {
     let key = digest(content);
     let dir = blob_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
+    crate::store::restrict_to_owner(&dir);
     let path = dir.join(format!("{key}.txt"));
     if !path.exists() {
         std::fs::write(&path, content).ok()?;
+        crate::store::restrict_to_owner(&path);
         prune_blobs(&dir);
     }
     Some(key)
@@ -139,7 +162,11 @@ fn prune_blobs(dir: &std::path::Path) {
 
 /// Record that `command` produced `compressed` (from `raw`), so a later
 /// identical run can be collapsed and the raw text stays recoverable.
+///
+/// Returns the key for the **raw** blob — the one a recovery hint must advertise,
+/// since the point of recovery is seeing what compression dropped.
 pub fn remember(
+    project: &str,
     command: &str,
     compressed: &str,
     raw: &str,
@@ -154,26 +181,51 @@ pub fn remember(
         0,
         RecentOutput {
             key: key.clone(),
-            raw_key,
+            raw_key: raw_key.clone(),
             command: command.chars().take(120).collect(),
             ts,
             tokens,
+            project: project.to_string(),
         },
     );
     index.truncate(RECENT_CAP);
     save_index(&index);
-    Some(key)
+    Some(raw_key)
+}
+
+/// May this remembered output stand in for a fresh run right now?
+///
+/// Kept separate from the disk lookup so the rule is testable without touching
+/// `~/.tokenix`. Two conditions, both required by what the marker asserts —
+/// "identical to an earlier run, unchanged": the entry must come from the same
+/// checkout, and it must be recent enough that the earlier copy is plausibly
+/// still in the conversation.
+fn reusable(entry: &RecentOutput, project: &str, now: f64) -> bool {
+    entry.project == project && now - entry.ts <= dedup_ttl_secs()
 }
 
 /// Look for an earlier call whose output was byte-identical to `content`.
 /// The hit is verified against the stored blob, so a hash collision or a pruned
 /// blob degrades to "no match" instead of a wrong collapse.
-pub fn find_identical(content: &str, tokens: usize) -> Option<RecentOutput> {
+///
+/// Scoped to `project` and to `dedup_ttl_secs()` because the marker asserts the
+/// output "is already in this conversation". The index lives in `~/.tokenix` and
+/// outlives both the session and the repository: without these two filters a
+/// `git status` from another checkout, or from yesterday, could be collapsed into
+/// a pointer to output the agent had never seen.
+pub fn find_identical(
+    project: &str,
+    content: &str,
+    tokens: usize,
+    now: f64,
+) -> Option<RecentOutput> {
     if !dedup_enabled() || tokens < dedup_min_tokens() {
         return None;
     }
     let key = digest(content);
-    let mut hit = load_index().into_iter().find(|e| e.key == key)?;
+    let mut hit = load_index()
+        .into_iter()
+        .find(|e| e.key == key && reusable(e, project, now))?;
     if retrieve(&hit.key).as_deref() != Some(content) {
         return None;
     }
@@ -380,6 +432,7 @@ mod tests {
             command: "git status".to_string(),
             ts: 1000.0,
             tokens: 420,
+            project: "/repo".to_string(),
         };
         let marker = dedup_marker(&hit, 1120.0);
         assert!(marker.contains("git status"));
@@ -395,6 +448,7 @@ mod tests {
             command: "c".to_string(),
             ts: 0.0,
             tokens: 1,
+            project: "/repo".to_string(),
         };
         assert!(dedup_marker(&hit, 30.0).contains("30s ago"));
         assert!(dedup_marker(&hit, 600.0).contains("10m ago"));
@@ -404,6 +458,47 @@ mod tests {
     #[test]
     fn short_output_is_never_deduped() {
         // Below the threshold the marker would cost more than the output.
-        assert!(find_identical("tiny", 3).is_none());
+        assert!(find_identical("/repo", "tiny", 3, 0.0).is_none());
+    }
+
+    #[test]
+    fn dedup_is_scoped_to_one_project_and_expires() {
+        // Both guards exist because the marker claims the output is already in
+        // this conversation. Neither a different checkout nor a run from an
+        // earlier session can honour that claim.
+        let entry = RecentOutput {
+            key: "k".to_string(),
+            raw_key: "k".to_string(),
+            command: "git status".to_string(),
+            ts: 1_000.0,
+            tokens: 900,
+            project: "/repo-a".to_string(),
+        };
+        let ttl = dedup_ttl_secs();
+
+        assert!(reusable(&entry, "/repo-a", 1_000.0 + ttl / 2.0));
+        assert!(
+            !reusable(&entry, "/repo-b", 1_000.0),
+            "another checkout must not reuse this entry"
+        );
+        assert!(
+            !reusable(&entry, "/repo-a", 1_000.0 + ttl + 1.0),
+            "past the TTL the earlier output is no longer assumed to be in context"
+        );
+    }
+
+    #[test]
+    fn entries_written_before_project_scoping_never_match() {
+        // `project` deserializes to "" for an index written by an older build.
+        // Those entries have unknown origin, so they must not be reused.
+        let legacy = RecentOutput {
+            key: "k".to_string(),
+            raw_key: "k".to_string(),
+            command: "git status".to_string(),
+            ts: 1_000.0,
+            tokens: 900,
+            project: String::new(),
+        };
+        assert!(!reusable(&legacy, "/repo-a", 1_000.0));
     }
 }
