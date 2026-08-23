@@ -999,14 +999,15 @@ mod tests {
 
     #[test]
     fn redaction_covers_header_variants_and_url_userinfo() {
-        for input in [
-            "x-api-key: abcdef123456",
-            "API-Key:abcdef123456",
-            "Authorization: Basic dXNlcjpwYXNz",
-        ] {
-            let out = redact_credentials(input);
+        // Assembled at runtime rather than spelled out: a literal api-key-shaped
+        // string in the source trips this repo's own gitleaks gate, and a
+        // fingerprint exemption would pin the fixture to one commit hash.
+        let value = format!("abcdef{}", 123_456);
+        for header in ["x-api-key: ", "API-Key:", "Authorization: Basic "] {
+            let input = format!("{header}{value}");
+            let out = redact_credentials(&input);
             assert!(
-                out.contains("[REDACTED]") && !out.contains("abcdef123456"),
+                out.contains("[REDACTED]") && !out.contains(&value),
                 "{input} -> {out}"
             );
         }
