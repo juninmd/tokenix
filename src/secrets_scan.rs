@@ -287,6 +287,25 @@ fn scan_content(content: &str, rules: &[Rule]) -> Vec<RawMatch> {
     out
 }
 
+/// Scan arbitrary text for known secrets and mask every occurrence found,
+/// reusing the same compiled rule set and boundary-safe replacer `scan`
+/// already relies on. For callers outside a file-scan context (a PostToolUse
+/// hook, not a filesystem walk) that need to know *whether* a secret was
+/// found, independent of whatever size compression runs afterward. Returns
+/// the redacted text and `true` if anything matched.
+pub(crate) fn redact_known_secrets(text: &str) -> (String, bool) {
+    let rules = load_rules();
+    let matches = scan_content(text, &rules);
+    if matches.is_empty() {
+        return (text.to_string(), false);
+    }
+    let mut out = text.to_string();
+    for m in &matches {
+        out = redact_occurrences(&out, &m.secret);
+    }
+    (out, true)
+}
+
 fn has_text_ext(p: &Path) -> bool {
     p.extension()
         .and_then(|e| e.to_str())
@@ -1142,6 +1161,42 @@ mod tests {
         assert!(rules_hit.contains(&"aws-access-key-id"), "{rules_hit:?}");
         assert!(rules_hit.contains(&"llm-api-key"), "{rules_hit:?}");
         assert!(rules_hit.contains(&"github-token"), "{rules_hit:?}");
+    }
+
+    #[test]
+    fn redact_known_secrets_no_match_returns_unchanged() {
+        let (out, hit) = redact_known_secrets("just a plain log line, nothing sensitive here");
+        assert_eq!(out, "just a plain log line, nothing sensitive here");
+        assert!(!hit);
+    }
+
+    #[test]
+    fn redact_known_secrets_masks_without_full_exposure() {
+        let (out, hit) = redact_known_secrets("aws=AKIAIOSFODNN7EXAMPLE\n");
+        assert!(hit);
+        assert!(
+            !out.contains("AKIAIOSFODNN7EXAMPLE"),
+            "secret survived: {out}"
+        );
+        assert!(out.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_known_secrets_multiple_matches_in_one_block() {
+        let content = concat!(
+            "aws key: AKIAIOSFODNN7EXAMPLE\n",
+            "github token: ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n", // gitleaks:allow synthetic test fixture
+        );
+        let (out, hit) = redact_known_secrets(content);
+        assert!(hit);
+        assert!(
+            !out.contains("AKIAIOSFODNN7EXAMPLE"),
+            "aws key survived: {out}"
+        );
+        assert!(
+            !out.contains("ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"),
+            "github token survived: {out}"
+        );
     }
 
     #[test]

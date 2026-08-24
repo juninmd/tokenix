@@ -272,3 +272,70 @@ fn powershell_disabled_env_passes_through() {
         "bypass must skip rewrite: {stdout}"
     );
 }
+
+/// Run `tokenix hook-post` with `payload` on stdin, same isolation shape as
+/// `run_hook` — the hook writes its event log relative to the repo root it
+/// detects.
+fn run_hook_post(payload: &str) -> (String, i32) {
+    let dir = std::env::temp_dir().join(format!(
+        "tokenix-hook-post-e2e-{}-{:x}",
+        std::process::id(),
+        payload.len()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp cwd");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .arg("hook-post")
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn tokenix hook-post");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(payload.as_bytes())
+        .expect("write payload");
+    let out = child.wait_with_output().expect("hook-post exit");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+/// Regression for the PostToolUse `updatedToolOutput` fix (issue #73): a
+/// non-Bash, non-ListDirectory tool result (e.g. a `Read`) previously exited
+/// this hook immediately on the stale belief that Claude Code PostToolUse
+/// "cannot replace or shorten a tool result" — silently skipping redaction
+/// for exactly the surface the PreToolUse Bash rewrite never sees. A secret
+/// embedded in a `Read` result must now be stripped before the model would
+/// ever receive it.
+#[test]
+fn claude_read_result_secret_is_redacted_via_updated_tool_output() {
+    let secret = "AKIAIOSFODNN7EXAMPLE"; // gitleaks:allow synthetic test fixture
+    let payload = format!(
+        r#"{{"hook_event_name":"PostToolUse","tool_name":"Read","tool_input":{{"file_path":"notes.txt"}},"tool_response":{text}}}"#,
+        text = serde_json::to_string(&format!("config dump:\naws_key={secret}\n")).unwrap()
+    );
+    let (stdout, code) = run_hook_post(&payload);
+    assert_eq!(code, 0, "hook-post must always exit 0");
+
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("must emit JSON when a secret was redacted");
+    assert_eq!(
+        v["hookSpecificOutput"]["hookEventName"], "PostToolUse",
+        "must carry the PostToolUse hookEventName"
+    );
+    let updated = v["hookSpecificOutput"]["updatedToolOutput"]
+        .as_str()
+        .expect("updatedToolOutput must be a string");
+    assert!(
+        !updated.contains(secret),
+        "secret survived into updatedToolOutput: {updated}"
+    );
+    assert!(
+        updated.contains("[REDACTED]"),
+        "expected a redaction marker: {updated}"
+    );
+}
