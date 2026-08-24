@@ -2075,8 +2075,12 @@ fn extract_response_text(response: &serde_json::Value) -> Option<String> {
 /// Output dialect for a PostToolUse hook, selected by which agent invoked it.
 #[derive(Debug, PartialEq)]
 enum PostDialect {
-    /// Claude Code / Codex: PostToolUse cannot replace or shorten a tool result,
-    /// so compression here is a no-op — exit 0 silently without logging savings.
+    /// Claude Code / Codex. Historical name: for versions before Claude Code
+    /// v2.1.121, PostToolUse genuinely could not replace a tool result and
+    /// this dialect was a silent no-op. As of v2.1.121+,
+    /// `hookSpecificOutput.updatedToolOutput` is honored for all tools — see
+    /// the emission in `run_hook_post` below — so this variant is no longer
+    /// a no-op; the name is kept only to avoid an unrelated rename.
     ClaudeNoop,
     /// GitHub Copilot CLI: print `{"modifiedResult":{...}}` JSON on stdout, exit 0.
     CopilotJson,
@@ -2215,40 +2219,32 @@ pub fn run_hook_post() -> Result<()> {
     let original_tokens = count_tokens(&input.text) as i64;
     let actual_tokens = count_tokens(&compressed) as i64;
 
-    if secret_hit {
-        let _ = log_hook_event(
-            &repo_root,
-            &HookEvent {
-                ts: now_ts(),
-                tool: input.tool_name.clone(),
-                action: "intercepted".to_string(),
-                phase: "post".to_string(),
-                reason: "secret-redacted".to_string(),
-                saved_tokens: 0,
-                actual_tokens,
-                original_estimate: original_tokens,
-                input_preview: clean.chars().take(200).collect(),
-                command: input.command.clone(),
-            },
-        );
-    }
-    if changed {
-        let _ = log_hook_event(
-            &repo_root,
-            &HookEvent {
-                ts: now_ts(),
-                tool: input.tool_name.clone(),
-                action: "intercepted".to_string(),
-                phase: "post".to_string(),
-                reason: "size-compressed".to_string(),
-                saved_tokens: (original_tokens - actual_tokens).max(0),
-                actual_tokens,
-                original_estimate: original_tokens,
-                input_preview: clean.chars().take(200).collect(),
-                command: input.command.clone(),
-            },
-        );
-    }
+    // Exactly one HookEvent per call: `secret_hit` always implies `changed`
+    // (redaction never leaves the text byte-identical), so logging both
+    // conditions independently double-counted this single call in `gain`'s
+    // `intercepted` count and token sums. `reason` alone still tells `gain`
+    // apart which kind of call this was — secret-redacted takes priority
+    // since it is the security-relevant signal.
+    let reason = if secret_hit {
+        "secret-redacted"
+    } else {
+        "size-compressed"
+    };
+    let _ = log_hook_event(
+        &repo_root,
+        &HookEvent {
+            ts: now_ts(),
+            tool: input.tool_name,
+            action: "intercepted".to_string(),
+            phase: "post".to_string(),
+            reason: reason.to_string(),
+            saved_tokens: (original_tokens - actual_tokens).max(0),
+            actual_tokens,
+            original_estimate: original_tokens,
+            input_preview: clean.chars().take(200).collect(),
+            command: input.command,
+        },
+    );
 
     match input.dialect {
         PostDialect::ClaudeNoop => {
