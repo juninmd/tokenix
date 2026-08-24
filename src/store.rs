@@ -349,8 +349,10 @@ pub fn serialize_vec(v: &[f32]) -> Vec<u8> {
 
 pub fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
         .collect()
 }
 
@@ -796,6 +798,26 @@ pub fn search_graph_nodes_kind(
     Ok(nodes)
 }
 
+/// Every symbol declared in one file, ordered by position. Used to map changed
+/// line ranges back onto symbols (`tokenix blast`).
+pub fn graph_nodes_for_path(conn: &Connection, path: &str) -> Result<Vec<GraphNode>> {
+    let mut stmt = conn.prepare(
+        "SELECT chunk_id,path,name,kind,start_line,end_line
+         FROM graph_nodes WHERE path = ?1 ORDER BY start_line",
+    )?;
+    let rows = stmt.query_map(params![path], |row| {
+        Ok(GraphNode {
+            chunk_id: row.get(0)?,
+            path: row.get(1)?,
+            name: row.get(2)?,
+            kind: row.get(3)?,
+            start_line: row.get::<_, i64>(4)? as usize,
+            end_line: row.get::<_, i64>(5)? as usize,
+        })
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
 /// (chunk_id, name, path) for every graph node — the incremental rebuild's
 /// table-backed resolution map.
 pub fn all_graph_node_names(conn: &Connection) -> Result<Vec<(i64, String, String)>> {
@@ -1084,11 +1106,11 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 pub fn cosine_similarity_to_bytes(query_vec: &[f32], query_norm: f32, bytes: &[u8]) -> f32 {
     let mut dot = 0.0f32;
     let mut nb = 0.0f32;
-    for (i, chunk) in bytes.chunks_exact(4).enumerate() {
+    for (i, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
         if i >= query_vec.len() {
             break;
         }
-        let y = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let y = f32::from_le_bytes(*chunk);
         dot += query_vec[i] * y;
         nb += y * y;
     }
@@ -1537,6 +1559,31 @@ pub fn get_index_age(repo_root: &Path) -> Option<f64> {
         .ok()?
         .as_secs_f64();
     Some(now - indexed_at)
+}
+
+/// How many indexed files still need embeddings, for callers that only have the
+/// repo root. `0` when there is no index — nothing to backfill.
+///
+/// Deliberately *not* part of [`index_staleness`]: those files are perfectly
+/// usable for text search, the symbol graph and read interception, and reporting
+/// them as stale would make the hook fail open and stop saving tokens. It only
+/// means a full `tokenix index` still has work to do.
+pub fn pending_embed_count(repo_root: &Path) -> i64 {
+    match open_db(repo_root, false) {
+        Ok(Some(conn)) => pending_embed_files(&conn),
+        _ => 0,
+    }
+}
+
+/// Files written by a `--no-embed` run or an inline freshness refresh: their
+/// chunks are searchable as text but carry no vectors yet.
+pub fn pending_embed_files(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM files WHERE content_hash LIKE ?1",
+        params![format!("{}%", crate::indexer::NO_EMBED_HASH_PREFIX)],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
 }
 
 pub fn index_staleness(repo_root: &Path) -> IndexStaleness {

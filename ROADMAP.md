@@ -141,7 +141,7 @@ tokenix/
 
 ## Measurement & Validation
 
-1. **Benchmark suite**: `tokenix bench --session-like` 
+1. **Benchmark suite**: `tokenix bench --session-like`
    - Simulate 20 typical cluster queries
    - Measure tokens before/after optimizations
 
@@ -236,11 +236,11 @@ before the broader indexing work in Phases 1–3 above.
 
 ## Session Recovery Complete (2026-05-29)
 
-**Cluster status**: ✅ **38 apps deployed, 37 Synced+Healthy, 1 OutOfSync but Healthy**  
-**Pod health**: ✅ 72 pods running, 0 CrashLoops, 0 failed  
-**Critical services**: ✅ evo-agent, fast-news, shorts-generator, queima-buchinho, vibe-code all operational  
-**Postgres backup**: ✅ Fixed (pg_isready retry loop added, tested successful)  
-**Monitoring**: ✅ Telegram alerts active for backup/scheduled job failures  
+**Cluster status**: ✅ **38 apps deployed, 37 Synced+Healthy, 1 OutOfSync but Healthy**
+**Pod health**: ✅ 72 pods running, 0 CrashLoops, 0 failed
+**Critical services**: ✅ evo-agent, fast-news, shorts-generator, queima-buchinho, vibe-code all operational
+**Postgres backup**: ✅ Fixed (pg_isready retry loop added, tested successful)
+**Monitoring**: ✅ Telegram alerts active for backup/scheduled job failures
 
 ### Fixes Applied This Session
 1. **evo-agent Unknown** → Fixed 4 cronjobs with duplicate spec: key (kustomize build blocker)
@@ -268,6 +268,40 @@ Estimated token savings from P1+P2: ~60% of typical cluster-ops workflow.
 
 ---
 
-**Last updated**: 2026-05-29 (session recovery: 38 apps → fully operational)  
-**Owner**: Tokenix optimization initiative + app-charts cluster recovery  
+**Last updated**: 2026-05-29 (session recovery: 38 apps → fully operational)
+**Owner**: Tokenix optimization initiative + app-charts cluster recovery
 **Status**: Session complete; next phase is tokenix k8s subcommand implementation
+## Competitive gap pass (2026-08)
+
+Audit against [Graft](https://github.com/NanoNets/Graft),
+[codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) and
+[Agent-Reach](https://github.com/Panniantong/Agent-Reach).
+
+Shipped in this pass:
+
+1. **Freshness-on-query** (`freshness.rs`) — retrieval reconciles the working
+   tree before answering, `--no-embed` path, fails open. Graft refreshes before
+   every command; tokenix previously answered from the last index run.
+2. **Modules** (`modules.rs`, `tokenix modules`) — Louvain communities over the
+   symbol graph, the repo-orientation answer cbm gets from Louvain and Graft
+   pays an LLM for. No API key, deterministic.
+3. **Blast radius of a diff** (`blast.rs`, `tokenix blast`) — the `graft blast`
+   equivalent, built on the existing graph.
+4. **Team snapshots** (`snapshot.rs`, `export-index` / `import-index`) — the
+   `.codebase-memory/graph.db.zst` idea: index once per repo, not once per dev.
+
+Deliberately not done:
+
+- **Tree-sitter breadth** (Java, C#, Ruby, PHP, Kotlin, Swift). Graft covers 21
+  languages, cbm claims 158; tokenix covers 8. Still the weakest column, and
+  still a per-language grammar dependency + binary-size decision the owner
+  declined on 2026-06-10.
+- **Route/IaC nodes** (HTTP/gRPC handler ↔ call site, Dockerfile/k8s manifests as
+  graph nodes). Highest-value remaining gap and it overlaps the cluster items
+  below; needs its own design pass.
+- **Task-level correctness benchmark** (SWE-bench-style). Graft publishes
+  correctness and billed cost; tokenix publishes tokens only. This is a harness
+  project, not a code change, and the README already states the position.
+- **Agent-Reach**: orthogonal (internet access). The one transferable idea is its
+  capability layer — ordered backends with automatic fallback surfaced by
+  `doctor`.

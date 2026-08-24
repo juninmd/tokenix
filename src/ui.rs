@@ -92,6 +92,25 @@ pub fn format_num(n: i64) -> String {
     result.chars().rev().collect()
 }
 
+/// Byte count in the unit a human would use (`1.4 MB`, `812 KB`, `37 B`).
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    let b = bytes as f64;
+    if b < KB {
+        return format!("{bytes} B");
+    }
+    for (limit, unit) in [
+        (KB * KB, "KB"),
+        (KB * KB * KB, "MB"),
+        (KB * KB * KB * KB, "GB"),
+    ] {
+        if b < limit {
+            return format!("{:.1} {unit}", b / (limit / KB));
+        }
+    }
+    format!("{:.1} TB", b / (KB * KB * KB * KB))
+}
+
 /// Rounded-border aligned table backed by `tabled`. `right` lists the column
 /// indices to right-align (numeric columns); all others stay left. Cell strings
 /// may carry ANSI color — the `ansi` feature measures display width correctly so

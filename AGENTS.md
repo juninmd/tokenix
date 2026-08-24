@@ -33,6 +33,10 @@ them weekly and on demand — that is the only place they execute.
 | `store.rs` | SQLite access, `index_staleness`, graph tables, hook log |
 | `query.rs` | Semantic + lexical retrieval, RRF fusion, budgeting |
 | `graph.rs` | Symbol graph, PageRank, Tarjan SCC cycles, import graph, repo hotspots |
+| `freshness.rs` | Inline pre-query refresh of dirty files (`--no-embed` path), fails open |
+| `modules.rs` | Louvain community detection over `graph_edges` — `tokenix modules` |
+| `blast.rs` | Diff → changed symbols → reverse call graph (`tokenix blast`) |
+| `snapshot.rs` | `export-index` / `import-index` — gzipped `VACUUM INTO` copy for teams |
 | `hook.rs` | `PreToolUse` handler — the interception decision tree |
 | `compress.rs` | Generic output compression, base64 redaction, token ceiling, EOL preservation |
 | `filters.rs` | `FilterDef` schema, filter resolution, `apply_filter_with_exit` |
@@ -75,6 +79,17 @@ meta(key PK, value)                          -- 'indexed_at', git fingerprint
 
 `meta` holds `indexed_at` plus a Git fingerprint (worktree root + branch + HEAD);
 a different fingerprint counts as stale so branch switches never reuse context.
+`snapshot_version` / `snapshot_created_at` are stamped by `tokenix export-index`.
+
+`files.content_hash` prefixed with `ne:` marks a row written **without
+embeddings** (`index --no-embed`, or the inline refresh in `freshness.rs`). The
+prefix makes the file read as changed to the next embedding run, and
+`plan_files` appends those files to a git-incremental plan so the backlog is
+always paid — a git-clean file would otherwise never be revisited.
+`index_staleness` deliberately ignores them: those chunks are valid for FTS,
+graph and read interception, and reporting them stale would make the hook fail
+open and stop saving tokens. `index --if-stale` checks `pending_embed_count`
+separately.
 
 **Query paths open old DBs without migrating** — SELECTs must degrade when `scale`
 is missing (`embeddings_have_scale()` probes by selecting `NULL`).
