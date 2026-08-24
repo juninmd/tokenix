@@ -403,7 +403,7 @@ repo-local `opencode.json` MCP registration.
 |---|---|
 | `tokenix hook` | `PreToolUse` handler — intercepts large reads, semantic grep, noisy commands |
 | `tokenix hook-post` | `PostToolUse` compatibility handler |
-| `tokenix run "CMD"` | Run a command and compress its output (`--shell`, `--path/-p`) |
+| `tokenix run "CMD"` | Run a command and compress its output (`--shell`, `--path/-p`, `--raw`) |
 | `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools (`--profile slim\|full`) |
 
 <details>
@@ -413,6 +413,14 @@ repo-local `opencode.json` MCP registration.
 the dashboard, same as `TOKENIX_NO_TUI=1`), `TOKENIX_BRANCH_AWARE=true` (suffix the
 SQLite DB per git branch), `TOKENIX_DISABLED=1` (bypass the hook for one command),
 `TOKENIX_MAX_OUTPUT_TOKENS` (global output ceiling, default 8000, `0` disables).
+
+**`tokenix run`** — `--raw` (also `TOKENIX_RAW=1`) prints the command's
+stdout/stderr byte-for-byte, skipping compression, dedup and the recall stash.
+Use it when a script or pipeline consumes `tokenix run`'s output directly and
+needs the exact original bytes — auto-detecting that case is not reliable (the
+agent harness that normally calls `tokenix run` also reads its stdout through a
+pipe, indistinguishable from a script doing the same), so this is an explicit
+opt-out rather than automatic detection.
 
 **Freshness** — every retrieval command (`query`, `context`, `explore`, `grep`,
 `symbols`, `callers`, `callees`, `impact`, `flow`, `deps`, `graph`, `modules`,

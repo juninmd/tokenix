@@ -230,6 +230,17 @@ compression savings invert (arXiv 2607.12161). These are diagnostics: without a
 holdout control group no causal Δturns claim is possible, so `SessionStats` must
 stay descriptive and never feed a headline number.
 
+**`tokenix run --raw` / `TOKENIX_RAW=1`** — byte-exact passthrough, no
+compression/dedup/stash, via `compress::run_command_raw` (`Stdio::inherit`,
+shares `build_shell_command` with the compressed path so the two invocations
+can't drift). Closes the "shell-pipeline corruption" hazard from
+2607.12161 (filtered output silently wrong when a script expects raw text) as
+an **explicit opt-out**, not auto-detection: the agent harness's own capture of
+`tokenix run`'s stdout is a pipe, identical in signal to a script piping it
+into `jq`/`grep`/etc., so `isatty` cannot tell the two apart. Do not attempt to
+infer "raw" from environment heuristics — same guard-safety rule as the
+`never_mask_failure` filter invariant.
+
 **Keep docs in sync.** Every new or changed user-facing feature MUST update both
 `README.md` (Commands, and any affected section) and this file in the same change.
 
