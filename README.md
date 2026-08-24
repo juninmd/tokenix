@@ -360,7 +360,9 @@ repo-local `opencode.json` MCP registration.
 | `tokenix deps FILE` | File-level import dependencies (`--reverse`, `--transitive`, `--json`) |
 | `tokenix impact SYMBOL` | Bidirectional impact graph (`--format html\|mermaid`) |
 | `tokenix flow SYMBOL` | Forward call-flow trace (`--depth`, `--format text\|mermaid`) |
-| `tokenix graph` | Repo-wide symbol-graph overview — god nodes, bottlenecks, blast-radius leaders (`--format text\|dot\|json`, `--top N`) |
+| `tokenix graph` | Repo-wide symbol-graph overview — god nodes, bottlenecks, blast-radius leaders, modules (`--format text\|dot\|json`, `--top N`) |
+| `tokenix modules` | Functional modules found by community detection over the symbol graph (`--top`, `--json`) |
+| `tokenix blast` | Blast radius of the current diff — changed symbols and everything that calls them (`--since REF`, `--depth`, `--json`) |
 | `tokenix pack` | Budgeted repo pack for non-hook AI tools (`--mode/--profile`, `--changed`, `--token-map`) |
 | `tokenix memory add\|list\|remove\|edit` | Save preferences (`--global` / `--project`) for future context |
 
@@ -370,6 +372,8 @@ repo-local `opencode.json` MCP registration.
 |---|---|
 | `tokenix` (no args) | Open the [dashboard](#-dashboard); piped/non-TTY falls back to help |
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
+| `tokenix export-index` | Write the index to a shareable snapshot (`.tokenix/index.db.gz`) teammates can commit |
+| `tokenix import-index` | Bootstrap this repo's index from a snapshot instead of indexing from zero (`--force`) |
 | `tokenix install-hook` / `remove-hook` | Install or remove assistant hooks/instructions (default `--tool all`) |
 | `tokenix install-binary` | Copy the running executable to a per-user bin dir and ensure it is on PATH |
 | `tokenix doctor` | Diagnose embedding backend, GPU, model cache, daemon, filter inventory, and filter config |
@@ -410,6 +414,15 @@ the dashboard, same as `TOKENIX_NO_TUI=1`), `TOKENIX_BRANCH_AWARE=true` (suffix 
 SQLite DB per git branch), `TOKENIX_DISABLED=1` (bypass the hook for one command),
 `TOKENIX_MAX_OUTPUT_TOKENS` (global output ceiling, default 8000, `0` disables).
 
+**Freshness** — every retrieval command (`query`, `context`, `explore`, `grep`,
+`symbols`, `callers`, `callees`, `impact`, `flow`, `deps`, `graph`, `modules`,
+`blast`) and the equivalent MCP tools reconcile the working tree before
+answering: files changed since the last index are re-chunked into the text index
+and the symbol graph, without embedding them (milliseconds, no model load). Those
+files are marked so the next `tokenix index` embeds them. `TOKENIX_AUTO_REFRESH=0`
+turns it off; `TOKENIX_AUTO_REFRESH_MAX` (default 25) is the file count past which
+a change set is left for a real index run.
+
 **Dedup** — repeated identical command output collapses to a one-line pointer.
 `TOKENIX_DEDUP=0` disables it, `TOKENIX_DEDUP_MIN_TOKENS` sets the floor (default
 200), `TOKENIX_DEDUP_TTL` how long an earlier run stays usable (default 3600 s).
@@ -448,6 +461,18 @@ downloaded on first use).
 `--format <text|html|mermaid|json>`, `--output/-o`, `--path/-p`
 
 **`tokenix flow`** — `--depth/-d` (3), `--limit/-l` (50), `--format <text|mermaid>`
+
+**`tokenix blast`** — `--since REF` (default `HEAD`, e.g. `origin/main`),
+`--depth/-d` (2), `--limit/-l` (50), `--json`, `--path/-p`
+
+**`tokenix modules`** — `--top` (12), `--json`, `--path/-p`
+
+**`tokenix export-index` / `import-index`** — `--output/-o` and `--input/-i`
+(default `.tokenix/index.db.gz`), `--force` on import to replace a newer local
+index. The snapshot is a compacted copy of the index with the local embedding
+cache stripped; import refuses anything that is not a tokenix index, keeps the
+previous DB as `*.pre-import.bak`, and leaves the snapshot's git fingerprint in
+place so `tokenix index` only has to catch up on the diff.
 
 **`tokenix pack`** — `--mode/--profile <plan|debug|audit|security|review>`,
 `--budget N` (8000), `--format <markdown|xml|json>`, `--changed`, `--since REF`,
@@ -543,7 +568,11 @@ language mapping in `.tokenix.toml`.
 ```
 
 - **Storage** — one SQLite DB per project under `~/.tokenix/`, int8-quantized
-  embeddings, FTS5 for lexical search.
+  embeddings, FTS5 for lexical search. `tokenix export-index` turns it into a
+  committable snapshot so a team indexes once, not once per developer.
+- **Freshness** — retrieval never answers from an index the working tree has
+  moved past: dirty files are re-chunked into the text index and symbol graph
+  first, and marked for embedding on the next real index run.
 - **Embeddings** — in-process ONNX via `fastembed`. No daemon required; if
   `tokenix serve` is running it keeps the model in RAM and answers over a local
   socket, otherwise the hook embeds in-process. The socket is bound to

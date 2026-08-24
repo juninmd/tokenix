@@ -1,5 +1,6 @@
 mod artifacts;
 mod benchmark;
+mod blast;
 mod chunker;
 mod cmd_filter;
 mod compress;
@@ -14,6 +15,7 @@ mod doctor;
 mod egress_scan;
 mod embed;
 mod filters;
+mod freshness;
 mod gain;
 mod graph;
 mod hook;
@@ -22,11 +24,13 @@ mod mcp;
 mod mcp_audit;
 mod mcp_proxy;
 mod memory;
+mod modules;
 mod pack;
 mod query;
 mod recall;
 mod recordings;
 mod secrets_scan;
+mod snapshot;
 mod store;
 mod transcripts;
 mod tui;
@@ -456,6 +460,56 @@ enum Commands {
         top: usize,
         #[arg(short, long, help = "Write output to a file instead of stdout")]
         output: Option<String>,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Write this repo's index to a shareable snapshot teammates can import
+    ExportIndex {
+        #[arg(
+            short,
+            long,
+            help = "Snapshot file to write (default: .tokenix/index.db.gz)"
+        )]
+        output: Option<PathBuf>,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Bootstrap this repo's index from a snapshot instead of indexing from zero
+    ImportIndex {
+        #[arg(
+            short,
+            long,
+            help = "Snapshot file to read (default: .tokenix/index.db.gz)"
+        )]
+        input: Option<PathBuf>,
+        #[arg(long, help = "Replace the local index even if it is newer")]
+        force: bool,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Blast radius of the current diff: which symbols depend on what changed
+    Blast {
+        #[arg(
+            long,
+            default_value = "HEAD",
+            help = "Diff against this ref (e.g. origin/main)"
+        )]
+        since: String,
+        #[arg(short, long, default_value_t = 2, help = "Caller hops to follow")]
+        depth: usize,
+        #[arg(short, long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        json: bool,
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Group the repo into functional modules discovered from the symbol graph
+    Modules {
+        #[arg(long, default_value_t = 12, help = "How many modules to show")]
+        top: usize,
+        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        json: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -1279,6 +1333,18 @@ fn main() -> Result<()> {
             output,
             path,
         } => cmd_graph(&format, top, output.as_deref(), &path),
+        Commands::ExportIndex { output, path } => cmd_export_index(output.as_deref(), &path),
+        Commands::ImportIndex { input, force, path } => {
+            cmd_import_index(input.as_deref(), force, &path)
+        }
+        Commands::Blast {
+            since,
+            depth,
+            limit,
+            json,
+            path,
+        } => cmd_blast(&since, depth, limit, json, &path),
+        Commands::Modules { top, json, path } => cmd_modules(top, json, &path),
         Commands::Cycles { path } => cmd_cycles(&path),
         Commands::RebuildGraph { path } => cmd_rebuild_graph(&path),
         Commands::Gain {
@@ -1665,7 +1731,9 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result
 
     if if_stale && !force {
         let staleness = store::index_staleness(&repo_root);
-        if !staleness.stale {
+        // A fresh index can still owe embeddings to files an inline refresh wrote
+        // as text only, and this is the run that pays that debt.
+        if !staleness.stale && store::pending_embed_count(&repo_root) == 0 {
             return Ok(());
         }
     }
@@ -1711,6 +1779,7 @@ fn cmd_context(
     path: &Path,
 ) -> Result<()> {
     let repo_root = find_repo_root(path);
+    freshness::refresh_and_announce(&repo_root);
     let out = query::build_task_context_with_mode(&repo_root, task, mode, budget, max_files)?;
     if json {
         println!(
@@ -1743,6 +1812,7 @@ fn cmd_pack(
     output: Option<PathBuf>,
 ) -> Result<()> {
     let repo_root = find_repo_root(path);
+    freshness::refresh_and_announce(&repo_root);
     let options = pack::PackOptions {
         profile,
         budget,
@@ -1902,6 +1972,7 @@ fn cmd_explore(
     path: &Path,
 ) -> Result<()> {
     let repo_root = find_repo_root(path);
+    freshness::refresh_and_announce(&repo_root);
     let out = query::build_explore_context(&repo_root, query_text, budget, max_symbols)?;
     if json {
         println!(
@@ -2025,6 +2096,7 @@ fn cmd_query(
         anyhow::bail!("k must be >= 1");
     }
     let repo_root = find_repo_root(path);
+    freshness::refresh_and_announce(&repo_root);
 
     // Cross-project search: include linked projects
     if !link.is_empty() {
@@ -2078,6 +2150,8 @@ fn cmd_grep(
 
 fn open_existing_index(path: &Path) -> Result<rusqlite::Connection> {
     let repo_root = find_repo_root(path);
+    // Answer against the working tree, not against the last index run.
+    freshness::refresh_and_announce(&repo_root);
     store::open_db(&repo_root, false)?
         .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))
 }
@@ -2192,6 +2266,100 @@ fn cmd_flow(symbol: &str, depth: usize, limit: usize, format_str: &str, path: &P
             graph::format_relations(&relations, &format!("Call flow from `{symbol}`"))
         );
     }
+    Ok(())
+}
+
+fn cmd_export_index(output: Option<&Path>, path: &Path) -> Result<()> {
+    let repo_root = find_repo_root(path);
+    let report = snapshot::export(&repo_root, output)?;
+    println!(
+        "{} snapshot written to {}",
+        "ok".green(),
+        report.output.display()
+    );
+    println!(
+        "  {} files, {} chunks, {} embeddings, model {} — {}",
+        format_num(report.files),
+        format_num(report.chunks),
+        format_num(report.embeddings),
+        report.model,
+        ui::format_bytes(report.bytes)
+    );
+    if let Some(head) = report.head {
+        println!("  indexed at {head}");
+    }
+    println!("  Commit it, and teammates run: tokenix import-index");
+    Ok(())
+}
+
+fn cmd_import_index(input: Option<&Path>, force: bool, path: &Path) -> Result<()> {
+    let repo_root = find_repo_root(path);
+    let report = snapshot::import(&repo_root, input, force)?;
+    println!(
+        "{} imported {} → {}",
+        "ok".green(),
+        report.source.display(),
+        report.target.display()
+    );
+    println!(
+        "  {} files, {} chunks, {} embeddings, model {}",
+        format_num(report.files),
+        format_num(report.chunks),
+        format_num(report.embeddings),
+        report.model
+    );
+    if let Some(version) = report.created_by {
+        println!("  written by tokenix {version}");
+    }
+    if report.replaced_newer {
+        println!(
+            "  {} a newer local index was replaced (--force)",
+            "warning:".yellow()
+        );
+    }
+    if let Some(backup) = report.backup {
+        println!("  previous index kept at {}", backup.display());
+    }
+    println!("  Catch up to your checkout with: tokenix index");
+    Ok(())
+}
+
+fn cmd_blast(since: &str, depth: usize, limit: usize, json: bool, path: &Path) -> Result<()> {
+    if limit == 0 {
+        anyhow::bail!("--limit must be >= 1");
+    }
+    let repo_root = find_repo_root(path);
+    let conn = open_existing_index(path)?;
+    let report = blast::analyze(&conn, &repo_root, since, depth, limit)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!("{}", blast::format_report(&report));
+    Ok(())
+}
+
+fn cmd_modules(top: usize, json: bool, path: &Path) -> Result<()> {
+    if top == 0 {
+        anyhow::bail!("--top must be >= 1");
+    }
+    let conn = open_existing_index(path)?;
+    let edges = store::load_all_graph_edges(&conn)?;
+    let found = modules::detect_modules(&edges, top);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&found)?);
+        return Ok(());
+    }
+    if found.is_empty() {
+        println!("No modules found. Run `tokenix index` first, or the graph is too small.");
+        return Ok(());
+    }
+    println!(
+        "# Modules — {} group(s) over {} edges{}",
+        found.len(),
+        edges.len(),
+        modules::format_modules(&found)
+    );
     Ok(())
 }
 
@@ -4210,6 +4378,15 @@ fn cmd_stats(path: &Path) -> Result<()> {
     ui::kv("chunks", &stats.chunks.to_string());
     ui::kv("tokens", &format_num(stats.total_tokens));
     ui::kv("age", &age_str);
+    // Files an inline refresh (or `--no-embed`) wrote as text only. They are
+    // searchable now; the next `tokenix index` gives them vectors back.
+    let pending = store::pending_embed_files(&conn);
+    if pending > 0 {
+        ui::kv(
+            "pending embed",
+            &format!("{pending} file(s) — run `tokenix index`"),
+        );
+    }
     println!();
     Ok(())
 }

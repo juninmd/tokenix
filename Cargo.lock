@@ -4079,6 +4079,7 @@ dependencies = [
  "colored",
  "dirs",
  "fastembed",
+ "flate2",
  "hex",
  "ignore",
  "indicatif 0.18.6",

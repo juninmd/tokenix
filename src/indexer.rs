@@ -81,6 +81,12 @@ pub fn lower_process_priority() {
     }
 }
 
+/// Marks a file whose chunks were written without embeddings (`--no-embed`, or
+/// the inline refresh in `crate::freshness`). The stored content hash never
+/// matches the real one while this prefix is on it, so the next full index
+/// re-chunks and embeds the file instead of skipping it as unchanged.
+pub const NO_EMBED_HASH_PREFIX: &str = "ne:";
+
 fn mtime_of(path: &Path) -> f64 {
     std::fs::metadata(path)
         .ok()
@@ -88,6 +94,21 @@ fn mtime_of(path: &Path) -> f64 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+/// Modification time of a path as the index stores it (0.0 when unreadable).
+pub fn file_mtime(path: &Path) -> f64 {
+    mtime_of(path)
+}
+
+/// `((absolute, repo-relative) changed files, repo-relative deleted files)`.
+pub type DirtyPaths = (Vec<(PathBuf, String)>, HashSet<String>);
+
+/// Files git reports as changed/untracked in the working tree, plus the paths
+/// it reports as deleted. `None` when this is not a git repo or git failed.
+pub fn git_dirty_paths(repo_root: &Path) -> Option<DirtyPaths> {
+    let plan = git_changed_files(repo_root)?;
+    Some((plan.files, plan.deleted))
 }
 
 fn chunk_embedding_key(text: &str) -> String {
@@ -187,13 +208,89 @@ fn git_changed_files(repo_root: &Path) -> Option<FilePlan> {
     })
 }
 
+/// Files the index holds only as text (written by a `--no-embed` run or an
+/// inline freshness refresh) and that still exist on disk. A git-incremental
+/// plan cannot see them — they are unchanged as far as git is concerned — so
+/// they are appended explicitly, otherwise their chunks would stay vectorless
+/// until the file happened to change again.
+fn pending_embed_files(
+    repo_root: &Path,
+    existing: &HashMap<String, (i64, f64, String)>,
+    already: &[(PathBuf, String)],
+) -> Vec<(PathBuf, String)> {
+    let planned: HashSet<&str> = already.iter().map(|(_, rel)| rel.as_str()).collect();
+    let mut extra: Vec<(PathBuf, String)> = existing
+        .iter()
+        .filter(|(rel, (_, _, hash))| {
+            hash.starts_with(NO_EMBED_HASH_PREFIX) && !planned.contains(rel.as_str())
+        })
+        .map(|(rel, _)| (repo_root.join(rel), rel.clone()))
+        .filter(|(abs, _)| abs.is_file())
+        .collect();
+    // Deterministic order so two runs over the same backlog behave identically.
+    extra.sort_by(|a, b| a.1.cmp(&b.1));
+    extra
+}
+
+/// Tracked files that exist on disk but have no row in the index.
+///
+/// This is how a file comes back. A deletion drops the file's rows, and a later
+/// `git checkout`/`git stash pop`/branch switch restores a file whose content
+/// matches HEAD — so `git status` says nothing and a purely status-driven plan
+/// would never look at it again. The index would stay silently short one file
+/// until someone ran `--force`.
+fn restored_files(
+    repo_root: &Path,
+    existing: &HashMap<String, (i64, f64, String)>,
+    already: &[(PathBuf, String)],
+) -> Vec<(PathBuf, String)> {
+    let Some(out) = Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(repo_root)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+    else {
+        return Vec::new();
+    };
+    let max_bytes = index_config()
+        .max_file_bytes
+        .unwrap_or(MAX_INDEX_FILE_BYTES);
+    let planned: HashSet<&str> = already.iter().map(|(_, rel)| rel.as_str()).collect();
+
+    let mut extra: Vec<(PathBuf, String)> = out
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|f| !f.is_empty())
+        .map(|f| String::from_utf8_lossy(f).replace('\\', "/"))
+        .filter(|rel| !existing.contains_key(rel.as_str()) && !planned.contains(rel.as_str()))
+        .map(|rel| (repo_root.join(&rel), rel))
+        .filter(|(abs, _)| {
+            abs.is_file()
+                && should_index(abs)
+                && std::fs::metadata(abs).is_ok_and(|m| m.len() <= max_bytes)
+        })
+        .collect();
+    extra.sort_by(|a, b| a.1.cmp(&b.1));
+    extra
+}
+
 fn plan_files(
     repo_root: &Path,
-    force: bool,
+    options: IndexOptions,
     existing: &HashMap<String, (i64, f64, String)>,
 ) -> FilePlan {
-    if !force && !existing.is_empty() {
-        if let Some(plan) = git_changed_files(repo_root) {
+    if !options.force && !existing.is_empty() {
+        if let Some(mut plan) = git_changed_files(repo_root) {
+            // Only a full run reconciles these, and only it should pay for them:
+            // a `--no-embed` refresh runs inline on a query, where the extra
+            // work is unbounded and the backlog would not shrink anyway.
+            if !options.no_embed {
+                plan.files
+                    .extend(pending_embed_files(repo_root, existing, &plan.files));
+                plan.files
+                    .extend(restored_files(repo_root, existing, &plan.files));
+            }
             return plan;
         }
     }
@@ -211,15 +308,19 @@ fn plan_files(
 fn decode_text(raw: &[u8]) -> Option<String> {
     if raw.starts_with(&[0xFF, 0xFE]) {
         let units: Vec<u16> = raw[2..]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         return Some(String::from_utf16_lossy(&units));
     }
     if raw.starts_with(&[0xFE, 0xFF]) {
         let units: Vec<u16> = raw[2..]
-            .chunks_exact(2)
-            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_be_bytes(*c))
             .collect();
         return Some(String::from_utf16_lossy(&units));
     }
@@ -365,7 +466,7 @@ where
     }
     let existing: Arc<HashMap<String, (i64, f64, String)>> = Arc::new(load_all_file_info(&conn)?);
 
-    let file_plan = plan_files(repo_root, options.force, &existing);
+    let file_plan = plan_files(repo_root, options, &existing);
     let files = file_plan.files;
 
     let total = files.len();
@@ -564,7 +665,15 @@ where
             continue;
         }
 
-        let file_id = match upsert_file(&conn, &f.rel, f.mtime, &f.hash) {
+        // A no-embed write stores a sentinel hash so the file reads as changed to
+        // the next embedding run; otherwise its chunks would keep no vectors for
+        // as long as the body stays the same.
+        let stored_hash = if options.no_embed {
+            format!("{NO_EMBED_HASH_PREFIX}{}", f.hash)
+        } else {
+            f.hash.clone()
+        };
+        let file_id = match upsert_file(&conn, &f.rel, f.mtime, &stored_hash) {
             Ok(id) => id,
             Err(e) => {
                 errors += 1;
@@ -617,9 +726,18 @@ where
         _ => {}
     }
 
-    // Phase 6: clean up removed files from index
+    // Phase 6: clean up removed files from index.
+    //
+    // An inline refresh (`no_embed`) deliberately skips this. It runs on every
+    // query, so it would see a file that is momentarily absent — mid-rebase,
+    // mid-stash, a checkout in flight — and drop its rows; when the file comes
+    // back unchanged, git reports nothing and the index would stay short one
+    // file. Leaving a deleted file's rows in place until the next full index is
+    // the cheaper mistake: stale hits, not missing ones.
     let mut removed = false;
-    if file_plan.git_incremental {
+    if options.no_embed {
+        // nothing to do
+    } else if file_plan.git_incremental {
         for rel_path in &file_plan.deleted {
             if let Some((file_id, _, _)) = existing.get(rel_path) {
                 progress_cb(&format!("removing deleted file from index: {}", rel_path));

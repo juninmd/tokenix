@@ -677,8 +677,18 @@ pub fn format_repo_report(edges: &[store::GraphEdgeRow], top: usize) -> String {
         ));
     }
 
+    // Orientation: which parts this repo actually has, derived from the graph
+    // rather than from the folder names.
+    out.push_str(&crate::modules::format_modules(
+        &crate::modules::detect_modules(edges, MODULES_IN_REPORT),
+    ));
+
     out
 }
+
+/// How many communities the repo report names. The report is an orientation
+/// device, not an inventory — past a handful the reader stops reading.
+const MODULES_IN_REPORT: usize = 8;
 
 /// Render the most-connected subgraph as Graphviz DOT. Only edges whose both
 /// endpoints are among the top hotspots are emitted, keeping the diagram legible.

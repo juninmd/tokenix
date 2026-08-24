@@ -597,6 +597,23 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
     let path = Path::new(".");
     let repo_root = find_repo_root(path);
 
+    // An MCP session outlives many edits by the agent that is calling it, so a
+    // retrieval tool has to reconcile the working tree before it answers.
+    // Non-retrieval tools (memory, gain, run) never touch the index.
+    if matches!(
+        name,
+        "tokenix_query"
+            | "tokenix_context"
+            | "tokenix_explore"
+            | "tokenix_read"
+            | "tokenix_symbols"
+            | "tokenix_callers"
+            | "tokenix_callees"
+            | "tokenix_impact"
+    ) {
+        let _ = crate::freshness::refresh_before_query(&repo_root);
+    }
+
     match name {
         "tokenix_search_tools" => {
             let query = args

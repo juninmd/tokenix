@@ -10,3 +10,4 @@ dump_gemini.json
 # Generated per-machine by `tokenix install-hook --tool copilot`; absolute/local
 # binary paths must not be committed. Each contributor regenerates it locally.
 .github/hooks/hooks.json
+target-test/*

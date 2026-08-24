@@ -21,13 +21,14 @@ const READ_TIMEOUT_MS: u64 = 15_000; // model load on first request can take ~50
 
 #[inline]
 fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-    let chunks = a.chunks_exact(8).zip(b.chunks_exact(8));
-    let mut sum: f32 = chunks
+    let (blocks_a, rem_a) = a.as_chunks::<8>();
+    let (blocks_b, rem_b) = b.as_chunks::<8>();
+    let mut sum: f32 = blocks_a
+        .iter()
+        .zip(blocks_b.iter())
         .map(|(ca, cb)| ca.iter().zip(cb.iter()).map(|(x, y)| x * y).sum::<f32>())
         .sum();
     // handle remainder (768 % 8 == 0, so this is a no-op for nomic-embed-text-v1.5)
-    let rem_a = a.chunks_exact(8).remainder();
-    let rem_b = b.chunks_exact(8).remainder();
     sum += rem_a
         .iter()
         .zip(rem_b.iter())
@@ -40,8 +41,11 @@ fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 /// The i8→f32 widening vectorizes; cache traffic is 4x lower than f32×f32.
 #[inline]
 fn dot_product_q8(a: &[f32], b: &[i8]) -> f32 {
-    let chunks = a.chunks_exact(8).zip(b.chunks_exact(8));
-    let mut sum: f32 = chunks
+    let (blocks_a, rem_a) = a.as_chunks::<8>();
+    let (blocks_b, rem_b) = b.as_chunks::<8>();
+    let mut sum: f32 = blocks_a
+        .iter()
+        .zip(blocks_b.iter())
         .map(|(ca, cb)| {
             ca.iter()
                 .zip(cb.iter())
@@ -49,8 +53,6 @@ fn dot_product_q8(a: &[f32], b: &[i8]) -> f32 {
                 .sum::<f32>()
         })
         .sum();
-    let rem_a = a.chunks_exact(8).remainder();
-    let rem_b = b.chunks_exact(8).remainder();
     sum += rem_a
         .iter()
         .zip(rem_b.iter())
