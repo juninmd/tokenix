@@ -2180,70 +2180,100 @@ pub fn run_hook_post() -> Result<()> {
         _ => std::process::exit(0),
     };
 
-    // Non-shell tools (e.g. an MCP image-generation result) are only worth
-    // processing for a dialect that can actually replace the result. Claude/Codex
-    // post is a no-op, so skip the work; Copilot's modifiedResult is honored.
-    let is_shell = POST_HOOK_TOOLS.contains(&input.tool_name.as_str());
-    if !is_shell && input.dialect == PostDialect::ClaudeNoop {
-        std::process::exit(0);
-    }
+    // Redaction runs first and unconditionally — on every tool this hook
+    // fires on, independent of dialect. This is the path that reaches tool
+    // results the PreToolUse Bash rewrite never sees (Read results, MCP
+    // results, ListDirectory, ...). Historically Claude/Codex non-shell
+    // results exited here immediately on the (stale) belief that Claude Code
+    // PostToolUse can never replace a result — as of Claude Code v2.1.121+,
+    // `hookSpecificOutput.updatedToolOutput` is honored for all tools, not
+    // only MCP, so that early exit was silently skipping real redaction.
+    let (redacted, secret_hit) = crate::secrets_scan::redact_known_secrets(&input.text);
 
+    let is_shell = POST_HOOK_TOOLS.contains(&input.tool_name.as_str());
     let compressed = if input.tool_name == "Bash" {
-        compress_bash_output(&input.command, &input.text)
+        compress_bash_output(&input.command, &redacted)
     } else if is_shell {
-        compress_output(&input.text)
+        compress_output(&redacted)
+    } else if input.dialect == PostDialect::ClaudeNoop {
+        // Non-shell, Claude/Codex dialect: no command-oriented compression
+        // heuristics apply — redaction above is the whole job.
+        redacted
     } else {
-        // Non-shell result: skip the command-oriented heuristics, just redact
-        // embedded base64 blobs — the dominant token waste in agent histories.
-        redact_base64_blobs(&input.text)
+        // Non-shell, Copilot dialect: unchanged behavior, redact embedded
+        // base64 blobs — the dominant token waste in agent histories — on
+        // top of the secret redaction already applied.
+        redact_base64_blobs(&redacted)
     };
 
-    if compressed == input.text {
+    let changed = compressed != input.text;
+    if !secret_hit && !changed {
         std::process::exit(0);
     }
 
-    // Claude Code PostToolUse hooks cannot shorten or replace a tool result:
-    // exit 2 surfaces stderr (not stdout) as a blocking error, and the supported
-    // `hookSpecificOutput.additionalContext` only appends next to the original
-    // output. So compressing Bash output here can never reduce the tokens Claude
-    // Code sends to the model. Exit 0 silently to avoid the empty-stderr blocking
-    // error, and do NOT log savings the model never actually receives. Real Bash
-    // compression must move to a PreToolUse command rewrite (run the command
-    // through tokenix before execution, wrapping it as `tokenix run <cmd>`).
-    if input.dialect == PostDialect::ClaudeNoop {
-        std::process::exit(0);
-    }
-
-    // Only Copilot reaches here, and its modifiedResult JSON genuinely replaces
-    // the tool result — so the logged savings are real for this dialect.
     let repo_root = find_repo_root();
     let original_tokens = count_tokens(&input.text) as i64;
     let actual_tokens = count_tokens(&compressed) as i64;
-    let saved = (original_tokens - actual_tokens).max(0);
 
-    let _ = log_hook_event(
-        &repo_root,
-        &HookEvent {
-            ts: now_ts(),
-            tool: input.tool_name,
-            action: "intercepted".to_string(),
-            phase: "post".to_string(),
-            reason: String::new(),
-            saved_tokens: saved,
-            actual_tokens,
-            original_estimate: original_tokens,
-            input_preview: clean.chars().take(200).collect(),
-            command: input.command,
-        },
-    );
+    if secret_hit {
+        let _ = log_hook_event(
+            &repo_root,
+            &HookEvent {
+                ts: now_ts(),
+                tool: input.tool_name.clone(),
+                action: "intercepted".to_string(),
+                phase: "post".to_string(),
+                reason: "secret-redacted".to_string(),
+                saved_tokens: 0,
+                actual_tokens,
+                original_estimate: original_tokens,
+                input_preview: clean.chars().take(200).collect(),
+                command: input.command.clone(),
+            },
+        );
+    }
+    if changed {
+        let _ = log_hook_event(
+            &repo_root,
+            &HookEvent {
+                ts: now_ts(),
+                tool: input.tool_name.clone(),
+                action: "intercepted".to_string(),
+                phase: "post".to_string(),
+                reason: "size-compressed".to_string(),
+                saved_tokens: (original_tokens - actual_tokens).max(0),
+                actual_tokens,
+                original_estimate: original_tokens,
+                input_preview: clean.chars().take(200).collect(),
+                command: input.command.clone(),
+            },
+        );
+    }
 
-    let out = serde_json::json!({
-        "modifiedResult": {
-            "resultType": "success",
-            "textResultForLlm": compressed,
+    match input.dialect {
+        PostDialect::ClaudeNoop => {
+            // As of Claude Code v2.1.121+, updatedToolOutput is honored for
+            // all tools. Fail open on older installs: the field is simply
+            // ignored and the original tool result stands — never a
+            // blocking error, never malformed stdout.
+            let out = serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "updatedToolOutput": compressed,
+                }
+            });
+            println!("{}", serde_json::to_string(&out).unwrap_or_default());
         }
-    });
-    println!("{}", serde_json::to_string(&out).unwrap_or_default());
+        PostDialect::CopilotJson => {
+            let out = serde_json::json!({
+                "modifiedResult": {
+                    "resultType": "success",
+                    "textResultForLlm": compressed,
+                }
+            });
+            println!("{}", serde_json::to_string(&out).unwrap_or_default());
+        }
+    }
     std::process::exit(0);
 }
 

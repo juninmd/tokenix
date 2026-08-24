@@ -38,7 +38,7 @@ them weekly and on demand — that is the only place they execute.
 | `blast.rs` | Diff → changed symbols → reverse call graph (`tokenix blast`) |
 | `snapshot.rs` | `export-index` / `import-index` — gzipped `VACUUM INTO` copy for teams |
 | `hook.rs` | `PreToolUse` handler — the interception decision tree |
-| `compress.rs` | Generic output compression, base64 redaction, token ceiling, EOL preservation |
+| `compress.rs` | Generic output compression, base64 redaction, token ceiling, EOL preservation; `run_hook_post` also redacts known secrets on every PostToolUse tool result via `secrets_scan::redact_known_secrets`, then emits `hookSpecificOutput.updatedToolOutput` for Claude Code/Codex |
 | `filters.rs` | `FilterDef` schema, filter resolution, `apply_filter_with_exit` |
 | `cmd_filter.rs` | `filter list/active/generate/verify` + recording |
 | `pack.rs` | `tokenix pack` — budgeted repo map, `order_by_priority` (reason → PageRank → path) |

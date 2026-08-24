@@ -402,7 +402,7 @@ repo-local `opencode.json` MCP registration.
 | Command | Description |
 |---|---|
 | `tokenix hook` | `PreToolUse` handler — intercepts large reads, semantic grep, noisy commands |
-| `tokenix hook-post` | `PostToolUse` compatibility handler |
+| `tokenix hook-post` | `PostToolUse` handler — redacts secrets and compresses tool output before the model sees it (Claude Code, Codex, Copilot CLI) |
 | `tokenix run "CMD"` | Run a command and compress its output (`--shell`, `--path/-p`, `--raw`) |
 | `tokenix mcp` | MCP server exposing context, read/search, graph, and gain tools (`--profile slim\|full`) |
 
