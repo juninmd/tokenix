@@ -2347,7 +2347,14 @@ fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Opti
     Some(path)
 }
 
-pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Path>) -> Result<i32> {
+/// Build the child `Command` for `tokenix run`, shared by the compressed and
+/// raw execution paths so the two can never drift on how the command is
+/// actually invoked.
+fn build_shell_command(
+    command_str: &str,
+    shell: &str,
+    cwd: Option<&Path>,
+) -> std::process::Command {
     let is_powershell = matches!(shell, "pwsh" | "powershell");
     let mut cmd = if is_powershell {
         // Force UTF-8 so captured bytes decode cleanly (Windows PowerShell 5.1
@@ -2371,9 +2378,31 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
+    cmd
+}
 
-    // Capture stdout and stderr
-    let output = cmd.output()?;
+/// Run the command and print its stdout/stderr byte-for-byte, with no
+/// compression, dedup, or recall stash — `tokenix run --raw` / `TOKENIX_RAW=1`.
+///
+/// Exists because auto-detecting "this output feeds a script, not an LLM" is
+/// not a safe deterministic signal here: the agent harness that is the normal
+/// caller of `tokenix run` also captures stdout through a pipe, so a piped
+/// script and a harness invocation are indistinguishable by `isatty` alone.
+/// An explicit opt-out is the only form of this guard that cannot misfire.
+pub fn run_command_raw(command_str: &str, shell: &str, cwd: Option<&Path>) -> Result<i32> {
+    let mut cmd = build_shell_command(command_str, shell, cwd);
+    // Inherit rather than capture: streams the child's bytes straight through
+    // untouched (encoding included), and avoids buffering output this path
+    // never needs to look at.
+    cmd.stdout(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::inherit());
+    let status = cmd.status()?;
+    Ok(status.code().unwrap_or(0))
+}
+
+pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Path>) -> Result<i32> {
+    let is_powershell = matches!(shell, "pwsh" | "powershell");
+    let output = build_shell_command(command_str, shell, cwd).output()?;
 
     let stdout_raw = String::from_utf8_lossy(&output.stdout);
     let stderr_raw = String::from_utf8_lossy(&output.stderr);
@@ -2499,6 +2528,17 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_command_raw_preserves_exit_code() {
+        // stdout/stderr content is inherited straight to the process' own
+        // streams (asserting the bytes would mean capturing the whole test
+        // binary's output); the exit code is the one signal this path can
+        // check without that. Manually verified byte-exactness against
+        // `tokenix run --raw` in homologation.
+        let code = run_command_raw("exit 7", "auto", None).unwrap();
+        assert_eq!(code, 7);
+    }
 
     #[test]
     fn compact_json_is_lossless() {

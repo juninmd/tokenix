@@ -764,3 +764,109 @@ indentation, line breaks and CRLF — the re-derived, truncating `…` form is g
 time gaps, mean/max calls per session, and within-session re-requests of the
 same tool+subject — the measurable share of the "+13.8% turns" inversion
 mechanism — as a diagnostic that stays descriptive until holdout lands.
+
+---
+
+## Deep sweep (pass 5) — homologation, 2026-08-24
+
+Full re-verification of the pass-4 implementation table against the tree at
+`67e2f30` (merged to `main` as v0.64.0), plus a targeted sweep for literature
+published after pass 4's 2026-08-22 cutoff.
+
+### Verification method
+
+Not a re-read of the table — each "DONE" row was checked against the actual
+source, by symbol name, not by trusting the prior pass's note:
+
+| Claim | Check | Result |
+|---|---|---|
+| T0.1 chars-not-bytes tokenizer | `chunker.rs:92` body + `count_tokens_counts_chars_not_bytes` test | **CONFIRMED** |
+| T1.5 CRLF anchor fix | `dominant_eol`/`restore_eol` (`compress.rs:1318-1348`), wired in `filters.rs:1971-1972` | **CONFIRMED** |
+| T1.5 verbatim signature slice | `extract_signature_verbatim` + `line_starts` (`chunker.rs:911-935`), called at `chunker.rs:1268` | **CONFIRMED** |
+| Pass-3 entropy fix (`basic-auth-url`, `db-connection-uri`) | both rules at `min_entropy = 2.8` with `{7,...}` floors, `default.toml:296-312` | **CONFIRMED** |
+| T0.2 `gain` session shape | `session_stats`/`SessionStats`/`re_requests` (`gain.rs:216-260`) | **CONFIRMED** |
+
+`cargo fmt --check`, `cargo clippy --all-targets` and `cargo test` all clean —
+438 + 14 + 2 = **454 passed, 10 ignored (model-tests, offline by design), 0
+failed**.
+
+### Correction to the pass-4 table
+
+The pass-4 audit table's T0.2 row reads "Δturns NOT reported" — but that row
+describes the state *before* the same-day close documented at the end of pass
+4, which shipped `gain::session_stats`'s `re_requests` field as exactly that
+diagnostic. The row was stale the moment it was written next to its own
+same-day fix. Corrected here: **T0.2 is DONE**, with the caveat pass 4 already
+stated correctly elsewhere — it is a descriptive proxy, not a causal Δturns
+claim, because no holdout control group exists yet (that gap is T0.3, still
+open).
+
+### T1.6 closed — as an explicit opt-out, not auto-detection
+
+Implemented `tokenix run --raw` / `TOKENIX_RAW=1`
+(`compress::run_command_raw`, `Stdio::inherit`, sharing `build_shell_command`
+with the compressed path so the two invocations cannot drift).
+
+Investigating the "detect pipeline consumption" framing pass 4 carried forward
+from the decision list found it is **not safely implementable as automatic
+detection**: the agent harness that is the normal caller of `tokenix run`
+reads its stdout through a pipe (that is how the harness captures output at
+all), which is the identical `isatty()` signal a human piping into
+`jq`/`grep`/a file would produce. There is no deterministic signal in this
+process's own environment that tells the two apart — attempting one risks
+silently *disabling compression in the primary use case* to guard a secondary
+one, which is a worse failure than the hazard it closes. This is the same
+category of correction pass 2 made to F5 (labeled DEAD): the failure mode is
+real, the originally-imagined mechanism is not viable, and the paper's
+prescription ("pass through raw" when detected) survives as an **explicit,
+documented flag** instead of a guess. Verified functionally: byte-exact
+stdout/stderr passthrough, exit code preserved (`exit 3` → process exit 3),
+both the flag and the env var. Regression test:
+`run_command_raw_preserves_exit_code`.
+
+### New literature since pass 4
+
+**What Does Context Compression Cost an Agent?** ([arXiv 2608.16370](https://arxiv.org/abs/2608.16370),
+Liu, 2026-08-17 — 5 days after pass 4's cutoff) introduces **reacquisition
+cost**: additional retrieval tool calls an agent issues to recover state a
+compressor dropped, measured with a controlled bounded-horizon protocol
+comparing a *dropping* operator against a *fact-preserving* one. At 5×
+compression, a dropping operator produced a retrieval surge across all six
+model/regime comparisons tested even where task completion stayed
+statistically flat — GPT-5.5: completion 80%→85% (p=1.0, i.e. *unchanged*)
+while retrieval calls rose 21.0→63.9 (p=.002). Semantically irrelevant content
+replacement alone raised retrieval **57%** with no significant completion
+change.
+
+This does not change tokenix's architecture — it sharpens the existing
+"closed-loop recovery" mechanism (2607.12161) with a name and a clean natural
+experiment, and its own stated guidance is the position this repo already
+holds: fact-preserving/semantic-filtering compression is safe, unconditional
+dropping is not. It corroborates, in the same family as LogDx-CI's
+`never_worse`-of-evidence finding and CORVUS's trajectory-elongation result,
+why `filters.rs`'s `never_mask_failure`/`priority_lines`/`passthrough_when_emptied`
+rules exist as hard invariants rather than tunables: a filter that drops
+failure evidence to hit a compression ratio is exactly the *dropping* operator
+this paper measures the cost of, even when its own golden tests still pass.
+No code change indicated — recorded as corroboration for the next filter
+audit pass.
+
+### Remaining gaps — reaffirmed, still deferred
+
+Unchanged from pass 4, each still absent from the tree by symbol-level check:
+**T0.3 holdout mode** (no `TOKENIX_HOLDOUT`), **T0.4 OTLP receiver** (no OTLP
+in `daemon.rs`), **T1.7 NAP harness** (no action-preservation in
+`cmd_filter.rs`), **T2.8 `updatedToolOutput`** (no reference in `hook.rs`),
+**T3.11 CORE-Bench** (`benchmark.rs` is still the internal-only harness). Each
+is day-to-week scale, not an hours-scale close like T1.6; ranked in pass 4 and
+that ranking still holds — holdout mode is the next cheapest and the
+precondition for any causal savings claim.
+
+### Verdict
+
+No architectural correction from this pass. One real gap closed (T1.6, in the
+only form that is actually safe), one stale table note corrected (T0.2), and
+one new paper filed as corroboration rather than a new requirement. The
+"homologate against the papers" bar for this pass is: every DONE claim in the
+tree re-verified by symbol, not by re-reading the prior pass's prose — that
+distinction is what this pass adds.

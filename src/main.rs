@@ -686,6 +686,13 @@ enum Commands {
         /// Shell used to execute the command: auto (cmd/sh), or pwsh/powershell
         #[arg(long, default_value = "auto")]
         shell: String,
+        /// Print the command's raw stdout/stderr unmodified (no compression,
+        /// dedup, or recall stash). For a script/pipeline that consumes the
+        /// exact output — auto-detecting that case is not reliable (the agent
+        /// harness's own stdout capture looks identical to a pipe), so this is
+        /// an explicit opt-out. Also set by TOKENIX_RAW=1.
+        #[arg(long)]
+        raw: bool,
     },
     /// Wrap another MCP server and compress its tool results before they reach
     /// the agent (the only path that reaches MCP output — hooks cannot)
@@ -1460,11 +1467,17 @@ fn main() -> Result<()> {
             command,
             path,
             shell,
+            raw,
         } => {
             // `--path` defaults to "."; only pass a real override through so the
             // normal case keeps the caller's cwd untouched.
             let cwd = (path != Path::new(".")).then_some(path);
-            let code = compress::run_command_and_compress(&command, &shell, cwd.as_deref())?;
+            let raw = raw || std::env::var("TOKENIX_RAW").is_ok_and(|v| v == "1" || v == "true");
+            let code = if raw {
+                compress::run_command_raw(&command, &shell, cwd.as_deref())?
+            } else {
+                compress::run_command_and_compress(&command, &shell, cwd.as_deref())?
+            };
             std::process::exit(code);
         }
         Commands::McpProxy { name, command } => {
