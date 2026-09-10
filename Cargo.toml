@@ -48,7 +48,7 @@ tabled = { version = "0.21", default-features = false, features = ["ansi"] }
 # Interactive filter browser (`tokenix filter` in a TTY). Default features bring
 # the crossterm backend, re-exported as `ratatui::crossterm` so we pin one version.
 ratatui = "0.30"
-dirs = "6"
+dirs = "7"
 rayon = "1"
 toml = "1.1"
 regex = "1"
