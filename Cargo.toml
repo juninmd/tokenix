@@ -54,6 +54,10 @@ toml = "1.1"
 regex = "1"
 rust-embed = { version = "8", features = ["include-exclude"] }
 libc = "0.2"
+# CSPRNG for the daemon capability token on every platform. Already in the tree
+# transitively at this exact version, so this adds no new compilation unit —
+# it just stops the non-unix path from hashing pid + clock + heap addresses.
+getrandom = "0.3"
 tree-sitter = "0.26"
 tree-sitter-rust = "0.24"
 tree-sitter-python = "0.25"

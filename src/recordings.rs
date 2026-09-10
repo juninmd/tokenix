@@ -113,11 +113,24 @@ pub fn capture(repo_root: &Path, command: &str, stdout: &str, stderr: &str) {
         body.push_str("--- stderr ---\n");
         body.push_str(stderr);
     }
+    // Captures land in the working tree and are later shipped, verbatim and up
+    // to 64 KB, as an argv value to whichever AI CLI `filter generate` finds on
+    // PATH. Redact before either happens: `aws sts get-session-token` under a
+    // recording session used to write its session token straight into the repo.
+    let body = crate::secrets_scan::redact_known_secrets(&body).0;
+    let body = crate::conversation_audit::redact_credentials(&body);
     let body = truncate_bytes(&body, MAX_BYTES_PER_CAPTURE);
 
     let dir = recordings_dir(repo_root).join(&base);
     if std::fs::create_dir_all(&dir).is_err() {
         return;
+    }
+    // Captures are raw command output sitting in the working tree. Not every
+    // repo gitignores `.tokenix/`, and `git add -A` after a recording session
+    // would commit them.
+    let ignore = recordings_dir(repo_root).join(".gitignore");
+    if !ignore.exists() {
+        let _ = std::fs::write(&ignore, "*\n");
     }
     // Claim the slot atomically. The hook rewrites every in-scope command into
     // its own `tokenix run` process, so two concurrent runs of the same base

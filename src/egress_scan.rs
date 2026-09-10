@@ -217,7 +217,18 @@ fn load_rules() -> Vec<Rule> {
     let local = crate::store::find_project_root(&cwd)
         .join(".tokenix")
         .join("egress-rules");
-    read_toml_dir(&local, &mut specs);
+    // Repo-local rules are add-only: see `secrets_scan::reject_overrides`. A
+    // repo that could redefine a bundled id would blank its own exfiltration
+    // detection.
+    let mut repo_specs = Vec::new();
+    read_toml_dir(&local, &mut repo_specs);
+    let allowed = crate::secrets_scan::reject_overrides(
+        specs.iter().map(|s| s.id.clone()),
+        repo_specs,
+        |s: &RuleSpec| s.id.as_str(),
+        "egress",
+    );
+    specs.extend(allowed);
     read_toml_dir(&user_rules_dir(), &mut specs);
     compile_rules(specs)
 }

@@ -42,6 +42,11 @@ pub struct HookInput {
     pub tool_name: String,
     #[serde(default)]
     pub tool_input: serde_json::Value,
+    /// Claude Code / Codex send this on every hook call. Used to scope
+    /// re-read suppression to the conversation that actually received the
+    /// bytes; empty for agents that don't send one.
+    #[serde(default)]
+    pub session_id: String,
     #[serde(skip)]
     raw_tool_name: String,
 }
@@ -78,6 +83,7 @@ impl HookInput {
             raw_tool_name: tool_name.clone(),
             tool_name,
             tool_input,
+            session_id: String::new(),
         })
     }
 
@@ -93,6 +99,7 @@ impl HookInput {
                 raw_tool_name: input.tool_call.name,
                 tool_name,
                 tool_input,
+                session_id: String::new(),
             });
         }
         if let Ok(input) = serde_json::from_str::<HookInput>(clean) {
@@ -107,6 +114,7 @@ impl HookInput {
                     raw_tool_name: input.tool_name,
                     tool_name,
                     tool_input,
+                    session_id: input.session_id,
                 });
             }
         }
@@ -144,6 +152,7 @@ fn normalize_copilot_input(tool_name: &str, tool_args: &serde_json::Value) -> Ho
         raw_tool_name: tool_name.clone(),
         tool_name,
         tool_input,
+        session_id: String::new(),
     }
 }
 
@@ -243,7 +252,11 @@ fn symbol_lookup(pattern: &str, repo_root: &Path) -> Option<String> {
     Some(lines.join("\n"))
 }
 
-fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String, String) {
+fn handle_read(
+    tool_input: &serde_json::Value,
+    repo_root: &Path,
+    session: &str,
+) -> (bool, String, String) {
     let file_path = match tool_input["file_path"].as_str() {
         Some(p) => p,
         None => return (false, String::new(), "missing file_path".to_string()),
@@ -312,7 +325,8 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
     let recall_path = full_path.to_string_lossy().replace('\\', "/");
     let content_tokens = count_tokens(&content);
     let now = now_ts();
-    if let Some(hit) = crate::recall::find_recent_read(&recall_path, &content, content_tokens, now)
+    if let Some(hit) =
+        crate::recall::find_recent_read(&recall_path, &content, content_tokens, now, session)
     {
         return (
             true,
@@ -321,7 +335,7 @@ fn handle_read(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, Strin
         );
     }
     let remember_full_read =
-        || crate::recall::remember_read(&recall_path, &content, content_tokens, now);
+        || crate::recall::remember_read(&recall_path, &content, content_tokens, now, session);
 
     let line_count = content.lines().count();
     let min_lines = min_lines_for_outline();
@@ -1170,7 +1184,7 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
     }
 
     let (intercepted, output, reason) = match input.tool_name.as_str() {
-        "Read" => handle_read(&input.tool_input, &repo_root),
+        "Read" => handle_read(&input.tool_input, &repo_root, &input.session_id),
         "Grep" => handle_grep(&input.tool_input, &repo_root),
         _ => (false, String::new(), "unsupported tool".to_string()),
     };
@@ -1455,7 +1469,7 @@ mod tests {
         }
         drop(f);
         let input = serde_json::json!({ "file_path": dense.to_string_lossy() });
-        let (intercepted, _, reason) = handle_read(&input, &dir);
+        let (intercepted, _, reason) = handle_read(&input, &dir, "");
         assert!(
             !intercepted,
             "dense small-symbol file should pass through, got: {reason}"
@@ -1477,7 +1491,7 @@ mod tests {
         }
         drop(f);
         let input = serde_json::json!({ "file_path": sparse.to_string_lossy() });
-        let (intercepted, _, reason) = handle_read(&input, &dir);
+        let (intercepted, _, reason) = handle_read(&input, &dir, "");
         assert!(
             intercepted,
             "large-body file should be intercepted, got: {reason}"
@@ -1541,6 +1555,7 @@ mod tests {
             tool_name: "Grep".to_string(),
             tool_input: serde_json::json!({"pattern": "foo", "output_mode": "content"}),
             raw_tool_name: "Grep".to_string(),
+            session_id: String::new(),
         };
         let (updated, reason) = grep_cap_input(&input.tool_input).unwrap();
         let out = input_rewrite_output(&input, updated, &reason, false);
@@ -1557,6 +1572,7 @@ mod tests {
             tool_name: "Grep".to_string(),
             tool_input: serde_json::json!({"pattern": "foo", "output_mode": "content"}),
             raw_tool_name: "grep_search".to_string(),
+            session_id: String::new(),
         };
         let (updated, reason) = grep_cap_input(&input.tool_input).unwrap();
         let out = input_rewrite_output(&input, updated, &reason, true);
@@ -1576,6 +1592,7 @@ mod tests {
             tool_name: "Bash".to_string(),
             tool_input: serde_json::json!({"command": "git status"}),
             raw_tool_name: "Bash".to_string(),
+            session_id: String::new(),
         };
         let out = bash_rewrite_output(&input, "git status --short", "test reason", false);
         let hso = &out["hookSpecificOutput"];

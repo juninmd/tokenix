@@ -4080,6 +4080,7 @@ dependencies = [
  "dirs",
  "fastembed",
  "flate2",
+ "getrandom 0.3.4",
  "hex",
  "ignore",
  "indicatif 0.18.6",

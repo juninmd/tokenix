@@ -254,9 +254,15 @@ deterministic TOML rules, never a model. Engine guarantees:
 - **Never worse.** A filtered result never costs more bytes than the raw output.
 - **Line endings are preserved.** CRLF input comes back CRLF, so content the agent
   may quote into an exact-match edit still matches the bytes on disk.
-- **Repo-local filters are trust-gated.** `.tokenix/filters` is skipped until
-  `tokenix trust` pins its SHA-256, so a cloned repo cannot rewrite what the agent
-  sees.
+- **Repo-controlled inputs are trust-gated.** `.tokenix/filters`,
+  `.tokenix/secret-rules`, `.tokenix/egress-rules`, `.mcp.json`, `opencode.json`
+  and `.vscode/mcp.json` are all skipped until `tokenix trust` pins their
+  SHA-256, so a cloned repo cannot rewrite what the agent sees, blind the
+  scanners, or choose a command `prompt-audit` spawns.
+- **Repo rule files may add, never override.** A `.tokenix/secret-rules` entry
+  reusing a built-in id is ignored with a warning — otherwise a repo could
+  redefine `aws-secret-access-key` to match nothing and blank its own scan.
+  Your own `~/.tokenix/secret-rules` still overrides freely.
 
 ---
 
@@ -382,7 +388,7 @@ repo-local `opencode.json` MCP registration.
 | `tokenix gain` | Tokens removed, split by source — Read interception vs command filters; semantic Grep counts as neutral usage. Reports session shape (sessions, calls/session, within-session re-requests — the measurable share of the "+turns" inversion mechanism) and (`--cost-estimate`, `--economics`) |
 | `tokenix discover` | Replay current filters over historical agent output — measured recoverable savings plus uncovered commands (`--agent`, `--top`, `--json`) |
 | `tokenix retrieve KEY` | Print the exact original output a compressed run stashed; the key comes from a `[tokenix: ...]` marker |
-| `tokenix trust` / `untrust` | Approve (SHA-256 pinned) or revoke this repo's `.tokenix/filters` (`--status`) |
+| `tokenix trust` / `untrust` | Approve (SHA-256 pinned) or revoke this repo's executable inputs — `.tokenix/{filters,secret-rules,egress-rules}`, `.mcp.json`, `opencode.json`, `.vscode/mcp.json` (`--status`) |
 | `tokenix usage` | Absolute token spend + ≈USD from agent transcripts (`daily\|weekly\|monthly\|session\|model\|project\|blocks`, `--all-projects`, `--statusline`, `--json`) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix tokenmap` | Directory tree weighted by token count, heaviest paths first (`--format html`) |
@@ -437,7 +443,9 @@ a change set is left for a real index run.
 Matches are scoped to the current project and verified byte-for-byte against the
 stash, so a pointer is only emitted for output this checkout really produced.
 Re-read suppression is separate: `TOKENIX_READ_DEDUP=0`,
-`TOKENIX_READ_DEDUP_TTL` (900 s), `TOKENIX_READ_DEDUP_MIN_TOKENS` (1500).
+`TOKENIX_READ_DEDUP_TTL` (900 s), `TOKENIX_READ_DEDUP_MIN_TOKENS` (1500). It is
+scoped to the agent session that actually received the file, so a second session
+is never told it already has something it has not seen.
 
 **`tokenix index`** — `--force/-f`, `--cpu-profile <low|default|max>`, `--jobs N`,
 `--embed-batch N` (default 16 CPU / 64 GPU), `--if-stale`, `--path/-p`,
@@ -603,9 +611,16 @@ language mapping in `.tokenix.toml`.
 - **Everything is local.** No code, prompt, or transcript leaves your machine. The
   only network access is the one-time embedding-model download, pinned to a commit
   SHA on the hub so the weights you get are the weights we tested.
-- **Repo-local filters are untrusted by default** and skipped until `tokenix trust`
-  pins their SHA-256 — a cloned repository cannot silently rewrite what your agent
-  sees.
+- **Repo-controlled inputs are untrusted by default** and skipped until
+  `tokenix trust` pins their SHA-256 — a cloned repository cannot silently rewrite
+  what your agent sees, silence the secret/egress scanners, or get
+  `prompt-audit` / `session-audit` to spawn a command of its choosing from a
+  committed `.mcp.json`. User-scoped configs (`~/.claude.json`, `~/.codex/`)
+  are yours and carry no gate.
+- **Index snapshots are scrubbed on export.** `tokenix export-index` masks known
+  secrets in chunk content before writing `.tokenix/index.db.gz` and tells you how
+  many it hit — a gzipped blob nobody diffs is a bad place to learn you committed
+  a key.
 - **Secrets are never indexed.** `.env`, `.pem`, and similar files are excluded,
   and `tokenix scan-secrets` redacts by default.
 - **Credentials are masked before anything is persisted.** Command lines and

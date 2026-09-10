@@ -34,7 +34,10 @@ fn log_unfiltered_cmd(cmd: &str) {
     if std::fs::metadata(&log_path).is_ok_and(|m| m.len() >= UNFILTERED_LOG_CAP) {
         let _ = std::fs::rename(&log_path, log_path.with_extension("log.1"));
     }
-    let entry = format!("{}\n", cmd);
+    // Shell input is where credentials actually live (`curl -H "Authorization:
+    // Bearer …"`, `psql postgres://user:pw@host`). The failure tee already
+    // masks them before writing; this log did not, and it is long-lived.
+    let entry = format!("{}\n", crate::conversation_audit::redact_credentials(cmd));
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -42,6 +45,7 @@ fn log_unfiltered_cmd(cmd: &str) {
         .open(&log_path)
     {
         let _ = f.write_all(entry.as_bytes());
+        crate::store::restrict_to_owner(&log_path);
     }
 }
 

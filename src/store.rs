@@ -1777,6 +1777,12 @@ pub fn restrict_to_owner(path: &Path) {
         let mode = if meta.is_dir() { 0o700 } else { 0o600 };
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
     }
+    // Windows has no chmod. The caller's files live under the user profile,
+    // whose default ACL already grants only the user, SYSTEM and the local
+    // Administrators group — an unprivileged *other* account cannot read them.
+    // Tightening further (icacls /inheritance:r) risks locking the owner out of
+    // their own index if the explicit grant fails, so this stays a no-op and
+    // the docs say so rather than claiming a 0600 that never happened.
     #[cfg(not(unix))]
     {
         let _ = path;

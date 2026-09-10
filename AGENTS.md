@@ -51,7 +51,7 @@ them weekly and on demand — that is the only place they execute.
 | `discover.rs` | Replays current filters over historical agent output |
 | `transcripts.rs` | Per-agent history roots and parsers |
 | `conversation_audit.rs` | `conversation-audit` + `redact_credentials()` — the single credential masker every persisted view goes through |
-| `recordings.rs` | `filter record` sessions — captures raw output for filter authoring |
+| `recordings.rs` | `filter record` sessions — captures command output for filter authoring; redacted and self-gitignored, because captures land in the working tree and `filter generate` uploads them to an AI CLI |
 | `memory.rs` | Cross-session notes surfaced back into context |
 | `benchmark.rs` | Retrieval benchmark harness (`tokenix benchmark`) |
 | `doctor.rs` | Environment diagnosis — GPU/EP probe, cache sizes, daemon reachability |
@@ -266,8 +266,18 @@ both, and that is the recommended shape for a silent-on-success tool. The
 `apply_filter_with_exit` fallback is gated on `!output.trim().is_empty()`, so
 passthrough only takes over when filtering emptied *non-empty* output.
 
-Repo-local filters are trust-gated (`tokenix trust`, SHA-256 in
-`~/.tokenix/trusted_filters.json`) and skipped until approved. Failed commands
+Repo-controlled inputs are trust-gated (`tokenix trust`, SHA-256 in
+`~/.tokenix/trusted_filters.json`) and skipped until approved. The gate covers
+everything a clone can put in the tree that tokenix acts on:
+`.tokenix/{filters,secret-rules,egress-rules}/*.toml`, `.mcp.json`,
+`opencode.json`, `.vscode/mcp.json` — see `filters::repo_input_hashes`, which is
+the single list the gate is defined by. `mcp_audit` introspects a server by
+*spawning* it, so a repo-declared server reports
+`unknown (declared by this repo — not spawned)` until trusted; user-scoped
+configs are never gated. Repo rule files are additionally add-only
+(`secrets_scan::reject_overrides`): a repo id colliding with a bundled one is
+dropped with a warning, so a clone cannot redefine `aws-secret-access-key` into
+a regex that matches nothing. Failed commands
 with clipped output tee raw text to `~/.tokenix/tee/` with a
 `[full output (credentials masked): path]` hint (`TOKENIX_TEE=0` disables). The
 hint says "masked" on purpose — the file is redacted, so the agent must not read a
@@ -320,7 +330,12 @@ both the session and the checkout, and the marker claims the output "is already 
 this conversation" — a hit from another repository, or from yesterday, cannot
 honour that. Entries written before scoping existed deserialize with an empty
 `project` and therefore never match. Re-read suppression keeps its own 900 s TTL
-(`TOKENIX_READ_DEDUP_TTL`).
+(`TOKENIX_READ_DEDUP_TTL`) and is scoped to the agent's `session_id` for the same
+reason: `read_marker` claims the file "is already in this conversation", and
+`recent_reads.json` is machine-wide, so a second session started minutes later
+was being handed that claim — and denied the content — for bytes it never saw.
+Agents that send no session id compare equal to each other, so their behavior is
+unchanged.
 
 ## One interface
 
