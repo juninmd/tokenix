@@ -9,6 +9,14 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+/// Machine-wide state (hook log, recall stash) goes here instead of the
+/// developer's `~/.tokenix`; shared per test process so dedup can see it.
+fn isolated_home() -> std::path::PathBuf {
+    let home = std::env::temp_dir().join(format!("tokenix-hook-e2e-home-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("isolated TOKENIX_HOME");
+    home
+}
+
 /// Run `tokenix hook` with `payload` on stdin from an isolated temp cwd (the
 /// hook writes its event log relative to the repo root it detects, so tests
 /// must not run inside this repository).
@@ -22,6 +30,7 @@ fn run_hook(payload: &str) -> (String, i32) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_tokenix"))
         .arg("hook")
         .current_dir(&dir)
+        .env("TOKENIX_HOME", isolated_home())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -153,6 +162,7 @@ fn repeated_successful_command_dedupes_and_stays_retrievable() {
         let out = Command::new(env!("CARGO_BIN_EXE_tokenix"))
             .args(["run", cmd])
             .current_dir(&dir)
+            .env("TOKENIX_HOME", isolated_home())
             .output()
             .expect("tokenix run");
         String::from_utf8_lossy(&out.stdout).into_owned()
@@ -188,6 +198,7 @@ fn repeated_successful_command_dedupes_and_stays_retrievable() {
     let retrieved = Command::new(env!("CARGO_BIN_EXE_tokenix"))
         .args(["retrieve", &key])
         .current_dir(&dir)
+        .env("TOKENIX_HOME", isolated_home())
         .output()
         .expect("tokenix retrieve");
     let body = String::from_utf8_lossy(&retrieved.stdout);
@@ -286,6 +297,7 @@ fn run_hook_post(payload: &str) -> (String, i32) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_tokenix"))
         .arg("hook-post")
         .current_dir(&dir)
+        .env("TOKENIX_HOME", isolated_home())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
