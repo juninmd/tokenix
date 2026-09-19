@@ -105,7 +105,10 @@ pub fn run_doctor() -> Result<()> {
         .collect();
     let mut issue_count = 0usize;
     for (name, def) in &named {
-        for issue in crate::filters::semantic_filter_issues(def) {
+        let issues = crate::filters::semantic_filter_issues(def)
+            .into_iter()
+            .chain(crate::filters::regex_issues(def));
+        for issue in issues {
             kv(name, &issue);
             issue_count += 1;
         }

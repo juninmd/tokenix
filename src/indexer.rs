@@ -111,6 +111,20 @@ pub fn git_dirty_paths(repo_root: &Path) -> Option<DirtyPaths> {
     Some((plan.files, plan.deleted))
 }
 
+/// Whether indexing `abs` writes a `files` row at all. Empty, binary and
+/// sub-`MIN_CHUNK_TOKENS` files never get one, so a caller waiting for that
+/// row would wait forever.
+pub fn stores_content(abs: &Path, rel: &str) -> bool {
+    std::fs::read(abs)
+        .ok()
+        .and_then(|raw| decode_text(&raw))
+        .is_some_and(|text| !chunk_file(rel, &text).is_empty())
+}
+
+fn within_size_cap(abs: &Path, max_bytes: u64) -> bool {
+    std::fs::metadata(abs).is_ok_and(|m| m.len() <= max_bytes)
+}
+
 fn chunk_embedding_key(text: &str) -> String {
     let mut hasher = sha2::Sha256::new();
     hasher.update(text.as_bytes());
@@ -173,6 +187,9 @@ fn git_changed_files(repo_root: &Path) -> Option<FilePlan> {
         return None;
     }
 
+    let max_bytes = index_config()
+        .max_file_bytes
+        .unwrap_or(MAX_INDEX_FILE_BYTES);
     let mut files = Vec::new();
     let mut deleted = HashSet::new();
     let mut seen = HashSet::new();
@@ -196,7 +213,11 @@ fn git_changed_files(repo_root: &Path) -> Option<FilePlan> {
         }
 
         let abs = repo_root.join(&rel);
-        if abs.is_file() && should_index(&abs) && seen.insert(rel.clone()) {
+        if abs.is_file()
+            && should_index(&abs)
+            && within_size_cap(&abs, max_bytes)
+            && seen.insert(rel.clone())
+        {
             files.push((abs, rel));
         }
     }
@@ -265,11 +286,7 @@ fn restored_files(
         .map(|f| String::from_utf8_lossy(f).replace('\\', "/"))
         .filter(|rel| !existing.contains_key(rel.as_str()) && !planned.contains(rel.as_str()))
         .map(|rel| (repo_root.join(&rel), rel))
-        .filter(|(abs, _)| {
-            abs.is_file()
-                && should_index(abs)
-                && std::fs::metadata(abs).is_ok_and(|m| m.len() <= max_bytes)
-        })
+        .filter(|(abs, _)| abs.is_file() && should_index(abs) && within_size_cap(abs, max_bytes))
         .collect();
     extra.sort_by(|a, b| a.1.cmp(&b.1));
     extra
@@ -883,5 +900,54 @@ mod tests {
         assert!(mtime > 0.0);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("tokenix_test_indexer")
+            .join(format!("{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn stores_content_is_false_for_files_that_never_get_a_row() {
+        let dir = scratch_dir("stores");
+        std::fs::write(dir.join("empty.md"), "").unwrap();
+        std::fs::write(dir.join("blob.rs"), [0x01, 0x00, 0x42, 0x00, 0x00, 0x10]).unwrap();
+        let code = "pub fn invoice_total(items: &[u32]) -> u32 {\n    items.iter().sum()\n}\n";
+        std::fs::write(dir.join("lib.rs"), code).unwrap();
+
+        // The inline refresh counted these as new on every query, forever.
+        assert!(!stores_content(&dir.join("empty.md"), "empty.md"));
+        assert!(!stores_content(&dir.join("blob.rs"), "blob.rs"));
+        assert!(stores_content(&dir.join("lib.rs"), "lib.rs"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_plan_skips_files_above_the_size_cap() {
+        let dir = scratch_dir("git_cap");
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .expect("git available")
+        };
+        assert!(git(&["init", "-q"]).status.success());
+        std::fs::write(dir.join("small.rs"), "fn small() {}\n").unwrap();
+        let line = "fn padding() {}\n";
+        let big = line.repeat(MAX_INDEX_FILE_BYTES as usize / line.len() + 1);
+        std::fs::write(dir.join("big.rs"), big).unwrap();
+
+        // The full walk skips oversized files whole; the git-incremental plan
+        // used to index them anyway.
+        let plan = git_changed_files(&dir).expect("git repo");
+        let rels: Vec<&str> = plan.files.iter().map(|(_, rel)| rel.as_str()).collect();
+        assert!(rels.contains(&"small.rs"), "{rels:?}");
+        assert!(!rels.contains(&"big.rs"), "{rels:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

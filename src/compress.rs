@@ -5,6 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::chunker::count_tokens;
 use crate::store::{log_hook_event, HookEvent};
 
+mod shell;
+
 const POST_HOOK_TOOLS: &[&str] = &["Bash", "ListDirectory"];
 const BASH_MAX_LINES: usize = 100;
 const BASH_HEAD_LINES: usize = 40;
@@ -23,8 +25,8 @@ fn log_unfiltered_cmd(cmd: &str) {
     }
     // Write to the global ~/.tokenix/ dir, not the project dir, to avoid
     // accidentally committing internal tokenix logs.
-    let log_path = match dirs::home_dir() {
-        Some(h) => h.join(".tokenix").join("unfiltered_cmds.log"),
+    let log_path = match crate::store::global_dir() {
+        Some(h) => h.join("unfiltered_cmds.log"),
         None => return,
     };
     if let Some(parent) = log_path.parent() {
@@ -34,7 +36,10 @@ fn log_unfiltered_cmd(cmd: &str) {
     if std::fs::metadata(&log_path).is_ok_and(|m| m.len() >= UNFILTERED_LOG_CAP) {
         let _ = std::fs::rename(&log_path, log_path.with_extension("log.1"));
     }
-    let entry = format!("{}\n", cmd);
+    // Shell input is where credentials actually live (`curl -H "Authorization:
+    // Bearer …"`, `psql postgres://user:pw@host`). The failure tee already
+    // masks them before writing; this log did not, and it is long-lived.
+    let entry = format!("{}\n", crate::conversation_audit::redact_credentials(cmd));
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -42,6 +47,7 @@ fn log_unfiltered_cmd(cmd: &str) {
         .open(&log_path)
     {
         let _ = f.write_all(entry.as_bytes());
+        crate::store::restrict_to_owner(&log_path);
     }
 }
 
@@ -1830,7 +1836,20 @@ fn compress_command_streams(
         compress_bash_output_for_stream(command_str, stderr_raw, true, Some(success))
     };
 
-    (stdout_compressed, stderr_compressed)
+    (
+        keep_final_newline(stdout_raw, stdout_compressed),
+        keep_final_newline(stderr_raw, stderr_compressed),
+    )
+}
+
+/// Filters rejoin lines without a trailing terminator. When the agent's
+/// harness merges both streams, a missing one glues this stream's last line
+/// onto the other's first (`[... omitted ...]test result: FAILED`).
+fn keep_final_newline(raw: &str, mut out: String) -> String {
+    if !out.is_empty() && raw.ends_with('\n') && !out.ends_with('\n') {
+        out.push_str(if raw.ends_with("\r\n") { "\r\n" } else { "\n" });
+    }
+    out
 }
 
 /// Remove ANSI/VT100 escape sequences (CSI, OSC, and single-char sequences).
@@ -2311,7 +2330,7 @@ fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Opti
     if std::env::var("TOKENIX_TEE").is_ok_and(|v| v == "0") {
         return None;
     }
-    let dir = dirs::home_dir()?.join(".tokenix").join("tee");
+    let dir = crate::store::global_dir()?.join("tee");
     std::fs::create_dir_all(&dir).ok()?;
     crate::store::restrict_to_owner(&dir);
 
@@ -2395,9 +2414,18 @@ fn build_shell_command(
         c.args(["-NoProfile", "-NonInteractive", "-Command", &wrapped]);
         c
     } else if cfg!(windows) {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", command_str]);
-        c
+        match shell::git_bash() {
+            Some(bash) => {
+                let mut c = std::process::Command::new(bash);
+                c.args(["-c", command_str]);
+                c
+            }
+            None => {
+                let mut c = std::process::Command::new("cmd");
+                c.args(["/C", command_str]);
+                c
+            }
+        }
     } else {
         let mut c = std::process::Command::new("sh");
         c.args(["-c", command_str]);
@@ -2862,6 +2890,25 @@ error[E0425]: cannot find value `y`
         assert!(
             !stderr.contains("build succeeded"),
             "stderr must not emit success sentinel: {stderr:?}"
+        );
+    }
+
+    #[test]
+    fn cargo_warnings_on_stderr_reach_the_filter() {
+        let warning = "warning: unused variable: `x`\n --> src/lib.rs:2:9\n  |\n2 |     let x = 5;\n  |         ^ help: if this is intentional, prefix it with an underscore: `_x`\n  |\n  = note: `#[warn(unused_variables)]` on by default\n\n";
+        let stderr_raw = format!("   Compiling demo v0.1.0\n{warning}    Finished `dev` profile\n");
+        let (_, stderr) = compress_command_streams("cargo clippy", "", &stderr_raw, true);
+        assert!(
+            stderr.contains("warning: unused variable: `x`\n --> src/lib.rs:2:9"),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains("let x = 5"),
+            "rustc writes to stderr; the cargo filter must see it: {stderr}"
+        );
+        assert!(
+            stderr.ends_with('\n'),
+            "a merged stdout would glue onto the last line: {stderr:?}"
         );
     }
 

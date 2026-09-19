@@ -5,7 +5,7 @@ passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
-  "^\\s*{",
+  "^\\s*\\{",
   "^\\s*}"
 ]
 keep_lines_matching = [

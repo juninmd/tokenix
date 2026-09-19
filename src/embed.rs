@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use fastembed::{
-    EmbeddingModel, InitOptions, InitOptionsUserDefined, Pooling, TextEmbedding, TokenizerFiles,
-    UserDefinedEmbeddingModel,
+    EmbeddingModel, InitOptionsUserDefined, Pooling, TextEmbedding, TextInitOptions,
+    TokenizerFiles, UserDefinedEmbeddingModel,
 };
 use once_cell::sync::OnceCell;
 use reqwest::blocking::Client;
@@ -59,9 +59,9 @@ pub const MODELS: &[ModelSpec] = &[
         note: "768d · English · quantized · default",
     },
     // Non-quantized ONNX: the Qdrant-quantized bge/minilm graphs use a fused
-    // SkipLayerNormalization op that the pinned ORT build cannot run (missing
-    // input). The fp32 graphs load cleanly; they are larger to download but still
-    // far fewer params than nomic, so indexing is faster.
+    // SkipLayerNormalization op that ORT 2.0.0-rc.9 could not run (missing
+    // input). Not re-checked on rc.13; switching would change stored vectors.
+    // The fp32 graphs load cleanly and are far fewer params than nomic.
     ModelSpec {
         id: "bge-small",
         source: ModelSource::BuiltIn(EmbeddingModel::BGESmallENV15),
@@ -145,8 +145,10 @@ pub fn active_model_id() -> String {
 }
 
 /// Loaded models keyed by id. Leaked to `'static` so callers get a stable
-/// reference; the process loads each model at most once.
-static MODELS_CACHE: OnceCell<Mutex<HashMap<String, &'static TextEmbedding>>> = OnceCell::new();
+/// reference; the process loads each model at most once. Each model sits
+/// behind its own lock because fastembed ≥ 5 embeds through `&mut self`.
+type SharedModel = &'static Mutex<TextEmbedding>;
+static MODELS_CACHE: OnceCell<Mutex<HashMap<String, SharedModel>>> = OnceCell::new();
 
 /// When true, the GPU execution provider is skipped even on a GPU-enabled build.
 /// Set by `main()` from the `--only-cpu` flag before the model is first used.
@@ -224,7 +226,7 @@ pub fn gpu_backend() -> Option<&'static str> {
 }
 
 fn open_query_cache_db() -> Option<Connection> {
-    let dir = dirs::home_dir()?.join(".tokenix");
+    let dir = crate::store::global_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join("query_cache.db");
     let conn = Connection::open(&path).ok()?;
@@ -257,7 +259,7 @@ fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
 /// Get (loading once) the model for a friendly id. The lock is held across the
 /// load so two threads never load the same model twice; after first load it is a
 /// brief map lookup.
-fn model_for(id: &str) -> Result<&'static TextEmbedding> {
+fn model_for(id: &str) -> Result<SharedModel> {
     let cache = MODELS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut map = cache
         .lock()
@@ -276,9 +278,17 @@ fn model_for(id: &str) -> Result<&'static TextEmbedding> {
     }
     .map_err(|e| anyhow!("Embedding model '{id}' init failed: {e}"))?;
     // Leak once: the model lives for the rest of the process anyway.
-    let leaked: &'static TextEmbedding = Box::leak(Box::new(te));
+    let leaked: SharedModel = Box::leak(Box::new(Mutex::new(te)));
     map.insert(id.to_string(), leaked);
     Ok(leaked)
+}
+
+fn embed_with(id: &str, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+    model_for(id)?
+        .lock()
+        .map_err(|_| anyhow!("embedding model '{id}' poisoned"))?
+        .embed(texts, None)
+        .map_err(|e| anyhow!("{e}"))
 }
 
 fn build_text_embedding(model: EmbeddingModel) -> Result<TextEmbedding> {
@@ -293,7 +303,7 @@ fn build_text_embedding(model: EmbeddingModel) -> Result<TextEmbedding> {
     std::fs::create_dir_all(&cache_dir).ok();
 
     #[allow(unused_mut)]
-    let mut options = InitOptions::new(model).with_cache_dir(cache_dir);
+    let mut options = TextInitOptions::new(model).with_cache_dir(cache_dir);
 
     // GPU-by-default with automatic CPU fallback. Register the GPU provider
     // first and CPU second, so ORT uses the GPU when available and falls back
@@ -301,20 +311,20 @@ fn build_text_embedding(model: EmbeddingModel) -> Result<TextEmbedding> {
     #[cfg(feature = "cuda")]
     if !force_cpu() {
         options = options.with_execution_providers(vec![
-            ort::execution_providers::CUDAExecutionProvider::default().build(),
-            ort::execution_providers::CPUExecutionProvider::default().build(),
+            ort::ep::CUDA::default().build(),
+            ort::ep::CPU::default().build(),
         ]);
     }
 
     #[cfg(all(not(feature = "cuda"), feature = "directml"))]
     if !force_cpu() {
         options = options.with_execution_providers(vec![
-            ort::execution_providers::DirectMLExecutionProvider::default().build(),
-            ort::execution_providers::CPUExecutionProvider::default().build(),
+            ort::ep::DirectML::default().build(),
+            ort::ep::CPU::default().build(),
         ]);
     }
 
-    TextEmbedding::try_new(options)
+    TextEmbedding::try_new(options).map_err(|e| anyhow!("{e}"))
 }
 
 /// Load a "bring your own" ONNX model from the Hugging Face hub via fastembed's
@@ -356,15 +366,15 @@ fn build_custom_embedding(
     #[cfg(feature = "cuda")]
     if !force_cpu() {
         options = options.with_execution_providers(vec![
-            ort::execution_providers::CUDAExecutionProvider::default().build(),
-            ort::execution_providers::CPUExecutionProvider::default().build(),
+            ort::ep::CUDA::default().build(),
+            ort::ep::CPU::default().build(),
         ]);
     }
     #[cfg(all(not(feature = "cuda"), feature = "directml"))]
     if !force_cpu() {
         options = options.with_execution_providers(vec![
-            ort::execution_providers::DirectMLExecutionProvider::default().build(),
-            ort::execution_providers::CPUExecutionProvider::default().build(),
+            ort::ep::DirectML::default().build(),
+            ort::ep::CPU::default().build(),
         ]);
     }
 
@@ -423,9 +433,7 @@ pub fn embed_documents(texts: &[String]) -> Result<Vec<Vec<f32>>> {
         .iter()
         .map(|t| format!("{}{t}", spec.doc_prefix))
         .collect();
-    model_for(&id)?
-        .embed(prefixed, None)
-        .map_err(|e| anyhow!("{e}"))
+    embed_with(&id, prefixed)
 }
 
 /// Embed a single query string for semantic search, applying the active model's
@@ -455,9 +463,7 @@ pub fn embed_query(text: &str) -> Result<Vec<f32>> {
 
     // 2. Generate embedding if not cached
     let prefixed = format!("{}{text}", spec.query_prefix);
-    let vec = model_for(&id)?
-        .embed(vec![prefixed], None)
-        .map_err(|e| anyhow!("{e}"))?
+    let vec = embed_with(&id, vec![prefixed])?
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("Empty embedding response"))?;
@@ -477,6 +483,41 @@ pub fn embed_query(text: &str) -> Result<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Vectors are stored on disk and compared against fresh queries, so a
+    /// dependency bump that shifts them silently breaks every existing index.
+    /// Captured with fastembed 4.9.1; fastembed 7.0.1 reproduced it exactly.
+    #[test]
+    #[cfg_attr(
+        not(feature = "model-tests"),
+        ignore = "needs model download; run with --features model-tests"
+    )]
+    fn default_model_vectors_are_stable_across_upgrades() {
+        set_active_model(DEFAULT_MODEL_ID);
+        // Batched on purpose: padding from the longer neighbour changes the
+        // vector (cosine ≈ 0.984 vs embedding it alone), so the fingerprint
+        // pins the batch shape the indexer actually uses.
+        let v = embed_documents(&[
+            "fn main() { println!(\"hi\"); }".to_string(),
+            "SELECT id FROM chunks WHERE path = ?1".to_string(),
+        ])
+        .expect("embed_documents failed")
+        .remove(0);
+        let expected = [
+            0.041491434f32,
+            -0.017307969,
+            -0.16891126,
+            -0.02869297,
+            0.03467372,
+            -0.04637254,
+        ];
+        for (i, (got, want)) in v.iter().zip(expected).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-4,
+                "dim {i} drifted: {got} vs {want} — existing indexes need a re-embed"
+            );
+        }
+    }
 
     /// Verifies the fastembed model loads and returns 768-dim vectors.
     /// Downloads ~130MB on first run; cached in %LOCALAPPDATA%\tokenix\models.

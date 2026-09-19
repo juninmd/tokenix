@@ -3,6 +3,15 @@ description = "Compact cargo check output"
 match_command = "^cargo\\s+check\\b"
 passthrough_when_emptied = true
 strip_ansi = true
+# rustc writes every diagnostic to stderr; without this the filter never sees them.
+filter_stderr = true
+notify_on_truncate = true
+priority_lines = ["^error"]
+# A warning keeps its message and location; its snippet is most of the bytes.
+# Errors are not capped: their snippet carries the compiler's suggested fix.
+block_caps = [
+  { start = "^warning(\\[[\\w-]+\\])?: ", end = "^(\\s*$|[A-Za-z])", max_lines = 2 },
+]
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Checking",
@@ -14,7 +23,7 @@ max_lines = 60
 
 
 [[tests.cargo-check]]
-name = "full diagnostic block shown"
+name = "warning collapses to message and location"
 input = """
 Checking my-crate v0.1.0
 warning: unused variable: `x`
@@ -29,12 +38,8 @@ Finished dev [unoptimized + debuginfo] target(s) in 0.5s
 """
 expected = """warning: unused variable: `x`
  --> src/main.rs:10:9
-  |
-10 |     let x = 5;
-  |         ^^ help: if this is intentional, prefix with underscore: `_x`
-  |
-  = note: `#[warn(unused_variables)]` on by default
-Finished dev [unoptimized + debuginfo] target(s) in 0.5s"""
+Finished dev [unoptimized + debuginfo] target(s) in 0.5s
+[... 5 detail lines omitted from 1 blocks ...]"""
 
 [[tests.cargo-check]]
 name = "silent success stays empty"

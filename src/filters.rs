@@ -5,6 +5,13 @@ use regex::Regex;
 use rust_embed::Embed;
 use serde::Deserialize;
 
+mod blocks;
+mod regex_lint;
+mod trust;
+pub use blocks::BlockCap;
+pub use regex_lint::regex_issues;
+pub use trust::{repo_input_hashes, repo_inputs_trusted, set_repo_inputs_trust};
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct MatchOutput {
@@ -138,6 +145,10 @@ pub struct FilterDef {
     /// positional cut that may spend the whole budget on one class.
     #[serde(default)]
     pub category_caps: Vec<CategoryCap>,
+    /// Keep only the first `max_lines` of each block opened by `start` (see
+    /// `blocks::BlockCap`). Runs before `strip_lines_matching`.
+    #[serde(default)]
+    pub block_caps: Vec<BlockCap>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -155,6 +166,16 @@ pub struct ExtractSection {
     pub include_markers: bool,
     #[serde(default)]
     pub max_matches: Option<usize>,
+    /// Lines kept per matched section (markers included); the rest collapse
+    /// into one `[... N lines omitted ...]` marker for that section.
+    #[serde(default)]
+    pub max_lines: Option<usize>,
+    /// A start line inside an open section begins the next section instead of
+    /// being content of the current one — for records that are delimited only
+    /// by their own header (`commit …`). Off: consecutive `npm ERR!` lines are
+    /// one section.
+    #[serde(default)]
+    pub split_on_start: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -239,9 +260,8 @@ pub struct ActiveFilter {
 struct BundledFilters;
 
 pub fn filters_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".tokenix")
+    crate::store::global_dir()
+        .unwrap_or_else(|| PathBuf::from(".tokenix"))
         .join("filters")
 }
 
@@ -325,83 +345,6 @@ pub fn load_user_filters_named() -> Vec<(String, FilterDef)> {
     result
 }
 
-/// Path of the JSON trust store gating repo-local filter files.
-pub fn trust_store_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".tokenix")
-        .join("trusted_filters.json")
-}
-
-/// SHA-256 of every `.toml` under `<repo>/.tokenix/filters`, keyed by file name.
-pub fn local_filter_hashes(root: &std::path::Path) -> std::collections::BTreeMap<String, String> {
-    use sha2::{Digest, Sha256};
-    let mut hashes = std::collections::BTreeMap::new();
-    let dir = root.join(".tokenix").join("filters");
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("toml") {
-                if let (Some(name), Ok(content)) = (
-                    path.file_name().and_then(|n| n.to_str()),
-                    std::fs::read(&path),
-                ) {
-                    hashes.insert(name.to_string(), hex::encode(Sha256::digest(&content)));
-                }
-            }
-        }
-    }
-    hashes
-}
-
-fn load_trust_store() -> HashMap<String, std::collections::BTreeMap<String, String>> {
-    std::fs::read_to_string(trust_store_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-/// True when every current repo-local filter file matches the hash recorded
-/// by `tokenix trust` for this repo. New, edited, or never-trusted files fail
-/// closed: repo-local filters control what the agent gets to see, so a cloned
-/// repository must not be able to rewrite command output until a human
-/// approves its filters.
-pub fn local_filters_trusted(root: &std::path::Path) -> bool {
-    let current = local_filter_hashes(root);
-    if current.is_empty() {
-        return true; // nothing to trust
-    }
-    let store = load_trust_store();
-    match store.get(&root.to_string_lossy().to_string()) {
-        Some(trusted) => *trusted == current,
-        None => false,
-    }
-}
-
-/// Record the current repo-local filter hashes as trusted (or remove the
-/// entry with `trust = false`). Returns the number of files affected.
-pub fn set_local_filters_trust(root: &std::path::Path, trust: bool) -> std::io::Result<usize> {
-    let mut store = load_trust_store();
-    let key = root.to_string_lossy().to_string();
-    let count;
-    if trust {
-        let current = local_filter_hashes(root);
-        count = current.len();
-        store.insert(key, current);
-    } else {
-        count = store.remove(&key).map(|m| m.len()).unwrap_or(0);
-    }
-    let path = trust_store_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(
-        &path,
-        serde_json::to_string_pretty(&store).unwrap_or_default(),
-    )?;
-    Ok(count)
-}
-
 /// This repo's `.tokenix/filters` directory.
 pub fn local_filters_dir() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -420,7 +363,7 @@ pub fn load_local_filters_named() -> Vec<(String, FilterDef)> {
     // Trust gate: silently skip untrusted repo-local filters in the hot path
     // (a warning here would leak into every filtered command's stderr).
     // `tokenix trust` reports the pending state interactively.
-    if !local_filters_trusted(&root) {
+    if !repo_inputs_trusted(&root) {
         return vec![];
     }
     let mut result = Vec::new();
@@ -755,7 +698,7 @@ pub fn sample_inputs() -> HashMap<String, String> {
     // samples must not be shown either, or a cloned repo could put its own
     // text in the preview pane under a bundled filter's name.
     let mut dirs = vec![filters_dir()];
-    if local_filters_trusted(&root) {
+    if repo_inputs_trusted(&root) {
         dirs.insert(0, local_filters_dir());
     }
     for dir in dirs {
@@ -2037,6 +1980,10 @@ fn apply_filter_with_exit_inner(output: &str, f: &FilterDef, exit_ok: Option<boo
 
     let mut lines: Vec<String> = s.lines().map(|l| l.to_string()).collect();
 
+    if !f.block_caps.is_empty() {
+        lines = blocks::apply_block_caps(lines, &f.block_caps);
+    }
+
     if !f.strip_lines_matching.is_empty() {
         let patterns: Vec<Regex> = f
             .strip_lines_matching
@@ -2175,15 +2122,32 @@ fn output_has_failure_signal(output: &str) -> bool {
     static FAILURE: OnceLock<Regex> = OnceLock::new();
     let re = FAILURE.get_or_init(|| {
         Regex::new(
-            r"(?m)^\s*(?:(?i:error|fatal|panic|panicked|exception|stderr|err)\b|FAILED\b|FAIL\b|---\s*FAIL\b|Traceback \(most recent call last\)|Unhandled exception|Exception in thread\b)|\b(?i:failed with exit code|exited with status|exited with code|exit status|exit code|exit)\b\s*[:=]?\s*[1-9]\d*|\b(?:SIGSEGV|SIGABRT|SIGILL|SIGBUS|AssertionError|NullPointerException|Segmentation fault|(?i:Command failed|command not found|failed to compile))\b|\[(?i:error|fatal|panic|failed|fail)\]|level=(?i:error|fatal|panic)|\b(?i:err)(?:!|:)"
+            // `^\S*:\s*(?i:error|fatal|panic):` catches the two dominant Unix
+            // diagnostic shapes the line-start alternatives miss because a
+            // prefix comes first: `cppcheck: error: unrecognized option` and
+            // `main.c:3:5: error: expected ';'`. Without it a filter whose
+            // keep-rules don't recognise a tool's own error format empties the
+            // output and earns the success `on_empty` sentinel — and on the
+            // PostToolUse path there is no exit code to fall back on.
+            r"(?m)^\s*(?:(?i:error|fatal|panic|panicked|exception|stderr|err)\b|FAILED\b|FAIL\b|---\s*FAIL\b|Traceback \(most recent call last\)|Unhandled exception|Exception in thread\b)|^\S*:\s*(?i:error|fatal|panic):|\b(?i:failed with exit code|exited with status|exited with code|exit status|exit code|exit)\b\s*[:=]?\s*[1-9]\d*|\b(?:SIGSEGV|SIGABRT|SIGILL|SIGBUS|AssertionError|NullPointerException|Segmentation fault|(?i:Command failed|command not found|failed to compile))\b|\[(?i:error|fatal|panic|failed|fail)\]|level=(?i:error|fatal|panic)|\b(?i:err)(?:!|:)"
         )
         .expect("failure-signal regex compiles")
     });
     re.is_match(output)
 }
 
+/// Keep only the lines inside the configured sections.
+///
+/// Two invariants worth stating because both were once violated: surviving
+/// lines are emitted in **source order**, not grouped per section (a Docker
+/// build's trailing `ERROR: failed to solve` must not precede the frames that
+/// explain it), and a section left **unclosed** at end of output is kept
+/// regardless of `include_markers` — output that stops mid-section is exactly
+/// the output of a command that died.
 fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Vec<String> {
-    let mut result = Vec::new();
+    let mut kept: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    // Index of the last kept line of a capped section → lines dropped after it.
+    let mut omitted: HashMap<usize, usize> = HashMap::new();
     let content = lines.join("\n");
 
     for section in sections {
@@ -2200,26 +2164,43 @@ fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Ve
         let max_matches = section.max_matches.unwrap_or(usize::MAX);
 
         let mut in_section = false;
-        let mut section_lines = Vec::new();
+        let mut section_lines: Vec<usize> = Vec::new();
+        let mut flush = |section_lines: &mut Vec<usize>| {
+            let cap = section.max_lines.unwrap_or(usize::MAX).max(1);
+            if section_lines.len() > cap {
+                omitted.insert(section_lines[cap - 1], section_lines.len() - cap);
+                section_lines.truncate(cap);
+            }
+            kept.extend(section_lines.drain(..));
+        };
 
-        for line in content.lines() {
+        for (i, line) in content.lines().enumerate() {
             let start_match = start_re.is_match(line);
             let end_match = end_re.is_match(line);
+
+            if section.split_on_start && start_match && in_section && !end_match {
+                flush(&mut section_lines);
+                matches += 1;
+                in_section = false;
+                if matches >= max_matches {
+                    break;
+                }
+            }
 
             if start_match && !in_section {
                 in_section = true;
                 if section.include_markers {
-                    section_lines.push(line.to_string());
+                    section_lines.push(i);
                 }
                 continue;
             }
 
             if in_section {
                 if section.include_markers || !end_match {
-                    section_lines.push(line.to_string());
+                    section_lines.push(i);
                 }
                 if end_match {
-                    result.append(&mut section_lines);
+                    flush(&mut section_lines);
                     matches += 1;
                     in_section = false;
                     if matches >= max_matches {
@@ -2229,17 +2210,26 @@ fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Ve
             }
         }
 
-        // Handle unclosed section
-        if in_section && section.include_markers {
-            result.extend(section_lines);
+        // An unclosed section means the output ended inside it — a build that
+        // was killed, a log that was truncated. Keep it either way.
+        if in_section {
+            flush(&mut section_lines);
         }
     }
 
-    if result.is_empty() {
-        lines
-    } else {
-        result
+    if kept.is_empty() {
+        return lines;
     }
+    let mut out = Vec::with_capacity(kept.len() + omitted.len());
+    for i in kept {
+        if let Some(line) = lines.get(i) {
+            out.push(line.clone());
+        }
+        if let Some(n) = omitted.get(&i) {
+            out.push(format!("    [... {n} lines omitted ...]"));
+        }
+    }
+    out
 }
 
 fn apply_replace_patterns(lines: Vec<String>, patterns: &[[String; 2]]) -> Vec<String> {
@@ -2271,38 +2261,43 @@ fn apply_deduplicate_blocks(lines: Vec<String>, dedup: &DeduplicateBlocksDef) ->
         None => return lines,
     };
 
-    let mut blocks: Vec<Vec<String>> = Vec::new();
-    let mut current_block = Vec::new();
+    // Every block is kept; `eligible` only decides whether a block may be
+    // *collapsed* into a "similar block(s) omitted" marker. Dropping the
+    // short ones outright — as this did — deletes exactly the lines that are
+    // short because they stand alone, e.g. a lone `fatal: bad revision` above
+    // an otherwise repetitive log, with no marker to say anything was lost.
+    let mut blocks: Vec<(Vec<String>, bool)> = Vec::new();
+    let mut current_block: Vec<String> = Vec::new();
 
     for line in &lines {
         if delim_re.is_match(line) && !current_block.is_empty() {
-            if current_block.len() >= dedup.min_block_lines {
-                blocks.push(current_block);
-            }
-            current_block = Vec::new();
+            let eligible = current_block.len() >= dedup.min_block_lines;
+            blocks.push((std::mem::take(&mut current_block), eligible));
         } else {
             current_block.push(line.clone());
         }
     }
-    if !current_block.is_empty() && current_block.len() >= dedup.min_block_lines {
-        blocks.push(current_block);
+    if !current_block.is_empty() {
+        let eligible = current_block.len() >= dedup.min_block_lines;
+        blocks.push((current_block, eligible));
     }
 
-    if blocks.len() < 2 {
+    if blocks.iter().filter(|(_, eligible)| *eligible).count() < 2 {
         return lines;
     }
 
     let mut result = Vec::new();
     let mut i = 0;
     while i < blocks.len() {
-        let block = &blocks[i];
+        let (block, eligible) = &blocks[i];
         result.extend(block.iter().cloned());
 
         // Check next blocks for similarity
         let mut j = i + 1;
         let mut similar_count = 0;
-        while j < blocks.len() {
-            if blocks_similar(block, &blocks[j], dedup.similarity) {
+        while *eligible && j < blocks.len() {
+            let (candidate, candidate_eligible) = &blocks[j];
+            if *candidate_eligible && blocks_similar(block, candidate, dedup.similarity) {
                 similar_count += 1;
                 j += 1;
             } else {
@@ -2575,27 +2570,34 @@ fn apply_token_budget(text: &str, budget: usize) -> String {
         }
     }
 
-    let mut result = Vec::new();
+    // Priority decides *what survives*, never *what order it is read in*: a
+    // stack trace whose middle frames are emitted after the final verdict is
+    // worse than one that is simply shorter. Keep the source index and restore
+    // it before joining.
+    let mut kept: Vec<(usize, &str)> = Vec::new();
     let mut used = 0usize;
 
-    for (_, line) in priority_lines {
+    for (i, line) in priority_lines {
         let line_tokens = crate::chunker::count_tokens(line);
         if used + line_tokens > budget {
             break;
         }
-        result.push(line.to_string());
+        kept.push((i, line));
         used += line_tokens;
     }
 
     // Fill remaining budget with other lines (prefer head/tail)
-    for (_, line) in other_lines {
+    for (i, line) in other_lines {
         let line_tokens = crate::chunker::count_tokens(line);
         if used + line_tokens > budget {
             break;
         }
-        result.push(line.to_string());
+        kept.push((i, line));
         used += line_tokens;
     }
+
+    kept.sort_by_key(|(i, _)| *i);
+    let mut result: Vec<String> = kept.into_iter().map(|(_, l)| l.to_string()).collect();
 
     if result.len() < lines.len() {
         result.push(format!(
@@ -2779,7 +2781,14 @@ replace_patterns = [       # regex replacements: [[pattern, replacement], ...]
 ]
 extract_sections = [       # extract content between markers
   {{ start_pattern = "---- FAILURES ----", end_pattern = "^\\s*$", include_markers = true, max_matches = 3 }},
+  # records delimited only by their own header: each start line opens a new
+  # section; keep 4 lines of each, the rest collapse into a count marker
+  {{ start_pattern = "^commit ", end_pattern = "[^\\s\\S]", include_markers = true, split_on_start = true, max_lines = 4 }},
 ]
+block_caps = [             # keep the first N lines of each block opened by `start`
+  {{ start = "^warning: ", end = "^(\\s*$|[A-Za-z])", max_lines = 2 }},
+]
+filter_stderr = true       # also filter stderr (compilers write diagnostics there)
 semantic_filter = {{       # embedding-based relevance filtering (uses daemon/embed)
   query = "test failure error panic",
   threshold = 0.3,
@@ -2848,13 +2857,13 @@ on_empty = "empty filter output"
 
         // Trust gate: repo-local filters are skipped until `tokenix trust`.
         let root = crate::store::find_project_root(&std::env::current_dir().unwrap());
-        let _ = set_local_filters_trust(&root, false);
+        let _ = set_repo_inputs_trust(&root, false);
         assert!(
             load_local_filters().is_empty(),
             "untrusted repo-local filters must not load"
         );
 
-        set_local_filters_trust(&root, true).unwrap();
+        set_repo_inputs_trust(&root, true).unwrap();
         let local_filters = load_local_filters();
         assert!(!local_filters.is_empty());
         let found = find_filter("test_local_cmd", &local_filters);
@@ -2874,7 +2883,7 @@ on_empty = "empty filter output"
         );
 
         // Clean up
-        let _ = set_local_filters_trust(&root, false);
+        let _ = set_repo_inputs_trust(&root, false);
         let _ = std::fs::remove_file(&toml_path);
         let _ = std::fs::remove_dir_all(
             std::env::current_dir()
@@ -3359,6 +3368,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         // Would panic with naive &l[..4] because 'é'/'ç' straddle the boundary.
         let out = apply_filter("café\nação\n", &f);
@@ -3398,6 +3408,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let issues = semantic_filter_issues(&f);
         assert_eq!(
@@ -3472,6 +3483,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let filters = [f];
         // Unspaced semicolon, cd prefix, and a pipe all resolve to the filter.
@@ -3508,6 +3520,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let f_gitleaks = FilterDef {
             description: None,
@@ -3535,6 +3548,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let filters2 = [f_cat, f_gitleaks];
         let matched = find_filter("cat x | gitleaks detect", &filters2).unwrap();
@@ -3569,6 +3583,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let filters = [f];
         // Unbounded full dump: filter applies.
@@ -3651,6 +3666,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let filters = [f];
         assert!(find_filter("git -C /repo add .", &filters).is_some());
@@ -3717,6 +3733,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         // Pattern present, no error → short-circuit to message
         assert_eq!(apply_filter("total size is 100\n", &f), "ok (synced)");
@@ -3806,6 +3823,7 @@ match_command = "^second\\b"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         }
     }
 
@@ -4057,6 +4075,8 @@ keep_lines_matchin = ["oops"]
             end_pattern: "^END".to_string(),
             include_markers: false,
             max_matches: None,
+            max_lines: None,
+            split_on_start: false,
         }];
         let out = apply_filter("noise\nSTART\na\nb\nEND\ntrailing\n", &f);
         assert_eq!(out, "a\nb");
@@ -4068,6 +4088,45 @@ keep_lines_matchin = ["oops"]
     }
 
     #[test]
+    fn apply_filter_extract_sections_keeps_source_order_and_unclosed_tail() {
+        // Two sections, configured in the opposite order to how they appear.
+        // The verdict line must not be delivered before the evidence, and the
+        // unclosed trailing section must survive even with include_markers off.
+        let mut f = base_filter();
+        f.extract_sections = vec![
+            ExtractSection {
+                start_pattern: "^ERROR".to_string(),
+                end_pattern: "^NEVER_CLOSES".to_string(),
+                include_markers: false,
+                max_matches: None,
+                max_lines: None,
+                split_on_start: false,
+            },
+            ExtractSection {
+                start_pattern: "^-----".to_string(),
+                end_pattern: "^-----$".to_string(),
+                include_markers: false,
+                max_matches: None,
+                max_lines: None,
+                split_on_start: false,
+            },
+        ];
+        let input =
+            "noise\n-----\nframe one\nframe two\n-----\nERROR: failed to solve\ntail detail\n";
+        let out = apply_filter(input, &f);
+        let frame = out
+            .find("frame one")
+            .unwrap_or_else(|| panic!("frames kept: {out:?}"));
+        let tail = out
+            .find("tail detail")
+            .unwrap_or_else(|| panic!("unclosed section kept: {out:?}"));
+        assert!(
+            frame < tail,
+            "evidence must precede the trailing section: {out:?}"
+        );
+    }
+
+    #[test]
     fn apply_filter_extract_sections_no_match_returns_original() {
         let mut f = base_filter();
         f.extract_sections = vec![ExtractSection {
@@ -4075,6 +4134,8 @@ keep_lines_matchin = ["oops"]
             end_pattern: "^NOPE".to_string(),
             include_markers: false,
             max_matches: None,
+            max_lines: None,
+            split_on_start: false,
         }];
         // No marker present → falls back to the unmodified content.
         assert_eq!(apply_filter("just\ntwo lines\n", &f), "just\ntwo lines");
@@ -4102,6 +4163,30 @@ keep_lines_matchin = ["oops"]
     }
 
     #[test]
+    fn apply_filter_deduplicate_blocks_keeps_short_blocks() {
+        // A block shorter than `min_block_lines` is ineligible for collapsing,
+        // not eligible for deletion. The lone line above a repetitive log is
+        // usually the one that matters — a failure the agent must see.
+        let mut f = base_filter();
+        f.deduplicate_blocks = Some(DeduplicateBlocksDef {
+            min_block_lines: 3,
+            similarity: 0.8,
+            block_delimiter: None,
+        });
+        let block = "connection refused to upstream host\nretrying with backoff enabled\ngiving up after three attempts";
+        let input = format!("fatal: bad revision 'HEAD~99'\n\n{block}\n\n{block}\n");
+        let out = apply_filter(&input, &f);
+        assert!(
+            out.contains("fatal: bad revision 'HEAD~99'"),
+            "the one-line block must survive: {out:?}"
+        );
+        assert!(
+            out.contains("1 similar block(s) omitted"),
+            "eligible duplicates still collapse: {out:?}"
+        );
+    }
+
+    #[test]
     fn apply_filter_token_budget_truncates_with_marker() {
         let mut f = base_filter();
         f.token_budget = Some(10);
@@ -4117,6 +4202,35 @@ keep_lines_matchin = ["oops"]
         assert!(
             out.len() < input.len(),
             "budgeted output must be smaller than input"
+        );
+    }
+
+    #[test]
+    fn apply_filter_token_budget_keeps_source_order() {
+        // A budget that drops *some* middle lines must still deliver the
+        // survivors in the order the command printed them: an agent reading a
+        // panic body after the "test result: FAILED" verdict misreads which
+        // assertion failed.
+        let mut f = base_filter();
+        f.token_budget = Some(210);
+        let mut input = String::new();
+        for i in 0..40 {
+            input.push_str(&format!("line {i:02} of the captured build output\n"));
+        }
+        let out = apply_filter(&input, &f);
+        let kept: Vec<usize> = out
+            .lines()
+            .filter_map(|l| l.strip_prefix("line "))
+            .filter_map(|l| l.get(..2))
+            .filter_map(|n| n.parse::<usize>().ok())
+            .collect();
+        assert!(
+            kept.len() > 4 && kept.len() < 40,
+            "test needs a partial keep-set, got {kept:?}"
+        );
+        assert!(
+            kept.windows(2).all(|w| w[0] < w[1]),
+            "surviving lines must stay in source order: {kept:?}"
         );
     }
 
@@ -4979,6 +5093,41 @@ keep_lines_matchin = ["oops"]
         assert!(!output_has_failure_signal("exit status 0"));
         assert!(!output_has_failure_signal("exited with status: 0"));
         assert!(!output_has_failure_signal("warnings: 12"));
+
+        // Prefixed diagnostics: the shape every Unix tool and every C/C++
+        // compiler emits. These reach `on_empty` unguarded on the PostToolUse
+        // path, which carries no exit code.
+        assert!(output_has_failure_signal(
+            "cppcheck: error: unrecognized command line option: \"--foo\".\n"
+        ));
+        assert!(output_has_failure_signal(
+            "main.c:3:5: error: expected ';'\n"
+        ));
+        assert!(output_has_failure_signal("ld: fatal: symbol not found\n"));
+        // Still not a failure: a warning with the same prefix shape.
+        assert!(!output_has_failure_signal(
+            "main.c:3:5: warning: unused variable 'x'\n"
+        ));
+    }
+
+    #[test]
+    fn post_hook_path_never_masks_a_prefixed_tool_error() {
+        // Regression: `run_hook_post` compresses with an unknown exit status,
+        // so the sentinel guard is the only thing between a failed command and
+        // a fabricated "ok". A tool that reports its own errors in a format its
+        // filter's keep-rules do not recognise used to come back as success.
+        let out = crate::compress::compress_bash_output(
+            "cppcheck --foo src/",
+            "cppcheck: error: unrecognized command line option: \"--foo\".\n",
+        );
+        assert!(
+            !out.contains("cppcheck: ok"),
+            "failed command must not earn the success sentinel: {out:?}"
+        );
+        assert!(
+            out.contains("unrecognized command line option"),
+            "the real error must survive: {out:?}"
+        );
     }
 
     #[test]
@@ -5054,6 +5203,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5081,6 +5231,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5108,6 +5259,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5135,6 +5287,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5167,6 +5320,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5194,6 +5348,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5221,6 +5376,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5248,6 +5404,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5275,6 +5432,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
         ];
 

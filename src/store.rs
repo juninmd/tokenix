@@ -7,12 +7,36 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod vector;
+pub use vector::*;
+
 // ---------------------------------------------------------------------------
 // Global storage: ~/.tokenix/{project_id}.{db,log}
 // ---------------------------------------------------------------------------
 
-fn global_dir() -> Option<PathBuf> {
+/// `~/.tokenix`, or `$TOKENIX_HOME` when set, so homologation runs and
+/// scripted checks keep their state out of the user's real home. Every
+/// machine-wide tokenix path must derive from here.
+pub fn global_dir() -> Option<PathBuf> {
+    home_override(std::env::var_os("TOKENIX_HOME")).or_else(default_home)
+}
+
+#[cfg(not(test))]
+fn default_home() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".tokenix"))
+}
+
+/// Unit tests never see the developer's `~/.tokenix`: its user filters shadow
+/// the bundled ones under test, and its logs and caches are not theirs to write.
+#[cfg(test)]
+fn default_home() -> Option<PathBuf> {
+    Some(std::env::temp_dir().join(format!("tokenix-unit-{}", std::process::id())))
+}
+
+/// Only an absolute `TOKENIX_HOME` counts: a relative one resolves against the
+/// agent's current directory, scattering state across repositories.
+fn home_override(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    value.map(PathBuf::from).filter(|p| p.is_absolute())
 }
 
 /// 16-char hex identifier derived from the canonical project root path.
@@ -109,7 +133,26 @@ fn is_pid_alive(pid: u32) -> bool {
 
 /// Walk up from `start` looking for VCS/project-root markers.
 /// Falls back to `start` itself if nothing is found.
+/// Nearest ancestor that was indexed or carries a project marker. An index
+/// counts first: `tokenix index <dir>` roots at `<dir>` even when a parent
+/// (often the home directory) holds a `package.json`.
 pub fn find_project_root(start: &Path) -> PathBuf {
+    find_project_root_with(start, has_index)
+}
+
+/// `.name` is written by every index run, including branch-aware ones whose
+/// DB file carries a branch suffix.
+fn has_index(dir: &Path) -> bool {
+    let Some(global) = global_dir() else {
+        return false;
+    };
+    let id = project_id(dir);
+    ["db", "name"]
+        .iter()
+        .any(|ext| global.join(format!("{id}.{ext}")).exists())
+}
+
+fn find_project_root_with(start: &Path, is_indexed: impl Fn(&Path) -> bool) -> PathBuf {
     let abs = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
     let mut current = abs.as_path();
     let markers: &[&str] = &[
@@ -120,7 +163,7 @@ pub fn find_project_root(start: &Path) -> PathBuf {
         ".hg",
     ];
     loop {
-        if markers.iter().any(|m| current.join(m).exists()) {
+        if is_indexed(current) || markers.iter().any(|m| current.join(m).exists()) {
             return current.to_path_buf();
         }
         match current.parent() {
@@ -354,41 +397,6 @@ pub fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
         .iter()
         .map(|b| f32::from_le_bytes(*b))
         .collect()
-}
-
-/// Symmetric int8 quantization: `scale = max|x| / 127`, each element stored as
-/// one signed byte. 4x smaller than f32 with near-lossless cosine similarity
-/// (the per-vector scale cancels out of the cosine entirely).
-pub fn quantize_q8(v: &[f32]) -> (Vec<u8>, f32) {
-    let max_abs = v.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-    let scale = if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 };
-    let data = v
-        .iter()
-        .map(|x| (x / scale).round().clamp(-127.0, 127.0) as i8 as u8)
-        .collect();
-    (data, scale)
-}
-
-/// Cosine similarity between an f32 query and an i8-quantized document vector.
-/// The document's quantization scale cancels in the cosine, so only the raw
-/// i8 bytes are needed.
-pub fn cosine_similarity_to_q8(query_vec: &[f32], query_norm: f32, bytes: &[u8]) -> f32 {
-    let mut dot = 0.0f32;
-    let mut nb = 0.0f32;
-    for (i, &b) in bytes.iter().enumerate() {
-        if i >= query_vec.len() {
-            break;
-        }
-        let y = b as i8 as f32;
-        dot += query_vec[i] * y;
-        nb += y * y;
-    }
-    let nb_sqrt = nb.sqrt();
-    if query_norm == 0.0 || nb_sqrt == 0.0 {
-        0.0
-    } else {
-        dot / (query_norm * nb_sqrt)
-    }
 }
 
 pub fn upsert_file(conn: &Connection, path: &str, mtime: f64, hash: &str) -> Result<i64> {
@@ -1077,157 +1085,6 @@ fn graph_relation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphRel
     })
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[allow(dead_code)]
-pub struct SearchResult {
-    pub id: i64,
-    pub path: String,
-    pub start_line: usize,
-    pub end_line: usize,
-    pub symbol: String,
-    pub kind: String,
-    pub content: String,
-    pub token_count: usize,
-    pub distance: f32,
-}
-
-#[allow(dead_code)]
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if na == 0.0 || nb == 0.0 {
-        0.0
-    } else {
-        dot / (na * nb)
-    }
-}
-
-pub fn cosine_similarity_to_bytes(query_vec: &[f32], query_norm: f32, bytes: &[u8]) -> f32 {
-    let mut dot = 0.0f32;
-    let mut nb = 0.0f32;
-    for (i, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
-        if i >= query_vec.len() {
-            break;
-        }
-        let y = f32::from_le_bytes(*chunk);
-        dot += query_vec[i] * y;
-        nb += y * y;
-    }
-    let nb_sqrt = nb.sqrt();
-    if query_norm == 0.0 || nb_sqrt == 0.0 {
-        0.0
-    } else {
-        dot / (query_norm * nb_sqrt)
-    }
-}
-
-#[allow(clippy::type_complexity)]
-pub fn search_similar(
-    conn: &Connection,
-    query_vec: &[f32],
-    k: usize,
-    file_filter: Option<&str>,
-) -> Result<Vec<SearchResult>> {
-    type RowData = (
-        Vec<u8>,
-        Option<f64>,
-        i64,
-        String,
-        i64,
-        i64,
-        String,
-        String,
-        String,
-        i64,
-    );
-    // Pre-migration DBs have no `scale` column; select NULL so every row takes
-    // the legacy f32 path until `tokenix index` migrates the file.
-    let scale_expr = if embeddings_have_scale(conn) {
-        "e.scale"
-    } else {
-        "NULL"
-    };
-    let rows_data: Vec<RowData> = if let Some(filter) = file_filter {
-        let mut stmt = conn.prepare(&format!(
-            "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding, {scale_expr}
-             FROM embeddings e JOIN chunks c ON c.id = e.chunk_id
-             WHERE instr(c.path, ?1) > 0"
-        ))?;
-        let rows = stmt.query_map(params![filter], |row| {
-            Ok((
-                row.get::<_, Vec<u8>>(8)?,
-                row.get::<_, Option<f64>>(9)?,
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-            ))
-        })?;
-        let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
-        collected
-    } else {
-        let mut stmt = conn.prepare(&format!(
-            "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, c.content, c.token_count, e.embedding, {scale_expr}
-             FROM embeddings e JOIN chunks c ON c.id = e.chunk_id"
-        ))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, Vec<u8>>(8)?,
-                row.get::<_, Option<f64>>(9)?,
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-            ))
-        })?;
-        let collected: Vec<_> = rows.filter_map(|r| r.ok()).collect();
-        collected
-    };
-
-    let query_norm: f32 = query_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-    use rayon::prelude::*;
-    let mut scored: Vec<(f32, SearchResult)> = rows_data
-        .into_par_iter()
-        .map(
-            |(blob, scale, id, path, sl, el, symbol, kind, content, tc)| {
-                // scale set → int8-quantized row; NULL → legacy f32 blob.
-                let sim = if scale.is_some() {
-                    cosine_similarity_to_q8(query_vec, query_norm, &blob)
-                } else {
-                    cosine_similarity_to_bytes(query_vec, query_norm, &blob)
-                };
-                (
-                    sim,
-                    SearchResult {
-                        id,
-                        path,
-                        start_line: sl as usize,
-                        end_line: el as usize,
-                        symbol,
-                        kind,
-                        content,
-                        token_count: tc as usize,
-                        distance: 1.0 - sim,
-                    },
-                )
-            },
-        )
-        .collect();
-
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(scored.into_iter().take(k).map(|(_, r)| r).collect())
-}
-
 pub fn sanitize_fts_query(query: &str) -> String {
     let mut words = Vec::new();
     for word in query.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
@@ -1777,6 +1634,12 @@ pub fn restrict_to_owner(path: &Path) {
         let mode = if meta.is_dir() { 0o700 } else { 0o600 };
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
     }
+    // Windows has no chmod. The caller's files live under the user profile,
+    // whose default ACL already grants only the user, SYSTEM and the local
+    // Administrators group — an unprivileged *other* account cannot read them.
+    // Tightening further (icacls /inheritance:r) risks locking the owner out of
+    // their own index if the explicit grant fails, so this stays a no-op and
+    // the docs say so rather than claiming a 0600 that never happened.
     #[cfg(not(unix))]
     {
         let _ = path;
@@ -2022,6 +1885,42 @@ pub fn get_file_graph_ranks(conn: &Connection) -> Result<HashMap<String, f32>> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn tokenix_home_override_must_be_absolute() {
+        // A relative value resolves against whatever directory the agent is in,
+        // which scatters state across repos and can put the trust store inside
+        // one of them.
+        for rejected in ["", ".tokenix", "repo/.tokenix"] {
+            assert_eq!(home_override(Some(rejected.into())), None, "{rejected:?}");
+        }
+        assert_eq!(home_override(None), None);
+        let abs = std::env::temp_dir().join("tokenix-home");
+        assert_eq!(home_override(Some(abs.clone().into())), Some(abs));
+    }
+
+    #[test]
+    fn an_indexed_dir_is_the_root_even_under_a_marked_ancestor() {
+        // `tokenix index <dir>` stores the index under <dir>, but a marker-less
+        // repo below a folder holding `package.json` (a home directory, often)
+        // used to resolve to that ancestor, so every later lookup missed it.
+        let base = std::env::temp_dir().join(format!("tokenix-root-{}", std::process::id()));
+        let repo = base.join("repo");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(base.join("package.json"), "{}").unwrap();
+        let indexed = repo.canonicalize().unwrap();
+        let marked = base.canonicalize().unwrap();
+
+        let root = find_project_root_with(&repo.join("src"), |p| p == indexed);
+        let unindexed = find_project_root_with(&repo.join("src"), |_| false);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert_eq!(root, indexed, "the indexed dir must win");
+        assert_eq!(
+            unindexed, marked,
+            "without an index, the nearest marker still decides"
+        );
+    }
+
     fn event_with(command: &str, preview: &str) -> HookEvent {
         HookEvent {
             ts: 1.0,
@@ -2072,42 +1971,6 @@ mod tests {
         let red = redacted_event(&e);
         assert_eq!(red.command, "cargo test --locked");
         assert_eq!(red.input_preview, "cargo test --locked");
-    }
-
-    #[test]
-    fn test_cosine_similarity_to_bytes() {
-        let q = vec![1.0, 2.0, 3.0, 4.0];
-        let b = vec![0.5, -1.0, 2.0, 1.5];
-        let q_norm = q.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-        let sim1 = cosine_similarity(&q, &b);
-        let bytes = serialize_vec(&b);
-        let sim2 = cosine_similarity_to_bytes(&q, q_norm, &bytes);
-
-        assert!((sim1 - sim2).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_q8_cosine_matches_f32() {
-        // Pseudo-embedding with mixed signs/magnitudes; q8 cosine must track f32.
-        let doc: Vec<f32> = (0..768)
-            .map(|i| ((i as f32 * 0.37).sin() * 0.04) - 0.01)
-            .collect();
-        let query: Vec<f32> = (0..768)
-            .map(|i| ((i as f32 * 0.29).cos() * 0.05) + 0.005)
-            .collect();
-        let q_norm = query.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-        let exact = cosine_similarity(&query, &doc);
-        let (q8, scale) = quantize_q8(&doc);
-        assert!(scale > 0.0);
-        assert_eq!(q8.len(), doc.len());
-        let approx = cosine_similarity_to_q8(&query, q_norm, &q8);
-
-        assert!(
-            (exact - approx).abs() < 0.01,
-            "q8 cosine drifted: exact={exact} approx={approx}"
-        );
     }
 
     #[test]

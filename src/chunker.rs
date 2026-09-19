@@ -420,7 +420,7 @@ fn find_first_identifier<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> O
             return Some(text.to_string());
         }
     }
-    for i in 0..node.child_count() as u32 {
+    for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             if let Some(name) = find_first_identifier(child, source) {
                 return Some(name);
@@ -471,7 +471,7 @@ fn chunk_with_parser(
                 kind: kind.to_string(),
             });
         }
-        for i in 0..node.child_count() as u32 {
+        for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
                 traverse(child, source, is_symbol_node, symbols);
             }

@@ -8,9 +8,7 @@ strip_lines_matching = [
 ]
 keep_lines_matching = [
   "^\\w+",
-  "\\(.*\\)",
-  "\\d+)",
-  ")"
+  "\\(.*\\)"
 ]
 max_lines = 50
 

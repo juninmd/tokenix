@@ -234,8 +234,16 @@ enum Request {
         budget: usize,
         file: Option<String>,
     },
+    /// Bare liveness ping. Deliberately unauthenticated and deliberately
+    /// carries no counts: "is something listening" is all an unauthenticated
+    /// caller gets.
     Health,
-    Status,
+    Status {
+        /// Required: `Status` reports pid, port, uptime, per-project chunk
+        /// counts and cache size — reconnaissance for anyone probing the port.
+        #[serde(default)]
+        token: String,
+    },
 }
 
 fn default_k() -> usize {
@@ -257,11 +265,14 @@ struct RespErr {
     error: String,
 }
 
+/// Liveness only. `cached_projects` / `chunks` used to ride along here and are
+/// deliberately gone rather than pinned to 0: an unauthenticated caller gets no
+/// inventory, and a caller that was reading those fields should break loudly
+/// instead of silently believing the index is empty. `Status` (token-gated)
+/// carries the real numbers.
 #[derive(Serialize)]
 struct RespHealth {
     ok: bool,
-    cached_projects: usize,
-    chunks: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -287,56 +298,44 @@ pub fn daemon_port() -> u16 {
 }
 
 fn pid_path() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".tokenix").join("daemon.pid"))
+    Some(crate::store::global_dir()?.join("daemon.pid"))
 }
 
 fn port_path() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".tokenix").join("daemon.port"))
+    Some(crate::store::global_dir()?.join("daemon.port"))
 }
 
 fn token_path() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".tokenix").join("daemon.token"))
+    Some(crate::store::global_dir()?.join("daemon.token"))
 }
 
 /// A 32-hex-char secret shared between this user's tokenix processes.
 ///
 /// `127.0.0.1` is not an access control: on a shared host (build box, CI runner,
 /// jump host) every local account can reach the port, and `Search` returns
-/// indexed *source code* for any `project_root` the caller names. The token file
-/// is created `0600`, so possession of it means "runs as the user who owns the
-/// index" — which is exactly the intended audience.
+/// indexed *source code* for any `project_root` the caller names. Possession of
+/// the token is therefore the whole access decision, and the file is restricted
+/// to the owner — `0600` on unix; on Windows it inherits the user-profile ACL
+/// (user + SYSTEM + Administrators), which `restrict_to_owner` does not tighten
+/// further. See `crate::store::restrict_to_owner`.
 ///
-/// Not a cryptographic protocol: it is a capability file, so unpredictability is
-/// all that is required of the value.
+/// Not a cryptographic protocol: it is a capability file. But it *must* be
+/// unpredictable — the previous non-unix path hashed `nanos:pid:stack:heap`,
+/// and both the pid and (via `daemon.pid`'s mtime) the start instant are
+/// observable by any local process, which made the search space small enough to
+/// walk. `getrandom` is the OS CSPRNG on every platform.
 fn generate_token() -> String {
-    use sha2::{Digest, Sha256};
-    // /dev/urandom where it exists; otherwise mix sources an unrelated local
-    // process cannot observe or replay (nanosecond clock, pid, two live
-    // addresses) and hash them.
-    //
-    // Read exactly 16 bytes: `/dev/urandom` is an endless stream, so a
-    // read-to-EOF helper never returns.
-    #[cfg(unix)]
-    {
-        use std::io::Read;
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            let mut buf = [0u8; 16];
-            if f.read_exact(&mut buf).is_ok() {
-                return hex::encode(buf);
-            }
+    let mut buf = [0u8; 16];
+    match getrandom::fill(&mut buf) {
+        Ok(()) => hex::encode(buf),
+        // No fallback to a guessable value: a token nobody can authenticate
+        // with is a dead daemon (`run_serve` refuses to start), which is the
+        // correct outcome. An attacker-guessable one is not.
+        Err(e) => {
+            eprintln!("tokenix: cannot generate daemon token ({e})");
+            String::new()
         }
     }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    let stack = &nanos as *const u128 as usize;
-    let heap = Box::new(0u8);
-    let heap_addr = &*heap as *const u8 as usize;
-    let digest = Sha256::digest(
-        format!("{nanos}:{}:{stack:x}:{heap_addr:x}", std::process::id()).as_bytes(),
-    );
-    hex::encode(&digest[..16])
 }
 
 /// Write a fresh token for this daemon generation and return it. A failure to
@@ -350,6 +349,9 @@ fn write_token() -> Option<String> {
         crate::store::restrict_to_owner(parent);
     }
     let token = generate_token();
+    if token.is_empty() {
+        return None;
+    }
     std::fs::write(&path, &token).ok()?;
     crate::store::restrict_to_owner(&path);
     Some(token)
@@ -480,7 +482,11 @@ fn fetch_status() -> Option<DaemonStatus> {
     stream
         .set_read_timeout(Some(Duration::from_millis(READ_TIMEOUT_MS)))
         .ok()?;
-    stream.write_all(b"{\"type\":\"status\"}\n").ok()?;
+    let req = serde_json::json!({
+        "type": "status",
+        "token": read_token().unwrap_or_default(),
+    });
+    stream.write_all(format!("{req}\n").as_bytes()).ok()?;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     reader.read_line(&mut line).ok()?;
@@ -829,17 +835,15 @@ fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) -> Result<()> {
     reader.read_line(&mut line)?;
 
     let response_str = match serde_json::from_str::<Request>(line.trim()) {
-        Ok(Request::Health) => {
-            let lock = state.cache.read().unwrap();
-            let cached_projects = lock.projects.len();
-            let chunks = lock.projects.values().map(|c| c.entries.len()).sum();
-            serde_json::to_string(&RespHealth {
-                ok: true,
-                cached_projects,
-                chunks,
+        Ok(Request::Health) => serde_json::to_string(&RespHealth { ok: true })?,
+        Ok(Request::Status { token }) if !token_matches(&state.token, &token) => {
+            serde_json::to_string(&RespErr {
+                ok: false,
+                error: "unauthorized: missing or stale token (see ~/.tokenix/daemon.token)"
+                    .to_string(),
             })?
         }
-        Ok(Request::Status) => {
+        Ok(Request::Status { .. }) => {
             let lock = state.cache.read().unwrap();
             let cached_projects = lock.projects.len();
             let chunks: usize = lock.projects.values().map(|c| c.entries.len()).sum();
@@ -1124,6 +1128,20 @@ mod tests {
                 .expect("parses without a token field");
         let Request::Search { token, .. } = req else {
             panic!("expected a search request");
+        };
+        assert!(token.is_empty());
+        assert!(!token_matches(&"a".repeat(32), &token));
+    }
+
+    #[test]
+    fn status_without_the_token_is_rejected() {
+        // `Status` reports pid, port, uptime, per-project chunk counts and
+        // cache size — it used to answer any local connection, ahead of the
+        // token guard.
+        let req: Request =
+            serde_json::from_str(r#"{"type":"status"}"#).expect("parses without a token field");
+        let Request::Status { token } = req else {
+            panic!("expected a status request");
         };
         assert!(token.is_empty());
         assert!(!token_matches(&"a".repeat(32), &token));

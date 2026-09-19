@@ -3,6 +3,18 @@ description = "Compact cargo test output aggressively"
 match_command = "^cargo\\s+test\\b"
 passthrough_when_emptied = true
 strip_ansi = true
+# rustc writes every diagnostic to stderr; without this the filter never sees them.
+filter_stderr = true
+notify_on_truncate = true
+priority_lines = ["^error"]
+# Compile warnings are not what a test run is for: keep a few messages and a
+# count; `cargo check`/`clippy` show them in full. Errors are never capped.
+block_caps = [
+  { start = "^warning(\\[[\\w-]+\\])?: ", end = "^(\\s*$|[A-Za-z])", max_lines = 1 },
+]
+category_caps = [
+  { pattern = "^warning(\\[[\\w-]+\\])?: [a-z]", max = 3 },
+]
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Compiling",
@@ -19,7 +31,7 @@ max_lines = 60
 replace_patterns = [
   ["target/debug/deps/[a-z0-9_-]+-[a-f0-9]+", "target/debug/deps/<test_binary>"],
   ["\\d+\\.\\d+s", "<duration>"],
-  ["thread '([^']+)' panicked at", "panic in $1"],
+  ["thread '([^']+)'( \\(\\d+\\))? panicked at", "panic in $1"],
 ]
 deduplicate_blocks = { min_block_lines = 2, similarity = 0.7 }
 token_budget = 3000
@@ -80,3 +92,33 @@ expected = """test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filt
 name = "silent success stays empty"
 input = ""
 expected = ""
+
+[[tests.cargo-test]]
+name = "compile warnings reduced to a few messages and a count"
+input = """
+warning: unused variable: `unused_1`
+ --> src/lib.rs:2:38
+  |
+2 | pub fn helper_1(x: i64) -> i64 { let unused_1 = x; x * 1 }
+  |                                      ^^^^^^^^ help: prefix it with an underscore: `_unused_1`
+
+warning: unused variable: `unused_2`
+ --> src/lib.rs:3:38
+
+warning: unused variable: `unused_3`
+ --> src/lib.rs:4:38
+
+warning: unused variable: `unused_4`
+ --> src/lib.rs:5:38
+
+warning: `demo` (lib test) generated 4 warnings
+error: test failed, to rerun pass `--lib`
+"""
+expected = """
+warning: unused variable: `unused_1`
+warning: unused variable: `unused_2`
+warning: unused variable: `unused_3`
+[... 1 more similar line(s) omitted ...]
+warning: `demo` (lib test) generated 4 warnings
+error: test failed, to rerun pass `--lib`
+[... 7 detail lines omitted from 4 blocks ...]"""
