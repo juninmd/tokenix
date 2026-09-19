@@ -57,6 +57,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # ort-sys symlinks DirectML.dll into target/ from its download cache; keep
+    # that cache inside target/ so a restored target/ has no dangling links.
+    env:
+      ORT_CACHE_DIR: ${{ github.workspace }}/target/ort-cache
     steps:
       - name: Harden runner
         # harden-runner is Linux-only; skip it on the Windows leg.
@@ -74,9 +78,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-ort-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-ort-
       - name: Test (fast; model-gated tests skipped)
         run: cargo test --locked
       # release.yml ships a `--features directml` binary; without this step an
