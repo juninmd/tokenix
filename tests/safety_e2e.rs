@@ -34,11 +34,11 @@ fn repo_filters_apply_only_after_trust_and_an_edit_revokes_it() {
     );
 
     assert_eq!(sb.tokenix(&["trust"]).code, 0);
-    let trusted = sb.tokenix(&["run", cmd]).stdout;
-    assert!(trusted.contains("keep-line"), "{trusted}");
+    let filtered = sb.tokenix(&["run", cmd]).stdout;
+    assert!(filtered.contains("keep-line"), "{filtered}");
     assert!(
-        !trusted.contains("noise-line"),
-        "trusted filter applies: {trusted}"
+        !filtered.contains("noise-line"),
+        "an approved filter applies: {filtered}"
     );
 
     let path = sb.path(".tokenix/filters/demo.toml");
