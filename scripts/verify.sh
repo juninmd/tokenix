@@ -23,6 +23,7 @@ case "$(uname -s)" in
     step "clippy (directml)"
     cargo clippy --locked --quiet --features directml -- -D warnings
     ;;
+  *) ;;
 esac
 # fuzz/ includes src/chunker.rs with its own lockfile; cflite_pr.yml builds it.
 step "fuzz targets"; cargo check --locked --quiet --manifest-path fuzz/Cargo.toml --bins
