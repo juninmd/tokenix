@@ -10,14 +10,27 @@ User-facing docs live in `README.md`; this file is the engineering contract.
 
 ```bash
 cargo build --release
-cargo test --bin tokenix          # 455 unit + golden tests
+cargo test --bin tokenix          # 458 unit + golden tests
+cargo test --tests                # + 30 end-to-end tests against the real binary
 cargo fmt --check                 # CI runs fmt FIRST — run it before pushing
 cargo clippy --all-targets --locked -- -D warnings
 ./scripts/verify.sh [--models]    # every CI gate locally, in CI order
 ```
 
-`scripts/verify.sh` runs fmt → clippy → tests → release build → the three
-homologation scripts, under a throwaway `TOKENIX_HOME`. Every machine-wide path
+`scripts/verify.sh` runs fmt → clippy → fuzz-target type-check → tests → release
+build → the three homologation scripts, under a throwaway `TOKENIX_HOME`.
+
+End-to-end tests live in `tests/`: `workflow_e2e.rs` (index → stats → symbol
+graph → read/outline → Read/Grep hook → pack), `safety_e2e.rs` (exit code kept,
+trust gate incl. revocation on edit, memory refusing credentials, inline
+freshness), `hook_e2e.rs` (hook JSON contract per agent) and `mcp_proxy_e2e.rs`.
+`tests/common::Sandbox` gives every test its own git repo and `TOKENIX_HOME`;
+new e2e tests must use it (or set `TOKENIX_HOME`), never the developer's home.
+Index with `--no-embed` there: the model cache (`embed::model_cache_dir`) follows
+the OS cache dir, not `TOKENIX_HOME`, so an embedding test downloads into the real
+cache and belongs behind `--features model-tests`.
+Assert behavior a user relies on (exact symbol location, exit code, budget
+held), not "did not panic" — that is what `homologation.sh` already covers. Every machine-wide path
 derives from `store::global_dir()`, which honours an **absolute** `TOKENIX_HOME`
 (relative values resolve per-cwd and are ignored); never build
 `~/.tokenix` by hand, or checks and tests start writing to the user's real home.
@@ -108,6 +121,13 @@ always paid — a git-clean file would otherwise never be revisited.
 graph and read interception, and reporting them stale would make the hook fail
 open and stop saving tokens. `index --if-stale` checks `pending_embed_count`
 separately.
+
+The inline refresh (`freshness.rs`) counts a dirty file the index does not know
+only if `indexer::stores_content` says indexing it would write a row. Empty,
+binary and sub-`MIN_CHUNK_TOKENS` files never get one, and counting them made
+every retrieval command pay a refresh, forever. The git-incremental plan applies
+the same `max_file_bytes` cap as the full walk (`within_size_cap`); it used to
+index oversized dirty files the walk skips.
 
 **Query paths open old DBs without migrating** — SELECTs must degrade when `scale`
 is missing (`embeddings_have_scale()` probes by selecting `NULL`).
@@ -281,6 +301,9 @@ infer "raw" from environment heuristics — same guard-safety rule as the
 
 **Keep docs in sync.** Every new or changed user-facing feature MUST update both
 `README.md` (Commands, and any affected section) and this file in the same change.
+A change to what `install-hook` writes, or to how an agent's payload is parsed,
+also updates that agent's guide in `docs/agents/`. Every command and payload
+shown there was run against the real binary; keep it that way.
 
 ## Output filters
 
