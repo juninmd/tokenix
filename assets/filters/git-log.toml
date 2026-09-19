@@ -1,33 +1,31 @@
 [filters.git-log]
-description = "Compact git log output aggressively"
+description = "Compact git log: short hash, refs, subject and the first body lines of each commit"
 match_command = "^git\\s+log\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
   "^Author:",
   "^Date:",
-  "^    (Co-authored-by|Signed-off-by|Reviewed-by):",
+  "(?i)^    (co-authored-by|signed-off-by|reviewed-by|acked-by|tested-by|reported-by|change-id|claude-session):",
 ]
 keep_lines_matching = [
   "^commit ",
   "^    ",
   "^Merge:",
 ]
-max_lines = 30
 # Compact variants (`git log --oneline`, `--graph`) don't match the full-log keep
 # rules; show the real output instead of a false "no commits".
 passthrough_when_emptied = true
+# Hashes stay usable: an agent's next step is `git show <hash>`.
 replace_patterns = [
-  ["[a-f0-9]{40}", "<commit_hash>"],
-  ["[a-f0-9]{7,12}(?=\\s)", "<short_hash>"],
-  ["\\(HEAD.*?\\)", "(HEAD)"],
-  ["\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}", "<date>"],
+  ["^commit ([a-f0-9]{12})[a-f0-9]{28}", "commit $1"],
 ]
+# One section per commit: the end pattern never matches, so each `commit` line
+# starts the next section. The rest of a long body is `git show` away.
 extract_sections = [
-  { start_pattern = "^commit ", end_pattern = "^commit |^$", include_markers = true, max_matches = 20 },
+  { start_pattern = "^commit ", end_pattern = "[^\\s\\S]", include_markers = true, split_on_start = true, max_lines = 4 },
 ]
-deduplicate_blocks = { min_block_lines = 2, similarity = 0.6 }
-token_budget = 1500
+token_budget = 3000
 
 [[tests.git-log]]
 name = "oneline format is not falsely reported empty"
@@ -42,7 +40,7 @@ expected = """
 44f26a4 fix: robustness pass"""
 
 [[tests.git-log]]
-name = "compact log"
+name = "compact log keeps every commit subject"
 input = """
 commit abc123def456 (HEAD -> main, origin/main)
 Author: John Doe <john@example.com>
@@ -57,41 +55,38 @@ Date:   Fri Jan 12 15:45:00 2024 +0000
     Fix bug in parser
 """
 expected = """
-commit abc123def456 (HEAD)
+commit abc123def456 (HEAD -> main, origin/main)
     Add new feature
-commit def456abc123"""
+commit def456abc123
+    Fix bug in parser"""
 
 [[tests.git-log]]
-name = "many commits deduplicated"
+name = "full hashes shortened and long bodies capped per commit"
 input = """
-commit abc123def456 (HEAD -> main)
+commit 0123456789abcdef0123456789abcdef01234567 (HEAD -> main)
 Author: John Doe
 Date:   Mon Jan 15 10:30:00 2024 +0000
 
-    Fix typo
+    fix(index): stop perpetual refresh
 
-commit def456abc123
+    The inline refresh counted every dirty file.
+    Second line of body.
+    Third line of body.
+    Fourth line of body.
+
+    Co-Authored-By: Someone <someone@example.com>
+
+commit fedcba9876543210fedcba9876543210fedcba98
 Author: Jane Smith
 Date:   Fri Jan 12 15:45:00 2024 +0000
 
-    Fix typo
-
-commit fedcba98765
-Author: Bob Wilson
-Date:   Thu Jan 11 12:00:00 2024 +0000
-
-    Fix typo
-
-commit 123456789ab
-Author: Alice Brown
-Date:   Wed Jan 10 09:00:00 2024 +0000
-
-    Add feature
+    docs: tweak wording
 """
 expected = """
-commit abc123def456 (HEAD)
-    Fix typo
-commit def456abc123
-commit fedcba98765
-    Fix typo
-commit 123456789ab"""
+commit 0123456789ab (HEAD -> main)
+    fix(index): stop perpetual refresh
+    The inline refresh counted every dirty file.
+    Second line of body.
+    [... 2 lines omitted ...]
+commit fedcba987654
+    docs: tweak wording"""

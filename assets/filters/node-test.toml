@@ -1,14 +1,24 @@
 [filters.node-test]
-description = "Compact node built-in test runner output — failures and summary only"
-match_command = "^node\\s+(--test|--run)\\b"
+description = "Compact node built-in test runner output — failures, assertion details and counts"
+match_command = '^node\s+(--test|--run)\b'
 passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
-  "^\\s*$",
-  "^\\s*[✔#]",
-  "^\\s*ℹ (tests|suites|pass \\d|cancelled|skipped|todo|duration_ms)",
+  '^\s*$',
+  '^\s*[✔#]',
+  '^\s*ℹ (suites|cancelled|skipped|todo|duration_ms)',
+  '^\(node:\d+\) \[MODULE_TYPELESS_PACKAGE_JSON\]',
+  '^Reparsing as ES module because',
+  '^To eliminate this warning, add "type"',
+  '^\(Use `node --trace-warnings',
+  '^\s+at .*\((node:|file:///.*node_modules/)',
+  '^\s+at (async )?(Test|process)\.',
+  '^\s+(generatedMessage|code|operator|diff): ',
+  '^\s+\}$',
 ]
-max_lines = 60
+priority_lines = ['^\s*✖', '^\s*ℹ (tests|pass|fail) ', '^\s*(actual|expected): ', '^test at ']
+notify_on_truncate = true
+max_lines = 150
 
 [[tests.node-test]]
 name = "all passing"
@@ -24,7 +34,9 @@ input = """
 ℹ todo 0
 ℹ duration_ms 52.3
 """
-expected = "ℹ fail 0"
+expected = """ℹ tests 2
+ℹ pass 2
+ℹ fail 0"""
 
 [[tests.node-test]]
 name = "failure details kept"
@@ -43,4 +55,55 @@ expected = """✖ parses config (3.1ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
   actual: undefined
   expected: 8080
+ℹ tests 2
+ℹ pass 1
 ℹ fail 1"""
+
+[[tests.node-test]]
+name = "typeless warning and stack noise dropped, assertion values kept"
+input = """
+(node:32696) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///w/test/game.test.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /w/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ createGame initializes game state (1.6012ms)
+✖ updateGame handles ghost collision (1.671ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ duration_ms 172.4654
+
+✖ failing tests:
+
+test at test/game.test.js:78:1
+✖ updateGame handles ghost collision (1.671ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  3 !== 2
+
+      at TestContext.<anonymous> (file:///w/test/game.test.js:88:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 3,
+    expected: 2,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+"""
+expected = """✖ updateGame handles ghost collision (1.671ms)
+ℹ tests 2
+ℹ pass 1
+ℹ fail 1
+✖ failing tests:
+test at test/game.test.js:78:1
+✖ updateGame handles ghost collision (1.671ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  3 !== 2
+      at TestContext.<anonymous> (file:///w/test/game.test.js:88:10)
+    actual: 3,
+    expected: 2,"""

@@ -10,8 +10,8 @@ User-facing docs live in `README.md`; this file is the engineering contract.
 
 ```bash
 cargo build --release
-cargo test --bin tokenix          # 458 unit + golden tests
-cargo test --tests                # + 30 end-to-end tests against the real binary
+cargo test --bin tokenix          # 469 unit + golden tests
+cargo test --tests                # + 31 end-to-end tests (one Windows-only) against the real binary
 cargo fmt --check                 # CI runs fmt FIRST — run it before pushing
 cargo clippy --all-targets --locked -- -D warnings
 ./scripts/verify.sh [--models]    # every CI gate locally, in CI order
@@ -38,10 +38,14 @@ derives from `store::global_dir()`, which honours an **absolute** `TOKENIX_HOME`
 `bench_search_similar` (`#[ignore]`) measures the vector scan on 30k × 768d
 rows: `cargo test --release --bin tokenix bench_search_similar -- --ignored --nocapture`.
 
-MSRV is `1.88` (`rust-version` in Cargo.toml). The floor is not cosmetic:
+MSRV is `1.90` (`rust-version` in Cargo.toml). The floor is not cosmetic:
 `Command` only quotes arguments safely for Windows `.cmd`/`.bat` shims from
 1.77.2 on (CVE-2024-24576), and `cmd_filter` spawns exactly those shims with
-repo-controlled argv.
+repo-controlled argv. It must match the highest `rust-version` in the locked
+tree (tree-sitter 0.27 needs 1.90); it drifted to a false 1.88 because CI
+builds on stable only. Check with `cargo +1.90.0 check --locked --all-targets`,
+and update with `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo update`
+so resolution never silently raises it.
 
 Model-gated tests (`--features model-tests`: ONNX inference, query cache,
 retrieval hit-rate eval) are **not** part of `cargo test`. `deep-verify.yml` runs
@@ -160,7 +164,10 @@ Grep:  < 3 words → not semantic; symbol lookup if identifier-like, else
        ≥ 3 words → semantic results, exit 2; gain records neutral usage
 
 Bash / PowerShell: matches a filter → rewrite to `tokenix run`
-       (PowerShell: `& 'exe' run --shell pwsh '<cmd>'`, re-executed under pwsh)
+       (PowerShell: `& 'exe' run --shell pwsh '<cmd>'`, re-executed under pwsh;
+       Bash on Windows: re-executed under the Git Bash in `MSYSTEM`/`EXEPATH`/
+       `CLAUDE_CODE_GIT_BASH_PATH`, `cmd /C` only outside one — cmd broke
+       heredocs, `$(...)`, `2>/dev/null` and `echo` in a Haiku benchmark)
        otherwise → exit 0
 
 Index stale → Grep still gets its head_limit cap, then exit 0 for every tool.
@@ -308,7 +315,7 @@ shown there was run against the real binary; keep it that way.
 ## Output filters
 
 Resolution: `<repo>/.tokenix/filters` (trust-gated) → `~/.tokenix/filters` →
-bundled. Currently **528 filters / 1,146 golden cases**.
+bundled. Currently **528 filters / 1,150 golden cases**.
 
 **Hot path uses `load_filters_for_command()`, not `load_all_filters()`.** A
 prefilter narrows candidates before any regex compiles; `find_filter` matches via
@@ -320,7 +327,28 @@ raw) · `head_lines`+`tail_lines` form a first+last window with an inline
 `[... N lines omitted ...]` marker · `priority_lines` survive every sizing cut ·
 `category_caps` bound repetitive classes with a count marker · `apply_filter_with_exit`
 honors per-filter `on_failure = "passthrough"|"tail:N"` · `FilterDef` is
-`deny_unknown_fields` so typo'd keys fail loudly.
+`deny_unknown_fields` so typo'd keys fail loudly · every regex must compile
+(`filters::regex_issues`; `every_bundled_filter_regex_compiles` gates the corpus,
+`doctor` reports user/local ones) — `cached_regex` skips a bad pattern with a
+warning, so seven bundled rules (lookarounds, bare `{`/`)`) had silently never run.
+
+stderr only reaches a filter with `filter_stderr = true`; otherwise it gets the
+generic compressor. rustc writes every diagnostic to stderr, so the cargo
+build/check/clippy/test filters set it and use `block_caps` (applied before
+`strip_lines_matching`, since a blank line ends a block) to keep a warning's
+message + location and drop its snippet — errors are never capped. A competitor
+benchmark measured 0% reduction on `cargo clippy` before this.
+
+`extract_sections` with `split_on_start = true` treats each start line as the next
+record's header (`git log`), and `max_lines` caps each section with a count
+marker. Without `split_on_start`, a start line inside an open section is content
+(`npm ERR!` runs). `git-log` keeps 12-char hashes: replacing them with
+`<commit_hash>` left the agent nothing to `git show`. `git-diff` keeps `@@` hunk
+headers — the only line numbers an agent can edit by.
+
+Unit tests (`cfg(test)`) default `global_dir()` to a per-process temp dir: the
+developer's `~/.tokenix/filters` shadowed bundled filters and made results
+machine-dependent.
 
 `on_empty` and `passthrough_when_emptied` **compose** — 94 bundled filters ship
 both, and that is the recommended shape for a silent-on-success tool. The

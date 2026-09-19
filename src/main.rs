@@ -683,7 +683,7 @@ enum Commands {
         command: String,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
-        /// Shell used to execute the command: auto (cmd/sh), or pwsh/powershell
+        /// Shell used to execute the command: auto (sh; on Windows the Git Bash it was launched from, else cmd), or pwsh/powershell
         #[arg(long, default_value = "auto")]
         shell: String,
         /// Print the command's raw stdout/stderr unmodified (no compression,

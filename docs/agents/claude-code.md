@@ -36,7 +36,7 @@ move the binary, run `install-hook` again.
 | `Grep` for an identifier | Its definition from the symbol graph |
 | `Grep` for a 3+ word phrase | Semantic search results |
 | `Grep` with unbounded `content` output | Adds `head_limit` (default 100) through `updatedInput` |
-| `Bash` matching a filter | Rewritten to `tokenix run '<cmd>'` through `updatedInput`, same exit code |
+| `Bash` matching a filter | Rewritten to `tokenix run '<cmd>'` through `updatedInput`, same exit code. On Windows it re-runs under the same Git Bash, so bash syntax keeps working |
 | `PowerShell` matching a filter | Rewritten to `& 'tokenix' run --shell pwsh '<cmd>'` |
 | Anything else, or no/stale index | Passes through (exit `0`) |
 

@@ -6,10 +6,11 @@ strip_lines_matching = [
   "^\\s*$",
   "^index ",
   "^--- ",
-  "^\\+\\+\\+ ",
-  "^@@ "
+  "^\\+\\+\\+ "
 ]
+# Hunk headers stay: they carry the only line numbers an agent can edit by.
 keep_lines_matching = [
+  "^@@ ",
   "^\\+",
   "^\\-",
   "^\\\\ ",
@@ -47,6 +48,7 @@ index 1234567..abcdefg 100644
  """
 expected = """
 diff --git a/src/main.rs b/src/main.rs
+@@ -1,5 +1,6 @@
 +    println!("New line");"""
 
 [[tests.git-diff]]
@@ -64,6 +66,7 @@ index 1234567..abcdefg 100644
  """
 expected = """
 diff --git a/src/main.rs b/src/main.rs
+@@ -1,6 +1,5 @@
 -    println!("Old line");"""
 
 [[tests.git-diff]]

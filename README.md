@@ -117,7 +117,7 @@ cargo install --path . --locked                    # from source
 Use `--locked`. It builds against the committed `Cargo.lock`. Without it, `cargo
 install` re-resolves dependencies and can pull an incompatible `ureq` into the
 `ort-sys` build script. Building from source needs a recent stable
-[Rust](https://www.rust-lang.org/tools/install) toolchain (MSRV 1.88).
+[Rust](https://www.rust-lang.org/tools/install) toolchain (MSRV 1.90).
 
 > **🤖 For AI agents installing tokenix:** use the prebuilt binary, not `cargo
 > install`. It needs no toolchain and no compile step. Fetch the version-less URL
@@ -324,7 +324,7 @@ model.** The measurements are reproducible. They are *not* a claim about your bi
 | Task context vs reading the full file | 86,291 → 8,630 | **90.0%** | `tokenix benchmark` |
 | Outline + targeted symbol workflow | 55,020 → 17,384 | **68.4%** | `tokenix benchmark` |
 | Command filters, verbose output | 1,891 → 369 | **80.5%** | `cargo test verbose_real_output -- --nocapture` |
-| Command filters, full golden corpus (1,146 cases) | 47,237 → 27,836 | **41.1%** | `cargo test filters_deliver_aggregate_token_savings -- --nocapture` |
+| Command filters, full golden corpus (1,150 cases) | 46,804 → 27,728 | **40.8%** | `cargo test filters_deliver_aggregate_token_savings -- --nocapture` |
 
 Retrieval quality is checked by the same benchmark:
 
@@ -333,7 +333,7 @@ Retrieval quality is checked by the same benchmark:
 | Expected file in the top 3 results (8 labeled queries) | **8/8** |
 | Expected file ranked #1 | 6/8 |
 | Budgeted context still contained the expected file | **8/8**, 0 budget violations |
-| Golden filter cases reproducing byte-exact expected output | **1,146/1,146** |
+| Golden filter cases reproducing byte-exact expected output | **1,150/1,150** |
 
 <details>
 <summary><b>Why there is no dollar figure, and how to read these numbers</b></summary>
@@ -352,7 +352,7 @@ README reports tokens and calls them tokens. Cache-aware cost accounting is the 
 roadmap item. [`docs/research/2026-08-token-economy.md`](docs/research/2026-08-token-economy.md)
 has the full evidence review.
 
-- **The 41.1% corpus figure is pessimistic on purpose.** Half the golden corpus is
+- **The 40.8% corpus figure is pessimistic on purpose.** Half the golden corpus is
   failure-path cases a filter must pass through *unfiltered*, so errors are never
   masked as success.
 - **`tokenix benchmark`'s command arm reports about 26%** because its sample
@@ -534,7 +534,7 @@ exist. Rules are TOML `[[rules]]` (`id`, `pattern`, optional `capture` /
 
 ## 🔧 Output filters
 
-528 bundled filters, 1,146 golden cases. A filter matches a command and shapes its
+528 bundled filters, 1,150 golden cases. A filter matches a command and shapes its
 output:
 
 ```toml
@@ -559,6 +559,11 @@ embedded golden cases**, and CI also enforces the rules below.
 - **Failures are never masked.** A non-zero exit suppresses success messages, and a
   filter that could empty a failure payload must keep the failure markers.
 - **Never worse.** A filtered result never costs more bytes than the raw output.
+- **Every regex compiles.** An invalid pattern would silently disable its rule;
+  CI fails on one in a bundled filter, and `tokenix doctor` lists them in yours.
+- **stderr is opt-in per filter** (`filter_stderr = true`). The cargo filters set it,
+  because rustc writes every diagnostic there. `block_caps` then keeps each
+  warning's message and location and drops its snippet; errors keep theirs.
 - **Line endings are preserved.** CRLF comes back as CRLF, so text the agent quotes
   into an exact-match edit still matches the bytes on disk.
 - **Compression happens at write time,** before output enters the conversation, so

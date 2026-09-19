@@ -8,7 +8,7 @@ strip_lines_matching = [
   "^\\s*installing ",
   "^\\s*installed package",
   "^\\s*done",
-  "^\\s*\\✓",
+  "^\\s*✓",
   "^\\s*✔"
 ]
 keep_lines_matching = [

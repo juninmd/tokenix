@@ -18,6 +18,31 @@ fn run_keeps_the_exit_code_and_the_failure_output() {
     assert!(ok.stdout.contains("all-good"));
 }
 
+/// Claude Code's Bash tool is Git Bash on Windows; a rewritten command must keep
+/// bash semantics instead of being re-run under `cmd /C`.
+#[cfg(windows)]
+#[test]
+fn run_from_git_bash_keeps_bash_semantics() {
+    let git_bin = r"C:\Program Files\Git\bin";
+    if !std::path::Path::new(git_bin).join("bash.exe").is_file() {
+        eprintln!("skipped: no Git Bash at {git_bin}");
+        return;
+    }
+    let sb = Sandbox::new("git-bash");
+    let env = [("MSYSTEM", "MINGW64"), ("EXEPATH", git_bin)];
+    let run = sb.tokenix_with_env(
+        &["run", "echo $(echo from-subshell) 2>/dev/null && exit 5"],
+        &env,
+    );
+    assert_eq!(run.code, 5, "{}", run.stderr);
+    assert!(run.stdout.contains("from-subshell"), "{}", run.stdout);
+    assert!(
+        !run.stdout.contains("$(echo"),
+        "ran under cmd: {}",
+        run.stdout
+    );
+}
+
 #[test]
 fn repo_filters_apply_only_after_trust_and_an_edit_revokes_it() {
     let sb = Sandbox::new("trust");

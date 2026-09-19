@@ -5,7 +5,11 @@ use regex::Regex;
 use rust_embed::Embed;
 use serde::Deserialize;
 
+mod blocks;
+mod regex_lint;
 mod trust;
+pub use blocks::BlockCap;
+pub use regex_lint::regex_issues;
 pub use trust::{repo_input_hashes, repo_inputs_trusted, set_repo_inputs_trust};
 
 #[derive(Debug, Deserialize, Clone)]
@@ -141,6 +145,10 @@ pub struct FilterDef {
     /// positional cut that may spend the whole budget on one class.
     #[serde(default)]
     pub category_caps: Vec<CategoryCap>,
+    /// Keep only the first `max_lines` of each block opened by `start` (see
+    /// `blocks::BlockCap`). Runs before `strip_lines_matching`.
+    #[serde(default)]
+    pub block_caps: Vec<BlockCap>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -158,6 +166,16 @@ pub struct ExtractSection {
     pub include_markers: bool,
     #[serde(default)]
     pub max_matches: Option<usize>,
+    /// Lines kept per matched section (markers included); the rest collapse
+    /// into one `[... N lines omitted ...]` marker for that section.
+    #[serde(default)]
+    pub max_lines: Option<usize>,
+    /// A start line inside an open section begins the next section instead of
+    /// being content of the current one — for records that are delimited only
+    /// by their own header (`commit …`). Off: consecutive `npm ERR!` lines are
+    /// one section.
+    #[serde(default)]
+    pub split_on_start: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -1962,6 +1980,10 @@ fn apply_filter_with_exit_inner(output: &str, f: &FilterDef, exit_ok: Option<boo
 
     let mut lines: Vec<String> = s.lines().map(|l| l.to_string()).collect();
 
+    if !f.block_caps.is_empty() {
+        lines = blocks::apply_block_caps(lines, &f.block_caps);
+    }
+
     if !f.strip_lines_matching.is_empty() {
         let patterns: Vec<Regex> = f
             .strip_lines_matching
@@ -2124,6 +2146,8 @@ fn output_has_failure_signal(output: &str) -> bool {
 /// the output of a command that died.
 fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Vec<String> {
     let mut kept: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    // Index of the last kept line of a capped section → lines dropped after it.
+    let mut omitted: HashMap<usize, usize> = HashMap::new();
     let content = lines.join("\n");
 
     for section in sections {
@@ -2141,10 +2165,27 @@ fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Ve
 
         let mut in_section = false;
         let mut section_lines: Vec<usize> = Vec::new();
+        let mut flush = |section_lines: &mut Vec<usize>| {
+            let cap = section.max_lines.unwrap_or(usize::MAX).max(1);
+            if section_lines.len() > cap {
+                omitted.insert(section_lines[cap - 1], section_lines.len() - cap);
+                section_lines.truncate(cap);
+            }
+            kept.extend(section_lines.drain(..));
+        };
 
         for (i, line) in content.lines().enumerate() {
             let start_match = start_re.is_match(line);
             let end_match = end_re.is_match(line);
+
+            if section.split_on_start && start_match && in_section && !end_match {
+                flush(&mut section_lines);
+                matches += 1;
+                in_section = false;
+                if matches >= max_matches {
+                    break;
+                }
+            }
 
             if start_match && !in_section {
                 in_section = true;
@@ -2159,7 +2200,7 @@ fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Ve
                     section_lines.push(i);
                 }
                 if end_match {
-                    kept.extend(section_lines.drain(..));
+                    flush(&mut section_lines);
                     matches += 1;
                     in_section = false;
                     if matches >= max_matches {
@@ -2172,17 +2213,23 @@ fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Ve
         // An unclosed section means the output ended inside it — a build that
         // was killed, a log that was truncated. Keep it either way.
         if in_section {
-            kept.extend(section_lines);
+            flush(&mut section_lines);
         }
     }
 
     if kept.is_empty() {
-        lines
-    } else {
-        kept.into_iter()
-            .filter_map(|i| lines.get(i).cloned())
-            .collect()
+        return lines;
     }
+    let mut out = Vec::with_capacity(kept.len() + omitted.len());
+    for i in kept {
+        if let Some(line) = lines.get(i) {
+            out.push(line.clone());
+        }
+        if let Some(n) = omitted.get(&i) {
+            out.push(format!("    [... {n} lines omitted ...]"));
+        }
+    }
+    out
 }
 
 fn apply_replace_patterns(lines: Vec<String>, patterns: &[[String; 2]]) -> Vec<String> {
@@ -2734,7 +2781,14 @@ replace_patterns = [       # regex replacements: [[pattern, replacement], ...]
 ]
 extract_sections = [       # extract content between markers
   {{ start_pattern = "---- FAILURES ----", end_pattern = "^\\s*$", include_markers = true, max_matches = 3 }},
+  # records delimited only by their own header: each start line opens a new
+  # section; keep 4 lines of each, the rest collapse into a count marker
+  {{ start_pattern = "^commit ", end_pattern = "[^\\s\\S]", include_markers = true, split_on_start = true, max_lines = 4 }},
 ]
+block_caps = [             # keep the first N lines of each block opened by `start`
+  {{ start = "^warning: ", end = "^(\\s*$|[A-Za-z])", max_lines = 2 }},
+]
+filter_stderr = true       # also filter stderr (compilers write diagnostics there)
 semantic_filter = {{       # embedding-based relevance filtering (uses daemon/embed)
   query = "test failure error panic",
   threshold = 0.3,
@@ -3314,6 +3368,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         // Would panic with naive &l[..4] because 'é'/'ç' straddle the boundary.
         let out = apply_filter("café\nação\n", &f);
@@ -3353,6 +3408,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let issues = semantic_filter_issues(&f);
         assert_eq!(
@@ -3427,6 +3483,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let filters = [f];
         // Unspaced semicolon, cd prefix, and a pipe all resolve to the filter.
@@ -3463,6 +3520,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let f_gitleaks = FilterDef {
             description: None,
@@ -3490,6 +3548,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let filters2 = [f_cat, f_gitleaks];
         let matched = find_filter("cat x | gitleaks detect", &filters2).unwrap();
@@ -3524,6 +3583,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let filters = [f];
         // Unbounded full dump: filter applies.
@@ -3606,6 +3666,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         let filters = [f];
         assert!(find_filter("git -C /repo add .", &filters).is_some());
@@ -3672,6 +3733,7 @@ expected = \"\"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         };
         // Pattern present, no error → short-circuit to message
         assert_eq!(apply_filter("total size is 100\n", &f), "ok (synced)");
@@ -3761,6 +3823,7 @@ match_command = "^second\\b"
             on_failure: None,
             priority_lines: vec![],
             category_caps: vec![],
+            block_caps: vec![],
         }
     }
 
@@ -4012,6 +4075,8 @@ keep_lines_matchin = ["oops"]
             end_pattern: "^END".to_string(),
             include_markers: false,
             max_matches: None,
+            max_lines: None,
+            split_on_start: false,
         }];
         let out = apply_filter("noise\nSTART\na\nb\nEND\ntrailing\n", &f);
         assert_eq!(out, "a\nb");
@@ -4034,12 +4099,16 @@ keep_lines_matchin = ["oops"]
                 end_pattern: "^NEVER_CLOSES".to_string(),
                 include_markers: false,
                 max_matches: None,
+                max_lines: None,
+                split_on_start: false,
             },
             ExtractSection {
                 start_pattern: "^-----".to_string(),
                 end_pattern: "^-----$".to_string(),
                 include_markers: false,
                 max_matches: None,
+                max_lines: None,
+                split_on_start: false,
             },
         ];
         let input =
@@ -4065,6 +4134,8 @@ keep_lines_matchin = ["oops"]
             end_pattern: "^NOPE".to_string(),
             include_markers: false,
             max_matches: None,
+            max_lines: None,
+            split_on_start: false,
         }];
         // No marker present → falls back to the unmodified content.
         assert_eq!(apply_filter("just\ntwo lines\n", &f), "just\ntwo lines");
@@ -5132,6 +5203,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5159,6 +5231,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5186,6 +5259,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5213,6 +5287,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5245,6 +5320,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5272,6 +5348,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5299,6 +5376,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5326,6 +5404,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
             FilterDef {
                 description: None,
@@ -5353,6 +5432,7 @@ keep_lines_matchin = ["oops"]
                 on_failure: None,
                 priority_lines: vec![],
                 category_caps: vec![],
+                block_caps: vec![],
             },
         ];
 

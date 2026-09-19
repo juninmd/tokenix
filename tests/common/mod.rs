@@ -81,6 +81,15 @@ impl Sandbox {
         self.tokenix_with_stdin(args, "")
     }
 
+    pub fn tokenix_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
+        let mut cmd = self.command();
+        cmd.args(args).stdin(Stdio::null());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        into_run(cmd.output().expect("tokenix exit"))
+    }
+
     pub fn tokenix_with_stdin(&self, args: &[&str], stdin: &str) -> Run {
         let mut child = self.command().args(args).spawn().expect("spawn tokenix");
         child

@@ -3,6 +3,15 @@ description = "Compact cargo clippy output"
 match_command = "^cargo\\s+clippy\\b"
 passthrough_when_emptied = true
 strip_ansi = true
+# rustc writes every diagnostic to stderr; without this the filter never sees them.
+filter_stderr = true
+notify_on_truncate = true
+priority_lines = ["^error"]
+# A warning keeps its message and location; its snippet is most of the bytes.
+# Errors are not capped: their snippet carries the compiler's suggested fix.
+block_caps = [
+  { start = "^warning(\\[[\\w-]+\\])?: ", end = "^(\\s*$|[A-Za-z])", max_lines = 2 },
+]
 strip_lines_matching = [
   "^\\s*$",
   "^\\s*Checking",
@@ -45,17 +54,37 @@ Finished dev [unoptimized + debuginfo] target(s) in 0.5s
 """
 expected = """warning: unused import: `std::io::Write`
  --> src/main.rs:5:5
-  |
-5 | use std::io::Write;
-  |     ^^^^^^^^^^^^^^
-  |
-  = note: `#[warn(unused_imports)]` on by default
-  = help: remove the import
 warning: this `if` can be removed
  --> src/main.rs:10:5
+Finished dev [unoptimized + debuginfo] target(s) in 0.5s
+[... 11 detail lines omitted from 2 blocks ...]"""
+
+[[tests.cargo-clippy]]
+name = "warning snippets collapse to message and location"
+input = """
+    Checking demo v0.1.0 (/work/demo)
+warning: unused variable: `unused_1`
+ --> src/lib.rs:2:38
   |
-10 |     if true {
-  |     ^^^^^^^
+2 | pub fn helper_1(x: i64) -> i64 { let unused_1 = x; x * 1 }
+  |                                      ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused_1`
   |
-  = help: remove the `if` block
-Finished dev [unoptimized + debuginfo] target(s) in 0.5s"""
+  = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `unused_2`
+ --> src/lib.rs:3:38
+  |
+3 | pub fn helper_2(x: i64) -> i64 { let unused_2 = x; x * 2 }
+  |                                      ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused_2`
+
+warning: `demo` (lib) generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+"""
+expected = """
+warning: unused variable: `unused_1`
+ --> src/lib.rs:2:38
+warning: unused variable: `unused_2`
+ --> src/lib.rs:3:38
+warning: `demo` (lib) generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+[... 8 detail lines omitted from 2 blocks ...]"""

@@ -18,8 +18,19 @@ pub use vector::*;
 /// scripted checks keep their state out of the user's real home. Every
 /// machine-wide tokenix path must derive from here.
 pub fn global_dir() -> Option<PathBuf> {
-    home_override(std::env::var_os("TOKENIX_HOME"))
-        .or_else(|| dirs::home_dir().map(|h| h.join(".tokenix")))
+    home_override(std::env::var_os("TOKENIX_HOME")).or_else(default_home)
+}
+
+#[cfg(not(test))]
+fn default_home() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".tokenix"))
+}
+
+/// Unit tests never see the developer's `~/.tokenix`: its user filters shadow
+/// the bundled ones under test, and its logs and caches are not theirs to write.
+#[cfg(test)]
+fn default_home() -> Option<PathBuf> {
+    Some(std::env::temp_dir().join(format!("tokenix-unit-{}", std::process::id())))
 }
 
 /// Only an absolute `TOKENIX_HOME` counts: a relative one resolves against the

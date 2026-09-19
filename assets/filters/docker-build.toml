@@ -30,7 +30,6 @@ keep_lines_matching = [
 max_lines = 40
 replace_patterns = [
   ["sha256:[a-f0-9]{64}", "sha256:<hash>"],
-  ["[a-f0-9]{12,}(?=\\s|$)", "<layer_id>"],
   ["\\d+\\.\\d+s", "<duration>"],
   ["docker\\.io/library/[^:]+:[^\\s]+", "docker.io/library/<image>"],
 ]
