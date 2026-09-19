@@ -15,7 +15,7 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.11"
 toml = "1.1"
-tree-sitter = "0.26"
+tree-sitter = "0.27"
 tree-sitter-cpp = "0.23"
 tree-sitter-go = "0.25"
 tree-sitter-javascript = "0.25"
