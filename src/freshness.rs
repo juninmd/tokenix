@@ -102,8 +102,9 @@ pub fn refresh_before_query(repo_root: &Path) -> Refresh {
                 Some((_, stored_mtime, _)) => {
                     (stored_mtime - indexer::file_mtime(abs)).abs() >= 0.01
                 }
-                // Unknown file: created since the last index.
-                None => true,
+                // Unknown file: created since the last index, unless it is one
+                // that never gets a row (empty, binary).
+                None => indexer::stores_content(abs, rel),
             })
             .count();
         // Deletions are counted for the report only. The refresh does not apply
