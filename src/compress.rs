@@ -23,8 +23,8 @@ fn log_unfiltered_cmd(cmd: &str) {
     }
     // Write to the global ~/.tokenix/ dir, not the project dir, to avoid
     // accidentally committing internal tokenix logs.
-    let log_path = match dirs::home_dir() {
-        Some(h) => h.join(".tokenix").join("unfiltered_cmds.log"),
+    let log_path = match crate::store::global_dir() {
+        Some(h) => h.join("unfiltered_cmds.log"),
         None => return,
     };
     if let Some(parent) = log_path.parent() {
@@ -34,7 +34,10 @@ fn log_unfiltered_cmd(cmd: &str) {
     if std::fs::metadata(&log_path).is_ok_and(|m| m.len() >= UNFILTERED_LOG_CAP) {
         let _ = std::fs::rename(&log_path, log_path.with_extension("log.1"));
     }
-    let entry = format!("{}\n", cmd);
+    // Shell input is where credentials actually live (`curl -H "Authorization:
+    // Bearer …"`, `psql postgres://user:pw@host`). The failure tee already
+    // masks them before writing; this log did not, and it is long-lived.
+    let entry = format!("{}\n", crate::conversation_audit::redact_credentials(cmd));
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -42,6 +45,7 @@ fn log_unfiltered_cmd(cmd: &str) {
         .open(&log_path)
     {
         let _ = f.write_all(entry.as_bytes());
+        crate::store::restrict_to_owner(&log_path);
     }
 }
 
@@ -2311,7 +2315,7 @@ fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Opti
     if std::env::var("TOKENIX_TEE").is_ok_and(|v| v == "0") {
         return None;
     }
-    let dir = dirs::home_dir()?.join(".tokenix").join("tee");
+    let dir = crate::store::global_dir()?.join("tee");
     std::fs::create_dir_all(&dir).ok()?;
     crate::store::restrict_to_owner(&dir);
 

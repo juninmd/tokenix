@@ -283,28 +283,39 @@ pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<
 
     // Prefer real outputs captured during a `tokenix filter record` session —
     // they give the AI diverse, realistic noise instead of a single re-run.
-    let sample =
-        if let Some((recorded, used)) = recordings::read_samples(repo_root, &base_cmd, 64 * 1024) {
-            println!(
-                "  {} using {} recorded sample(s) from `tokenix filter record`",
-                "→".cyan(),
-                used
-            );
-            recorded
+    let sample = if let Some((recorded, used)) =
+        recordings::read_samples(repo_root, &base_cmd, 64 * 1024)
+    {
+        println!(
+            "  {} using {} recorded sample(s) from `tokenix filter record`",
+            "→".cyan(),
+            used
+        );
+        recorded
+    } else {
+        // No recordings — re-run the latest real invocation from the log, or the
+        // base command as-is (NEVER `--help`; it has the wrong noise profile).
+        let full_cmd_to_run = find_latest_unfiltered_command(&base_cmd)
+            .as_deref()
+            .and_then(sample_argv)
+            .unwrap_or_else(|| vec![base_cmd.clone()]);
+        // A recovered log line is a real past invocation, and re-running it
+        // has real side effects — `terraform apply -auto-approve` and
+        // `npm publish` both survive `sample_argv`. Ask before executing
+        // anything the user did not type in this command.
+        let full_cmd_to_run = if full_cmd_to_run.len() > 1 && !confirm_rerun(&full_cmd_to_run)? {
+            println!("  {} running `{}` instead", "→".cyan(), base_cmd);
+            vec![base_cmd.clone()]
         } else {
-            // No recordings — re-run the latest real invocation from the log, or the
-            // base command as-is (NEVER `--help`; it has the wrong noise profile).
-            let full_cmd_to_run = find_latest_unfiltered_command(&base_cmd)
-                .as_deref()
-                .and_then(sample_argv)
-                .unwrap_or_else(|| vec![base_cmd.clone()]);
-            println!(
-                "  {} running `{}` for sample output...",
-                "→".cyan(),
-                full_cmd_to_run.join(" ")
-            );
-            run_command_sample(&full_cmd_to_run)
+            full_cmd_to_run
         };
+        println!(
+            "  {} running `{}` for sample output...",
+            "→".cyan(),
+            full_cmd_to_run.join(" ")
+        );
+        run_command_sample(&full_cmd_to_run)
+    };
 
     // Show preview and let user confirm or replace
     let sample = preview_and_confirm_sample(&base_cmd, sample)?;
@@ -433,9 +444,7 @@ fn preview_and_confirm_sample(cmd: &str, sample: String) -> Result<String> {
 /// never a repo-local path. A repo-local file would be authored by whatever
 /// repository the user happens to be in, and the line it yields is executed.
 fn find_latest_unfiltered_command(base_cmd: &str) -> Option<String> {
-    let log_path = dirs::home_dir()?
-        .join(".tokenix")
-        .join("unfiltered_cmds.log");
+    let log_path = crate::store::global_dir()?.join("unfiltered_cmds.log");
     if !log_path.exists() {
         return None;
     }
@@ -471,6 +480,24 @@ fn sample_argv(full_cmd: &str) -> Option<Vec<String>> {
     } else {
         Some(parts)
     }
+}
+
+/// Confirm before re-executing a command recovered from the unfiltered-command
+/// log. Defaults to "no": the safe answer is the bare base command.
+fn confirm_rerun(argv: &[String]) -> Result<bool> {
+    println!(
+        "\n  {} tokenix wants to re-run your last invocation to capture a sample:",
+        "?".yellow()
+    );
+    println!("     {}", argv.join(" ").yellow());
+    print!("  Run it? [y/N]: ");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// Run the sample command directly (no shell): argv elements reach the child
@@ -926,10 +953,21 @@ fn verify_sources() -> Vec<(String, std::path::PathBuf)> {
     let mut sources = Vec::new();
     let user_dir = filters::filters_dir();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let local_dir = store::find_project_root(&cwd)
-        .join(".tokenix")
-        .join("filters");
-    for (label, dir) in [("user", user_dir), ("project", local_dir)] {
+    let root = store::find_project_root(&cwd);
+    // Every other consumer of repo-local filters checks the trust gate first
+    // (`filters::load_local_filters_named`, `filters::sample_inputs`). Verify
+    // did not, so an untrusted clone's regexes ran and its chosen `expected` /
+    // `on_empty` strings were printed as tool output.
+    let mut dirs = vec![("user", user_dir)];
+    if filters::repo_inputs_trusted(&root) {
+        dirs.push(("project", root.join(".tokenix").join("filters")));
+    } else {
+        eprintln!(
+            "{} skipping repo-local filters: not trusted — run `tokenix trust` to include them",
+            "warning:".yellow()
+        );
+    }
+    for (label, dir) in dirs {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -1015,18 +1053,19 @@ pub fn cmd_filter_verify(only: Option<&str>, require_all: bool) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// `tokenix trust` / `untrust` — SHA-256 gate for repo-local filter files.
+// `tokenix trust` / `untrust` — SHA-256 gate for repo-controlled inputs.
 // ---------------------------------------------------------------------------
 
 pub fn cmd_trust(status_only: bool) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let root = store::find_project_root(&cwd);
-    let hashes = filters::local_filter_hashes(&root);
+    let hashes = filters::repo_input_hashes(&root);
     if hashes.is_empty() {
-        println!("No repo-local filters found under .tokenix/filters — nothing to trust.");
+        println!("No repo-controlled tokenix inputs found — nothing to trust.");
+        println!("  (looked for .tokenix/{{filters,secret-rules,egress-rules}}/*.toml, .mcp.json, opencode.json, .vscode/mcp.json)");
         return Ok(());
     }
-    let trusted = filters::local_filters_trusted(&root);
+    let trusted = filters::repo_inputs_trusted(&root);
     if status_only {
         for name in hashes.keys() {
             println!("  {name}");
@@ -1044,9 +1083,9 @@ pub fn cmd_trust(status_only: bool) -> Result<()> {
         );
         return Ok(());
     }
-    let count = filters::set_local_filters_trust(&root, true)?;
+    let count = filters::set_repo_inputs_trust(&root, true)?;
     println!(
-        "{} Trusted {count} repo-local filter file(s) for {}",
+        "{} Trusted {count} repo-controlled input file(s) for {}",
         "✓".green(),
         root.display()
     );
@@ -1057,12 +1096,12 @@ pub fn cmd_trust(status_only: bool) -> Result<()> {
 pub fn cmd_untrust() -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let root = store::find_project_root(&cwd);
-    let count = filters::set_local_filters_trust(&root, false)?;
+    let count = filters::set_repo_inputs_trust(&root, false)?;
     if count == 0 {
         println!("No trust entry for {}", root.display());
     } else {
         println!(
-            "{} Revoked trust for {count} filter file(s) — they will be skipped.",
+            "{} Revoked trust for {count} repo input file(s) — they will be skipped.",
             "✓".green()
         );
     }

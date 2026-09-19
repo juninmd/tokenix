@@ -1889,18 +1889,12 @@ impl Shell {
                 Style::default().dim(),
             ),
         ]));
-        let ref_model = crate::gain::MODELS.iter().find(|m| m.reference);
-        if let Some(m) = ref_model {
-            let usd = s.tokens_saved as f64 * m.input_per_1m / 1_000_000.0;
-            lines.push(Line::from(vec![
-                Span::raw("   "),
-                Span::styled(crate::ui::bar(s.pct_saved / 100.0, 28), green),
-                Span::styled(
-                    format!("  ≈ ${usd:.2} saved at {} input rates", m.name),
-                    Style::default().dim(),
-                ),
-            ]));
-        }
+        // No dollar figure here: list-price $ ignores cache traffic, which
+        // dominates a real bill (see AGENTS.md, "`gain` reports tokens").
+        lines.push(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(crate::ui::bar(s.pct_saved / 100.0, 28), green),
+        ]));
         lines.push(Line::from(""));
 
         lines.push(Line::from("token summary".bold()));

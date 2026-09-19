@@ -102,6 +102,12 @@ struct ServerSpec {
     agent: Agent,
     name: String,
     transport: Transport,
+    /// The config that declared this server lives inside the repository, so a
+    /// clone chooses the command. Introspection spawns that command, which is
+    /// why these are gated on `tokenix trust`; user-scoped configs
+    /// (`~/.claude.json`, `~/.copilot/`, `~/.codex/`) are the user's own and
+    /// carry no such gate.
+    repo_local: bool,
 }
 
 #[derive(Clone)]
@@ -203,6 +209,15 @@ fn collect_audit(
         specs.extend(discover(*agent, cwd));
     }
 
+    // Introspecting a stdio server means *spawning* it. When the config that
+    // declared it ships inside the repository, the repository picks that
+    // command — so cloning a repo and running `tokenix prompt-audit` (or
+    // `session-audit`, which calls `audit_summary`) would be arbitrary code
+    // execution. Repo-declared servers are reported, never spawned, until the
+    // same `tokenix trust` gate that guards repo-local filters approves them.
+    let repo_root = crate::find_repo_root(cwd);
+    let repo_trusted = crate::filters::repo_inputs_trusted(&repo_root);
+
     // Introspect each unique stdio transport once, reuse across agents.
     let mut cache: HashMap<String, Status> = HashMap::new();
     let mut reports: Vec<(Agent, String, Status)> = Vec::new();
@@ -215,6 +230,10 @@ fn collect_audit(
                 "HTTP/SSE not introspected: {}",
                 crate::conversation_audit::redact_credentials(url)
             )),
+            Transport::Stdio { .. } if spec.repo_local && !repo_trusted => Status::Unknown(
+                "declared by this repo — not spawned; run `tokenix trust` to introspect"
+                    .to_string(),
+            ),
             Transport::Stdio { command, args, env } => {
                 let key = format!("{command}\u{0}{}", args.join("\u{0}"));
                 cache
@@ -246,15 +265,25 @@ fn discover(agent: Agent, cwd: &Path) -> Vec<ServerSpec> {
 
 /// Parse a Claude/Antigravity/Copilot-style `{ name: { command|url, args, env } }`
 /// JSON map into specs.
-fn parse_json_map(agent: Agent, map: &serde_json::Map<String, Value>, out: &mut Vec<ServerSpec>) {
+fn parse_json_map(
+    agent: Agent,
+    map: &serde_json::Map<String, Value>,
+    repo_local: bool,
+    out: &mut Vec<ServerSpec>,
+) {
     for (name, val) in map {
-        if let Some(spec) = parse_json_server(agent, name, val) {
+        if let Some(spec) = parse_json_server(agent, name, val, repo_local) {
             out.push(spec);
         }
     }
 }
 
-fn parse_json_server(agent: Agent, name: &str, val: &Value) -> Option<ServerSpec> {
+fn parse_json_server(
+    agent: Agent,
+    name: &str,
+    val: &Value,
+    repo_local: bool,
+) -> Option<ServerSpec> {
     // HTTP/SSE servers carry a `url`; introspection is skipped for them.
     if let Some(url) = val.get("url").and_then(Value::as_str) {
         return Some(ServerSpec {
@@ -263,6 +292,7 @@ fn parse_json_server(agent: Agent, name: &str, val: &Value) -> Option<ServerSpec
             transport: Transport::Http {
                 url: url.to_string(),
             },
+            repo_local,
         });
     }
     let command = val.get("command")?.as_str()?.to_string();
@@ -288,6 +318,7 @@ fn parse_json_server(agent: Agent, name: &str, val: &Value) -> Option<ServerSpec
         agent,
         name: name.to_string(),
         transport: Transport::Stdio { command, args, env },
+        repo_local,
     })
 }
 
@@ -305,7 +336,7 @@ fn discover_claude(cwd: &Path) -> Vec<ServerSpec> {
     if let Some(v) = read_json(&repo_root.join(".mcp.json")) {
         if let Some(map) = v.get("mcpServers").and_then(Value::as_object) {
             let mut tmp = Vec::new();
-            parse_json_map(Agent::ClaudeCode, map, &mut tmp);
+            parse_json_map(Agent::ClaudeCode, map, true, &mut tmp);
             for s in tmp {
                 by_name.insert(s.name.clone(), s);
             }
@@ -317,7 +348,7 @@ fn discover_claude(cwd: &Path) -> Vec<ServerSpec> {
         if let Some(v) = read_json(&home.join(".claude.json")) {
             if let Some(map) = v.get("mcpServers").and_then(Value::as_object) {
                 let mut tmp = Vec::new();
-                parse_json_map(Agent::ClaudeCode, map, &mut tmp);
+                parse_json_map(Agent::ClaudeCode, map, false, &mut tmp);
                 for s in tmp {
                     by_name.insert(s.name.clone(), s);
                 }
@@ -330,7 +361,7 @@ fn discover_claude(cwd: &Path) -> Vec<ServerSpec> {
             {
                 if let Some(map) = proj.get("mcpServers").and_then(Value::as_object) {
                     let mut tmp = Vec::new();
-                    parse_json_map(Agent::ClaudeCode, map, &mut tmp);
+                    parse_json_map(Agent::ClaudeCode, map, false, &mut tmp);
                     for s in tmp {
                         by_name.insert(s.name.clone(), s);
                     }
@@ -377,6 +408,8 @@ fn codex_specs_from_str(raw: &str) -> Vec<ServerSpec> {
                 transport: Transport::Http {
                     url: url.to_string(),
                 },
+                // `~/.codex/config.toml` — user scope, not the repo's.
+                repo_local: false,
             });
             continue;
         }
@@ -409,6 +442,7 @@ fn codex_specs_from_str(raw: &str) -> Vec<ServerSpec> {
                 args,
                 env,
             },
+            repo_local: false,
         });
     }
     out
@@ -421,7 +455,7 @@ fn discover_antigravity() -> Vec<ServerSpec> {
     let mut out = Vec::new();
     if let Some(v) = read_json(&path) {
         if let Some(map) = v.get("mcpServers").and_then(Value::as_object) {
-            parse_json_map(Agent::Antigravity, map, &mut out);
+            parse_json_map(Agent::Antigravity, map, false, &mut out);
         }
     }
     out
@@ -451,6 +485,9 @@ fn opencode_specs_from_map(map: &serde_json::Map<String, Value>) -> Vec<ServerSp
                         transport: Transport::Http {
                             url: url.to_string(),
                         },
+                        // Sole caller is `discover_opencode`, which reads the
+                        // repo's own `opencode.json`.
+                        repo_local: true,
                     });
                 }
             }
@@ -490,6 +527,7 @@ fn opencode_specs_from_map(map: &serde_json::Map<String, Value>) -> Vec<ServerSp
                         args,
                         env,
                     },
+                    repo_local: true,
                 });
             }
             _ => {}
@@ -502,17 +540,18 @@ fn opencode_specs_from_map(map: &serde_json::Map<String, Value>) -> Vec<ServerSp
 /// locations. The server map may live under `servers` (VS Code) or `mcpServers`.
 fn discover_copilot(cwd: &Path) -> Vec<ServerSpec> {
     let repo_root = crate::find_repo_root(cwd);
-    let mut candidates = vec![repo_root.join(".vscode").join("mcp.json")];
+    // (path, repo_local): the `.vscode` entry is inside the working tree.
+    let mut candidates = vec![(repo_root.join(".vscode").join("mcp.json"), true)];
     if let Some(cfg) = dirs::config_dir() {
         // Windows: %APPDATA%\Code\User\mcp.json ; Linux: ~/.config/Code/User/mcp.json
-        candidates.push(cfg.join("Code").join("User").join("mcp.json"));
+        candidates.push((cfg.join("Code").join("User").join("mcp.json"), false));
     }
     if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".copilot").join("mcp-config.json"));
+        candidates.push((home.join(".copilot").join("mcp-config.json"), false));
     }
 
     let mut by_name: HashMap<String, ServerSpec> = HashMap::new();
-    for path in candidates {
+    for (path, repo_local) in candidates {
         let Some(v) = read_json(&path) else {
             continue;
         };
@@ -522,7 +561,7 @@ fn discover_copilot(cwd: &Path) -> Vec<ServerSpec> {
             .or_else(|| v.get("mcpServers").and_then(Value::as_object));
         if let Some(map) = map {
             let mut tmp = Vec::new();
-            parse_json_map(Agent::Copilot, map, &mut tmp);
+            parse_json_map(Agent::Copilot, map, repo_local, &mut tmp);
             for s in tmp {
                 by_name.insert(s.name.clone(), s);
             }
@@ -1259,7 +1298,7 @@ mod tests {
     #[test]
     fn parses_stdio_server() {
         let val = json!({"command": "npx", "args": ["-y", "srv"], "env": {"K": "v"}});
-        let spec = parse_json_server(Agent::ClaudeCode, "srv", &val).unwrap();
+        let spec = parse_json_server(Agent::ClaudeCode, "srv", &val, false).unwrap();
         match spec.transport {
             Transport::Stdio { command, args, env } => {
                 assert_eq!(command, "npx");
@@ -1273,7 +1312,7 @@ mod tests {
     #[test]
     fn parses_http_server() {
         let val = json!({"type": "http", "url": "https://example.com/mcp"});
-        let spec = parse_json_server(Agent::Copilot, "remote", &val).unwrap();
+        let spec = parse_json_server(Agent::Copilot, "remote", &val, false).unwrap();
         assert!(matches!(spec.transport, Transport::Http { .. }));
     }
 

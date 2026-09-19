@@ -2221,6 +2221,19 @@ fn cmd_graph_relations(
     Ok(())
 }
 
+/// Reject an unknown `--format` instead of silently falling through to the
+/// text branch and exiting 0. An agent cannot tell a typo from a real answer,
+/// and `cmd_graph` even reported `graph <typo> written to <file>`.
+fn validate_format(format_str: &str, allowed: &[&str]) -> Result<()> {
+    if allowed.iter().any(|a| format_str.eq_ignore_ascii_case(a)) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "unknown --format {format_str:?}: expected one of {}",
+        allowed.join(" | ")
+    )
+}
+
 fn cmd_impact(
     symbol: &str,
     depth: usize,
@@ -2229,6 +2242,7 @@ fn cmd_impact(
     output: Option<&str>,
     path: &Path,
 ) -> Result<()> {
+    validate_format(format_str, &["text", "html", "mermaid", "json"])?;
     let conn = open_existing_index(path)?;
     let relations = store::graph_impact(&conn, symbol, depth, limit)?;
     let title = format!("Impact graph for `{symbol}`");
@@ -2266,6 +2280,7 @@ fn cmd_impact(
 }
 
 fn cmd_flow(symbol: &str, depth: usize, limit: usize, format_str: &str, path: &Path) -> Result<()> {
+    validate_format(format_str, &["text", "mermaid"])?;
     let conn = open_existing_index(path)?;
     let relations = store::graph_flow(&conn, symbol, depth, limit)?;
     if format_str.eq_ignore_ascii_case("mermaid") {
@@ -2300,6 +2315,14 @@ fn cmd_export_index(output: Option<&Path>, path: &Path) -> Result<()> {
     );
     if let Some(head) = report.head {
         println!("  indexed at {head}");
+    }
+    if report.redacted > 0 {
+        println!(
+            "  {} masked known secrets in {} chunk(s) before writing — your local index \
+             still holds the plaintext; fix the source and re-run `tokenix index`",
+            "warning:".yellow(),
+            format_num(report.redacted as i64)
+        );
     }
     println!("  Commit it, and teammates run: tokenix import-index");
     Ok(())
@@ -2388,6 +2411,7 @@ fn cmd_graph(format_str: &str, top: usize, output: Option<&str>, path: &Path) ->
     if top == 0 {
         anyhow::bail!("--top must be >= 1");
     }
+    validate_format(format_str, &["text", "json", "dot"])?;
     let conn = open_existing_index(path)?;
     let edges = store::load_all_graph_edges(&conn)?;
     let body = if format_str.eq_ignore_ascii_case("json") {
@@ -4916,6 +4940,17 @@ fn format_ts(ts: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_format_is_an_error_not_a_silent_text_fallback() {
+        assert!(validate_format("mermaid", &["text", "mermaid"]).is_ok());
+        assert!(validate_format("MERMAID", &["text", "mermaid"]).is_ok());
+        let err = validate_format("mermiad", &["text", "html", "mermaid", "json"])
+            .expect_err("a typo must not fall through to the text branch and exit 0");
+        let msg = err.to_string();
+        assert!(msg.contains("mermiad"), "{msg}");
+        assert!(msg.contains("text | html | mermaid | json"), "{msg}");
+    }
 
     #[test]
     fn guard_hook_turns_a_panic_into_a_recoverable_error() {

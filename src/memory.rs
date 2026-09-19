@@ -157,11 +157,7 @@ fn scope_path(repo_root: &Path, scope: PreferenceScope) -> Result<PathBuf> {
 }
 
 fn tokenix_home() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("TOKENIX_HOME") {
-        return Ok(PathBuf::from(path));
-    }
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not resolve home directory"))?;
-    Ok(home.join(".tokenix"))
+    crate::store::global_dir().ok_or_else(|| anyhow!("Could not resolve home directory"))
 }
 
 fn append_scope_lines(out: &mut String, path: &Path) -> Result<()> {
@@ -356,7 +352,9 @@ fn reject_sensitive_preference(text: &str) -> Result<()> {
         "secret",
         "-----begin",
     ];
-    if sensitive.iter().any(|needle| lower.contains(needle)) {
+    if sensitive.iter().any(|needle| lower.contains(needle))
+        || crate::secrets_scan::redact_known_secrets(text).1
+    {
         return Err(anyhow!(
             "Preference looks sensitive; refusing to store secrets in memory"
         ));
@@ -412,6 +410,22 @@ mod tests {
     fn rejects_sensitive_preferences() {
         let err = reject_sensitive_preference("use api_key abc for tests").unwrap_err();
         assert!(err.to_string().contains("sensitive"));
+    }
+
+    #[test]
+    fn rejects_bare_credentials_without_a_keyword() {
+        // Preferences are re-injected into every future session's context, so a
+        // pasted key would leak far beyond the file it is stored in.
+        for text in [
+            "deploy staging with AKIAIOSFODNN7EXAMPLE", // gitleaks:allow AWS docs example key
+            "clone via ghp_0123456789abcdefghijklmnopqrstuvwxyzAB", // gitleaks:allow synthetic test fixture
+        ] {
+            assert!(
+                reject_sensitive_preference(text).is_err(),
+                "stored a credential: {text}"
+            );
+        }
+        assert!(reject_sensitive_preference("prefer Biome over ESLint").is_ok());
     }
 
     #[test]

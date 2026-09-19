@@ -36,6 +36,9 @@ pub struct ExportReport {
     pub embeddings: i64,
     pub model: String,
     pub head: Option<String>,
+    /// Chunks whose content had a known secret masked on the way into the
+    /// snapshot. Non-zero means the *index* still holds the plaintext.
+    pub redacted: usize,
 }
 
 #[derive(Debug)]
@@ -89,6 +92,7 @@ pub fn export(repo_root: &Path, output: Option<&Path>) -> Result<ExportReport> {
     let staging = output.with_extension(format!("staging-{}", std::process::id()));
     let _ = std::fs::remove_file(&staging);
 
+    let redacted;
     let (files, chunks, embeddings, model, head) = {
         let conn = Connection::open(&source)
             .with_context(|| format!("cannot open index at {}", source.display()))?;
@@ -99,6 +103,13 @@ pub fn export(repo_root: &Path, output: Option<&Path>) -> Result<ExportReport> {
         // The embedding cache is a local accelerator keyed by content hash; it
         // roughly doubles the file and the recipient rebuilds it as they index.
         staged.execute_batch("DELETE FROM embedding_cache;")?;
+        // `chunks.content` is verbatim source unless the repo opted into
+        // `[index] redact_secrets`, which defaults to false. A snapshot is a
+        // file this tool tells you to commit and share, so it gets scrubbed on
+        // the way out regardless of that setting — a hardcoded key inside a
+        // gzipped blob nobody diffs is exactly how one gets published.
+        // The `chunks_au` trigger keeps chunks_fts consistent with the update.
+        redacted = redact_staged_chunks(&staged)?;
         store::set_meta(&staged, "snapshot_version", crate::VERSION)?;
         store::set_meta(
             &staged,
@@ -132,7 +143,29 @@ pub fn export(repo_root: &Path, output: Option<&Path>) -> Result<ExportReport> {
         embeddings,
         model,
         head,
+        redacted,
     })
+}
+
+/// Mask known secrets in every chunk of the staged snapshot copy. Returns the
+/// number of chunks changed. Operates on the staging database only — the live
+/// index is untouched.
+fn redact_staged_chunks(staged: &Connection) -> Result<usize> {
+    let rows: Vec<(i64, String)> = {
+        let mut stmt = staged.prepare("SELECT id, content FROM chunks")?;
+        let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        mapped.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    let mut changed = 0usize;
+    let mut update = staged.prepare("UPDATE chunks SET content = ?1 WHERE id = ?2")?;
+    for (id, content) in rows {
+        let (clean, hit) = crate::secrets_scan::redact_known_secrets(&content);
+        if hit {
+            update.execute(rusqlite::params![clean, id])?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
 }
 
 /// Restore a snapshot as this repo's index.

@@ -47,7 +47,7 @@ fn dedup_min_tokens() -> usize {
 }
 
 fn base_dir() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(".tokenix"))
+    crate::store::global_dir()
 }
 
 fn blob_dir() -> Option<PathBuf> {
@@ -309,6 +309,14 @@ pub struct RecentRead {
     pub content_key: String,
     pub ts: f64,
     pub tokens: usize,
+    /// Agent session that received the bytes. `read_marker` asserts the content
+    /// "is already in this conversation", and `~/.tokenix/recent_reads.json` is
+    /// machine-wide with a 15-minute TTL — so without this a *second* session
+    /// started minutes later was told it already had a file it had never seen,
+    /// and the content was withheld. Empty for agents that send no session id;
+    /// those compare equal to each other and keep the previous behavior.
+    #[serde(default)]
+    pub session: String,
 }
 
 fn load_reads() -> Vec<RecentRead> {
@@ -333,13 +341,13 @@ fn save_reads(entries: &[RecentRead]) {
     }
 }
 
-/// Record that `path` was read with this exact content.
-pub fn remember_read(path: &str, content: &str, tokens: usize, ts: f64) {
+/// Record that `path` was read with this exact content, by `session`.
+pub fn remember_read(path: &str, content: &str, tokens: usize, ts: f64, session: &str) {
     let Some(content_key) = stash(content) else {
         return;
     };
     let mut reads = load_reads();
-    reads.retain(|r| r.path != path);
+    reads.retain(|r| !(r.path == path && r.session == session));
     reads.insert(
         0,
         RecentRead {
@@ -347,6 +355,7 @@ pub fn remember_read(path: &str, content: &str, tokens: usize, ts: f64) {
             content_key,
             ts,
             tokens,
+            session: session.to_string(),
         },
     );
     reads.truncate(RECENT_CAP);
@@ -355,14 +364,20 @@ pub fn remember_read(path: &str, content: &str, tokens: usize, ts: f64) {
 
 /// Was this exact file content already delivered recently? Returns the entry
 /// whose stash key recovers the bytes.
-pub fn find_recent_read(path: &str, content: &str, tokens: usize, now: f64) -> Option<RecentRead> {
+pub fn find_recent_read(
+    path: &str,
+    content: &str,
+    tokens: usize,
+    now: f64,
+    session: &str,
+) -> Option<RecentRead> {
     if !read_dedup_enabled() || tokens < read_min_tokens() {
         return None;
     }
     let key = digest(content);
     let hit = load_reads()
         .into_iter()
-        .find(|r| r.path == path && r.content_key == key)?;
+        .find(|r| r.path == path && r.content_key == key && r.session == session)?;
     if now - hit.ts > read_ttl_secs() {
         return None;
     }
@@ -395,6 +410,7 @@ mod tests {
             content_key: "deadbeef".to_string(),
             ts: 0.0,
             tokens: 3000,
+            session: String::new(),
         };
         let marker = read_marker(&hit, 300.0);
         assert!(marker.contains("src/main.rs"));
@@ -405,7 +421,32 @@ mod tests {
 
     #[test]
     fn small_reads_are_never_suppressed() {
-        assert!(find_recent_read("x.rs", "fn main() {}", 5, 0.0).is_none());
+        assert!(find_recent_read("x.rs", "fn main() {}", 5, 0.0, "").is_none());
+    }
+
+    #[test]
+    fn a_read_is_only_suppressed_for_the_session_that_received_it() {
+        // `read_marker` claims the file "is already in this conversation".
+        // `recent_reads.json` is machine-wide with a 15-minute TTL, so a second
+        // session started minutes later used to be handed that claim — and the
+        // file content withheld — for bytes it had never seen.
+        let content = "x".repeat(20_000);
+        let path = format!(
+            "{}/session-scope-{}.rs",
+            std::env::temp_dir().to_string_lossy().replace('\\', "/"),
+            std::process::id()
+        );
+        let tokens = crate::chunker::count_tokens(&content);
+        remember_read(&path, &content, tokens, 0.0, "session-A");
+
+        assert!(
+            find_recent_read(&path, &content, tokens, 10.0, "session-A").is_some(),
+            "the session that received the bytes must still be deduped"
+        );
+        assert!(
+            find_recent_read(&path, &content, tokens, 10.0, "session-B").is_none(),
+            "a different conversation never received these bytes"
+        );
     }
 
     #[test]

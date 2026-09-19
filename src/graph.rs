@@ -888,7 +888,7 @@ fn extract_references_tree_sitter(content: &str, path: &str) -> Option<Vec<Strin
             }
         }
 
-        for i in 0..node.child_count() as u32 {
+        for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
                 traverse(child, content, refs);
             }

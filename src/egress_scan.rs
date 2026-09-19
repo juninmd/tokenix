@@ -107,9 +107,8 @@ fn load_host_list(
     file_name: &str,
     select: impl FnOnce(HostListFile) -> Vec<String>,
 ) -> HashSet<String> {
-    let path = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".tokenix")
+    let path = crate::store::global_dir()
+        .unwrap_or_else(|| PathBuf::from(".tokenix"))
         .join(file_name);
     match std::fs::read_to_string(&path) {
         Ok(content) => match toml::from_str::<HostListFile>(&content) {
@@ -132,9 +131,8 @@ fn host_matches(list: &HashSet<String>, host: &str) -> bool {
 }
 
 fn user_rules_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".tokenix")
+    crate::store::global_dir()
+        .unwrap_or_else(|| PathBuf::from(".tokenix"))
         .join("egress-rules")
 }
 
@@ -204,6 +202,16 @@ fn bundled_rules() -> Vec<Rule> {
     compile_rules(specs)
 }
 
+/// `<repo>/.tokenix/egress-rules/*.toml`, only once `tokenix trust` approved
+/// them (see `secrets_scan::repo_rule_specs`).
+fn repo_rule_specs(root: &Path) -> Vec<RuleSpec> {
+    let mut specs = Vec::new();
+    if crate::filters::repo_inputs_trusted(root) {
+        read_toml_dir(&root.join(".tokenix").join("egress-rules"), &mut specs);
+    }
+    specs
+}
+
 fn load_rules() -> Vec<Rule> {
     let mut specs = Vec::new();
     for file in BundledRules::iter() {
@@ -214,10 +222,17 @@ fn load_rules() -> Vec<Rule> {
         }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let local = crate::store::find_project_root(&cwd)
-        .join(".tokenix")
-        .join("egress-rules");
-    read_toml_dir(&local, &mut specs);
+    // Repo-local rules are add-only: see `secrets_scan::reject_overrides`. A
+    // repo that could redefine a bundled id would blank its own exfiltration
+    // detection.
+    let repo_specs = repo_rule_specs(&crate::store::find_project_root(&cwd));
+    let allowed = crate::secrets_scan::reject_overrides(
+        specs.iter().map(|s| s.id.clone()),
+        repo_specs,
+        |s: &RuleSpec| s.id.as_str(),
+        "egress",
+    );
+    specs.extend(allowed);
     read_toml_dir(&user_rules_dir(), &mut specs);
     compile_rules(specs)
 }
@@ -781,6 +796,25 @@ pub fn run(opts: Options) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn untrusted_repo_rules_are_not_loaded() {
+        // An added `.+` rule would flag every destination and bury real egress.
+        let dir = std::env::temp_dir().join(format!("tokenix-er-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".tokenix").join("egress-rules")).unwrap();
+        let rule = "[[rules]]\nid = \"repo-everything\"\npattern = \".+\"\n";
+        assert_eq!(parse_rule_specs(rule).len(), 1, "fixture must parse");
+        std::fs::write(dir.join(".tokenix/egress-rules/wide.toml"), rule).unwrap();
+
+        let specs = repo_rule_specs(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            specs.is_empty(),
+            "untrusted repo rules must wait for `tokenix trust`: {:?}",
+            specs.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+    }
 
     fn test_rules() -> Vec<Rule> {
         bundled_rules()

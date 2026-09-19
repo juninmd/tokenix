@@ -62,9 +62,8 @@ struct Rule {
 
 /// User rule overrides live here; same `[[rules]]` shape as the bundled defaults.
 fn user_rules_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".tokenix")
+    crate::store::global_dir()
+        .unwrap_or_else(|| PathBuf::from(".tokenix"))
         .join("secret-rules")
 }
 
@@ -89,7 +88,9 @@ fn read_toml_dir(dir: &Path, out: &mut Vec<RuleSpec>) {
 }
 
 /// Compile rule specs into matchers. Later specs with a duplicate `id` override
-/// earlier ones (so user/local rules win over bundled defaults of the same name).
+/// earlier ones, so the *user's* rules win over bundled defaults of the same
+/// name. Repo-local specs never reach here with a colliding id — `load_rules`
+/// filters them through `reject_overrides` first.
 /// An invalid regex is skipped with a stderr warning rather than aborting the scan.
 fn compile_rules(specs: Vec<RuleSpec>) -> Vec<Rule> {
     let mut order: Vec<String> = Vec::new();
@@ -140,8 +141,13 @@ fn bundled_rules() -> Vec<Rule> {
 }
 
 /// Effective ruleset: bundled defaults, then `<repo>/.tokenix/secret-rules/`,
-/// then `~/.tokenix/secret-rules/` — later sources override earlier ids and add
-/// new ones, so the generic bundled rule keeps running last unless overridden.
+/// then `~/.tokenix/secret-rules/`.
+///
+/// The user's own directory may override a bundled id — that is their machine
+/// and their call. The **repo's** directory may only *add* ids: a cloned
+/// repository redefining `aws-secret-access-key` with a regex that never
+/// matches would silently blind the scanner that exists to catch its own
+/// leaked credentials. Collisions are dropped with a warning, not honoured.
 fn load_rules() -> Vec<Rule> {
     let mut specs = Vec::new();
     for file in BundledRules::iter() {
@@ -152,12 +158,54 @@ fn load_rules() -> Vec<Rule> {
         }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let local = crate::store::find_project_root(&cwd)
-        .join(".tokenix")
-        .join("secret-rules");
-    read_toml_dir(&local, &mut specs);
+    let repo_specs = repo_rule_specs(&crate::store::find_project_root(&cwd));
+    let allowed = reject_overrides(
+        specs.iter().map(|s| s.id.clone()),
+        repo_specs,
+        |s: &RuleSpec| s.id.as_str(),
+        "secret",
+    );
+    specs.extend(allowed);
     read_toml_dir(&user_rules_dir(), &mut specs);
     compile_rules(specs)
+}
+
+/// `<repo>/.tokenix/secret-rules/*.toml`, only once `tokenix trust` approved
+/// them: an added `.+` rule would make the PostToolUse redactor blank every
+/// tool result in that repo.
+fn repo_rule_specs(root: &Path) -> Vec<RuleSpec> {
+    let mut specs = Vec::new();
+    if crate::filters::repo_inputs_trusted(root) {
+        read_toml_dir(&root.join(".tokenix").join("secret-rules"), &mut specs);
+    }
+    specs
+}
+
+/// Keep only the `candidates` whose id is not already taken by a `protected`
+/// rule. Shared with the egress scanner, which has its own `RuleSpec` shape —
+/// both load repo-controlled rule files and both must stay add-only.
+pub(crate) fn reject_overrides<T>(
+    protected_ids: impl Iterator<Item = String>,
+    candidates: Vec<T>,
+    id_of: impl Fn(&T) -> &str,
+    kind: &str,
+) -> Vec<T> {
+    let known: std::collections::HashSet<String> = protected_ids.collect();
+    candidates
+        .into_iter()
+        .filter(|spec| {
+            let id = id_of(spec);
+            if known.contains(id) {
+                eprintln!(
+                    "{} ignoring repo-local {kind} rule '{id}': a repository may add rules, \
+                     not redefine a built-in id",
+                    "warning:".yellow(),
+                );
+                return false;
+            }
+            true
+        })
+        .collect()
 }
 
 /// One credential hit. The raw `secret` is retained so `--reveal` can print it;
@@ -1161,6 +1209,71 @@ mod tests {
         assert!(rules_hit.contains(&"aws-access-key-id"), "{rules_hit:?}");
         assert!(rules_hit.contains(&"llm-api-key"), "{rules_hit:?}");
         assert!(rules_hit.contains(&"github-token"), "{rules_hit:?}");
+    }
+
+    #[test]
+    fn repo_rules_may_add_but_never_redefine_a_builtin_id() {
+        // A cloned repo that could redefine `aws-secret-access-key` with a
+        // regex matching nothing would blind the scanner on its own leaked
+        // credentials, silently and with a clean exit code.
+        let bundled = bundled_rules();
+        let victim = bundled
+            .iter()
+            .find(|r| r.id == "aws-secret-access-key")
+            .map(|r| r.id.clone())
+            .expect("bundled rule set must ship aws-secret-access-key");
+
+        let repo_specs = vec![
+            RuleSpec {
+                id: victim.clone(),
+                pattern: r"\bTOKENIX_NEVER_MATCHES_THIS\b".to_string(),
+                capture: 0,
+                min_entropy: 0.0,
+            },
+            RuleSpec {
+                id: "repo-own-token".to_string(),
+                pattern: r"\bZZ_[A-Z]{8}\b".to_string(),
+                capture: 0,
+                min_entropy: 0.0,
+            },
+        ];
+        let protected = bundled.iter().map(|r| r.id.clone());
+        let kept = reject_overrides(
+            protected,
+            repo_specs,
+            |s: &RuleSpec| s.id.as_str(),
+            "secret",
+        );
+
+        let kept_ids: Vec<&str> = kept.iter().map(|s| s.id.as_str()).collect();
+        assert!(
+            !kept_ids.contains(&victim.as_str()),
+            "repo must not redefine a bundled id: {kept_ids:?}"
+        );
+        assert!(
+            kept_ids.contains(&"repo-own-token"),
+            "repo must still be able to add its own rule: {kept_ids:?}"
+        );
+    }
+
+    #[test]
+    fn untrusted_repo_rules_are_not_loaded() {
+        // Add-only is not enough: an added rule matching everything would make
+        // the PostToolUse redactor blank every tool result in that repo.
+        let dir = std::env::temp_dir().join(format!("tokenix-sr-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".tokenix").join("secret-rules")).unwrap();
+        let rule = "[[rules]]\nid = \"repo-everything\"\npattern = \".+\"\n";
+        assert_eq!(parse_rule_specs(rule).len(), 1, "fixture must parse");
+        std::fs::write(dir.join(".tokenix/secret-rules/wide.toml"), rule).unwrap();
+
+        let specs = repo_rule_specs(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            specs.is_empty(),
+            "untrusted repo rules must wait for `tokenix trust`: {:?}",
+            specs.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]
