@@ -79,3 +79,8 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Test (fast; model-gated tests skipped)
         run: cargo test --locked
+      # release.yml ships a `--features directml` binary; without this step an
+      # ort API rename only surfaced when the release build broke on main.
+      - name: Clippy (directml feature)
+        if: runner.os == 'Windows'
+        run: cargo clippy --locked --features directml -- -D warnings
