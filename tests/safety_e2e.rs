@@ -76,6 +76,38 @@ fn repo_filters_apply_only_after_trust_and_an_edit_revokes_it() {
     );
 }
 
+/// A filter's regex can fail to compile — e.g. a look-ahead the `regex` crate
+/// does not support — without ever blocking the command it matches. But the
+/// stderr warning that fires on every matching run has to say *where to look*,
+/// or the only way to find the offending filter is grepping every `*.toml`
+/// under `~/.tokenix/filters` by hand. Pins the `tokenix doctor` pointer added
+/// to `invalid_regex_warning`: fails on the bare `tokenix: ignoring invalid
+/// filter regex "...": ...` message, passes once it names the fix.
+#[test]
+fn invalid_user_filter_regex_still_names_the_fix() {
+    let sb = Sandbox::new("bad-user-regex");
+    std::fs::create_dir_all(sb.home.join("filters")).unwrap();
+    std::fs::write(
+        sb.home.join("filters").join("regression.toml"),
+        "[filters.regression]\nmatch_command = \"^echo regression-marker\"\n\
+         replace_patterns = [[\"[0-9]{2,4}(?=x)\", \"<n>\"]]\n",
+    )
+    .unwrap();
+
+    let run = sb.tokenix(&["run", "echo regression-marker 42x"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        run.stdout.contains("regression-marker"),
+        "an unusable rule must not swallow the command's real output: {}",
+        run.stdout
+    );
+    assert!(
+        run.stderr.contains("tokenix doctor"),
+        "the warning must point at the command that finds the offending filter: {}",
+        run.stderr
+    );
+}
+
 #[test]
 fn memory_roundtrips_notes_and_refuses_credentials() {
     let sb = Sandbox::new("memory");

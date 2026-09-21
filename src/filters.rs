@@ -816,6 +816,20 @@ pub fn semantic_filter_issues(f: &FilterDef) -> Vec<String> {
     issues
 }
 
+/// Message for a pattern that failed to compile. Bundled filters can never hit
+/// this path (`every_bundled_filter_regex_compiles` gates the corpus in CI), so
+/// in practice the pattern always came from a user or repo-local filter file —
+/// point at the one command that inventories those (`tokenix doctor`, via
+/// `regex_issues`) instead of just naming the pattern, or the only way to find
+/// which file it came from is grepping every `*.toml` under `~/.tokenix/filters`
+/// and `<repo>/.tokenix/filters` by hand.
+fn invalid_regex_warning(pattern: &str, err: &regex::Error) -> String {
+    format!(
+        "tokenix: ignoring invalid filter regex {pattern:?}: {err} \
+         (run `tokenix doctor` to see which filter file this is in)"
+    )
+}
+
 /// Process-wide compiled-regex cache. The hook is a short-lived process that
 /// evaluates hundreds of `match_command` patterns against a handful of
 /// candidate strings — each pattern must compile at most once per process,
@@ -833,7 +847,7 @@ fn cached_regex(pattern: &str) -> Option<Regex> {
             // Warn once per pattern (the cache makes this idempotent). A typo'd
             // regex used to make the filter silently no-op with no diagnostic
             // anywhere — the file loaded "successfully" and simply never worked.
-            eprintln!("tokenix: ignoring invalid filter regex {pattern:?}: {e}");
+            eprintln!("{}", invalid_regex_warning(pattern, &e));
             None
         }
     };
@@ -2835,6 +2849,29 @@ TOML filter:"#
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An invalid filter regex (e.g. a look-ahead the `regex` crate rejects)
+    /// must not vanish with just the bare parse error: the warning has to name
+    /// the escape hatch (`tokenix doctor`), or an agent facing the raw stderr
+    /// has no way to find which of the hundreds of possible filter files it
+    /// came from — see `invalid_regex_warning`'s doc comment.
+    #[test]
+    fn invalid_regex_warning_points_at_doctor() {
+        // Built at runtime, not passed as a literal: a literal invalid pattern
+        // trips clippy's own `invalid_regex` lint, which is the point of this
+        // test — the pattern is deliberately one the `regex` crate rejects.
+        let pattern: String = ["[a-z]{2,3}", "(?=x)"].concat();
+        let err = Regex::new(&pattern).unwrap_err();
+        let msg = invalid_regex_warning(&pattern, &err);
+        assert!(
+            msg.contains("tokenix doctor"),
+            "warning must point to the remediation command: {msg:?}"
+        );
+        assert!(
+            msg.contains("[a-z]{2,3}(?=x)"),
+            "warning must still name the offending pattern: {msg:?}"
+        );
+    }
 
     #[test]
     fn test_load_local_filters() {
