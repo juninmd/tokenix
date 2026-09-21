@@ -415,12 +415,19 @@ the raw blob was stashed and the key thrown away, so the single output most wort
 recovering — a big first result the caps just trimmed — had no way back except
 re-running the command. Failures take the tee path instead.
 
-Cross-call dedup is scoped to the **project** and to `TOKENIX_DEDUP_TTL`
-(default 3600 s, `recall::reusable`). The index lives in `~/.tokenix` and outlives
-both the session and the checkout, and the marker claims the output "is already in
-this conversation" — a hit from another repository, or from yesterday, cannot
-honour that. Entries written before scoping existed deserialize with an empty
-`project` and therefore never match. Re-read suppression keeps its own 900 s TTL
+Cross-call dedup is scoped to the **project**, the **command**, and to
+`TOKENIX_DEDUP_TTL` (default 3600 s, `recall::reusable`). The index lives in
+`~/.tokenix` and outlives both the session and the checkout, and the marker
+claims the output "is already in this conversation" — a hit from another
+repository, or from yesterday, cannot honour that. The command scope exists
+because the compressed-output digest alone is not a safe match key: two
+genuinely different commands can produce byte-identical compressed text, and
+matching on content only made the marker name the *wrong* command while the
+real command's own raw output was never stashed (`remember()` is skipped on a
+dedup hit) — `tokenix retrieve` then handed back bytes from a command the
+agent never ran. Entries written before either scoping field existed
+deserialize with an empty `project`/`command_key` and therefore never match.
+Re-read suppression keeps its own 900 s TTL
 (`TOKENIX_READ_DEDUP_TTL`) and is scoped to the agent's `session_id` for the same
 reason: `read_marker` claims the file "is already in this conversation", and
 `recent_reads.json` is machine-wide, so a second session started minutes later

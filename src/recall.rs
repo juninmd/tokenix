@@ -85,6 +85,18 @@ pub struct RecentOutput {
     /// their origin is unknown.
     #[serde(default)]
     pub project: String,
+    /// Digest of the full (untruncated) command string that produced this
+    /// entry. The marker asserts "identical to `<command>`, unchanged" — that
+    /// claim is about a *rerun*, not about two unrelated commands whose
+    /// compressed output happens to coincide. Matching on content alone let a
+    /// second, different command collapse into a first command's stash: the
+    /// marker named the wrong command, and — because `remember()` is skipped
+    /// on a dedup hit — the second command's own raw output was never stashed
+    /// at all, so `tokenix retrieve` handed back bytes from a command the
+    /// agent never ran. Empty on entries written before this field existed,
+    /// which therefore never match — same precedent as `project` above.
+    #[serde(default)]
+    pub command_key: String,
 }
 
 fn load_index() -> Vec<RecentOutput> {
@@ -186,6 +198,7 @@ pub fn remember(
             ts,
             tokens,
             project: project.to_string(),
+            command_key: digest(command),
         },
     );
     index.truncate(RECENT_CAP);
@@ -196,25 +209,37 @@ pub fn remember(
 /// May this remembered output stand in for a fresh run right now?
 ///
 /// Kept separate from the disk lookup so the rule is testable without touching
-/// `~/.tokenix`. Two conditions, both required by what the marker asserts —
-/// "identical to an earlier run, unchanged": the entry must come from the same
-/// checkout, and it must be recent enough that the earlier copy is plausibly
-/// still in the conversation.
-fn reusable(entry: &RecentOutput, project: &str, now: f64) -> bool {
-    entry.project == project && now - entry.ts <= dedup_ttl_secs()
+/// `~/.tokenix`. Three conditions, all required by what the marker asserts —
+/// "identical to `<command>` from earlier, unchanged": the entry must be a
+/// rerun of the *same command* (not just a content coincidence — two unrelated
+/// commands can legitimately produce byte-identical output), it must come from
+/// the same checkout, and it must be recent enough that the earlier copy is
+/// plausibly still in the conversation.
+fn reusable(entry: &RecentOutput, project: &str, command_key: &str, now: f64) -> bool {
+    entry.project == project
+        && entry.command_key == command_key
+        && now - entry.ts <= dedup_ttl_secs()
 }
 
-/// Look for an earlier call whose output was byte-identical to `content`.
-/// The hit is verified against the stored blob, so a hash collision or a pruned
-/// blob degrades to "no match" instead of a wrong collapse.
+/// Look for an earlier call of the *same command* whose output was
+/// byte-identical to `content`. The hit is verified against the stored blob,
+/// so a hash collision or a pruned blob degrades to "no match" instead of a
+/// wrong collapse.
 ///
-/// Scoped to `project` and to `dedup_ttl_secs()` because the marker asserts the
-/// output "is already in this conversation". The index lives in `~/.tokenix` and
-/// outlives both the session and the repository: without these two filters a
-/// `git status` from another checkout, or from yesterday, could be collapsed into
-/// a pointer to output the agent had never seen.
+/// Scoped to `command`, `project`, and `dedup_ttl_secs()` because the marker
+/// asserts the output "is already in this conversation, from `<command>`".
+/// The index lives in `~/.tokenix` and outlives both the session and the
+/// repository: without the project/TTL filters a `git status` from another
+/// checkout, or from yesterday, could be collapsed into a pointer to output
+/// the agent had never seen. Without the command filter, two *different*
+/// commands whose output happens to match byte-for-byte would collapse into
+/// each other — the marker would name the wrong command, and the real
+/// command's own raw output would never get stashed (its `remember()` call is
+/// skipped on a dedup hit), leaving `tokenix retrieve` to hand back bytes from
+/// a command the agent never ran.
 pub fn find_identical(
     project: &str,
+    command: &str,
     content: &str,
     tokens: usize,
     now: f64,
@@ -223,9 +248,10 @@ pub fn find_identical(
         return None;
     }
     let key = digest(content);
+    let command_key = digest(command);
     let mut hit = load_index()
         .into_iter()
-        .find(|e| e.key == key && reusable(e, project, now))?;
+        .find(|e| e.key == key && reusable(e, project, &command_key, now))?;
     if retrieve(&hit.key).as_deref() != Some(content) {
         return None;
     }
@@ -474,6 +500,7 @@ mod tests {
             ts: 1000.0,
             tokens: 420,
             project: "/repo".to_string(),
+            command_key: digest("git status"),
         };
         let marker = dedup_marker(&hit, 1120.0);
         assert!(marker.contains("git status"));
@@ -490,6 +517,7 @@ mod tests {
             ts: 0.0,
             tokens: 1,
             project: "/repo".to_string(),
+            command_key: digest("c"),
         };
         assert!(dedup_marker(&hit, 30.0).contains("30s ago"));
         assert!(dedup_marker(&hit, 600.0).contains("10m ago"));
@@ -499,7 +527,7 @@ mod tests {
     #[test]
     fn short_output_is_never_deduped() {
         // Below the threshold the marker would cost more than the output.
-        assert!(find_identical("/repo", "tiny", 3, 0.0).is_none());
+        assert!(find_identical("/repo", "git status", "tiny", 3, 0.0).is_none());
     }
 
     #[test]
@@ -514,16 +542,23 @@ mod tests {
             ts: 1_000.0,
             tokens: 900,
             project: "/repo-a".to_string(),
+            command_key: digest("git status"),
         };
         let ttl = dedup_ttl_secs();
+        let command_key = digest("git status");
 
-        assert!(reusable(&entry, "/repo-a", 1_000.0 + ttl / 2.0));
+        assert!(reusable(
+            &entry,
+            "/repo-a",
+            &command_key,
+            1_000.0 + ttl / 2.0
+        ));
         assert!(
-            !reusable(&entry, "/repo-b", 1_000.0),
+            !reusable(&entry, "/repo-b", &command_key, 1_000.0),
             "another checkout must not reuse this entry"
         );
         assert!(
-            !reusable(&entry, "/repo-a", 1_000.0 + ttl + 1.0),
+            !reusable(&entry, "/repo-a", &command_key, 1_000.0 + ttl + 1.0),
             "past the TTL the earlier output is no longer assumed to be in context"
         );
     }
@@ -539,7 +574,71 @@ mod tests {
             ts: 1_000.0,
             tokens: 900,
             project: String::new(),
+            command_key: digest("git status"),
         };
-        assert!(!reusable(&legacy, "/repo-a", 1_000.0));
+        assert!(!reusable(
+            &legacy,
+            "/repo-a",
+            &digest("git status"),
+            1_000.0
+        ));
+    }
+
+    #[test]
+    fn entries_written_before_command_scoping_never_match() {
+        // `command_key` deserializes to "" for an index written by an older
+        // build (pre this fix). Those entries never asserted which command
+        // produced them under the new rule, so they must not be reused either
+        // — same precedent as the `project` field above.
+        let legacy = RecentOutput {
+            key: "k".to_string(),
+            raw_key: "k".to_string(),
+            command: "git status".to_string(),
+            ts: 1_000.0,
+            tokens: 900,
+            project: "/repo-a".to_string(),
+            command_key: String::new(),
+        };
+        assert!(!reusable(
+            &legacy,
+            "/repo-a",
+            &digest("git status"),
+            1_000.0
+        ));
+    }
+
+    /// Pins the cross-command collision bug: two *different* commands whose
+    /// output happens to be byte-identical must not dedupe into each other.
+    /// Before this fix, `find_identical` matched on content alone, so the
+    /// second (different) command's marker named the *first* command, and —
+    /// because `remember()` is skipped on a dedup hit — the second command's
+    /// own raw output was never stashed, so `tokenix retrieve` on the
+    /// advertised key handed back bytes from a command that was never run.
+    #[test]
+    fn different_commands_with_identical_output_never_dedupe() {
+        let entry = RecentOutput {
+            key: "same-content-key".to_string(),
+            raw_key: "raw-of-command-a".to_string(),
+            command: "echo command-a-payload".to_string(),
+            ts: 0.0,
+            tokens: 900,
+            project: "/repo-a".to_string(),
+            command_key: digest("echo command-a-payload"),
+        };
+
+        assert!(
+            !reusable(
+                &entry,
+                "/repo-a",
+                &digest("printf '%s' command-b-payload"),
+                5.0
+            ),
+            "a different command must never be told its output is 'unchanged' \
+             from an unrelated command's stash, even with byte-identical content"
+        );
+        assert!(
+            reusable(&entry, "/repo-a", &digest("echo command-a-payload"), 5.0),
+            "the same command must still dedupe against its own earlier run"
+        );
     }
 }
