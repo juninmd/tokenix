@@ -18,6 +18,10 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   check-version:
     runs-on: ubuntu-latest
@@ -112,12 +116,11 @@ jobs:
           echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
           echo "Next release: $TAG ($BUMP from $PREVIOUS_TAG)"
 
-  # CI gate — fmt, clippy and tests must pass before ANYTHING is tagged, released
-  # or published. bump-version (and therefore build, release and publish-crate,
-  # which all depend on it) needs this job, so a red pipeline never produces a
-  # GitHub release or a crates.io push.
-  ci:
-    name: CI gate
+  # CI gates — fmt/clippy and tests run in parallel before ANYTHING is tagged,
+  # released or published. bump-version needs both jobs, so a red pipeline never
+  # produces a GitHub release or a crates.io push.
+  ci-lint:
+    name: CI lint (fmt & clippy)
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
@@ -136,6 +139,42 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-ci-lint-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ci-lint-cargo-
+            ${{ runner.os }}-cargo-lint-
+            ${{ runner.os }}-ci-gate-cargo-
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  ci-test:
+    name: CI test
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
@@ -147,18 +186,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-ci-gate-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-ci-test-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-ci-test-cargo-
             ${{ runner.os }}-ci-gate-cargo-
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+            ${{ runner.os }}-cargo-
       - name: Test
         run: cargo test --locked
 
   bump-version:
-    needs: [check-version, ci]
+    needs: [check-version, ci-lint, ci-test]
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -438,7 +475,9 @@ jobs:
           key: ${{ runner.os }}-publish-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-publish-cargo-
+            ${{ runner.os }}-ci-test-cargo-
             ${{ runner.os }}-ci-gate-cargo-
+            ${{ runner.os }}-cargo-
 
       # Exchanges the workflow's OIDC identity for a short-lived (30 min) crates.io
       # token. Requires a one-time Trusted Publisher config on crates.io

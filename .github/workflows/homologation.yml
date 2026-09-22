@@ -15,6 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: 1
 
 # Least privilege: homologation only builds and tests; no write scope needed.
