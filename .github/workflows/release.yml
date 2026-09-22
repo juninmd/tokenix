@@ -120,7 +120,7 @@ jobs:
     name: CI gate
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
@@ -226,16 +226,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Build on 22.04 (glibc 2.35) not 24.04 (glibc 2.39): a dynamically
-          # linked binary inherits the build host's glibc floor, so 24.04 made
-          # binaries fail with "GLIBC_2.39 not found" on Ubuntu 22.04 / Debian 12
-          # / RHEL 9. 2.35 covers all current mainstream distros. (musl static is
-          # not an option — fastembed's ONNX Runtime is glibc C++.)
+          # Fastembed 7 / ORT 2.0.0-rc.13 prebuilts require glibc 2.38+ (__isoc23_strtoll)
+          # and GCC 13+ libstdc++ (_M_replace_cold), provided by Ubuntu 24.04.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+            os: ubuntu-latest
             artifact: tokenix-linux-x86_64
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04-arm
+            os: ubuntu-24.04-arm
             artifact: tokenix-linux-aarch64
           - target: x86_64-apple-darwin
             os: macos-latest

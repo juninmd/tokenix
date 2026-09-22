@@ -1,56 +1,64 @@
 <div align="center">
-  <img src=".github/prints/logo.jpg" alt="tokenix logo" style="max-height: 450px;" />
+  <img src=".github/prints/logo.jpg" alt="tokenix logo" width="560" style="max-width: 100%; border-radius: 14px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);" />
 
-  <h3>Give your AI coding agent the part of the repo it needs — not the whole file.</h3>
+  <h1>tokenix</h1>
 
-  <p>Local semantic search · symbol graph · compact reads · deterministic output filters · hooks for every major agent</p>
+  <p><strong>Give your AI coding agent the exact slice of the repo it needs — not the whole file.</strong></p>
+
+  <p><em>Local ONNX semantic search · Tree-sitter symbol graph · Surgical reads · Deterministic output filters · Native agent hooks</em></p>
 
   <p>
-    <a href="https://github.com/juninmd/tokenix/releases"><img src="https://img.shields.io/github/v/release/juninmd/tokenix?style=flat-square&color=orange&label=release" alt="Latest Release" /></a>
-    <a href="https://crates.io/crates/tokenix"><img src="https://img.shields.io/crates/v/tokenix?style=flat-square&color=orange" alt="crates.io" /></a>
-    <a href="https://crates.io/crates/tokenix"><img src="https://img.shields.io/crates/d/tokenix?style=flat-square&color=orange&label=downloads" alt="crates.io downloads" /></a>
+    <a href="https://github.com/juninmd/tokenix/releases"><img src="https://img.shields.io/github/v/release/juninmd/tokenix?style=flat-square&color=ff7700&label=release" alt="Latest Release" /></a>
+    <a href="https://crates.io/crates/tokenix"><img src="https://img.shields.io/crates/v/tokenix?style=flat-square&color=e05d44&label=crates.io" alt="crates.io" /></a>
+    <a href="https://crates.io/crates/tokenix"><img src="https://img.shields.io/crates/d/tokenix?style=flat-square&color=blue&label=downloads" alt="crates.io downloads" /></a>
     <a href="https://github.com/juninmd/tokenix/stargazers"><img src="https://img.shields.io/github/stars/juninmd/tokenix?style=flat-square&color=yellow" alt="GitHub stars" /></a>
     <a href="https://github.com/juninmd/tokenix/actions/workflows/rust.yml"><img src="https://img.shields.io/github/actions/workflow/status/juninmd/tokenix/rust.yml?branch=main&style=flat-square&label=CI" alt="CI" /></a>
     <a href="https://scorecard.dev/viewer/?uri=github.com/juninmd/tokenix"><img src="https://img.shields.io/ossf-scorecard/github.com/juninmd/tokenix?style=flat-square&label=scorecard" alt="OpenSSF Scorecard" /></a>
     <a href="https://github.com/juninmd/tokenix/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License" /></a>
-    <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust" alt="Built with Rust" /></a>
-    <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platforms" />
+    <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/built%20with-Rust%20(MSRV%201.90)-dea584?style=flat-square&logo=rust" alt="Built with Rust" /></a>
+    <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-555555?style=flat-square" alt="Platforms" />
   </p>
 
   <p>
-    <a href="#-quick-start">Quick start</a> ·
-    <a href="#-using-tokenix-day-to-day">Guide</a> ·
-    <a href="#-agent-guides">Agent guides</a> ·
-    <a href="#-dashboard">Dashboard</a> ·
-    <a href="#-command-reference">Commands</a> ·
-    <a href="#-troubleshooting">Troubleshooting</a>
+    <a href="#-quick-start"><b>⚡ Quick start</b></a> ·
+    <a href="#-features-at-a-glance"><b>✨ Highlights</b></a> ·
+    <a href="#-using-tokenix-day-to-day"><b>🧭 Guide</b></a> ·
+    <a href="#-agent-guides"><b>🔌 Agent guides</b></a> ·
+    <a href="#-dashboard"><b>🖥️ Dashboard</b></a> ·
+    <a href="#-command-reference"><b>📖 Commands</b></a> ·
+    <a href="#-troubleshooting"><b>❓ Troubleshooting</b></a>
   </p>
 </div>
 
 ---
 
-**tokenix** is a single Rust binary that sits between your AI coding agent and your
-repository. It indexes the code locally, and when the agent reaches for a 1,500-line
-file or a command that prints 10,000 lines, tokenix hands back the outline, the one
-function, or the lines that matter.
+> ⚡ **tokenix** is a high-performance Rust CLI that sits directly between your AI coding agent and your repository. It indexes your codebase locally, and when an agent reaches for an unwieldy 1,500-line file or triggers a verbose 10,000-line test run, tokenix hands back only the symbol outline, targeted function, or pertinent errors.
 
-```
-Without tokenix:  Read(src/hook.rs)        → 1,518 lines → 13,498 tokens
-With tokenix:     tokenix read src/hook.rs → symbol outline →  2,395 tokens
+```text
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Without tokenix:  Read(src/hook.rs)        → 1,518 lines  → 13,498 tokens (bloats context) │
+│ With tokenix:     tokenix read src/hook.rs → outline      →  2,395 tokens (82.3% saved!)   │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Works with** Claude Code, OpenAI Codex CLI, GitHub Copilot, Antigravity, OpenCode, and any MCP client.
-- **Runs locally.** No Ollama, no Python, no server to host. The embedding model downloads once from Hugging Face; after that, search and interception run offline.
-- **Fails open.** If tokenix breaks, is missing its index or does not recognise a tool call, the agent's call goes through untouched.
+## ✨ Features at a glance
+
+| ⚡ Local Semantic Retrieval | 🌲 Tree-sitter Symbol Graph | ✂️ Deterministic Output Filters |
+|:---|:---|:---|
+| Fast on-device ONNX embeddings with int8 quantized cosine search and SQLite FTS5 hybrid RRF ranking. Zero external services, zero latency. | Deep AST symbol parsing with PageRank importance, bidirectional caller/callee tracing, and diff blast-radius impact analysis. | 528+ bundled filters stripping noisy build/test logs without masking real errors or exit codes. |
+
+| 🛡️ Zero-Trust Security | 📉 Measured Token Savings | 🔌 Universal Agent Compatibility |
+|:---|:---|:---|
+| In-flight credential masking on hooks and failure tees. Repo-controlled filters are isolated behind SHA-256 trust gates. | 40% to 90% real payload reduction before prompt-cache writes. 100% fail-open contract (always exit 0 on errors). | Native hook support for Claude Code, OpenAI Codex, GitHub Copilot, Antigravity, OpenCode, and any MCP client. |
 
 ---
 
 ## ⚡ Quick start
 
-Four steps, about three minutes. Step 2 is the only slow one, because the first
-index downloads the embedding model (~130 MB, once).
+> [!NOTE]
+> Four simple steps, about three minutes. Step 2 is the only one that takes a moment initially, as the first index downloads the compact local embedding model (~130 MB, cached permanently).
 
-**1. Install the binary**
+### 1️⃣ Install the binary
 
 ```bash
 # macOS / Linux: pick the asset for your platform (table below)
@@ -64,14 +72,14 @@ irm https://github.com/juninmd/tokenix/releases/latest/download/tokenix-windows-
 .\tokenix.exe install-binary      # copies itself to a per-user bin dir on PATH
 ```
 
-**2. Index your repository**
+### 2️⃣ Index your repository
 
 ```bash
 cd your-project
 tokenix index .
 ```
 
-**3. Connect your agent**
+### 3️⃣ Connect your agent
 
 ```bash
 tokenix install-hook --tool claude-code   # or codex · copilot · antigravity · opencode · all
@@ -80,7 +88,7 @@ tokenix install-hook --tool claude-code   # or codex · copilot · antigravity �
 Each agent is wired a little differently. The [agent guides](#-agent-guides) cover
 what gets installed, what gets intercepted and how to undo it.
 
-**4. Check that it works**
+### 4️⃣ Verify that it works
 
 ```bash
 tokenix doctor     # binary, model, GPU, daemon, filters
@@ -88,7 +96,7 @@ tokenix            # dashboard → Stats tab: which agents are wired
 tokenix gain       # after a session: hook calls, intercepts, tokens removed
 ```
 
-Then work with your agent as usual. You do not need to change your prompts.
+Then work with your agent as usual. You do not need to change your prompts or habits.
 
 <details>
 <summary><b>All install options</b> (platform assets, crates.io, source, verification)</summary>
@@ -119,10 +127,8 @@ install` re-resolves dependencies and can pull an incompatible `ureq` into the
 `ort-sys` build script. Building from source needs a recent stable
 [Rust](https://www.rust-lang.org/tools/install) toolchain (MSRV 1.90).
 
-> **🤖 For AI agents installing tokenix:** use the prebuilt binary, not `cargo
-> install`. It needs no toolchain and no compile step. Fetch the version-less URL
-> and **never hard-code a version**. Detect the platform, download the matching
-> asset, mark it executable, then run `tokenix doctor`.
+> [!TIP]
+> **For AI agents installing tokenix:** Use the prebuilt binary, not `cargo install`. It needs no toolchain and no compile step. Fetch the version-less URL and **never hard-code a version**. Detect the platform, download the matching asset, mark it executable, then run `tokenix doctor`.
 
 </details>
 
@@ -371,7 +377,8 @@ has the full evidence review.
 
 ## 📖 Command reference
 
-> `tokenix --help` prints the same catalog with examples; `tokenix <command> --help` has every flag.
+> [!TIP]
+> Run `tokenix --help` for the full catalog with usage examples; `tokenix <command> --help` displays all flags and parameters for any specific command.
 
 ### 🤖 Commands agents use
 
