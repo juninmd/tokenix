@@ -1,0 +1,12 @@
+# Test fixtures for tokenix's own secret scanner and credential redactor tests.
+# These synthetic strings test redaction and entropy scoring and are not live credentials.
+
+# generic_rule_flags_high_entropy_assignment in src/secrets_scan.rs
+01d83acb419d669b8f8de0235f6079cb42a6ad0e:src/secrets_scan.rs:generic-api-key:833
+
+# pem_redaction_removes_the_key_body_not_just_the_marker in src/secrets_scan.rs
+0ff3562eded07d238dde950a218a109e1c70967d:src/secrets_scan.rs:private-key:1049
+
+# redaction_covers_header_variants_and_url_userinfo in src/conversation_audit.rs
+a6827ede89e2548965b210aaf8f72535e32ebbd6:src/conversation_audit.rs:generic-api-key:1003
+a6827ede89e2548965b210aaf8f72535e32ebbd6:src/conversation_audit.rs:generic-api-key:1004
