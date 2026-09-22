@@ -137,6 +137,25 @@ struct ProjectConfig {
     index: IndexConfig,
     #[serde(default)]
     hook: HookConfig,
+    #[serde(default)]
+    update: UpdateConfig,
+}
+
+/// `[update]` section of `.tokenix.toml`. All fields optional.
+#[derive(serde::Deserialize, Default, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateConfig {
+    /// Enable background check for new versions (default true).
+    pub check: Option<bool>,
+    /// Auto-install updates in background when available (default true).
+    pub auto_install: Option<bool>,
+    /// Check interval in hours (default 24).
+    pub interval_hours: Option<u64>,
+}
+
+/// The resolved `[update]` config for the current project (defaults if absent).
+pub fn update_config() -> UpdateConfig {
+    load_project_config().map(|c| c.update).unwrap_or_default()
 }
 
 /// `[hook]` section of `.tokenix.toml`. All fields optional; defaults live at
