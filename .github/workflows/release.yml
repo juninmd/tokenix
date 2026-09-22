@@ -234,9 +234,6 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             artifact: tokenix-linux-aarch64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            artifact: tokenix-macos-x86_64
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact: tokenix-macos-aarch64
@@ -392,7 +389,6 @@ jobs:
           files: |
             artifacts/tokenix-linux-x86_64
             artifacts/tokenix-linux-aarch64
-            artifacts/tokenix-macos-x86_64
             artifacts/tokenix-macos-aarch64
             artifacts/tokenix-windows-x86_64.exe
             artifacts/tokenix-windows-x86_64-directml.exe

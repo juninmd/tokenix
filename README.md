@@ -107,11 +107,12 @@ Every release ships one binary per platform. The version-less
 | Platform | Asset |
 |---|---|
 | Linux x86_64 | `tokenix-linux-x86_64` |
-| Linux arm64 | `tokenix-linux-aarch64` |
-| macOS x86_64 | `tokenix-macos-x86_64` |
-| macOS arm64 (Apple Silicon) | `tokenix-macos-aarch64` |
+| Linux arm64 (aarch64) | `tokenix-linux-aarch64` |
+| macOS (Apple Silicon / aarch64) | `tokenix-macos-aarch64` |
 | Windows x86_64 | `tokenix-windows-x86_64.exe` |
 | Windows x86_64 (GPU / DirectML) | `tokenix-windows-x86_64-directml.exe` |
+
+*(Intel macOS `x86_64` users can install from source using `cargo install tokenix --locked`)*
 
 Each release also publishes `sha256sums.txt` and SLSA build-provenance attestations.
 [SECURITY.md](SECURITY.md) explains how to verify a download.
