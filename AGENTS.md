@@ -94,6 +94,18 @@ alone), so the fingerprint pins the batch shape too.
 | `docshot.rs` | `#[cfg(test)]` only — renders README screenshots as SVG, never ships in the binary |
 | `tui.rs` | Ratatui shell — the only human interface |
 | `daemon.rs` | Background embedding server, port 47392, capability-token authenticated |
+| `self_update.rs` | Self-update from GitHub releases: SHA-256 validation, atomic binary replacement, background auto-update and update caching |
+
+The interactive CLI startup triggers the background update check before the bare
+TUI opens. It is limited to terminal, human commands: no network or cache work in
+hooks, MCP, query/pack/read, piped output or CI. The check is cached for 24 hours;
+the installed binary changes for the next invocation. A development binary under
+`target/` may check and notify but must never silently overwrite the per-user
+binary. Keep this behavior documented in `README.md`.
+The GitHub token belongs only on the release API request, whose client forbids
+redirects. Asset URLs must be HTTPS links to this repo's release path and use an
+unauthenticated client; both the asset and `sha256sums.txt` are checked before a
+binary replacement.
 
 ## SQLite schema
 
@@ -484,8 +496,8 @@ tokenix gain --history
 
 ## Project config
 
-`.tokenix.toml` (or `tokenix.toml`) at the project root, `[hook]` and `[index]`
-sections. Both are `deny_unknown_fields`, and a parse error is reported on stderr
+`.tokenix.toml` (or `tokenix.toml`) at the project root, `[hook]`, `[index]`,
+and `[update]` sections. All are `deny_unknown_fields`, and a parse error is reported on stderr
 instead of silently falling back to defaults — the previous `.ok()` swallow left
 users convinced a misspelled `read_min_lines` was active. A bad config still
 degrades to defaults rather than failing the hook.

@@ -404,6 +404,7 @@ has the full evidence review.
 | `tokenix export-index` / `import-index` | Write or load a shareable, secret-masked snapshot (`.tokenix/index.db.gz`) |
 | `tokenix install-hook` / `remove-hook` | Install or remove agent hooks and instructions (default `--tool all`) |
 | `tokenix install-binary` | Copy the running executable to a per-user bin dir and put it on PATH |
+| `tokenix update` | Check for, install, or toggle automatic updates from GitHub releases (`--check`, `--auto`, `--enable-auto`, `--disable-auto`) |
 | `tokenix doctor` | Diagnose embedding backend, GPU, model cache, daemon, filter inventory and filter config |
 | `tokenix serve` / `stop` | Start or stop the background embedding daemon |
 | `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |
@@ -415,6 +416,7 @@ has the full evidence review.
 | `tokenix tokenmap` | Directory tree weighted by token count, heaviest paths first (`--format html`) |
 | `tokenix benchmark` | Reproducible token-reduction and retrieval-quality benchmark, vanilla vs tokenix (`--json`) |
 | `tokenix filter list\|active\|generate\|record\|verify` | Browse, generate, record and golden-test output filters |
+
 | `tokenix prompt-audit` | Audit MCP/tool token weight across agents (`--agent`, `--recommend`, `--profile-impact`, `--json`) |
 | `tokenix session-audit` | Health check: index, hook events, MCP/tool weight, cache hygiene |
 | `tokenix conversation-audit` | Scan local conversation histories for token-waste patterns (`--generate` prints ready-to-run filter commands) |
@@ -424,6 +426,15 @@ has the full evidence review.
 | `tokenix cycles` | Detect circular dependencies (Tarjan's SCC) |
 | `tokenix rebuild-graph` | Rebuild graph tables from existing chunks without re-embedding |
 | `tokenix generate-ignores` | Write `.gitignore` entries for tokenix artifacts |
+
+When you open `tokenix` in a terminal, it checks GitHub releases in the background
+on a 24-hour cache and automatically installs a newer release by default.
+The current command keeps running; the new version is used on the next launch.
+Downloads use the release's SHA-256 checksums; a GitHub token, when set, is sent
+only to the releases API, never to asset downloads.
+Checks are skipped in CI, piped commands, hooks, and agent-facing commands. Set
+`TOKENIX_AUTO_UPDATE=notify` to receive update hints without installing, or run
+`tokenix update --disable-auto` to turn off automatic installation.
 
 ### ⚙ Internal (called by hooks, not by hand)
 
@@ -457,6 +468,8 @@ prints plain text instead of opening the dashboard.
 | `TOKENIX_DEDUP=0` · `TOKENIX_DEDUP_MIN_TOKENS` · `TOKENIX_DEDUP_TTL` | Cross-call dedup of identical output (defaults: on, 200 tokens, 3600 s; scoped to the project) |
 | `TOKENIX_READ_DEDUP=0` · `TOKENIX_READ_DEDUP_TTL` · `TOKENIX_READ_DEDUP_MIN_TOKENS` | Re-read suppression (defaults: on, 900 s, 1500 tokens; scoped to the agent session) |
 | `TOKENIX_TEE=0` | Do not tee failed-command output to `~/.tokenix/tee/` |
+| `TOKENIX_AUTO_UPDATE=1\|0\|notify` | Control auto-update behavior (`1`/`install` auto-updates in background; `0` disables checks) |
+| `TOKENIX_NO_UPDATE=1` | Disable all update checks and auto-updates |
 
 **`tokenix index`:** `--force/-f`, `--no-embed`, `--cpu-profile <low|default|max>`,
 `--jobs N`, `--embed-batch N` (default 16 CPU / 64 GPU), `--if-stale`, `--path/-p`,

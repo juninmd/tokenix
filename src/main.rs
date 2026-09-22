@@ -30,6 +30,7 @@ mod query;
 mod recall;
 mod recordings;
 mod secrets_scan;
+mod self_update;
 mod snapshot;
 mod store;
 mod transcripts;
@@ -40,6 +41,7 @@ mod usage;
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use ui::format_num;
 
@@ -628,6 +630,40 @@ enum Commands {
     },
     /// Copy this executable to a per-user bin directory on PATH (global install)
     InstallBinary,
+    /// Check for or install updates from GitHub releases
+    #[command(alias = "self-update", alias = "upgrade")]
+    Update {
+        /// Check if an update is available without downloading or installing
+        #[arg(short, long)]
+        check: bool,
+        /// Force update or reinstall even if already at latest version
+        #[arg(short, long)]
+        force: bool,
+        /// Automatically update if a new version is available
+        #[arg(long)]
+        auto: bool,
+        /// Enable automatic background updates
+        #[arg(long, conflicts_with = "disable_auto")]
+        enable_auto: bool,
+        /// Disable automatic background updates
+        #[arg(long, conflicts_with = "enable_auto")]
+        disable_auto: bool,
+        /// Output update status in JSON format
+        #[arg(long)]
+        json: bool,
+        /// On Windows, install the DirectML GPU-accelerated variant
+        #[arg(long)]
+        directml: bool,
+        /// Target a specific version tag (e.g. "v0.64.1") instead of latest
+        #[arg(long)]
+        version: Option<String>,
+        /// Custom destination path for the installed binary
+        #[arg(long)]
+        target_path: Option<PathBuf>,
+        /// Internal: run background check and optional auto-update
+        #[arg(long, hide = true)]
+        check_background: bool,
+    },
     /// Show index statistics
     Stats {
         #[arg(short, long, default_value = ".")]
@@ -1153,6 +1189,27 @@ fn hook_command(tokenix_bin: &str, subcommand: &str) -> String {
     format!("\"{}\" {}", tokenix_bin, subcommand)
 }
 
+fn should_check_update_on_start(command: Option<&Commands>) -> bool {
+    !matches!(
+        command,
+        Some(
+            Commands::Update { .. }
+                | Commands::Hook
+                | Commands::HookAntigravity
+                | Commands::HookPost
+                | Commands::Mcp { .. }
+                | Commands::McpProxy { .. }
+                | Commands::Run { .. }
+                | Commands::Query { .. }
+                | Commands::Grep { .. }
+                | Commands::Context { .. }
+                | Commands::Pack { .. }
+                | Commands::Read { .. }
+                | Commands::Retrieve { .. }
+        )
+    )
+}
+
 fn main() -> Result<()> {
     // Build the command via the factory so the wordmark banner and grouped
     // command catalog (both runtime-colored) can be attached as styled help.
@@ -1179,6 +1236,13 @@ fn main() -> Result<()> {
     // honors, so a single check covers both the flag and self-exec'd children.
     if cli.no_tui {
         set_env_override(tui::NO_TUI_ENV, "1");
+    }
+
+    // Only foreground, human invocations trigger the background updater. Hooks,
+    // MCP and commands used by agents must keep their latency and output contract.
+    // In particular, do this before the bare command enters the TUI.
+    if std::io::stdout().is_terminal() && should_check_update_on_start(cli.command.as_ref()) {
+        self_update::maybe_print_update_hint();
     }
 
     // Bare `tokenix`: launch the interactive launcher on a TTY (one cursor menu
@@ -1410,6 +1474,29 @@ fn main() -> Result<()> {
         }
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
         Commands::InstallBinary => cmd_install_binary(),
+        Commands::Update {
+            check,
+            force,
+            auto,
+            enable_auto,
+            disable_auto,
+            json,
+            directml,
+            version,
+            target_path,
+            check_background,
+        } => self_update::run_update(self_update::UpdateOptions {
+            check,
+            force,
+            auto,
+            enable_auto,
+            disable_auto,
+            json,
+            directml,
+            version: version.clone(),
+            target_path: target_path.clone(),
+            check_background,
+        }),
         Commands::RemoveHook { tool, local } => cmd_remove_hook(tool, local),
         Commands::Stats { path } => cmd_stats(&path),
         Commands::Tokenmap {
@@ -4847,6 +4934,7 @@ fn help_catalog() -> String {
             "Wrap an MCP server and compress its tool results",
         ),
         ("install-binary", "", "Install the tokenix binary on PATH"),
+        ("update", "", "Check for or install a new tokenix release"),
         (
             "generate-ignores",
             "",
@@ -4940,6 +5028,23 @@ fn format_ts(ts: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_check_runs_for_interactive_cli_but_not_agent_or_update_commands() {
+        assert!(should_check_update_on_start(None));
+        assert!(should_check_update_on_start(Some(&parse(&[
+            "tokenix", "stats"
+        ]))));
+        assert!(!should_check_update_on_start(Some(&parse(&[
+            "tokenix", "hook"
+        ]))));
+        assert!(!should_check_update_on_start(Some(&parse(&[
+            "tokenix", "query", "example"
+        ]))));
+        assert!(!should_check_update_on_start(Some(&parse(&[
+            "tokenix", "update", "--check"
+        ]))));
+    }
 
     #[test]
     fn unknown_format_is_an_error_not_a_silent_text_fallback() {
