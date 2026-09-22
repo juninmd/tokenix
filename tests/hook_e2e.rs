@@ -210,6 +210,76 @@ fn repeated_successful_command_dedupes_and_stays_retrievable() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Regression for the cross-command collision: two *different* commands whose
+/// output is byte-identical must never dedupe into each other. Before the fix,
+/// `find_identical` matched purely on the compressed-output digest, ignoring
+/// which command produced it — so the second (different) command's marker
+/// claimed its output was "identical to" the *first* command, and because
+/// `remember()` is skipped on a dedup hit, the second command's own output was
+/// never stashed. `tokenix retrieve` on the advertised key then handed back
+/// bytes that belonged to a command the agent never ran.
+#[test]
+fn different_commands_with_identical_output_never_dedupe_e2e() {
+    let dir = std::env::temp_dir().join(format!(
+        "tokenix-cross-cmd-dedup-e2e-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp cwd");
+    let home = isolated_home();
+
+    // Same fixture text, produced by two genuinely different commands.
+    let marker_word = format!("CROSSCMDFIXTURE{}", std::process::id());
+    let payload: String = (0..90)
+        .map(|i| format!("{marker_word}-{i}-filler-text-for-the-token-floor"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (command_a, command_b) = if cfg!(windows) {
+        (
+            format!("echo {payload}"),
+            format!("printf '%s\\n' '{payload}'"),
+        )
+    } else {
+        (
+            format!("echo '{payload}'"),
+            format!("printf '%s\\n' '{payload}'"),
+        )
+    };
+
+    let run = |cmd: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+            .args(["run", cmd])
+            .current_dir(&dir)
+            .env("TOKENIX_HOME", &home)
+            .output()
+            .expect("tokenix run");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let first = run(&command_a);
+    assert!(
+        first.contains(&marker_word) && !first.contains("output identical to"),
+        "first run (command A) must show real output, not a marker: {}",
+        &first[..first.len().min(200)]
+    );
+
+    // Command B is a different command with the same output text. It must
+    // show real output too — never a marker claiming it matches command A.
+    let second = run(&command_b);
+    assert!(
+        !second.contains("output identical to"),
+        "a different command must never be deduped against an unrelated \
+         command's stash just because their output coincides: {}",
+        &second[..second.len().min(300)]
+    );
+    assert!(
+        second.contains(&marker_word),
+        "command B's real output must still be shown: {}",
+        &second[..second.len().min(200)]
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An uncapped content grep must come back with a `head_limit` injected — and
 /// it must work from a temp cwd with no index at all, since the stale-index gate
 /// exits before the tool handlers.

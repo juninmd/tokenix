@@ -2502,9 +2502,13 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
     let mut deduped_against: Option<String> = None;
     if output.status.success() {
         let stdout_tokens = count_tokens(&stdout_compressed);
-        if let Some(hit) =
-            crate::recall::find_identical(&project, &stdout_compressed, stdout_tokens, now_ts())
-        {
+        if let Some(hit) = crate::recall::find_identical(
+            &project,
+            command_str,
+            &stdout_compressed,
+            stdout_tokens,
+            now_ts(),
+        ) {
             let marker = crate::recall::dedup_marker(&hit, now_ts());
             // Never trade a short output for a longer marker.
             if marker.len() < stdout_compressed.len() {
