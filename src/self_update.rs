@@ -129,7 +129,6 @@ pub fn get_target_asset_name(directml: bool) -> Result<&'static str> {
     match (os, arch) {
         ("linux", "x86_64") => Ok("tokenix-linux-x86_64"),
         ("linux", "aarch64") => Ok("tokenix-linux-aarch64"),
-        ("macos", "x86_64") => Ok("tokenix-macos-x86_64"),
         ("macos", "aarch64") => Ok("tokenix-macos-aarch64"),
         ("windows", "x86_64") => {
             if directml || cfg!(feature = "directml") {
