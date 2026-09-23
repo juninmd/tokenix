@@ -76,6 +76,41 @@ fn repo_filters_apply_only_after_trust_and_an_edit_revokes_it() {
     );
 }
 
+/// A `;`-joined compound command runs each segment as an independent process
+/// whose raw stdout is concatenated into one blob before any filter sees it.
+/// Matching an *allowlist* filter (`keep_lines_matching`) off one inner
+/// segment (a real bundled example: `git diff --stat` at the tail of `cat
+/// notes.yaml; git diff --stat …`, whose `git-diffstat.toml` keeps only lines
+/// that look like a diffstat) and then running it over the *whole* blob
+/// silently drops the other segments' output — with no cap marker, since
+/// that path is a filter match, not the token-budget cap. Reproduced here
+/// with a synthetic allowlist filter that only targets the tail segment:
+/// before the fix, its `keep_lines_matching` ate the head segment's line too.
+#[test]
+fn sequential_compound_command_does_not_let_the_tail_segments_allowlist_filter_eat_the_head_segment(
+) {
+    let sb = Sandbox::new("sequential-compound");
+    sb.write(
+        ".tokenix/filters/tail-only.toml",
+        "[filters.tail-only]\nmatch_command = \"^echo tail-marker\"\nkeep_lines_matching = [\"^tail-marker$\"]\n",
+    );
+    assert_eq!(sb.tokenix(&["trust"]).code, 0);
+
+    let cmd = "echo head-marker; echo tail-marker";
+    let out = sb.tokenix(&["run", cmd]).stdout;
+    assert!(
+        out.contains("head-marker"),
+        "an allowlist filter matched off the tail segment must not eat the \
+         head segment's output: {out}"
+    );
+    assert!(out.contains("tail-marker"), "{out}");
+
+    // Sanity check the filter is real: applied directly (single segment, no
+    // sequential operator) it still keeps only the allowed line.
+    let direct = sb.tokenix(&["run", "echo tail-marker"]).stdout;
+    assert_eq!(direct.trim(), "tail-marker", "{direct}");
+}
+
 /// A filter's regex can fail to compile — e.g. a look-ahead the `regex` crate
 /// does not support — without ever blocking the command it matches. But the
 /// stderr warning that fires on every matching run has to say *where to look*,

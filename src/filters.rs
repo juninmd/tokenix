@@ -1765,6 +1765,63 @@ pub fn get_effective_command(cmd: &str) -> String {
     current
 }
 
+/// True when `cmd` contains a top-level `;`, `&&`, or `||` (quote- and
+/// escape-aware) — the operators that run independent commands whose raw
+/// stdout gets concatenated into one blob, as opposed to `|`, which chains
+/// commands into the single stream the last stage produces.
+pub(crate) fn has_sequential_operator(cmd: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut escaping = false;
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if escaping {
+            escaping = false;
+            i += 1;
+            continue;
+        }
+        if c == '\\' {
+            escaping = true;
+            i += 1;
+            continue;
+        }
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '\'' || c == '"' {
+            quote = Some(c);
+            i += 1;
+            continue;
+        }
+        if c == ';' {
+            return true;
+        }
+        let next = chars.get(i + 1).copied();
+        if (c == '&' && next == Some('&')) || (c == '|' && next == Some('|')) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// True when `f.match_command` matches `cmd` (or its effective form) taken as
+/// a whole, as opposed to matching only because one inner `;`/`&&`/`||`
+/// segment happens to look like the filter's target. Used to tell "this
+/// filter really is what the compound command is running" from "this filter
+/// just resolved off a tail segment".
+pub(crate) fn filter_matches_whole_command(cmd: &str, match_command: &str) -> bool {
+    let Some(re) = cached_regex(match_command) else {
+        return false;
+    };
+    re.is_match(cmd) || re.is_match(&get_effective_command(cmd))
+}
+
 /// Split a shell command into segments on the operators `&&`, `||`, `;` and the
 /// pipe `|`, quote- and escape-aware. Operators are recognized regardless of
 /// surrounding whitespace, so `a;b` and `a ; b` segment identically.
