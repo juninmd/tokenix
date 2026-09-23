@@ -108,9 +108,23 @@ fn compress_bash_output_for_stream(
     let base = compress_output(s);
     let lines: Vec<&str> = base.lines().collect();
 
+    // A `;`/`&&`/`||` compound concatenates the stdout of independent
+    // commands into one blob before any of the checks below see it. Every
+    // `is_*_command(cmd)` detector here only looks at a prefix of `cmd`
+    // (e.g. `cmd.trim().starts_with("git log ")`), which still matches a
+    // compound like `git log -3 && echo done` because the FIRST chained
+    // command satisfies it — even though the compressor it selects then
+    // runs its content-specific, often lossy rewrite over every later
+    // chained command's output too. Gate cmd-based detection on the command
+    // being a single, non-compound invocation; content-shape detectors
+    // (`is_cargo_output`, `is_git_log`) are unaffected since they inspect
+    // what the output actually looks like, not the command string.
+    let is_compound =
+        crate::filters::has_sequential_operator(&crate::filters::get_effective_command(cmd));
+
     // `cargo metadata`: a single huge JSON blob compact_json cannot shrink — summarize
     // it to package count + workspace members instead of letting 500k tokens through.
-    if is_cargo_metadata_command(cmd) {
+    if !is_compound && is_cargo_metadata_command(cmd) {
         let out = compress_cargo_metadata(&base);
         if out.len() < base.len() {
             return out;
@@ -119,7 +133,7 @@ fn compress_bash_output_for_stream(
 
     // `cargo tree`: highly repetitive (subtrees repeat, marked `(*)`); collapse to the
     // unique crate set.
-    if is_cargo_tree_command(cmd) {
+    if !is_compound && is_cargo_tree_command(cmd) {
         let out = compress_cargo_tree(&lines);
         if out.len() < base.len() {
             return out;
@@ -127,7 +141,7 @@ fn compress_bash_output_for_stream(
     }
 
     // Plain grep: strip the indentation in matched content and group by file.
-    if is_grep_command(cmd) {
+    if !is_compound && is_grep_command(cmd) {
         let out = compress_grep(&lines);
         if out.len() < base.len() {
             return out;
@@ -135,7 +149,7 @@ fn compress_bash_output_for_stream(
     }
 
     // ps: keep the header + busiest processes by %CPU.
-    if is_ps_command(cmd) {
+    if !is_compound && is_ps_command(cmd) {
         let out = compress_ps(&lines);
         if out.len() < base.len() {
             return out;
@@ -150,28 +164,28 @@ fn compress_bash_output_for_stream(
         }
     }
 
-    if is_path_listing_command(cmd) {
+    if !is_compound && is_path_listing_command(cmd) {
         let listing_out = compress_path_listing(&lines);
         if listing_out.len() < base.len() {
             return listing_out;
         }
     }
 
-    if is_git_status_command(cmd) {
+    if !is_compound && is_git_status_command(cmd) {
         let status_out = compress_git_status(&lines);
         if status_out.len() < base.len() {
             return status_out;
         }
     }
 
-    if is_git_log_command(cmd) || is_git_log(&lines) {
+    if (!is_compound && is_git_log_command(cmd)) || is_git_log(&lines) {
         let log_out = compress_git_log(&lines);
         if log_out.len() < base.len() {
             return log_out;
         }
     }
 
-    if is_git_diff_command(cmd) {
+    if !is_compound && is_git_diff_command(cmd) {
         let diff_out = compress_git_diff(&lines);
         if diff_out.len() < base.len() {
             return diff_out;
@@ -179,7 +193,7 @@ fn compress_bash_output_for_stream(
     }
 
     // Kubernetes: compress kubectl output
-    if is_kubectl_command(cmd) {
+    if !is_compound && is_kubectl_command(cmd) {
         let kube_out = compress_kubectl(&lines);
         if kube_out.len() < base.len() {
             return kube_out;
@@ -187,7 +201,7 @@ fn compress_bash_output_for_stream(
     }
 
     // npm/yarn/pnpm/bun: compress package manager output
-    if is_pkg_manager_command(cmd) {
+    if !is_compound && is_pkg_manager_command(cmd) {
         let pkg_out = compress_pkg_manager(&lines);
         if pkg_out.len() < base.len() {
             return pkg_out;
@@ -195,7 +209,7 @@ fn compress_bash_output_for_stream(
     }
 
     // Terraform: compress terraform output
-    if is_terraform_command(cmd) {
+    if !is_compound && is_terraform_command(cmd) {
         let tf_out = compress_terraform(&lines);
         if tf_out.len() < base.len() {
             return tf_out;
@@ -203,7 +217,7 @@ fn compress_bash_output_for_stream(
     }
 
     // Docker compose: compress compose output
-    if is_docker_compose_command(cmd) {
+    if !is_compound && is_docker_compose_command(cmd) {
         let dc_out = compress_docker_compose(&lines);
         if dc_out.len() < base.len() {
             return dc_out;
@@ -211,7 +225,7 @@ fn compress_bash_output_for_stream(
     }
 
     // Make/ninja/cmake: compress build system output
-    if is_build_command(cmd) {
+    if !is_compound && is_build_command(cmd) {
         let build_out = compress_build(&lines);
         if build_out.len() < base.len() {
             return build_out;
@@ -3335,6 +3349,33 @@ test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
         }
         let out = compress_bash_output("", &input);
         assert!(out.contains("lines omitted"), "should truncate: {}", out);
+    }
+
+    #[test]
+    fn bash_compound_command_keeps_later_chained_segments() {
+        // Regression: `git log --oneline -3` chained with `&&` to two more
+        // commands. `is_git_log_command(cmd)` only checks whether `cmd`
+        // starts with "git log " — true here even though `cmd` is actually
+        // `git log --oneline -3 && echo marker-A && echo marker-B`. Without
+        // the compound guard, `compress_git_log` ran over the ENTIRE
+        // concatenated stdout, kept only the 3 oneline-commit-shaped lines
+        // it found, and silently dropped the echoed markers from the later
+        // chained commands — with no `[tokenix: N bytes not shown]` marker,
+        // since this is a content compressor, not the token-budget cap path.
+        let cmd = "git log --oneline -3 && echo marker-A && echo marker-B";
+        let input = "\
+1a2b3c4 fix: something
+5d6e7f8 chore: another
+9a0b1c2 feat: third
+marker-A
+marker-B
+";
+        let out = compress_bash_output(cmd, input);
+        assert!(
+            out.contains("marker-A") && out.contains("marker-B"),
+            "compound command must not silently drop later chained segments: {}",
+            out
+        );
     }
 
     #[test]

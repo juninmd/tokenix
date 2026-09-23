@@ -1816,10 +1816,15 @@ pub(crate) fn has_sequential_operator(cmd: &str) -> bool {
 /// filter really is what the compound command is running" from "this filter
 /// just resolved off a tail segment".
 pub(crate) fn filter_matches_whole_command(cmd: &str, match_command: &str) -> bool {
+    let effective = get_effective_command(cmd);
+    // `is_match` is a prefix match: `^git\s+log\b` would accept `git log -3 && echo done`.
+    if has_sequential_operator(&effective) {
+        return false;
+    }
     let Some(re) = cached_regex(match_command) else {
         return false;
     };
-    re.is_match(cmd) || re.is_match(&get_effective_command(cmd))
+    re.is_match(cmd) || re.is_match(&effective)
 }
 
 /// Split a shell command into segments on the operators `&&`, `||`, `;` and the
@@ -3538,6 +3543,28 @@ expected = \"\"
             split_on_operators(r#"echo "a;b" && x"#),
             vec![r#"echo "a;b""#, "x"]
         );
+    }
+
+    #[test]
+    fn filter_matches_whole_command_rejects_compound_prefix_match() {
+        // Regression: `^git\s+log\b` is start-anchored only. Against a
+        // `&&`-chained compound command, `Regex::is_match` still reports
+        // true because it matches the FIRST segment's prefix, not because
+        // the filter is really "the whole command". That falsely told the
+        // caller an allowlist filter could safely run over the entire
+        // concatenated output of every chained sub-command.
+        let compound = "git log --oneline -3 && echo marker-A";
+        assert!(!filter_matches_whole_command(compound, r"^git\s+log\b"));
+
+        // A genuinely single (non-compound) command still matches.
+        let single = "git log --oneline -3";
+        assert!(filter_matches_whole_command(single, r"^git\s+log\b"));
+
+        // A `cd` prefix is not a second command: the effective command still matches.
+        assert!(filter_matches_whole_command(
+            "cd repo && git log --oneline -3",
+            r"^git\s+log\b"
+        ));
     }
 
     #[test]
