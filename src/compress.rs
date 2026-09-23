@@ -64,14 +64,32 @@ fn compress_bash_output_for_stream(
     // User-defined TOML filters take priority over built-in heuristics.
     let user_filters = crate::filters::load_filter_groups_for_command(cmd);
     if let Some(f) = crate::filters::find_filter_ranked(cmd, &user_filters) {
-        if is_stderr && !f.filter_stderr {
-            return compress_output(s);
+        // Never lose content: a `;`/`&&`/`||` compound runs independent
+        // commands whose raw stdout is concatenated into one blob before any
+        // filter sees it. An *allowlist* filter (`keep_lines_matching`) that
+        // only resolved because one inner segment looks like its target (e.g.
+        // `git diff --stat` at the tail of `cat notes.yaml; git diff --stat`)
+        // would drop every line of the other segments that doesn't match its
+        // keep-list — silently, with no cap marker, since this is a filter
+        // match, not the token-budget cap path. Skip the filter in that case
+        // and fall through to the safe generic compressor. A denylist filter
+        // (`strip_lines_matching` only) stays exempt: it can only remove
+        // lines it recognizes as noise, not wholesale drop unrelated content,
+        // which is the shape `cd repo; gitleaks detect` / `npm i && gitleaks
+        // detect` rely on.
+        let lossy_allowlist = !f.keep_lines_matching.is_empty();
+        let resolved_only_via_segment = crate::filters::has_sequential_operator(cmd)
+            && !crate::filters::filter_matches_whole_command(cmd, &f.match_command);
+        if !(lossy_allowlist && resolved_only_via_segment) {
+            if is_stderr && !f.filter_stderr {
+                return compress_output(s);
+            }
+            // The global ceiling applies to filtered output too: a filter's own caps
+            // are per-filter, and a passthrough fallback (`passthrough_when_emptied`,
+            // failure-signal passthrough, `never_worse`) can hand back the full raw
+            // output, which is exactly the shape this cap exists to bound.
+            return enforce_token_budget(&crate::filters::apply_filter_with_exit(s, f, exit_ok));
         }
-        // The global ceiling applies to filtered output too: a filter's own caps
-        // are per-filter, and a passthrough fallback (`passthrough_when_emptied`,
-        // failure-signal passthrough, `never_worse`) can hand back the full raw
-        // output, which is exactly the shape this cap exists to bound.
-        return enforce_token_budget(&crate::filters::apply_filter_with_exit(s, f, exit_ok));
     }
 
     // No filter matched — record for later analysis (tokenix filter list).
