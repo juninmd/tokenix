@@ -421,3 +421,69 @@ fn claude_read_result_secret_is_redacted_via_updated_tool_output() {
         "expected a redaction marker: {updated}"
     );
 }
+
+/// Regression for #95/#96: a compound command whose LAST segment looks like
+/// `rg` (e.g. `sed -n 1,36p file; echo ====; rg -n 'Pattern' dir`) must not
+/// let the bundled `rg` filter's `keep_lines_matching` allowlist run over the
+/// *whole* concatenated blob and silently eat the earlier `sed` segment's
+/// source lines — some of which coincidentally contain a `:` (the allowlist
+/// pattern) and survive, while plain code lines (`}`, `return widget;`)
+/// vanish with no inline marker. Fixture is fully synthetic (fake "widget"
+/// source, fake `rg`-shaped match lines) and mirrors the real failure shape
+/// more closely than the plain `echo head; echo tail` fixture in #95: real
+/// source lines are a mix of colon-bearing and colon-free lines, not a single
+/// marker string.
+#[test]
+fn compound_command_ending_in_rg_does_not_eat_earlier_code_segment() {
+    let mut code_lines = Vec::new();
+    for i in 1..=36 {
+        code_lines.push(if i % 5 == 0 {
+            "}".to_string()
+        } else if i % 3 == 0 {
+            "    return widget;".to_string()
+        } else {
+            format!("    field_{i}: WidgetKind, // WIDGETLINE{i:02}")
+        });
+    }
+    let code_block = code_lines.join("\n");
+    let stdout = format!(
+        "{code_block}\n====\nsrc\\fixtures\\widget.rs:12:    Widget::Changed(id)\n\
+         src\\fixtures\\widget.rs:40:    Widget::Changed(other)\n"
+    );
+    let command =
+        "sed -n 1,36p src/fixtures/widget.rs; echo ====; rg -n 'Widget::Changed' src/fixtures";
+    let payload = format!(
+        r#"{{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{{"command":{cmd}}},"tool_response":{{"stdout":{out},"stderr":""}}}}"#,
+        cmd = serde_json::to_string(command).unwrap(),
+        out = serde_json::to_string(&stdout).unwrap(),
+    );
+
+    let (raw_stdout, code) = run_hook_post(&payload);
+    assert_eq!(code, 0, "hook-post must always exit 0");
+
+    // No JSON on stdout means the tool result was left untouched — the code
+    // block survived verbatim. JSON means the hook rewrote it; the rewrite
+    // must still carry every fixture line, not a filtered subset.
+    let final_text = if raw_stdout.trim().is_empty() {
+        stdout.clone()
+    } else {
+        let v: serde_json::Value = serde_json::from_str(raw_stdout.trim())
+            .unwrap_or_else(|_| panic!("non-empty stdout must be JSON: {raw_stdout}"));
+        v["hookSpecificOutput"]["updatedToolOutput"]
+            .as_str()
+            .unwrap_or_else(|| panic!("expected updatedToolOutput: {raw_stdout}"))
+            .to_string()
+    };
+
+    for line in &code_lines {
+        assert!(
+            final_text.contains(line.as_str()),
+            "source line from the `sed` segment was dropped without a marker: {line:?}\n\
+             --- final text ---\n{final_text}"
+        );
+    }
+    assert!(
+        final_text.contains("Widget::Changed"),
+        "the rg segment's own matches must still be present: {final_text}"
+    );
+}
