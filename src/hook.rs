@@ -819,6 +819,43 @@ fn ps_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
+/// True when `command`, or any of its `&&`/`;`/`||`/`|`-separated segments
+/// (raw, or after resolving a leading `cd`/`Set-Location`/package-runner
+/// prefix), is a bare `git` invocation.
+///
+/// Used to keep `git` commands visible as a plain, literal `git ...` program
+/// invocation even when a bundled filter would otherwise wrap the whole
+/// command in `tokenix run` for compression. A downstream guard that must
+/// verify a Bash/PowerShell command really is (and stays) `git` — e.g. Claude
+/// Code's worktree-isolation check on a subagent's git operations — cannot
+/// see through `'tokenix' run '<command>'` (the real invocation is now a
+/// quoted argument to an arbitrary binary) and refuses the opaque wrapper
+/// outright, even though the underlying command was exactly the transparent,
+/// safe `git` call the guard exists to allow. `git status` already gets its
+/// own transparent `--short` rewrite above (see `status_re`); this extends
+/// the same guarantee to every other git subcommand.
+fn is_git_invocation(command: &str) -> bool {
+    crate::filters::split_on_operators(command)
+        .iter()
+        .any(|segment| segment_is_git(segment))
+}
+
+fn segment_is_git(segment: &str) -> bool {
+    first_token_is_git(segment)
+        || first_token_is_git(&crate::filters::get_effective_command(segment))
+}
+
+fn first_token_is_git(s: &str) -> bool {
+    crate::filters::tokenize_command(s)
+        .first()
+        .map(|t| {
+            let t = t.as_str();
+            let stem = t.rsplit(['/', '\\']).next().unwrap_or(t);
+            stem.trim_end_matches(".exe").eq_ignore_ascii_case("git")
+        })
+        .unwrap_or(false)
+}
+
 fn is_bash_tool(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     matches!(
@@ -1038,6 +1075,13 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
         // 2. Otherwise check for other active filters to wrap in tokenix run
         let unwrapped =
             crate::filters::unwrap_shell_runner(command).unwrap_or_else(|| command.to_string());
+
+        // Never hide a git invocation behind the opaque `tokenix run` wrapper
+        // (see `is_git_invocation`) — pass it through unfiltered instead.
+        if is_git_invocation(&unwrapped) {
+            pass_through(antigravity);
+        }
+
         let filters = crate::filters::load_filter_groups_for_command(&unwrapped);
 
         if crate::filters::find_filter_ranked(&unwrapped, &filters).is_some() {
@@ -1112,6 +1156,12 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
                     command: command.to_string(),
                 },
             );
+            pass_through(antigravity);
+        }
+
+        // Never hide a git invocation behind the opaque `tokenix run` wrapper
+        // (see `is_git_invocation`) — pass it through unfiltered instead.
+        if is_git_invocation(command) {
             pass_through(antigravity);
         }
 
@@ -1269,6 +1319,28 @@ mod tests {
         );
         // Embedded single quotes are re-opened, not left dangling.
         assert_eq!(shell_quote("it's"), r"'it'\''s'");
+    }
+
+    #[test]
+    fn is_git_invocation_recognizes_bare_and_compound_git_commands() {
+        assert!(is_git_invocation("git log -1"));
+        assert!(is_git_invocation("git status -sb"));
+        // Regression: the tail segment of a compound command still counts —
+        // a filter match on that segment used to wrap the *whole* compound
+        // command in `tokenix run`, hiding the git call just as much.
+        assert!(is_git_invocation(
+            "pwd && git status && git log --oneline -5"
+        ));
+        // A leading cd/Set-Location prefix must not hide the git call either.
+        assert!(is_git_invocation("cd /repo && git diff"));
+        assert!(is_git_invocation("Set-Location D:/repo; git log -1"));
+        assert!(is_git_invocation(
+            "'C:/Program Files/Git/bin/git.exe' log -1"
+        ));
+
+        assert!(!is_git_invocation("cargo test"));
+        assert!(!is_git_invocation("npm test && echo done"));
+        assert!(!is_git_invocation("grep -r tokenix ."));
     }
 
     #[test]
