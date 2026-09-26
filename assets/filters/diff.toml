@@ -1,0 +1,59 @@
+[filters.diff]
+description = "Compact diff file comparison output"
+match_command = "^diff\\b"
+strip_ansi = true
+passthrough_when_emptied = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^index ",
+  "^--- ",
+  "^\\+\\+\\+ ",
+]
+keep_lines_matching = [
+  "^@@",
+  "^\\+",
+  "^\\-",
+  "^<",
+  "^>",
+  "^\\d+[,a-d0-9]*\\d*$",
+  "^---$",
+  "^Common subdirectories:",
+  "^Files .* differ$",
+  "^Only in ",
+]
+max_lines = 80
+token_budget = 2000
+
+[[tests.diff]]
+name = "unified diff format"
+command = "diff -u a.txt b.txt"
+input = """
+--- a.txt
++++ b.txt
+@@ -1,3 +1,3 @@
+-old line
++new line
+ unchanged
+"""
+expected = """@@ -1,3 +1,3 @@
+-old line
++new line"""
+
+[[tests.diff]]
+name = "normal diff format"
+command = "diff a.txt b.txt"
+input = """
+1c1
+< old
+---
+> new
+"""
+expected = """1c1
+< old
+---
+> new"""
+
+[[tests.diff]]
+name = "silent success stays empty"
+input = ""
+expected = ""

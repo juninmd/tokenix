@@ -4,7 +4,9 @@ match_command = "^(Get-ChildItem|gci)\\b"
 passthrough_when_emptied = true
 strip_ansi = true
 strip_lines_matching = [
-  "^\\s*$"
+  "^\\s*$",
+  "^\\s*FullName\\s*$",
+  "^\\s*--------\\s*$",
 ]
 truncate_lines_at = 200
 max_lines = 60
@@ -32,3 +34,16 @@ name = "empty directory"
 input = """
 """
 expected = ""
+
+[[tests.get-childitem]]
+name = "select full name strips header"
+command = "Get-ChildItem -Recurse | Select-Object FullName"
+input = """
+FullName
+--------
+C:\\repo\\src\\main.rs
+C:\\repo\\src\\lib.rs
+"""
+expected = """C:\\repo\\src\\main.rs
+C:\\repo\\src\\lib.rs"""
+

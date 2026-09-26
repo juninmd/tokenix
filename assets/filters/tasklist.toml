@@ -1,0 +1,41 @@
+[filters.tasklist]
+description = "Compact Windows tasklist output"
+match_command = "^tasklist(\\s|$)"
+strip_ansi = true
+passthrough_when_emptied = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^[=\\s]{10,}$",
+  "^\\s*(Nome da imagem|Image Name)\\s+"
+]
+match_output = [
+  { pattern = "(?i)(nenhuma tarefa em execução|no tasks are running)", message = "no matching tasks" }
+]
+truncate_lines_at = 160
+max_lines = 40
+token_budget = 1500
+
+[[tests.tasklist]]
+name = "empty tasklist result message"
+command = "tasklist //FI \"IMAGENAME eq nonexistent.exe\""
+input = """
+INFORMAÇÕES: nenhuma tarefa em execução correspondente aos critérios especificados.
+"""
+expected = "no matching tasks"
+
+[[tests.tasklist]]
+name = "process list strips header and separator"
+command = "tasklist //FI \"IMAGENAME eq node.exe\""
+input = """
+Nome da imagem            Identifi Nome da sessão       Sessão# Uso de memór
+========================= ======== ================ =========== ============
+node.exe                      7016 Console                    1     69.756 K
+node.exe                     14928 Console                    1    130.776 K
+"""
+expected = """node.exe                      7016 Console                    1     69.756 K
+node.exe                     14928 Console                    1    130.776 K"""
+
+[[tests.tasklist]]
+name = "empty input"
+input = ""
+expected = ""

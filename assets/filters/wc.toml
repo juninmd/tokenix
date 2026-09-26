@@ -1,0 +1,31 @@
+[filters.wc]
+description = "Compact wc line/word count output"
+match_command = "^wc\\b"
+strip_ansi = true
+passthrough_when_emptied = true
+strip_lines_matching = [
+  "^\\s*$",
+]
+priority_lines = ["(?i)\\btotal\\b"]
+max_lines = 40
+token_budget = 1000
+
+[[tests.wc]]
+name = "single file line count"
+command = "wc -l src/main.rs"
+input = """
+ 120 src/main.rs
+"""
+expected = " 120 src/main.rs"
+
+[[tests.wc]]
+name = "multi-file with total preserved"
+command = "wc -l src/*.rs"
+input = """
+  10 src/a.rs
+  20 src/b.rs
+  30 total
+"""
+expected = """  10 src/a.rs
+  20 src/b.rs
+  30 total"""
