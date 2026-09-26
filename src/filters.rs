@@ -1636,6 +1636,7 @@ fn strip_subcommand_global_opts(argv: &[String]) -> Vec<String> {
                 "--no-optional",
                 "--frozen-lockfile",
                 "--silent",
+                "-s",
             ],
         ),
         "bun" => (
@@ -1719,7 +1720,11 @@ fn strip_cd_and_operators(mut argv: &[String]) -> &[String] {
             break;
         }
         let first = &argv[0];
-        if first == "cd" || first == "pushd" {
+        if first == "cd"
+            || first == "pushd"
+            || first.eq_ignore_ascii_case("set-location")
+            || first == "sl"
+        {
             if argv.len() >= 2 && (argv[1] == "&&" || argv[1] == ";") {
                 argv = &argv[2..];
                 continue;
@@ -3070,6 +3075,15 @@ on_empty = "empty filter output"
             get_effective_command("bun --cwd /app run build"),
             "bun run build"
         );
+        // pnpm -s (silent) short flag
+        assert_eq!(get_effective_command("pnpm -s lint"), "pnpm lint");
+        assert_eq!(get_effective_command("pnpm -s typecheck"), "pnpm typecheck");
+        // PowerShell Set-Location / sl
+        assert_eq!(
+            get_effective_command("Set-Location /app && cargo test"),
+            "cargo test"
+        );
+        assert_eq!(get_effective_command("sl /app; cargo test"), "cargo test");
     }
 
     #[test]

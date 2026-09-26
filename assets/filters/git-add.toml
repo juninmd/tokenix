@@ -1,6 +1,7 @@
 [filters.git-add]
 description = "Drop noisy CRLF/LF line-ending warnings from git add"
 match_command = "^git\\s+add\\b"
+filter_stderr = true
 strip_ansi = true
 # `git add` is silent on success; on Windows it emits one line-ending warning per
 # file (`warning: ... LF will be replaced by CRLF ...`) — pure noise. Real errors

@@ -22,15 +22,20 @@ struct CmdStats {
 /// when the preview wasn't truncated before `tool_input.command`.
 fn base_command(ev: &store::HookEvent) -> Option<String> {
     if !ev.command.is_empty() {
-        return ev.command.split_whitespace().next().map(str::to_string);
+        return extract_base_from_command(&ev.command);
     }
     extract_base_command(&ev.input_preview)
+}
+
+fn extract_base_from_command(cmd: &str) -> Option<String> {
+    let eff = filters::get_effective_command(cmd);
+    eff.split_whitespace().next().map(str::to_string)
 }
 
 fn extract_base_command(input_preview: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(input_preview).ok()?;
     let cmd = v["tool_input"]["command"].as_str()?;
-    cmd.split_whitespace().next().map(str::to_string)
+    extract_base_from_command(cmd)
 }
 
 fn is_filter_savings_event(e: &store::HookEvent) -> bool {
@@ -1157,6 +1162,18 @@ mod tests {
     fn base_command_falls_back_to_legacy_preview() {
         let legacy = r#"{"tool_input":{"command":"git status"}}"#;
         assert_eq!(base_command(&ev("", legacy)), Some("git".to_string()));
+    }
+
+    #[test]
+    fn base_command_unwraps_cd_prefix() {
+        assert_eq!(
+            base_command(&ev("cd /app && cargo test", "")),
+            Some("cargo".to_string())
+        );
+        assert_eq!(
+            base_command(&ev("Set-Location D:/app; git diff", "")),
+            Some("git".to_string())
+        );
     }
 
     #[test]

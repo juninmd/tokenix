@@ -1399,6 +1399,7 @@ fn compress_output_inner(s: &str) -> String {
         return enforce_token_budget(&compacted);
     }
     let s = strip_ansi(s);
+    let s = strip_git_crlf_warnings(&s);
     let s = remove_emojis(&s);
     let s = collapse_blank_lines(&s);
     let s = group_repeated_blocks(&s);
@@ -1406,6 +1407,21 @@ fn compress_output_inner(s: &str) -> String {
 
     // Additional generic aggressive compression
     enforce_token_budget(&generic_aggressive_compress(&s))
+}
+
+fn strip_git_crlf_warnings(s: &str) -> String {
+    if !s.contains("LF will be replaced by CRLF") && !s.contains("CRLF will be replaced by LF") {
+        return s.to_string();
+    }
+    s.lines()
+        .filter(|l| {
+            let t = l.trim();
+            !(t.starts_with("warning:")
+                && (t.contains("LF will be replaced by CRLF")
+                    || t.contains("CRLF will be replaced by LF")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -1432,6 +1448,13 @@ mod eol_tests {
     fn lf_input_stays_lf() {
         let src = "fn main() {\n    println!(\"hi\");\n}\n";
         assert!(!compress_output(src).contains('\r'));
+    }
+
+    #[test]
+    fn git_crlf_warnings_are_stripped() {
+        let input = "warning: in the working copy of 'src/main.rs', LF will be replaced by CRLF the next time Git touches it\nreal output\nwarning: in the working copy of 'src/lib.rs', CRLF will be replaced by LF the next time Git touches it\n";
+        let out = compress_output(input);
+        assert_eq!(out.trim(), "real output");
     }
 
     #[test]

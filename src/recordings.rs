@@ -95,6 +95,10 @@ pub fn capture(repo_root: &Path, command: &str, stdout: &str, stderr: &str) {
     if !in_scope(&session, &base) {
         return;
     }
+    // Never capture recall / retrieve invocations — they exist to return exact raw bytes.
+    if base == "tokenix" && command.contains("retrieve") {
+        return;
+    }
 
     let out = stdout.trim();
     let err = stderr.trim();
@@ -295,9 +299,11 @@ pub fn economy(repo_root: &Path) -> Vec<Economy> {
     out
 }
 
-/// Base command (first whitespace token) if it is a safe identifier.
+/// Base command (effective executable identifier) if it is a safe identifier.
 fn base_of(command: &str) -> Option<String> {
-    sanitize_base(command.split_whitespace().next()?)
+    let eff = crate::filters::get_effective_command(command);
+    let first = eff.split_whitespace().next()?;
+    sanitize_base(first)
 }
 
 /// Accept only plain executable identifiers — the value becomes a directory
