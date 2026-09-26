@@ -85,6 +85,40 @@ fn claude_git_status_is_rewritten_to_short() {
     assert_eq!(cmd, "git status --short");
 }
 
+/// Regression: `git-log.toml` used to make the hook wrap `git log` in
+/// `tokenix run '<command>'`, hiding the real `git` invocation behind an
+/// opaque wrapper. A downstream guard that must verify a Bash command really
+/// is (and stays) `git` — e.g. Claude Code's worktree-isolation check on a
+/// subagent's git operations — cannot see through `'tokenix' run '...'` and
+/// refuses it outright, even though the command was exactly the transparent,
+/// safe `git log` such a guard exists to allow. `git log` (like every other
+/// git subcommand) must stay a plain, visible `git` invocation, exactly like
+/// `git status` already does.
+#[test]
+fn claude_git_log_is_never_wrapped_in_tokenix_run() {
+    let (stdout, code) = run_hook(&claude_bash_payload("git log -1"));
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "git log must stay a plain `git` invocation, not opaque tokenix run: {stdout}"
+    );
+}
+
+/// The same guarantee must hold when `git log` is the tail of a compound
+/// command: a filter match on that one segment used to wrap the *whole*
+/// compound command in `tokenix run`, hiding the git call just as much.
+#[test]
+fn claude_compound_command_with_trailing_git_segment_stays_plain() {
+    let (stdout, code) = run_hook(&claude_bash_payload(
+        "pwd && git status && git log --oneline -5",
+    ));
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "a compound command ending in `git log` must not be wrapped either: {stdout}"
+    );
+}
+
 #[test]
 fn tokenix_disabled_prefix_passes_through() {
     let (stdout, code) = run_hook(&claude_bash_payload("TOKENIX_DISABLED=1 terraform plan"));
@@ -339,6 +373,20 @@ fn powershell_tool_gets_pwsh_shell_rewrite() {
     assert!(
         cmd.contains("Get-Content src/main.rs"),
         "original command preserved: {cmd}"
+    );
+}
+
+/// Same guarantee as `claude_git_log_is_never_wrapped_in_tokenix_run`, for the
+/// PowerShell tool's own `run --shell pwsh` wrap path.
+#[cfg(windows)]
+#[test]
+fn powershell_git_log_is_never_wrapped_in_tokenix_run() {
+    let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"PowerShell","tool_input":{"command":"git log -1"}}"#;
+    let (stdout, code) = run_hook(payload);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "git log under PowerShell must stay plain, not wrapped in run --shell pwsh: {stdout}"
     );
 }
 
