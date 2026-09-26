@@ -1,0 +1,31 @@
+[filters.get-process]
+description = "Compact PowerShell Get-Process output"
+match_command = "^(Get-Process|gps)\\b"
+strip_ansi = true
+passthrough_when_emptied = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^\\s*--\\s+--+",
+  "^\\s*Id\\s+ProcessName",
+  "^\\s*NPM\\(K\\)\\s+PM\\(K\\)"
+]
+truncate_lines_at = 180
+max_lines = 40
+token_budget = 1500
+
+[[tests.get-process]]
+name = "process list strips header"
+command = "Get-Process cargo,rustc"
+input = """
+   Id ProcessName StartTime
+   -- ----------- ---------
+  704 cargo       22/09/2026 00:16:02
+ 9948 cargo       22/09/2026 00:16:13
+"""
+expected = """  704 cargo       22/09/2026 00:16:02
+ 9948 cargo       22/09/2026 00:16:13"""
+
+[[tests.get-process]]
+name = "empty input"
+input = ""
+expected = ""
