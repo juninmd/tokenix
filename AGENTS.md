@@ -1,7 +1,7 @@
 # AGENTS.md — tokenix
 
-Rust CLI that gives AI coding agents compact repository context: local ONNX
-embeddings + SQLite index, tree-sitter symbol graph, deterministic output filters,
+Rust CLI that gives AI coding agents compact repository context: a local
+SQLite index (FTS5 + tree-sitter symbol graph, no embeddings or model), deterministic output filters,
 and `PreToolUse` hooks for Claude Code / Copilot / Codex / Antigravity (OpenCode
 is MCP-only: no hook wiring is installed for it).
 User-facing docs live in `README.md`; this file is the engineering contract.
@@ -10,8 +10,8 @@ User-facing docs live in `README.md`; this file is the engineering contract.
 
 ```bash
 cargo build --release
-cargo test --bin tokenix          # 469 unit + golden tests
-cargo test --tests                # + 31 end-to-end tests (one Windows-only) against the real binary
+cargo test --bin tokenix          # 473 unit + golden tests
+cargo test --tests                # + 40 end-to-end tests (one Windows-only) against the real binary
 cargo fmt --check                 # CI runs fmt FIRST — run it before pushing
 cargo clippy --all-targets --locked -- -D warnings
 ./scripts/verify.sh [--models]    # every CI gate locally, in CI order
@@ -26,17 +26,12 @@ trust gate incl. revocation on edit, memory refusing credentials, inline
 freshness), `hook_e2e.rs` (hook JSON contract per agent) and `mcp_proxy_e2e.rs`.
 `tests/common::Sandbox` gives every test its own git repo and `TOKENIX_HOME`;
 new e2e tests must use it (or set `TOKENIX_HOME`), never the developer's home.
-Index with `--no-embed` there: the model cache (`embed::model_cache_dir`) follows
-the OS cache dir, not `TOKENIX_HOME`, so an embedding test downloads into the real
-cache and belongs behind `--features model-tests`.
+There is no model and no network in the test suite.
 Assert behavior a user relies on (exact symbol location, exit code, budget
 held), not "did not panic" — that is what `homologation.sh` already covers. Every machine-wide path
 derives from `store::global_dir()`, which honours an **absolute** `TOKENIX_HOME`
 (relative values resolve per-cwd and are ignored); never build
 `~/.tokenix` by hand, or checks and tests start writing to the user's real home.
-
-`bench_search_similar` (`#[ignore]`) measures the vector scan on 30k × 768d
-rows: `cargo test --release --bin tokenix bench_search_similar -- --ignored --nocapture`.
 
 MSRV is `1.90` (`rust-version` in Cargo.toml). The floor is not cosmetic:
 `Command` only quotes arguments safely for Windows `.cmd`/`.bat` shims from
@@ -47,27 +42,16 @@ builds on stable only. Check with `cargo +1.90.0 check --locked --all-targets`,
 and update with `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo update`
 so resolution never silently raises it.
 
-Model-gated tests (`--features model-tests`: ONNX inference, query cache,
-retrieval hit-rate eval) are **not** part of `cargo test`. `deep-verify.yml` runs
-them weekly and on demand — that is the only place they execute in CI. Run them
-before any `fastembed`/`ort` bump: `default_model_vectors_are_stable_across_upgrades`
-pins the default model's output, because stored vectors are compared against
-fresh queries and a silent drift breaks every existing index. A document's vector
-also depends on its batch neighbours (padding; cosine ≈ 0.984 vs embedding it
-alone), so the fingerprint pins the batch shape too.
-
 ## Key files
 
 | File | Role |
 |---|---|
 | `chunker.rs` | Symbol-aware chunking, `count_tokens`, outline generation, `enforce_token_cap` |
 | `indexer.rs` | Walks + indexes files. `filter_entry` (dirs) vs `should_index` (files) are separate on purpose |
-| `embed.rs` | ONNX via fastembed 7; `MODELS` registry, custom HF models. Each loaded model sits behind a `Mutex` (fastembed ≥ 5 embeds through `&mut self`) |
 | `store.rs` | SQLite access, `index_staleness`, graph tables, hook log, `global_dir()`, `find_project_root` |
-| `store/vector.rs` | int8 quantization, cosine scoring, two-pass top-k `search_similar` |
-| `query.rs` | Semantic + lexical retrieval, RRF fusion, budgeting. The reranker is repo-agnostic: it never names tokenix symbols or paths, and its test penalty fires only on real test locations (`tests/`, `*_test.*`, `*.spec.*`, `#[test]`/`#[cfg(test)]`), never on content substrings such as `assert!` |
+| `query.rs` | Lexical retrieval (FTS5 BM25 fused with rank), symbol recall, budgeting. The reranker is repo-agnostic: it never names tokenix symbols or paths, and its test penalty fires only on real test locations (`tests/`, `*_test.*`, `*.spec.*`, `#[test]`/`#[cfg(test)]`), never on content substrings such as `assert!` |
 | `graph.rs` | Symbol graph, PageRank, Tarjan SCC cycles, import graph, repo hotspots |
-| `freshness.rs` | Inline pre-query refresh of dirty files (`--no-embed` path), fails open |
+| `freshness.rs` | Inline pre-query refresh of dirty files (inline path), fails open |
 | `modules.rs` | Louvain community detection over `graph_edges` — `tokenix modules` |
 | `blast.rs` | Diff → changed symbols → reverse call graph (`tokenix blast`) |
 | `snapshot.rs` | `export-index` / `import-index` — gzipped `VACUUM INTO` copy for teams |
@@ -89,11 +73,10 @@ alone), so the fingerprint pins the batch shape too.
 | `recordings.rs` | `filter record` sessions — captures command output for filter authoring; redacted and self-gitignored, because captures land in the working tree and `filter generate` uploads them to an AI CLI |
 | `memory.rs` | Cross-session notes surfaced back into context; refuses text that trips a keyword *or* a bundled secret rule (`secrets_scan::redact_known_secrets`) |
 | `benchmark.rs` | Retrieval benchmark harness (`tokenix benchmark`) |
-| `doctor.rs` | Environment diagnosis — GPU/EP probe, cache sizes, daemon reachability |
+| `doctor.rs` | Install diagnosis — filter inventory and config issues, recording state |
 | `artifacts.rs` | Reads build artifacts referenced by agent output |
 | `docshot.rs` | `#[cfg(test)]` only — renders README screenshots as SVG, never ships in the binary |
 | `tui.rs` | Ratatui shell — the only human interface |
-| `daemon.rs` | Background embedding server, port 47392, capability-token authenticated |
 | `self_update.rs` | Self-update from GitHub releases: SHA-256 validation, atomic binary replacement, background auto-update and update caching |
 
 The interactive CLI startup triggers the background update check before the bare
@@ -113,11 +96,6 @@ binary replacement.
 files(id, path UNIQUE, mtime, content_hash)
 chunks(id, file_id, path, start_line, end_line, symbol, kind, content, token_count)
 chunks_fts(rowid, content, symbol, path)     -- FTS5
-embeddings(chunk_id PK, embedding BLOB, scale REAL)
-  -- scale NOT NULL → int8-quantized (1 byte/dim); NULL → legacy float32 LE.
-  -- Scale cancels out of the cosine, so q8 search needs only raw bytes.
-embedding_cache(content_hash PK, embedding BLOB, updated_at)  -- stays float32 so
-  -- model switches and quantization changes never force a re-embed
 graph_nodes(chunk_id PK, file_id, path, name, kind, start_line, end_line, rank)
 graph_edges(id, caller_chunk_id, callee_chunk_id, reference, edge_kind)
 graph_imports(id, source_path, target, resolved_path, kind, line)  -- NULL = external
@@ -128,18 +106,13 @@ meta(key PK, value)                          -- 'indexed_at', git fingerprint
 a different fingerprint counts as stale so branch switches never reuse context.
 `snapshot_version` / `snapshot_created_at` are stamped by `tokenix export-index`.
 
-`files.content_hash` prefixed with `ne:` marks a row written **without
-embeddings** (`index --no-embed`, or the inline refresh in `freshness.rs`). The
-prefix makes the file read as changed to the next embedding run, and
-`plan_files` appends those files to a git-incremental plan so the backlog is
-always paid — a git-clean file would otherwise never be revisited.
-`index_staleness` deliberately ignores them: those chunks are valid for FTS,
-graph and read interception, and reporting them stale would make the hook fail
-open and stop saving tokens. `index --if-stale` checks `pending_embed_count`
-separately.
+Indexes built before embeddings were removed still carry `embeddings` and
+`embedding_cache` tables (and `ne:`-prefixed hashes from `--no-embed` runs).
+`init_schema` drops the tables (and VACUUMs) on the next `tokenix index`; the `ne:` hashes
+never match a real hash, so those files are simply re-chunked once.
 
 Only the inline refresh (`IndexOptions.inline`) skips applying deletions; an
-explicit `index --no-embed` applies them. A git rename (`R`) records its origin
+every explicit `index` applies them. A git rename (`R`) records its origin
 as deleted (a copy, `C`, does not), and a file that still exists but now yields
 no chunks (emptied, binary, sub-minimum) has its row and chunks dropped rather
 than left serving the old body.
@@ -151,12 +124,8 @@ every retrieval command pay a refresh, forever. The git-incremental plan applies
 the same `max_file_bytes` cap as the full walk (`within_size_cap`); it used to
 index oversized dirty files the walk skips.
 
-**Query paths open old DBs without migrating** — SELECTs must degrade when `scale`
-is missing (`embeddings_have_scale()` probes by selecting `NULL`).
-
-`search_similar` scans vectors only (`chunk_id, embedding, scale`) and loads
-chunk text for the `k` winners. Selecting `c.content` in the scan copied the whole
-corpus out of SQLite per query: 122–130 ms → 47–48 ms on the 30k-row bench.
+**Query paths open old DBs without migrating.** They never touch the legacy
+vector tables, so an old index answers normally until it is re-indexed.
 
 Project root = nearest ancestor that **was indexed** (`<id>.db` or `<id>.name` in
 `global_dir()`) or carries a marker (`.git`, `Cargo.toml`, `package.json`, …).
@@ -175,11 +144,11 @@ Read:  < 200 lines OR offset/limit set → exit 0 (pass)
          code extensions (`is_code`) and when the outline saves ≥ 30%;
          otherwise the file passes through whole
 
-Grep:  < 3 words → not semantic; symbol lookup if identifier-like, else
+Grep:  identifier-like → symbol lookup from the graph, exit 2 when found;
+       anything else (phrases, regexes) passes through, and only
          output_mode="content" without head_limit → updatedInput injects
          head_limit (TOKENIX_GREP_HEAD_LIMIT, default 100, 0 disables);
          logged saved_tokens=0 because the unbounded output never ran
-       ≥ 3 words → semantic results, exit 2; gain records neutral usage
 
 Bash / PowerShell: matches a filter → rewrite to `tokenix run`
        (PowerShell: `& 'exe' run --shell pwsh '<cmd>'`, re-executed under pwsh;
@@ -191,8 +160,8 @@ Bash / PowerShell: matches a filter → rewrite to `tokenix run`
 Index stale → Grep still gets its head_limit cap, then exit 0 for every tool.
 ```
 
-Staleness is **not** age-based: missing DB, missing `indexed_at`, an explicitly
-requested different embedding model, or a changed git fingerprint.
+Staleness is **not** age-based: missing DB, missing `indexed_at`, or a changed
+git fingerprint.
 
 Installer matcher: `^(Read|Grep|Bash|PowerShell|grep_search|run_in_terminal)$`.
 Claude Code's exact-name `PowerShell` tool takes the pwsh path; the lowercase
@@ -211,7 +180,6 @@ Per-project tuning in `.tokenix.toml`:
 ```toml
 [hook]
 read_min_lines = 120   # default 200
-grep_min_words = 3     # default 3
 ```
 
 ## Critical rules
@@ -228,7 +196,7 @@ Tree-sitter parses Rust, Python, JS/TS, Go and C/C++; VB and SQL use
 line-based symbol chunking; everything else is generic line chunking.
 
 **Never break hook fallback.** `run_hook()` must `exit(0)` on any error — missing
-index, stale index, parse failure, embed error. Breaking a session is worse than
+index, stale index, parse failure, index error. Breaking a session is worse than
 missing a saving. This covers **panics too**: `main::guard_hook` wraps every hook
 entry point in `catch_unwind`, because an unwind used to exit 101 (and skip
 Antigravity's `decision:allow`), which is the one outcome the contract exists to
@@ -270,20 +238,6 @@ write costs ~12.5× a cache read.
 **Directory filtering:** `filter_entry` for directories uses ONLY `IGNORED_DIRS`.
 Do NOT call `should_index()` on directories — it returns false for dirs without
 extensions and breaks traversal.
-
-**Daemon is optional.** If `tokenix serve` is not running, `handle_grep()`
-autostarts it and retries once (800 ms), then falls back to in-process embed.
-
-**The daemon socket is authenticated.** `serve` writes a fresh 32-hex capability
-token to `~/.tokenix/daemon.token` (`0600`) before it binds, and every `search`
-request must present it. `127.0.0.1` is not access control: on a shared host any
-local account can reach the port, and `search` returns indexed *source* for any
-`project_root` the caller names. A missing or stale token is rejected, and the
-client degrades exactly as it does for an unreachable daemon (in-process embed).
-Only `health` stays open (a bare liveness bit). `status` needs the token too: it
-reports pid, port, uptime, per-project chunk counts and cache size —
-reconnaissance for anyone probing the port. `serve` refuses to start if it cannot
-write the token; never add an unauthenticated fallback.
 
 **Cross-platform paths:** `tokenix_bin_path()` normalizes to forward slashes for
 shell/JSON config strings.
@@ -476,17 +430,6 @@ per-grammar identifier node kinds in `find_first_identifier` — grammars differ
 (`constant` in Ruby, `name` in PHP, `simple_identifier` in Kotlin/Swift; none of
 those are wired yet).
 
-**New embedding model:** append a `ModelSpec` to `embed.rs::MODELS`. Built-in uses
-`ModelSource::BuiltIn`; custom uses
-`ModelSource::Custom { hf_repo, revision, onnx_file, pooling }` (downloaded to
-`<model_cache>/custom/<id>/`). `revision` must be a **commit SHA, never a branch**:
-`resolve/main` let the same tokenix build load different weights on two machines
-with no signal, while a commit is content-addressed — which is why there is no
-separate digest list to maintain. The active model is **stamped in the index
-`meta`** and read back by query/hook/daemon, so vectors always match. It is sticky
-across re-indexes; an explicit switch forces a full re-embed. Cache keys are
-namespaced by model id.
-
 **New secret rule:** `assets/secret-rules/*.toml`, `[[rules]]` with `id`,
 `pattern`, optional `capture` / `min_entropy`. **`min_entropy` must be reachable at
 the pattern's minimum match length** — Shannon entropy over the observed
@@ -499,7 +442,7 @@ disables the rule. Ship a true-positive *and* a near-miss negative test.
 tokenix index .
 echo '{"tool_name":"Read","tool_input":{"file_path":"src/main.rs"}}' | tokenix hook; echo $?   # 2
 echo '{"tool_name":"Read","tool_input":{"file_path":"Cargo.toml"}}' | tokenix hook; echo $?    # 0
-echo '{"tool_name":"Grep","tool_input":{"pattern":"how does embedding work"}}' | tokenix hook  # 2
+echo '{"tool_name":"Grep","tool_input":{"pattern":"how does indexing work"}}' | tokenix hook  # 0 (not intercepted)
 echo '{"toolName":"view","toolArgs":"{\"path\":\"src/main.rs\"}"}' | tokenix hook              # Copilot shape
 tokenix gain --history
 ```
@@ -521,7 +464,6 @@ degrades to defaults rather than failing the hook.
 | `supply-chain.yml` | push/PR + weekly | cargo-deny, zizmor, install-path egress audit |
 | `security.yml` | push to main | gitleaks (reusable workflow, SHA-pinned) |
 | `release.yml` | push to main | CI gate on **Linux + Windows**, then bump → build → attest → release → crates.io |
-| `deep-verify.yml` | weekly + dispatch | `--features model-tests`; filter reports as artifacts (not a gate) |
 | `scorecard.yml` / `release-drafter.yml` / `cflite_pr.yml` | — | posture, notes, fuzzing |
 
 The release CI gate runs the Windows leg too. It did not, and `release.yml` fires

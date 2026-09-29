@@ -34,7 +34,7 @@ run `tokenix trust`. OpenCode itself decides what it runs.
 
 ## What it does
 
-OpenCode sees the tokenix MCP tools: context, semantic search, smart read,
+OpenCode sees the tokenix MCP tools: context, code search, smart read,
 symbols, callers/callees, impact, memory and run. The [MCP guide](mcp.md) has the
 full list and the `slim` profile.
 

@@ -1,17 +1,13 @@
 use anyhow::Result;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunker::count_tokens;
-use crate::query::{format_results, get_file_outline, query_index};
+use crate::query::get_file_outline;
 use crate::store::{index_staleness, log_hook_event, search_by_symbol, HookEvent};
 
 const MIN_LINES_FOR_OUTLINE: usize = 200;
-const MIN_QUERY_WORDS: usize = 3;
-const DAEMON_HOOK_TIMEOUT_MS: u64 = 2_000;
 
 /// Read intercept threshold, overridable via `[hook] read_min_lines` in
 /// `.tokenix.toml`. Tune down to intercept more reads (saving more tokens) or
@@ -21,14 +17,6 @@ fn min_lines_for_outline() -> usize {
         .read_min_lines
         .filter(|n| *n > 0)
         .unwrap_or(MIN_LINES_FOR_OUTLINE)
-}
-
-/// Grep intercept threshold, overridable via `[hook] grep_min_words`.
-fn min_query_words() -> usize {
-    crate::chunker::hook_config()
-        .grep_min_words
-        .filter(|n| *n > 0)
-        .unwrap_or(MIN_QUERY_WORDS)
 }
 
 /// Normalized hook input used by tokenix.
@@ -213,10 +201,6 @@ fn now_ts() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs_f64()
-}
-
-fn is_semantic_query(pattern: &str) -> bool {
-    pattern.split_whitespace().count() >= min_query_words()
 }
 
 /// True if `s` looks like a plain identifier (no regex metacharacters).
@@ -438,159 +422,28 @@ fn handle_read(
     (true, msg, "generated symbol outline".to_string())
 }
 
-/// Returns a path to use as a soft lock file for concurrent embed protection.
-fn embed_lock_path() -> Option<std::path::PathBuf> {
-    Some(dirs::cache_dir()?.join("tokenix").join("embed.lock"))
-}
-
-/// Best-effort concurrency guard for the ONNX embed call.
-///
-/// The fastembed model uses ~293 MB per process (130 MB model + ORT runtime).
-/// If Claude Code fires parallel Grep hooks, each would load a separate model instance.
-/// This guard makes concurrent semantic Greps fall through (exit 0) so the original
-/// grep runs instead — limiting peak tokenix memory to one model instance at a time.
-///
-/// Implementation: timestamp file. Not atomically safe, but good enough for the
-/// typical pattern of a few concurrent hooks per second. Stale locks (>30s) are
-/// automatically overridden so a crashed process never permanently blocks the feature.
-fn try_acquire_embed_slot() -> bool {
-    let path = match embed_lock_path() {
-        Some(p) => p,
-        None => return true, // can't determine path → proceed anyway
-    };
-
-    if path.exists() {
-        let stale = std::fs::metadata(&path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.elapsed().ok())
-            .map(|e| e.as_secs() >= 30)
-            .unwrap_or(true);
-
-        if !stale {
-            return false; // another embed is in progress
-        }
-        // Remove stale lock before attempting to re-acquire
-        let _ = std::fs::remove_file(&path);
-    }
-
-    let _ = std::fs::create_dir_all(path.parent().unwrap_or(&path));
-    // create_new is atomic: exactly one concurrent caller succeeds
-    use std::io::Write;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map(|mut f| {
-            let _ = f.write_all(std::process::id().to_string().as_bytes());
-        })
-        .is_ok()
-}
-
-fn release_embed_slot() {
-    if let Some(path) = embed_lock_path() {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-fn index_has_embeddings(repo_root: &Path) -> bool {
-    let Some(conn) = crate::store::open_db(repo_root, false).ok().flatten() else {
-        return false;
-    };
-    conn.query_row("SELECT 1 FROM embeddings LIMIT 1", [], |_| Ok(()))
-        .is_ok()
-}
-
-fn daemon_search_with_hook_timeout(
-    repo_root: &Path,
-    pattern: &str,
-    k: usize,
-    budget: usize,
-    file_filter: Option<&str>,
-) -> Option<String> {
-    let (tx, rx) = mpsc::channel();
-    let repo_root = repo_root.to_path_buf();
-    let pattern = pattern.to_string();
-    let file_filter = file_filter.map(str::to_string);
-
-    std::thread::spawn(move || {
-        let out = crate::daemon::daemon_search_with_autostart(
-            &repo_root,
-            &pattern,
-            k,
-            budget,
-            file_filter.as_deref(),
-        );
-        let _ = tx.send(out);
-    });
-
-    rx.recv_timeout(Duration::from_millis(DAEMON_HOOK_TIMEOUT_MS))
-        .ok()
-        .flatten()
-}
-
 fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String, String) {
     let pattern = match tool_input["pattern"].as_str() {
         Some(p) => p,
         None => return (false, String::new(), "missing pattern".to_string()),
     };
 
-    // Short identifier-like patterns: try index symbol lookup before falling through
-    if !is_semantic_query(pattern) {
-        if looks_like_identifier(pattern) {
-            if let Some(output) = symbol_lookup(pattern, repo_root) {
-                return (
-                    true,
-                    output,
-                    format!("matched symbol exact lookup: {}", pattern),
-                );
-            }
-        }
-        return (
-            false,
-            String::new(),
-            format!("lexical query: '{}'", pattern),
-        );
-    }
-
-    if !index_has_embeddings(repo_root) {
-        return (
-            false,
-            String::new(),
-            "semantic index has no embeddings".to_string(),
-        );
-    }
-
-    // Try daemon first: model stays resident, ~30ms vs ~430ms cold embed.
-    if let Some(output) = daemon_search_with_hook_timeout(repo_root, pattern, 20, 2500, None) {
-        return (true, output, "semantic search via daemon".to_string());
-    }
-
-    // Fallback: direct embed (daemon not running or failed to start).
-    // Guard prevents N×293MB spikes from parallel hook processes.
-    if !try_acquire_embed_slot() {
-        return (
-            false,
-            String::new(),
-            "ONNX embed model slot locked".to_string(),
-        );
-    }
-    let results = match query_index(repo_root, pattern, 2500, 20, None) {
-        Ok(Some(r)) if !r.is_empty() => r,
-        _ => {
-            release_embed_slot();
+    // Only identifier-like patterns are answered from the index (exact symbol
+    // lookup). Everything else, natural-language included, is the agent's own
+    // grep: no retrieval here is good enough to stand in for it.
+    if looks_like_identifier(pattern) {
+        if let Some(output) = symbol_lookup(pattern, repo_root) {
             return (
-                false,
-                String::new(),
-                "semantic search returned empty results".to_string(),
+                true,
+                output,
+                format!("matched symbol exact lookup: {}", pattern),
             );
         }
-    };
-    release_embed_slot();
+    }
     (
-        true,
-        format_results(&results, pattern),
-        "semantic search via in-process embed".to_string(),
+        false,
+        String::new(),
+        format!("lexical query: '{}'", pattern),
     )
 }
 
@@ -1450,14 +1303,6 @@ mod tests {
         let raw = r#"{"tool_name":"Edit","tool_input":{"file_path":"x.rs"}}"#;
         let input = HookInput::from_stdin(raw).unwrap();
         assert_eq!(input.tool_name, "Edit");
-    }
-
-    #[test]
-    fn is_semantic_query_requires_3_words() {
-        assert!(!is_semantic_query("fn main"));
-        assert!(!is_semantic_query("embed_query"));
-        assert!(is_semantic_query("how does embedding work"));
-        assert!(is_semantic_query("database connection pool"));
     }
 
     #[test]

@@ -107,8 +107,8 @@ pub struct FilterDef {
     #[serde(default)]
     pub extract_sections: Vec<ExtractSection>,
 
-    /// Semantic filter: keep only lines semantically relevant to a query.
-    /// Uses embeddings to score relevance. Requires daemon or in-process embed.
+    /// Keyword filter: keep only lines that share a term with a query.
+    /// Keeps lines that share a keyword with the query.
     #[serde(default)]
     pub semantic_filter: Option<SemanticFilterDef>,
 
@@ -182,13 +182,15 @@ pub struct ExtractSection {
 pub struct SemanticFilterDef {
     /// Query to score relevance against (e.g., "error", "test failure", "build output")
     pub query: String,
-    /// Minimum cosine similarity to keep (0.0-1.0)
+    /// Ignored (relevance is keyword overlap); kept so old filter files still parse.
+    #[allow(dead_code)]
     #[serde(default = "default_semantic_threshold")]
     pub threshold: f32,
     /// Always keep lines matching these patterns regardless of score
     #[serde(default)]
     pub always_keep: Vec<String>,
-    /// Model to use (defaults to index model)
+    /// Ignored; kept so old filter files still parse.
+    #[allow(dead_code)]
     pub model: Option<String>,
 }
 
@@ -792,26 +794,25 @@ pub fn load_all_filters() -> Vec<FilterDef> {
     all
 }
 
-/// Config problems in a filter's semantic_filter section (unknown model,
-/// out-of-range threshold). Used by `tokenix doctor`; empty = healthy.
+/// Notes on a filter's `semantic_filter`: `model` and `threshold` no longer do
+/// anything (relevance is keyword overlap), and a line with no query term is
+/// dropped unless `always_keep` matches it. Used by `tokenix doctor`.
 pub fn semantic_filter_issues(f: &FilterDef) -> Vec<String> {
+    let Some(sem) = &f.semantic_filter else {
+        return Vec::new();
+    };
     let mut issues = Vec::new();
-    if let Some(sem) = &f.semantic_filter {
-        if let Some(model) = &sem.model {
-            if !crate::embed::is_known_model(model) {
-                issues.push(format!(
-                    "semantic_filter.model '{}' unknown — falls back to '{}'",
-                    model,
-                    crate::embed::DEFAULT_MODEL_ID
-                ));
-            }
-        }
-        if !(0.0..=1.0).contains(&sem.threshold) {
-            issues.push(format!(
-                "semantic_filter.threshold {} outside 0.0-1.0",
-                sem.threshold
-            ));
-        }
+    if sem.model.is_some() {
+        issues.push("semantic_filter.model is ignored (embeddings were removed)".to_string());
+    }
+    if sem.threshold != default_semantic_threshold() {
+        issues.push("semantic_filter.threshold is ignored (keyword overlap only)".to_string());
+    }
+    if sem.always_keep.is_empty() {
+        issues.push(
+            "semantic_filter drops lines sharing no query term; add always_keep for failure markers"
+                .to_string(),
+        );
     }
     issues
 }
@@ -2108,7 +2109,7 @@ fn apply_filter_with_exit_inner(output: &str, f: &FilterDef, exit_ok: Option<boo
         lines = apply_deduplicate_blocks(lines, dedup);
     }
 
-    // NEW: semantic_filter - embedding-based relevance filtering
+    // semantic_filter - keyword-overlap relevance filtering
     if let Some(semantic) = &f.semantic_filter {
         lines = apply_semantic_filter(lines, semantic);
     }
@@ -2414,95 +2415,6 @@ fn blocks_similar(a: &[String], b: &[String], threshold: f32) -> bool {
 }
 
 fn apply_semantic_filter(lines: Vec<String>, semantic: &SemanticFilterDef) -> Vec<String> {
-    // Try to use real embeddings via daemon or in-process
-    if let Ok(filtered) = apply_semantic_filter_with_embeddings(&lines, semantic) {
-        return filtered;
-    }
-
-    // Fallback: keyword-based heuristic
-    apply_semantic_filter_keyword_fallback(lines, semantic)
-}
-
-fn apply_semantic_filter_with_embeddings(
-    lines: &[String],
-    semantic: &SemanticFilterDef,
-) -> Result<Vec<String>, anyhow::Error> {
-    use crate::embed::{embed_query, set_active_model};
-
-    // Set model if specified
-    if let Some(model) = &semantic.model {
-        if !crate::embed::is_known_model(model) {
-            eprintln!(
-                "[tokenix] warning: semantic_filter.model '{}' is unknown; falling back to '{}'",
-                model,
-                crate::embed::DEFAULT_MODEL_ID
-            );
-        }
-        set_active_model(model);
-    }
-
-    // Embed the query
-    let query_vec = embed_query(&semantic.query)?;
-
-    // Embed each line (or small groups) and compute similarity
-    let always_keep_patterns: Vec<Regex> = semantic
-        .always_keep
-        .iter()
-        .filter_map(|p| cached_regex(p))
-        .collect();
-
-    // Two passes so the embeddings go through `embed_documents` in ONE batch.
-    // Embedding line-by-line meant a round-trip per line (daemon hop or model
-    // call), multiplying latency on the hook path by the line count — and one
-    // failing line aborted the whole filter into the keyword fallback.
-    let mut results = Vec::new();
-    let mut pending: Vec<String> = Vec::new();
-    let mut slots: Vec<Option<usize>> = Vec::with_capacity(lines.len());
-
-    for line in lines {
-        if always_keep_patterns.iter().any(|re| re.is_match(line)) {
-            slots.push(None);
-            results.push(line.clone());
-            continue;
-        }
-        if line.trim().len() < 5 {
-            slots.push(None);
-            continue;
-        }
-        slots.push(Some(pending.len()));
-        pending.push(line.clone());
-    }
-
-    if pending.is_empty() {
-        return Ok(results);
-    }
-    let vecs = crate::embed::embed_documents(&pending)?;
-
-    results.clear();
-    for (line, slot) in lines.iter().zip(slots) {
-        match slot {
-            None => {
-                if always_keep_patterns.iter().any(|re| re.is_match(line)) {
-                    results.push(line.clone());
-                }
-            }
-            Some(i) => {
-                if let Some(v) = vecs.get(i) {
-                    if cosine_similarity(&query_vec, v) >= semantic.threshold {
-                        results.push(line.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(results)
-}
-
-fn apply_semantic_filter_keyword_fallback(
-    lines: Vec<String>,
-    semantic: &SemanticFilterDef,
-) -> Vec<String> {
     let query_terms: Vec<&str> = semantic.query.split_whitespace().collect();
     let always_keep_patterns: Vec<Regex> = semantic
         .always_keep
@@ -2523,20 +2435,6 @@ fn apply_semantic_filter_keyword_fallback(
                 .any(|term| line_lower.contains(&term.to_lowercase()))
         })
         .collect()
-}
-
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        0.0
-    } else {
-        dot / (norm_a * norm_b)
-    }
 }
 
 fn apply_summarize_json(lines: Vec<String>, summarize: &SummarizeJsonDef) -> Vec<String> {
@@ -2875,11 +2773,9 @@ block_caps = [             # keep the first N lines of each block opened by `sta
   {{ start = "^warning: ", end = "^(\\s*$|[A-Za-z])", max_lines = 2 }},
 ]
 filter_stderr = true       # also filter stderr (compilers write diagnostics there)
-semantic_filter = {{       # embedding-based relevance filtering (uses daemon/embed)
+semantic_filter = {{       # keep lines sharing a keyword with `query`
   query = "test failure error panic",
-  threshold = 0.3,
-  always_keep = ["^error\\[", "^FAIL"],
-  model = "nomic-v1.5"
+  always_keep = ["^error\\[", "^FAIL"]
 }}
 deduplicate_blocks = {{    # structural block deduplication
   min_block_lines = 3,
@@ -2902,7 +2798,7 @@ Rules:
 - Set on_empty when the command normally succeeds silently
 - Use replace_patterns to normalize paths, timestamps, IDs, etc.
 - Use extract_sections to pull out failure blocks, error sections, etc.
-- Use semantic_filter for query-aware relevance (requires embed model)
+- Use semantic_filter to keep only lines sharing a keyword with a query
 - Use deduplicate_blocks for repetitive output (test runs, build steps)
 - Use summarize_json for large JSON (cargo metadata, API responses)
 - Use token_budget as a hard cap with priority-based truncation
@@ -3491,54 +3387,6 @@ expected = \"\"
         // Would panic with naive &l[..4] because 'é'/'ç' straddle the boundary.
         let out = apply_filter("café\nação\n", &f);
         assert_eq!(out, "caf\naç");
-    }
-
-    #[test]
-    fn semantic_filter_issues_flags_unknown_model_and_bad_threshold() {
-        let mut f = FilterDef {
-            description: None,
-            match_command: ".*".to_string(),
-            skip_when_matches: None,
-            notify_on_truncate: false,
-            strip_ansi: false,
-            strip_lines_matching: vec![],
-            keep_lines_matching: vec![],
-            max_lines: None,
-            head_lines: None,
-            tail_lines: None,
-            on_empty: None,
-            passthrough_when_emptied: false,
-            match_output: vec![],
-            truncate_lines_at: None,
-            uniform_success: None,
-            filter_stderr: false,
-            replace_patterns: vec![],
-            extract_sections: vec![],
-            semantic_filter: Some(SemanticFilterDef {
-                query: "errors".to_string(),
-                threshold: 1.5,
-                always_keep: vec![],
-                model: Some("does-not-exist".to_string()),
-            }),
-            deduplicate_blocks: None,
-            summarize_json: None,
-            token_budget: None,
-            on_failure: None,
-            priority_lines: vec![],
-            category_caps: vec![],
-            block_caps: vec![],
-        };
-        let issues = semantic_filter_issues(&f);
-        assert_eq!(
-            issues.len(),
-            2,
-            "expected model + threshold issues: {issues:?}"
-        );
-
-        let sem = f.semantic_filter.as_mut().unwrap();
-        sem.model = Some("nomic-v1.5".to_string());
-        sem.threshold = 0.3;
-        assert!(semantic_filter_issues(&f).is_empty());
     }
 
     #[test]

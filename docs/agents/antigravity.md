@@ -42,7 +42,7 @@ Antigravity's input and output format.
 | Antigravity tool | Treated as | Result |
 |---|---|---|
 | `read_file`, `view_file` | Read | `{"decision":"deny","reason":"<outline>"}` for large code files |
-| `grep_search` | Grep | Symbol lookup or semantic results |
+| `grep_search` | Grep | Symbol lookup for an identifier |
 | `run_command`, `run_in_terminal` | Bash | Rewritten through `overwrite: {name, args}` to run via `tokenix run` |
 | Anything else, or no/stale index | n/a | `{"decision":"allow"}` |
 

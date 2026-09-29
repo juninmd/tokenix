@@ -121,7 +121,7 @@ pub fn run_benchmark(
     } else if index_needs_refresh(repo_root) {
         println!(
             "{}",
-            "Index is stale or missing; benchmark will use available metadata only. Pass --refresh-index to re-embed."
+            "Index is stale or missing; benchmark will use available metadata only. Pass --refresh-index to re-index."
                 .yellow()
         );
         println!();
@@ -857,7 +857,7 @@ fn print_targeted_workflows(rows: &[WorkflowRow]) {
 }
 
 fn print_semantic_quality(rows: &[QueryRow], query_budget: usize) {
-    println!("{}", "3. Semantic Search Quality".bold());
+    println!("{}", "3. Search Quality".bold());
     println!(
         "  Budget: {} tokens/query. Hit@1 means the first returned file is expected; Hit@3 allows the first three files.",
         format_num(query_budget as i64)
@@ -947,7 +947,7 @@ fn print_verdict(
         format_num((cmd_vanilla.saturating_sub(cmd_tokenix)) as i64)
     );
     println!(
-        "  Semantic search found an expected file in the top 3 for {}/{} labeled queries.",
+        "  Search found an expected file in the top 3 for {}/{} labeled queries.",
         hit3,
         query_rows.len()
     );

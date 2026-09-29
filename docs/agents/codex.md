@@ -37,7 +37,7 @@ On Linux and macOS the hook calls `"<abs path>/tokenix" hook` directly.
 |---|---|
 | A shell command that matches a filter | Rewritten to `tokenix run '<cmd>'` (`updatedInput`), same exit code |
 | `git status` | Rewritten to `git status --short` |
-| `grep_search` | Same path as Claude's `Grep`: symbol lookup, semantic search or a `head_limit` cap |
+| `grep_search` | Same path as Claude's `Grep`: symbol lookup or a `head_limit` cap |
 | Anything else, or no/stale index | Passes through |
 
 Codex's matcher does not include file reads. For big files, the instructions and

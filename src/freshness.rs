@@ -8,12 +8,8 @@
 //! such escape: it answers confidently from old rows.
 //!
 //! This module closes that window for the common case (a handful of dirty
-//! files) by re-chunking just those files **without embedding them**: chunk
-//! text lands in the FTS5 side of hybrid search and the symbol graph is
-//! repaired, which costs milliseconds and no model load. Files touched this way
-//! are stamped with a sentinel content hash (see `indexer::NO_EMBED_HASH_PREFIX`)
-//! so the next real `tokenix index` re-embeds them instead of skipping them as
-//! unchanged.
+//! files) by re-chunking just those files: chunk text lands in the FTS5 index
+//! and the symbol graph is repaired, which costs milliseconds.
 //!
 //! Everything here fails open: any error, lock contention, or a change set too
 //! large to be cheap leaves the existing index untouched and the command
@@ -132,7 +128,6 @@ pub fn refresh_before_query(repo_root: &Path) -> Refresh {
         repo_root,
         IndexOptions {
             force: false,
-            no_embed: true,
             inline: true,
         },
         &mut silent,
@@ -159,7 +154,7 @@ pub fn announce(outcome: &Refresh) {
                 ));
             }
             eprintln!(
-                "[tokenix] index refreshed for {what} in {}ms (text + graph; run `tokenix index` to embed them)",
+                "[tokenix] index refreshed for {what} in {}ms (text + graph)",
                 r.elapsed_ms
             );
         }
