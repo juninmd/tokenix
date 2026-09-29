@@ -517,7 +517,7 @@ explicit switch re-embeds everything.
 **`tokenix export-index` / `import-index`:** `--output/-o` and `--input/-i` (default
 `.tokenix/index.db.gz`), `--force` on import to replace a newer local index. The
 snapshot is a compacted copy of the index with the local embedding cache stripped.
-Import refuses anything that is not a tokenix index, keeps the previous DB as
+Import refuses anything that is not a tokenix index (2 GiB decompressed cap, index lock held, `PRAGMA integrity_check` before the swap), keeps the previous DB as
 `*.pre-import.bak`, and keeps the snapshot's git fingerprint so `tokenix index`
 only has to catch up on the diff.
 
