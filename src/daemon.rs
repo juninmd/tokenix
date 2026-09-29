@@ -352,9 +352,23 @@ fn write_token() -> Option<String> {
     if token.is_empty() {
         return None;
     }
-    std::fs::write(&path, &token).ok()?;
-    crate::store::restrict_to_owner(&path);
+    create_private_file(&path, &token).ok()?;
     Some(token)
+}
+
+/// Create `path` owner-only from the first byte. `fs::write` + chmod leaves a
+/// window where the token is readable under the default umask; a stale file is
+/// removed first so `create_new` also refuses to follow a planted symlink.
+fn create_private_file(path: &Path, contents: &str) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(path);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)?.write_all(contents.as_bytes())
 }
 
 /// Read the running daemon's token. `None` when no daemon has started yet.
@@ -1096,6 +1110,23 @@ fn err_json(msg: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_file_replaces_stale_content_and_is_owner_only() {
+        let dir = std::env::temp_dir().join(format!("tokenix-tok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("daemon.token");
+        std::fs::write(&p, "stale-and-longer-than-new").unwrap();
+        create_private_file(&p, "fresh").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "fresh");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn generated_tokens_are_hex_and_unpredictable() {
