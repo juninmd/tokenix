@@ -101,7 +101,7 @@ fi
 
 # Verify every expected subcommand appears in help
 EXPECTED_CMDS=(index query context explore symbols callers callees impact
-  read stats gain benchmark serve stop doctor install-hook remove-hook
+  read stats gain benchmark doctor install-hook remove-hook
   filter memory hook hook-post mcp rebuild-graph)
 
 HELP_OUT=$("$TOKENIX" --help 2>&1)
@@ -152,12 +152,12 @@ This is a test repository for tokenix homologation.
 It contains arithmetic utilities and a greeting function.
 MD
 
-# Index (CPU, no-embed for speed — validates file walk + chunker, skips ONNX download)
-INDEX_OUT=$("$TOKENIX" index "$REPO" --no-embed --cpu-profile low 2>&1)
+# Index (validates file walk + chunker)
+INDEX_OUT=$("$TOKENIX" index "$REPO" --cpu-profile low 2>&1)
 if echo "$INDEX_OUT" | grep -qE "^error:|thread.*main.*panicked|Error:"; then
-  fail "index --no-embed produced errors: $INDEX_OUT"
+  fail "index produced errors: $INDEX_OUT"
 else
-  pass "index --no-embed succeeds on synthetic repo"
+  pass "index succeeds on synthetic repo"
 fi
 
 # Stats should show files > 0
@@ -168,12 +168,12 @@ else
   fail "stats shows no content after index" "$STATS"
 fi
 
-# Query (no-embed index → should handle gracefully, not panic)
+# Query (must not panic)
 QUERY_OUT=$("$TOKENIX" query "greet function" --path "$REPO" 2>&1 || true)
 if echo "$QUERY_OUT" | grep -qi "panic\|unwrap\|thread.*main"; then
   fail "query panicked: $QUERY_OUT"
 else
-  pass "query exits without panic (no-embed expected)"
+  pass "query exits without panic"
 fi
 
 # ---------------------------------------------------------------------------
@@ -296,13 +296,6 @@ if echo "$DOCTOR_OUT" | grep -q "version"; then
 else
   fail "doctor output missing version field: $DOCTOR_OUT"
 fi
-
-if echo "$DOCTOR_OUT" | grep -q "Embedding model"; then
-  pass "doctor reports embedding model section"
-else
-  fail "doctor missing 'Embedding model' section"
-fi
-
 # ---------------------------------------------------------------------------
 # 8. install-hook / remove-hook (dry, local only)
 # ---------------------------------------------------------------------------
@@ -373,38 +366,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 10. Daemon lifecycle (optional — skips if port already in use)
-# ---------------------------------------------------------------------------
-section "daemon lifecycle"
-
-DAEMON_PORT=47399  # non-default to avoid conflict
-
-# Check if port is free
-if ! ss -ltn 2>/dev/null | grep -q ":$DAEMON_PORT "; then
-  "$TOKENIX" serve --port "$DAEMON_PORT" &
-  DAEMON_PID=$!
-  sleep 2
-
-  # Health check via nc
-  if command -v nc &>/dev/null; then
-    HEALTH=$(echo '{"type":"health"}' | nc -w 1 127.0.0.1 "$DAEMON_PORT" 2>/dev/null || true)
-    if echo "$HEALTH" | grep -q '"ok":true'; then
-      pass "daemon health check returns ok:true"
-    else
-      fail "daemon health check failed: $HEALTH"
-    fi
-  else
-    skip "daemon health check via nc" "nc not installed"
-  fi
-
-  kill "$DAEMON_PID" 2>/dev/null || true
-  wait "$DAEMON_PID" 2>/dev/null || true
-  pass "daemon started and stopped cleanly"
-else
-  skip "daemon lifecycle" "port $DAEMON_PORT already in use"
-fi
-
-# ---------------------------------------------------------------------------
 # 11. gain subcommand
 # ---------------------------------------------------------------------------
 section "gain"
@@ -431,7 +392,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 13. context / explore (no-embed graceful)
+# 13. context / explore
 # ---------------------------------------------------------------------------
 section "context / explore"
 

@@ -154,7 +154,7 @@ fn full_tool_estimate() -> Vec<Value> {
     [
         (
             "tokenix_query",
-            "Semantic search over the indexed codebase repository",
+            "Search the indexed codebase (full-text + symbols)",
         ),
         ("tokenix_context", "Build focused task context in one call"),
         (
@@ -280,7 +280,7 @@ pub fn run_mcp_server(profile: McpProfile) -> Result<()> {
                                 "tools": [
                                     {
                                         "name": "tokenix_query",
-                                        "description": "Semantic search over the indexed codebase repository",
+                                        "description": "Search the indexed codebase (full-text + symbols)",
                                         "inputSchema": {
                                             "type": "object",
                                             "properties": {
@@ -303,7 +303,7 @@ pub fn run_mcp_server(profile: McpProfile) -> Result<()> {
                                     },
                                     {
                                         "name": "tokenix_context",
-                                        "description": "PRIMARY TOOL: build focused task context in one call by combining semantic search, preference-memory capture guidance, entry points, and compact file outlines",
+                                        "description": "PRIMARY TOOL: build focused task context in one call by combining indexed search, preference-memory capture guidance, entry points, and compact file outlines",
                                         "inputSchema": {
                                             "type": "object",
                                             "properties": {
@@ -995,10 +995,7 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
 
 fn search_tool_catalog(query: &str) -> String {
     const TOOLS: &[(&str, &str)] = &[
-        (
-            "tokenix_query",
-            "semantic code search with optional file filter",
-        ),
+        ("tokenix_query", "code search with optional file filter"),
         ("tokenix_context", "one-call focused context for a task"),
         (
             "tokenix_explore",

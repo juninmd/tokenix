@@ -34,7 +34,6 @@ move the binary, run `install-hook` again.
 | `Read` of a code file ≥ 200 lines, no `offset`/`limit` | Symbol outline instead of the file (exit `2`, Claude reads the outline from stderr), only when it saves ≥ 30% |
 | `Read` with a range, or a small file | Passes through |
 | `Grep` for an identifier | Its definition from the symbol graph |
-| `Grep` for a 3+ word phrase | Semantic search results |
 | `Grep` with unbounded `content` output | Adds `head_limit` (default 100) through `updatedInput` |
 | `Bash` matching a filter | Rewritten to `tokenix run '<cmd>'` through `updatedInput`, same exit code. On Windows it re-runs under the same Git Bash, so bash syntax keeps working |
 | `PowerShell` matching a filter | Rewritten to `& 'tokenix' run --shell pwsh '<cmd>'` |

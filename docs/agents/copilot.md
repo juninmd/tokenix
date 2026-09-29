@@ -50,7 +50,7 @@ tokenix maps it onto the same decisions Claude Code gets:
 | Copilot tool | Treated as | Result |
 |---|---|---|
 | `view`, `read` (`path`/`file` argument) | Read | Outline for large code files, pass-through otherwise |
-| `grep`, `grep_search` (`query`/`regex`/`search`) | Grep | Symbol lookup, semantic results or a `head_limit` cap |
+| `grep`, `grep_search` (`query`/`regex`/`search`) | Grep | Symbol lookup or a `head_limit` cap |
 | Terminal commands | Bash | Filtered through `tokenix run` |
 | Any tool result (PostToolUse) | n/a | Known secrets redacted, noisy output compressed |
 

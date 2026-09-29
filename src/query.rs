@@ -3,8 +3,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use crate::chunker::count_tokens;
-use crate::embed::embed_query;
-use crate::store::{fetch_chunks_by_ids, hybrid_search, open_db, search_graph_nodes, SearchResult};
+use crate::store::{
+    fetch_chunks_by_ids, lexical_search, open_db, search_graph_nodes, SearchResult,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum ContextMode {
@@ -27,14 +28,8 @@ pub fn query_index(
         None => return Ok(None),
     };
 
-    // Embed the query with the SAME model the index was built with (read from the
-    // index meta) so query and document vectors are comparable.
-    if let Some(model_id) = crate::store::index_model_id(repo_root) {
-        crate::embed::set_active_model(&model_id);
-    }
-    let vec = embed_query(query_text)?;
     let candidate_k = (k.saturating_mul(5)).max(50);
-    let mut results = hybrid_search(&conn, &vec, query_text, candidate_k, file_filter)?;
+    let mut results = lexical_search(&conn, query_text, candidate_k, file_filter)?;
     add_symbol_recall_candidates(&conn, &mut results, query_text, file_filter)?;
 
     rerank_results(&mut results, query_text);
@@ -43,9 +38,7 @@ pub fn query_index(
     let mut used_tokens = 0usize;
 
     for r in results.into_iter().take(k) {
-        // Use the model's real tokenizer for budget accuracy (falls back to the
-        // approximation if the model isn't downloaded yet).
-        let tokens = crate::embed::count_tokens_accurate(&r.content);
+        let tokens = crate::chunker::count_tokens(&r.content);
         if used_tokens + tokens > budget {
             continue;
         }
@@ -90,7 +83,7 @@ pub fn query_index_multi(
     let mut selected = Vec::new();
     let mut used_tokens = 0usize;
     for r in merged.into_iter().take(k) {
-        let tokens = crate::embed::count_tokens_accurate(&r.content);
+        let tokens = crate::chunker::count_tokens(&r.content);
         if used_tokens + tokens > budget {
             continue;
         }
@@ -174,7 +167,7 @@ fn add_symbol_recall_candidates(
 
     // 5. Update every result's distance using RRF combination
     for r in results.iter_mut() {
-        let rrf_hybrid = 1.0 - r.distance; // dense/sparse RRF score
+        let rrf_hybrid = 1.0 - r.distance; // fused BM25/FTS rank score
         let mut rrf_score = rrf_hybrid;
 
         if let Some(rank) = graph_ids.iter().position(|&x| x == r.id) {
@@ -212,8 +205,8 @@ pub fn rerank_results(results: &mut [SearchResult], query: &str) {
 }
 
 fn hybrid_score(result: &SearchResult, terms: &[String]) -> f32 {
-    let semantic = 1.0 - result.distance;
-    semantic + lexical_boost(result, terms)
+    let rank_score = 1.0 - result.distance;
+    rank_score + lexical_boost(result, terms)
 }
 
 // Core lexical reranking weights (per query term, summed then capped).
@@ -1331,7 +1324,7 @@ mod tests {
             distance: 0.12,
             ..make_result("src/other.rs", 1, 9, "run", "postgres pool")
         };
-        // Same lexical profile: the closer vector wins, no path-specific -0.8.
+        // Same lexical profile: the better-ranked chunk wins, no path-specific -0.8.
         assert_eq!(
             top_after_rerank(vec![base, bench], "postgres pool"),
             "src/benchmark.rs"

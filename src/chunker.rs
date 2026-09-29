@@ -53,7 +53,7 @@ pub const INDEXED_EXTS: &[&str] = &[
 
 /// Data/config extensions indexed only when `[index] data_files = true`.
 /// Off by default: these are usually generated/config noise (e.g. thousands of
-/// JSON files) that bloat the index and pollute semantic results.
+/// JSON files) that bloat the index and pollute search results.
 pub const DATA_EXTS: &[&str] = &[".json", ".yaml", ".yml"];
 
 /// Filename substrings that are never indexed — likely to contain secrets.
@@ -166,8 +166,9 @@ pub struct HookConfig {
     /// Read intercept: files with at least this many lines return an outline
     /// instead of full content (default 200).
     pub read_min_lines: Option<usize>,
-    /// Grep intercept: patterns with at least this many words are treated as
-    /// semantic queries (default 3).
+    /// Ignored: Grep is no longer intercepted for natural-language patterns. Kept
+    /// so existing `.tokenix.toml` files (`deny_unknown_fields`) still parse.
+    #[allow(dead_code)]
     pub grep_min_words: Option<usize>,
 }
 
@@ -381,8 +382,8 @@ pub fn chunk_file(path: &str, content: &str) -> Vec<Chunk> {
 /// Hard guarantee that no single chunk exceeds `MAX_CHUNK_TOKENS`. The
 /// language chunkers split on line boundaries, but a single very long line
 /// (minified JS/JSON, generated data) can still produce one oversized chunk —
-/// which inflates the padded ONNX embedding batch and was the historical
-/// PC-freeze trigger. Here we split such chunks by character windows (never
+/// which bloats the index and its full-text search and was the historical
+/// cost. Here we split such chunks by character windows (never
 /// truncating), preserving 100% of the content.
 fn enforce_token_cap(chunks: Vec<Chunk>) -> Vec<Chunk> {
     // Windowing is done on BYTES while `count_tokens` counts chars. Since
