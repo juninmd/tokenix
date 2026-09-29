@@ -1848,7 +1848,11 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result
     let mut progress = |msg: &str| println!("  {}", msg);
     let (result, stats) = indexer::index_repo_with_options(
         &repo_root,
-        indexer::IndexOptions { force, no_embed },
+        indexer::IndexOptions {
+            force,
+            no_embed,
+            inline: false,
+        },
         &mut progress,
     )?;
 

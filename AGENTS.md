@@ -138,6 +138,12 @@ graph and read interception, and reporting them stale would make the hook fail
 open and stop saving tokens. `index --if-stale` checks `pending_embed_count`
 separately.
 
+Only the inline refresh (`IndexOptions.inline`) skips applying deletions; an
+explicit `index --no-embed` applies them. A git rename (`R`) records its origin
+as deleted (a copy, `C`, does not), and a file that still exists but now yields
+no chunks (emptied, binary, sub-minimum) has its row and chunks dropped rather
+than left serving the old body.
+
 The inline refresh (`freshness.rs`) counts a dirty file the index does not know
 only if `indexer::stores_content` says indexing it would write a row. Empty,
 binary and sub-`MIN_CHUNK_TOKENS` files never get one, and counting them made
