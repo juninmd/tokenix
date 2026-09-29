@@ -301,7 +301,7 @@ shown there was run against the real binary; keep it that way.
 ## Output filters
 
 Resolution: `<repo>/.tokenix/filters` (trust-gated) → `~/.tokenix/filters` →
-bundled. Currently **528 filters / 1,150 golden cases**.
+bundled. Currently **534 filters / 1,167 golden cases**.
 
 **Hot path uses `load_filters_for_command()`, not `load_all_filters()`.** A
 prefilter narrows candidates before any regex compiles; `find_filter` matches via
