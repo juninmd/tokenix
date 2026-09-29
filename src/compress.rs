@@ -61,6 +61,14 @@ fn compress_bash_output_for_stream(
     is_stderr: bool,
     exit_ok: Option<bool>,
 ) -> String {
+    // `tokenix retrieve <key>` is the escape hatch the recovery marker itself
+    // advertises. Running its output back through this function would cap it
+    // again and print a NEW marker pointing at the SAME key — an unreachable
+    // full output. Never compress it, single command or not.
+    if is_tokenix_retrieve_command(cmd) {
+        return s.to_string();
+    }
+
     // User-defined TOML filters take priority over built-in heuristics.
     let user_filters = crate::filters::load_filter_groups_for_command(cmd);
     if let Some(f) = crate::filters::find_filter_ranked(cmd, &user_filters) {
@@ -937,6 +945,23 @@ fn is_cargo_metadata_command(cmd: &str) -> bool {
     cmd.contains("cargo metadata")
 }
 
+/// True for a `tokenix retrieve <key>` invocation, however it got there (a
+/// bare call, or one wrapped by env assignments / `cmd /c` / a package
+/// runner — anything `get_effective_command` already unwraps for other
+/// detectors in this file).
+fn is_tokenix_retrieve_command(cmd: &str) -> bool {
+    let effective = crate::filters::get_effective_command(cmd);
+    let mut tokens = effective.split_whitespace();
+    let Some(bin) = tokens.next() else {
+        return false;
+    };
+    let base = Path::new(bin)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(bin);
+    base.eq_ignore_ascii_case("tokenix") && tokens.next() == Some("retrieve")
+}
+
 /// Summarize `cargo metadata` (a single multi-hundred-KB JSON blob) to the package
 /// count + workspace members. The full transitive metadata is almost never the
 /// signal an agent needs, and it otherwise passes through uncompressed.
@@ -1399,6 +1424,7 @@ fn compress_output_inner(s: &str) -> String {
         return enforce_token_budget(&compacted);
     }
     let s = strip_ansi(s);
+    let s = strip_git_crlf_warnings(&s);
     let s = remove_emojis(&s);
     let s = collapse_blank_lines(&s);
     let s = group_repeated_blocks(&s);
@@ -1406,6 +1432,21 @@ fn compress_output_inner(s: &str) -> String {
 
     // Additional generic aggressive compression
     enforce_token_budget(&generic_aggressive_compress(&s))
+}
+
+fn strip_git_crlf_warnings(s: &str) -> String {
+    if !s.contains("LF will be replaced by CRLF") && !s.contains("CRLF will be replaced by LF") {
+        return s.to_string();
+    }
+    s.lines()
+        .filter(|l| {
+            let t = l.trim();
+            !(t.starts_with("warning:")
+                && (t.contains("LF will be replaced by CRLF")
+                    || t.contains("CRLF will be replaced by LF")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -1432,6 +1473,13 @@ mod eol_tests {
     fn lf_input_stays_lf() {
         let src = "fn main() {\n    println!(\"hi\");\n}\n";
         assert!(!compress_output(src).contains('\r'));
+    }
+
+    #[test]
+    fn git_crlf_warnings_are_stripped() {
+        let input = "warning: in the working copy of 'src/main.rs', LF will be replaced by CRLF the next time Git touches it\nreal output\nwarning: in the working copy of 'src/lib.rs', CRLF will be replaced by LF the next time Git touches it\n";
+        let out = compress_output(input);
+        assert_eq!(out.trim(), "real output");
     }
 
     #[test]
@@ -2645,6 +2693,26 @@ mod tests {
         assert!(out.starts_with(r#"{"id":"#), "key order changed: {out}");
         // Whitespace inside strings is preserved.
         assert_eq!(compact_json(r#"{ "k" : "a  b" }"#), r#"{"k":"a  b"}"#);
+    }
+
+    #[test]
+    fn retrieve_command_output_is_never_compressed() {
+        // Regression: `tokenix retrieve <key>` is the escape hatch offered by
+        // the compression marker itself. The hook ran this command's output
+        // back through `compress_bash_output` like any other, so a large
+        // retrieve result got capped again and printed a NEW marker pointing
+        // at the SAME key — the recovery path recovered nothing.
+        let mut fake_compiler_error = String::new();
+        for i in 0..2000 {
+            fake_compiler_error.push_str(&format!(
+                "error[E{i:04}]: mismatched types in synthetic_module::fn_{i}\n"
+            ));
+        }
+        let out = compress_bash_output("tokenix retrieve d8d79eefbf973679", &fake_compiler_error);
+        assert_eq!(
+            out, fake_compiler_error,
+            "retrieve output must pass through untouched"
+        );
     }
 
     #[test]

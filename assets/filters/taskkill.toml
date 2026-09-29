@@ -1,0 +1,39 @@
+[filters.taskkill]
+description = "Compact Windows taskkill output"
+match_command = "^taskkill(\\s|$)"
+strip_ansi = true
+uniform_success = { pattern = "(?i)^(SUCCESS|ÊXITO|ÉXITO):", message = "terminated {n} processes" }
+priority_lines = [
+  "(?i)^(ERROR|ERRO):",
+  "(?i)^Razão:",
+  "(?i)^Reason:"
+]
+max_lines = 20
+token_budget = 800
+
+[[tests.taskkill]]
+name = "uniform success collapses to count"
+command = "taskkill //IM node.exe //F //T"
+input = """
+ÊXITO: o processo com PID 25332 (processo filho de PID 4804) foi finalizado.
+ÊXITO: o processo com PID 29588 (processo filho de PID 4804) foi finalizado.
+ÊXITO: o processo com PID 6936 (processo filho de PID 4804) foi finalizado.
+"""
+expected = "terminated 3 processes"
+
+[[tests.taskkill]]
+name = "errors survive"
+command = "taskkill //IM node.exe //F //T"
+input = """
+ÊXITO: o processo com PID 25332 (processo filho de PID 4804) foi finalizado.
+ERRO: o processo com PID 29588 não pôde ser finalizado.
+Razão: Não há suporte para a operação tentada.
+"""
+expected = """ÊXITO: o processo com PID 25332 (processo filho de PID 4804) foi finalizado.
+ERRO: o processo com PID 29588 não pôde ser finalizado.
+Razão: Não há suporte para a operação tentada."""
+
+[[tests.taskkill]]
+name = "empty input"
+input = ""
+expected = ""

@@ -7,9 +7,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-mod vector;
-pub use vector::*;
-
 // ---------------------------------------------------------------------------
 // Global storage: ~/.tokenix/{project_id}.{db,log}
 // ---------------------------------------------------------------------------
@@ -303,15 +300,6 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
             content TEXT NOT NULL,
             token_count INTEGER
         );
-        CREATE TABLE IF NOT EXISTS embeddings (
-            chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
-            embedding BLOB NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS embedding_cache (
-            content_hash TEXT PRIMARY KEY,
-            embedding BLOB NOT NULL,
-            updated_at REAL
-        );
         CREATE TABLE IF NOT EXISTS graph_nodes (
             chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
             file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
@@ -348,29 +336,6 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_graph_nodes_name ON graph_nodes(name);
         CREATE INDEX IF NOT EXISTS idx_graph_edges_caller ON graph_edges(caller_chunk_id);
         CREATE INDEX IF NOT EXISTS idx_graph_edges_callee ON graph_edges(callee_chunk_id);
-
-        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-            content,
-            symbol,
-            path,
-            content='chunks',
-            content_rowid='id'
-        );
-
-        CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
-            INSERT INTO chunks_fts(rowid, content, symbol, path) VALUES (new.id, new.content, new.symbol, new.path);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, content, symbol, path) VALUES ('delete', old.id, old.content, old.symbol, old.path);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, content, symbol, path) VALUES ('delete', old.id, old.content, old.symbol, old.path);
-            INSERT INTO chunks_fts(rowid, content, symbol, path) VALUES (new.id, new.content, new.symbol, new.path);
-        END;
-
-        INSERT OR IGNORE INTO chunks_fts(rowid, content, symbol, path) SELECT id, content, symbol, path FROM chunks;
         "#,
     )?;
     // Migration for indexes created before graph centrality: add the rank
@@ -380,25 +345,38 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
         "ALTER TABLE graph_nodes ADD COLUMN rank REAL NOT NULL DEFAULT 0",
         [],
     );
-    // Migration for int8-quantized embeddings: rows with a non-NULL scale hold
-    // i8 vectors (1 byte/dim); NULL-scale rows are legacy f32 blobs (4 bytes/dim).
-    let _ = conn.execute("ALTER TABLE embeddings ADD COLUMN scale REAL", []);
+    // Embeddings and full-text search were removed: drop the tables (and the
+    // triggers that feed `chunks_fts`, which must go first or every chunk write
+    // would fail) an older index still carries. DROP only frees pages, so flag
+    // the file for `vacuum_if_flagged`, which a full `tokenix index` runs
+    // (never an inline refresh).
+    let had_legacy: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE name IN ('embeddings','embedding_cache','chunks_fts','chunks_ai','chunks_ad','chunks_au')",
+        [],
+        |r| r.get(0),
+    )?;
+    if had_legacy > 0 {
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS chunks_ai; DROP TRIGGER IF EXISTS chunks_ad;
+             DROP TRIGGER IF EXISTS chunks_au; DROP TABLE IF EXISTS chunks_fts;
+             DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS embedding_cache;",
+        )?;
+        set_meta(conn, "needs_vacuum", "1")?;
+    }
     Ok(())
 }
 
-pub fn serialize_vec(v: &[f32]) -> Vec<u8> {
-    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+/// Reclaim the space left by dropped legacy vector tables. Returns whether a
+/// VACUUM ran. A failure keeps the flag set so the next full index retries.
+pub fn vacuum_if_flagged(conn: &Connection) -> Result<bool> {
+    if meta_value(conn, "needs_vacuum").as_deref() != Some("1") {
+        return Ok(false);
+    }
+    conn.execute_batch("VACUUM")?;
+    set_meta(conn, "needs_vacuum", "0")?;
+    Ok(true)
 }
-
-pub fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|b| f32::from_le_bytes(*b))
-        .collect()
-}
-
 pub fn upsert_file(conn: &Connection, path: &str, mtime: f64, hash: &str) -> Result<i64> {
     conn.execute(
         "INSERT INTO files(path,mtime,content_hash) VALUES(?1,?2,?3)
@@ -412,11 +390,6 @@ pub fn upsert_file(conn: &Connection, path: &str, mtime: f64, hash: &str) -> Res
 }
 
 pub fn delete_chunks_for_file(conn: &Connection, file_id: i64) -> Result<()> {
-    // Delete embeddings via JOIN since we cascade on file delete
-    conn.execute(
-        "DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE file_id=?1)",
-        params![file_id],
-    )?;
     conn.execute(
         "DELETE FROM graph_edges WHERE caller_chunk_id IN (SELECT id FROM chunks WHERE file_id=?1)
          OR callee_chunk_id IN (SELECT id FROM chunks WHERE file_id=?1)",
@@ -460,163 +433,6 @@ pub fn insert_chunk(conn: &Connection, chunk: NewChunk<'_>) -> Result<i64> {
         ],
     )?;
     Ok(conn.last_insert_rowid())
-}
-
-pub fn insert_embedding(conn: &Connection, chunk_id: i64, embedding: &[f32]) -> Result<()> {
-    let (blob, scale) = quantize_q8(embedding);
-    conn.execute(
-        "INSERT OR REPLACE INTO embeddings(chunk_id,embedding,scale) VALUES(?1,?2,?3)",
-        params![chunk_id, blob, scale],
-    )?;
-    Ok(())
-}
-
-/// One-time, embedding-free migration: re-encode legacy f32 rows to int8.
-/// Returns the number of converted rows. Cheap (pure CPU re-encode), so it
-/// runs opportunistically at index time.
-pub fn backfill_quantized_embeddings(conn: &Connection) -> Result<usize> {
-    // Migrate in bounded batches. Materializing the whole legacy table pulled
-    // every f32 blob into RAM at once (~3 KB per chunk — over a GB on a large
-    // old index) right before Phase 1 starts allocating.
-    const BATCH: usize = 5_000;
-    let mut count = 0usize;
-    loop {
-        let legacy: Vec<(i64, Vec<u8>)> = {
-            let mut stmt = conn.prepare(
-                "SELECT chunk_id, embedding FROM embeddings WHERE scale IS NULL LIMIT ?1",
-            )?;
-            let rows = stmt.query_map(params![BATCH as i64], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })?;
-            rows.filter_map(|r| r.ok()).collect()
-        };
-        if legacy.is_empty() {
-            break;
-        }
-        count += legacy.len();
-        migrate_legacy_batch(conn, legacy)?;
-    }
-    if count == 0 {
-        return Ok(0);
-    }
-    // VACUUM rewrites the entire DB and needs ~2x the disk; make it opt-in
-    // rather than a mandatory blocking step at the start of every index run.
-    if std::env::var("TOKENIX_VACUUM_AFTER_MIGRATION").as_deref() == Ok("1") {
-        if let Err(e) = conn.execute_batch("VACUUM") {
-            eprintln!("tokenix: VACUUM after embedding migration failed: {e}");
-        }
-    }
-    Ok(count)
-}
-
-fn migrate_legacy_batch(conn: &Connection, legacy: Vec<(i64, Vec<u8>)>) -> Result<()> {
-    conn.execute_batch("BEGIN IMMEDIATE")?;
-    for (chunk_id, blob) in legacy {
-        let (q8, scale) = quantize_q8(&deserialize_vec(&blob));
-        // Roll back explicitly on error: a bare `?` here left the transaction
-        // open on the connection, so every later write joined a doomed
-        // transaction (or hit "cannot start a transaction within a transaction").
-        if let Err(e) = conn.execute(
-            "UPDATE embeddings SET embedding=?2, scale=?3 WHERE chunk_id=?1",
-            params![chunk_id, q8, scale],
-        ) {
-            let _ = conn.execute_batch("ROLLBACK");
-            return Err(e.into());
-        }
-    }
-    conn.execute_batch("COMMIT")?;
-    Ok(())
-}
-
-/// Read-only probe: does this index have the `scale` column yet? Query paths
-/// open old DBs without running migrations (init_schema runs only at index
-/// time), so SELECTs must degrade to the legacy f32 layout when it is missing.
-fn embeddings_have_scale(conn: &Connection) -> bool {
-    conn.prepare("SELECT scale FROM embeddings LIMIT 0").is_ok()
-}
-
-/// (quantized_rows, total_rows) — used by `doctor` to report migration coverage.
-pub fn quantization_coverage(conn: &Connection) -> Result<(i64, i64)> {
-    let total: i64 = conn.query_row("SELECT COUNT(*) FROM embeddings", [], |r| r.get(0))?;
-    if !embeddings_have_scale(conn) {
-        return Ok((0, total));
-    }
-    let quantized: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM embeddings WHERE scale IS NOT NULL",
-        [],
-        |r| r.get(0),
-    )?;
-    Ok((quantized, total))
-}
-
-pub fn cached_embeddings(
-    conn: &Connection,
-    content_hashes: &[String],
-) -> Result<HashMap<String, Vec<f32>>> {
-    const SQLITE_IN_BATCH: usize = 500;
-
-    let mut seen = HashSet::new();
-    let unique_hashes: Vec<&str> = content_hashes
-        .iter()
-        .map(String::as_str)
-        .filter(|hash| seen.insert(*hash))
-        .collect();
-
-    let mut cached = HashMap::new();
-    for batch in unique_hashes.chunks(SQLITE_IN_BATCH) {
-        if batch.is_empty() {
-            continue;
-        }
-
-        let placeholders = batch.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT content_hash, embedding FROM embedding_cache WHERE content_hash IN ({placeholders})"
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(batch.iter().copied()), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })?;
-
-        for row in rows {
-            let (hash, bytes) = row?;
-            cached.insert(hash, deserialize_vec(&bytes));
-        }
-    }
-
-    Ok(cached)
-}
-
-pub fn upsert_embedding_cache(
-    conn: &Connection,
-    content_hash: &str,
-    embedding: &[f32],
-) -> Result<()> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
-    conn.execute(
-        "INSERT INTO embedding_cache(content_hash,embedding,updated_at) VALUES(?1,?2,?3)
-         ON CONFLICT(content_hash) DO UPDATE SET embedding=excluded.embedding, updated_at=excluded.updated_at",
-        params![content_hash, serialize_vec(embedding), now],
-    )?;
-    Ok(())
-}
-
-/// Age out cache entries no recent index run touched. Nothing ever deleted from
-/// this table — every chunk hash ever seen was kept forever, so a repo with
-/// churn grew the DB by ~3 KB per historical chunk with no ceiling.
-pub fn prune_embedding_cache(conn: &Connection, max_age_days: f64) -> Result<usize> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
-    let cutoff = now - max_age_days * 86_400.0;
-    let removed = conn.execute(
-        "DELETE FROM embedding_cache WHERE updated_at IS NOT NULL AND updated_at < ?1",
-        params![cutoff],
-    )?;
-    Ok(removed)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1085,264 +901,6 @@ fn graph_relation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphRel
     })
 }
 
-pub fn sanitize_fts_query(query: &str) -> String {
-    let mut words = Vec::new();
-    for word in query.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
-        let trimmed = word.trim();
-        if !trimmed.is_empty() {
-            let escaped = trimmed.replace('"', "\"\"");
-            words.push(format!("\"{}\"", escaped));
-        }
-    }
-    if words.is_empty() {
-        "".to_string()
-    } else {
-        words.join(" OR ")
-    }
-}
-
-pub fn search_fts(
-    conn: &Connection,
-    query_text: &str,
-    limit: usize,
-    file_filter: Option<&str>,
-) -> Result<Vec<(i64, f32)>> {
-    let sanitized = sanitize_fts_query(query_text);
-    if sanitized.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut results = Vec::new();
-    if let Some(filter) = file_filter {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, rank FROM chunks c JOIN chunks_fts f ON c.id = f.rowid
-             WHERE chunks_fts MATCH ?1 AND instr(c.path, ?2) > 0 ORDER BY rank LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(
-            params![sanitized, filter, i64::try_from(limit).unwrap_or(i64::MAX)],
-            |row| {
-                let id: i64 = row.get(0)?;
-                let rank: f32 = row.get(1)?;
-                Ok((id, -rank)) // Negate: FTS5 rank is negative (lower=better)
-            },
-        )?;
-        for row in rows {
-            results.push(row?);
-        }
-    } else {
-        let mut stmt = conn.prepare(
-            "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ?1 ORDER BY rank LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(
-            params![sanitized, i64::try_from(limit).unwrap_or(i64::MAX)],
-            |row| {
-                let id: i64 = row.get(0)?;
-                let rank: f32 = row.get(1)?;
-                Ok((id, -rank)) // Negate: FTS5 rank is negative (lower=better)
-            },
-        )?;
-        for row in rows {
-            results.push(row?);
-        }
-    }
-    Ok(results)
-}
-
-/// Scan indexed chunk content with a regular expression — no embedding, no
-/// ranking. Returns chunks whose content matches `pattern`, ordered by path and
-/// start line so output reads top-to-bottom like a file. This is the exact /
-/// literal fallback for when semantic recall is not what the user wants.
-pub fn search_regex(
-    conn: &Connection,
-    pattern: &str,
-    limit: usize,
-    file_filter: Option<&str>,
-    case_insensitive: bool,
-) -> Result<Vec<SearchResult>> {
-    let full_pattern = if case_insensitive {
-        format!("(?i){pattern}")
-    } else {
-        pattern.to_string()
-    };
-    let re = regex::Regex::new(&full_pattern).context("compiling search regex")?;
-
-    let mut stmt = conn.prepare(
-        "SELECT id, path, start_line, end_line, symbol, kind, content, token_count
-         FROM chunks ORDER BY path, start_line",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(SearchResult {
-            id: row.get::<_, i64>(0)?,
-            path: row.get::<_, String>(1)?,
-            start_line: row.get::<_, i64>(2)? as usize,
-            end_line: row.get::<_, i64>(3)? as usize,
-            symbol: row.get::<_, String>(4)?,
-            kind: row.get::<_, String>(5)?,
-            content: row.get::<_, String>(6)?,
-            token_count: row.get::<_, i64>(7)? as usize,
-            distance: 0.0,
-        })
-    })?;
-
-    let mut results = Vec::new();
-    for r in rows {
-        let chunk = r?;
-        if file_filter.is_some_and(|f| !chunk.path.contains(f)) {
-            continue;
-        }
-        if re.is_match(&chunk.content) {
-            results.push(chunk);
-            if results.len() >= limit {
-                break;
-            }
-        }
-    }
-    Ok(results)
-}
-
-pub fn fetch_chunks_by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<SearchResult>> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
-    let query_str = format!(
-        "SELECT id, path, start_line, end_line, symbol, kind, content, token_count
-         FROM chunks WHERE id IN ({})",
-        placeholders.join(",")
-    );
-    let mut stmt = conn.prepare(&query_str)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
-        Ok(SearchResult {
-            id: row.get::<_, i64>(0)?,
-            path: row.get::<_, String>(1)?,
-            start_line: row.get::<_, i64>(2)? as usize,
-            end_line: row.get::<_, i64>(3)? as usize,
-            symbol: row.get::<_, String>(4)?,
-            kind: row.get::<_, String>(5)?,
-            content: row.get::<_, String>(6)?,
-            token_count: row.get::<_, i64>(7)? as usize,
-            distance: 1.0,
-        })
-    })?;
-    let mut results = Vec::new();
-    for r in rows {
-        results.push(r?);
-    }
-    Ok(results)
-}
-
-/// Reciprocal-rank-fusion damping constant (the classic k=60) shared by every
-/// hybrid ranking path (store, daemon, query graph/path recall).
-pub const RRF_K: f32 = 60.0;
-/// Weight of the normalized BM25 score blended into the sparse-side RRF term.
-pub const BM25_WEIGHT: f32 = 0.3;
-
-pub fn hybrid_search(
-    conn: &Connection,
-    query_vec: &[f32],
-    query_text: &str,
-    k: usize,
-    file_filter: Option<&str>,
-) -> Result<Vec<SearchResult>> {
-    let dense_limit = 100.max(k * 2);
-    let dense_results = search_similar(conn, query_vec, dense_limit, file_filter)?;
-
-    let sparse_limit = 100.max(k * 2);
-    let sparse_results = search_fts(conn, query_text, sparse_limit, file_filter)?;
-
-    let mut rrf_scores: HashMap<i64, f32> = HashMap::new();
-
-    for (rank, res) in dense_results.iter().enumerate() {
-        let score = 1.0 / (RRF_K + rank as f32);
-        rrf_scores.insert(res.id, score);
-    }
-
-    for (rank, (id, bm25_score)) in sparse_results.iter().enumerate() {
-        // Combine position-based RRF with BM25 score
-        let rrf_position = 1.0 / (RRF_K + rank as f32);
-        let bm25_normalized = (*bm25_score).max(0.0) / (1.0 + bm25_score.max(0.0));
-        let score = rrf_position + BM25_WEIGHT * bm25_normalized;
-        rrf_scores
-            .entry(*id)
-            .and_modify(|s| *s += score)
-            .or_insert(score);
-    }
-
-    let mut sorted_candidates: Vec<(i64, f32)> = rrf_scores.into_iter().collect();
-    sorted_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let top_candidates: Vec<(i64, f32)> = sorted_candidates.into_iter().take(k * 2).collect();
-    if top_candidates.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut dense_map: HashMap<i64, SearchResult> =
-        dense_results.into_iter().map(|r| (r.id, r)).collect();
-
-    let missing_ids: Vec<i64> = top_candidates
-        .iter()
-        .map(|(id, _)| *id)
-        .filter(|id| !dense_map.contains_key(id))
-        .collect();
-
-    if !missing_ids.is_empty() {
-        let chunks_fetched = fetch_chunks_by_ids(conn, &missing_ids)?;
-        for chunk in chunks_fetched {
-            dense_map.insert(chunk.id, chunk);
-        }
-    }
-
-    let mut final_results = Vec::new();
-    for (id, rrf_score) in top_candidates {
-        if let Some(mut result) = dense_map.remove(&id) {
-            result.distance = 1.0 - rrf_score;
-            final_results.push(result);
-        }
-    }
-
-    final_results.sort_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    Ok(final_results.into_iter().take(k).collect())
-}
-
-#[allow(dead_code)]
-pub struct SymbolMatch {
-    pub path: String,
-    pub start_line: usize,
-    pub end_line: usize,
-    pub kind: String,
-    pub symbol: String,
-}
-
-/// Find chunks whose symbol name contains `pattern` (case-insensitive substring).
-/// Returns up to 20 matches ordered by path + start_line.
-pub fn search_by_symbol(conn: &Connection, pattern: &str) -> Result<Vec<SymbolMatch>> {
-    let like = format!("%{}%", pattern.to_lowercase());
-    let mut stmt = conn.prepare(
-        "SELECT path, start_line, end_line, kind, symbol FROM chunks
-         WHERE lower(symbol) LIKE ?1 AND symbol != ''
-         ORDER BY path, start_line LIMIT 20",
-    )?;
-    let results = stmt
-        .query_map(params![like], |row| {
-            Ok(SymbolMatch {
-                path: row.get(0)?,
-                start_line: row.get::<_, i64>(1)? as usize,
-                end_line: row.get::<_, i64>(2)? as usize,
-                kind: row.get(3)?,
-                symbol: row.get(4)?,
-            })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(results)
-}
-
-/// Load all known file records into a HashMap for fast skip-detection during parallel indexing.
 pub fn load_all_file_info(conn: &Connection) -> Result<HashMap<String, (i64, f64, String)>> {
     let mut stmt = conn.prepare("SELECT id, path, mtime, content_hash FROM files")?;
     let mut map = HashMap::new();
@@ -1418,31 +976,6 @@ pub fn get_index_age(repo_root: &Path) -> Option<f64> {
     Some(now - indexed_at)
 }
 
-/// How many indexed files still need embeddings, for callers that only have the
-/// repo root. `0` when there is no index — nothing to backfill.
-///
-/// Deliberately *not* part of [`index_staleness`]: those files are perfectly
-/// usable for text search, the symbol graph and read interception, and reporting
-/// them as stale would make the hook fail open and stop saving tokens. It only
-/// means a full `tokenix index` still has work to do.
-pub fn pending_embed_count(repo_root: &Path) -> i64 {
-    match open_db(repo_root, false) {
-        Ok(Some(conn)) => pending_embed_files(&conn),
-        _ => 0,
-    }
-}
-
-/// Files written by a `--no-embed` run or an inline freshness refresh: their
-/// chunks are searchable as text but carry no vectors yet.
-pub fn pending_embed_files(conn: &Connection) -> i64 {
-    conn.query_row(
-        "SELECT COUNT(*) FROM files WHERE content_hash LIKE ?1",
-        params![format!("{}%", crate::indexer::NO_EMBED_HASH_PREFIX)],
-        |r| r.get(0),
-    )
-    .unwrap_or(0)
-}
-
 pub fn index_staleness(repo_root: &Path) -> IndexStaleness {
     let conn = match open_db(repo_root, false) {
         Ok(Some(c)) => c,
@@ -1459,25 +992,6 @@ pub fn index_staleness(repo_root: &Path) -> IndexStaleness {
             stale: true,
             reason: "missing indexed_at".to_string(),
         };
-    }
-
-    // A model change only makes the index stale when a model is *explicitly*
-    // requested via TOKENIX_EMBED_MODEL. Otherwise queries use whatever model the
-    // index was built with (read from meta), so a differing local default must not
-    // invalidate a perfectly usable index (e.g. a hook with no env set).
-    if let Ok(desired_raw) = std::env::var("TOKENIX_EMBED_MODEL") {
-        let desired_raw = desired_raw.trim();
-        if !desired_raw.is_empty() {
-            let desired = crate::embed::spec_for(desired_raw).id;
-            let stored = meta_value(&conn, "embed_model")
-                .unwrap_or_else(|| crate::embed::DEFAULT_MODEL_ID.to_string());
-            if stored != desired {
-                return IndexStaleness {
-                    stale: true,
-                    reason: format!("embedding model changed ({stored} -> {desired})"),
-                };
-            }
-        }
     }
 
     if let Some(current) = git_fingerprint(repo_root) {
@@ -1533,21 +1047,10 @@ pub fn index_staleness(repo_root: &Path) -> IndexStaleness {
 
 pub fn write_index_meta(conn: &Connection, repo_root: &Path, indexed_at: f64) -> Result<()> {
     set_meta(conn, "indexed_at", &indexed_at.to_string())?;
-    set_meta(conn, "embed_model", &crate::embed::active_model_id())?;
     if let Some(fp) = git_fingerprint(repo_root) {
         set_meta(conn, "git_fingerprint", &fp)?;
     }
     Ok(())
-}
-
-/// The embedding model id the index was built with. Defaults to the historical
-/// model for indexes created before model stamping. `None` if there is no index.
-pub fn index_model_id(repo_root: &Path) -> Option<String> {
-    let conn = open_db(repo_root, false).ok()??;
-    Some(
-        meta_value(&conn, "embed_model")
-            .unwrap_or_else(|| crate::embed::DEFAULT_MODEL_ID.to_string()),
-    )
 }
 
 pub fn meta_value(conn: &Connection, key: &str) -> Option<String> {
@@ -1745,107 +1248,6 @@ pub fn read_hook_log(repo_root: &Path) -> Vec<HookEvent> {
     events
 }
 
-// ---- Daemon helpers ---------------------------------------------------------
-
-pub struct EmbeddingEntry {
-    pub id: i64,
-    pub path: String,
-    pub start_line: usize,
-    pub end_line: usize,
-    pub symbol: String,
-    pub kind: String,
-    pub token_count: usize,
-    /// Int8-quantized vector (1 byte/dim). Legacy f32 rows are quantized at
-    /// load so the daemon cache holds 4x less RAM uniformly.
-    pub embedding_q8: Vec<i8>,
-}
-
-/// Load embeddings + metadata (no chunk content) for the daemon cache.
-/// Content is fetched on-demand via fetch_chunks_content() for top-K results only.
-pub fn load_all_embeddings(conn: &Connection) -> Result<Vec<EmbeddingEntry>> {
-    let scale_expr = if embeddings_have_scale(conn) {
-        "e.scale"
-    } else {
-        "NULL"
-    };
-    let mut stmt = conn.prepare(&format!(
-        "SELECT c.id, c.path, c.start_line, c.end_line, c.symbol, c.kind, \
-                c.token_count, e.embedding, {scale_expr} \
-         FROM embeddings e JOIN chunks c ON c.id = e.chunk_id",
-    ))?;
-    let entries = stmt
-        .query_map([], |row| {
-            let blob: Vec<u8> = row.get(7)?;
-            let scale: Option<f64> = row.get(8)?;
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, i64>(6)?,
-                blob,
-                scale,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .map(|(id, path, sl, el, symbol, kind, tc, blob, scale)| {
-            let embedding_q8: Vec<i8> = if scale.is_some() {
-                blob.into_iter().map(|b| b as i8).collect()
-            } else {
-                let (q8, _) = quantize_q8(&deserialize_vec(&blob));
-                q8.into_iter().map(|b| b as i8).collect()
-            };
-            EmbeddingEntry {
-                id,
-                path,
-                start_line: sl as usize,
-                end_line: el as usize,
-                symbol,
-                kind,
-                token_count: tc as usize,
-                embedding_q8,
-            }
-        })
-        .collect();
-    Ok(entries)
-}
-
-/// Fetch chunk content for a set of IDs — used after cosine search to hydrate top-K results.
-pub fn fetch_chunks_content(
-    conn: &Connection,
-    ids: &[i64],
-) -> Result<std::collections::HashMap<i64, String>> {
-    if ids.is_empty() {
-        return Ok(std::collections::HashMap::new());
-    }
-    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!("SELECT id, content FROM chunks WHERE id IN ({placeholders})");
-    let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<rusqlite::types::Value> = ids
-        .iter()
-        .map(|id| rusqlite::types::Value::Integer(*id))
-        .collect();
-    let result = stmt
-        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(result)
-}
-
-/// Return the DB file's mtime as secs-since-epoch, or 0.0 on error.
-pub fn get_db_mtime(repo_root: &Path) -> f64 {
-    std::fs::metadata(db_path(repo_root))
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
-}
-
 pub fn get_file_token_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
     let mut stmt = conn.prepare(
         "SELECT files.path, COALESCE(SUM(chunks.token_count), 0)
@@ -1974,46 +1376,6 @@ mod tests {
     }
 
     #[test]
-    fn test_backfill_quantizes_legacy_rows() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn, 4).unwrap();
-
-        let file_id = upsert_file(&conn, "src/a.rs", 1.0, "h").unwrap();
-        let chunk_id = insert_chunk(
-            &conn,
-            NewChunk {
-                file_id,
-                path: "src/a.rs",
-                start: 1,
-                end: 5,
-                symbol: "f",
-                kind: "function",
-                content: "fn f() {}",
-                token_count: 3,
-            },
-        )
-        .unwrap();
-        // Legacy f32 row (scale NULL), as written by pre-quantization builds.
-        let v = vec![0.1f32, -0.2, 0.3, -0.4];
-        conn.execute(
-            "INSERT INTO embeddings(chunk_id, embedding) VALUES(?1, ?2)",
-            params![chunk_id, serialize_vec(&v)],
-        )
-        .unwrap();
-
-        assert_eq!(backfill_quantized_embeddings(&conn).unwrap(), 1);
-        assert_eq!(backfill_quantized_embeddings(&conn).unwrap(), 0); // idempotent
-        let (quantized, total) = quantization_coverage(&conn).unwrap();
-        assert_eq!((quantized, total), (1, 1));
-
-        // Search still ranks the migrated row correctly via the q8 path.
-        let results = search_similar(&conn, &v, 1, None).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, chunk_id);
-        assert!(results[0].distance < 0.01, "self-similarity ~1.0");
-    }
-
-    #[test]
     fn test_hook_log_rotation() {
         let repo = std::env::temp_dir().join(format!("tokenix_test_rotate_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&repo);
@@ -2051,30 +1413,6 @@ mod tests {
         let _ = std::fs::remove_file(&log);
         let _ = std::fs::remove_file(&rotated);
         let _ = std::fs::remove_dir_all(&repo);
-    }
-
-    #[test]
-    fn test_cached_embeddings_batch_lookup() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn, 4).unwrap();
-
-        let first = vec![1.0, 2.0, 3.0, 4.0];
-        let second = vec![0.25, 0.5, 0.75, 1.0];
-        upsert_embedding_cache(&conn, "hash-a", &first).unwrap();
-        upsert_embedding_cache(&conn, "hash-b", &second).unwrap();
-
-        let hashes = vec![
-            "hash-a".to_string(),
-            "missing".to_string(),
-            "hash-a".to_string(),
-            "hash-b".to_string(),
-        ];
-        let cached = cached_embeddings(&conn, &hashes).unwrap();
-
-        assert_eq!(cached.len(), 2);
-        assert_eq!(cached.get("hash-a").unwrap(), &first);
-        assert_eq!(cached.get("hash-b").unwrap(), &second);
-        assert!(!cached.contains_key("missing"));
     }
 
     #[test]
@@ -2149,101 +1487,97 @@ mod tests {
     }
 
     #[test]
-    fn test_hybrid_search() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn, 4).unwrap();
-
-        // 1. Insert file
-        let file_id = upsert_file(&conn, "src/main.rs", 123.45, "abcde").unwrap();
-
-        // 2. Insert chunk
-        let chunk = NewChunk {
-            file_id,
-            path: "src/main.rs",
-            start: 1,
-            end: 10,
-            symbol: "my_cool_function",
-            kind: "function",
-            content: "fn my_cool_function() { println!(\"hello fts5 hybrid search\"); }",
-            token_count: 15,
-        };
-        let chunk_id = insert_chunk(&conn, chunk).unwrap();
-
-        // 3. Insert embedding
-        let embedding = vec![0.5, 0.5, 0.5, 0.5];
-        conn.execute(
-            "INSERT INTO embeddings(chunk_id, embedding) VALUES(?1, ?2)",
-            params![chunk_id, serialize_vec(&embedding)],
+    fn init_schema_reclaims_the_space_of_legacy_vectors() {
+        let dir = std::env::temp_dir().join(format!("tokenix_vac_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("legacy.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE embeddings(chunk_id INTEGER PRIMARY KEY, embedding BLOB, scale REAL);
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 200)
+             INSERT INTO embeddings SELECT i, zeroblob(20000), 1.0 FROM n;",
         )
         .unwrap();
-
-        // 4. Test search_fts
-        let sparse_results = search_fts(&conn, "fts5 hybrid", 10, None).unwrap();
-        assert_eq!(sparse_results.len(), 1);
-        assert_eq!(sparse_results[0].0, chunk_id);
-        assert!(sparse_results[0].1 > 0.0, "BM25 score should be positive");
-
-        // 5. Test hybrid_search
-        let query_vec = vec![0.6, 0.6, 0.6, 0.6];
-        let results = hybrid_search(&conn, &query_vec, "hello search", 10, None).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, chunk_id);
-        assert_eq!(results[0].symbol, "my_cool_function");
+        let before = std::fs::metadata(&path).unwrap().len();
+        init_schema(&conn, 4).unwrap();
+        assert!(vacuum_if_flagged(&conn).unwrap());
+        assert!(
+            !vacuum_if_flagged(&conn).unwrap(),
+            "flag is cleared after a VACUUM"
+        );
+        drop(conn);
+        let after = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            after < before / 4,
+            "index should shrink once vectors are gone: {before} -> {after}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn search_regex_matches_literal_and_respects_case_and_filter() {
+    fn init_schema_drops_legacy_embedding_tables() {
         let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn, 4).unwrap();
-        let file_id = upsert_file(&conn, "src/main.rs", 1.0, "h1").unwrap();
-        let other_id = upsert_file(&conn, "src/lib.rs", 1.0, "h2").unwrap();
-        let a = insert_chunk(
-            &conn,
-            NewChunk {
-                file_id,
-                path: "src/main.rs",
-                start: 1,
-                end: 2,
-                symbol: "alpha",
-                kind: "function",
-                content: "fn alpha() { let TOKEN = 1; }",
-                token_count: 9,
-            },
+        conn.execute_batch(
+            "CREATE TABLE embeddings(chunk_id INTEGER PRIMARY KEY, embedding BLOB, scale REAL);
+             CREATE TABLE embedding_cache(content_hash TEXT PRIMARY KEY, embedding BLOB, updated_at REAL);
+             INSERT INTO embeddings VALUES(1, zeroblob(8), 1.0);",
         )
         .unwrap();
+        init_schema(&conn, 4).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('embeddings','embedding_cache')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "legacy vector tables must not survive a re-index");
+        // The rest of the index still works on the migrated database.
+        let file_id = upsert_file(&conn, "src/a.rs", 1.0, "h").unwrap();
+        assert!(delete_chunks_for_file(&conn, file_id).is_ok());
+    }
+
+    #[test]
+    fn init_schema_drops_legacy_fts_and_its_triggers() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn, 4).unwrap();
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE chunks_fts USING fts5(content, symbol, path, content='chunks', content_rowid='id');
+             CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+                 INSERT INTO chunks_fts(rowid, content, symbol, path) VALUES (new.id, new.content, new.symbol, new.path);
+             END;
+             CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
+                 INSERT INTO chunks_fts(chunks_fts, rowid, content, symbol, path) VALUES ('delete', old.id, old.content, old.symbol, old.path);
+             END;",
+        )
+        .unwrap();
+        init_schema(&conn, 4).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'chunks_%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "the FTS table and its triggers must both go");
+        // A surviving trigger would make this write fail on the missing table.
+        let file_id = upsert_file(&conn, "src/a.rs", 1.0, "h").unwrap();
         insert_chunk(
             &conn,
             NewChunk {
-                file_id: other_id,
-                path: "src/lib.rs",
+                file_id,
+                path: "src/a.rs",
                 start: 1,
                 end: 2,
-                symbol: "beta",
+                symbol: "a",
                 kind: "function",
-                content: "fn beta() {}",
-                token_count: 4,
+                content: "fn a() {}",
+                token_count: 3,
             },
         )
         .unwrap();
-
-        // Regex metacharacters honored.
-        let hits = search_regex(&conn, r"alpha\(\)", 10, None, false).unwrap();
-        assert_eq!(hits.iter().map(|r| r.id).collect::<Vec<_>>(), vec![a]);
-
-        // Case-sensitive miss, case-insensitive hit.
-        assert!(search_regex(&conn, "token", 10, None, false)
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            search_regex(&conn, "token", 10, None, true).unwrap().len(),
-            1
-        );
-
-        // File filter scopes results.
-        assert!(search_regex(&conn, "fn ", 10, Some("lib.rs"), false)
-            .unwrap()
-            .iter()
-            .all(|r| r.path == "src/lib.rs"));
+        assert!(delete_chunks_for_file(&conn, file_id).is_ok());
     }
 
     #[test]
@@ -2368,103 +1702,6 @@ mod tests {
         assert_eq!(callers.len(), 1);
         assert_eq!(callers[0].from.name, "main");
     }
-
-    /// Retrieval quality gate. Builds a tiny in-memory index from labeled
-    /// (path, content) docs using the REAL embedding model, then runs labeled
-    /// queries through `hybrid_search` and asserts Hit@1 / Hit@3 thresholds.
-    /// No repo walk, no daemon — just a handful of short embeds, so it is safe
-    /// to run. Model-gated so the default offline `cargo test` stays fast.
-    #[test]
-    #[cfg_attr(
-        not(feature = "model-tests"),
-        ignore = "needs model download; run with --features model-tests"
-    )]
-    fn retrieval_eval_meets_hit_rate_thresholds() {
-        // Mirror the indexer's embedded-text format: "<path>\n<content>".
-        let docs: &[(&str, &str)] = &[
-            (
-                "src/auth.rs",
-                "fn validate_jwt_token(token: &str) -> bool { verify the signature and expiry of a json web token }",
-            ),
-            (
-                "src/db.rs",
-                "struct ConnectionPool { establishes postgres database connections and reuses them via pooling }",
-            ),
-            (
-                "src/cache.rs",
-                "fn evict_lru_entry() { remove the least recently used item from the in-memory cache }",
-            ),
-            (
-                "src/http.rs",
-                "async fn handle_request(req: Request) { route an incoming http request to the right handler }",
-            ),
-            (
-                "src/math.rs",
-                "fn dot_product(a: &[f32], b: &[f32]) -> f32 { sum of the elementwise multiplication of two vectors }",
-            ),
-        ];
-        let queries: &[(&str, &str)] = &[
-            ("how are json web tokens validated", "src/auth.rs"),
-            ("database connection pooling", "src/db.rs"),
-            ("least recently used cache eviction", "src/cache.rs"),
-            ("routing incoming http requests", "src/http.rs"),
-            ("vector dot product", "src/math.rs"),
-        ];
-
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn, 768).unwrap();
-
-        let texts: Vec<String> = docs
-            .iter()
-            .map(|(path, content)| format!("{path}\n{content}"))
-            .collect();
-        let embeddings = crate::embed::embed_documents(&texts).expect("embed docs");
-
-        for (i, (path, content)) in docs.iter().enumerate() {
-            let file_id = upsert_file(&conn, path, i as f64, "hash").unwrap();
-            let chunk_id = insert_chunk(
-                &conn,
-                NewChunk {
-                    file_id,
-                    path,
-                    start: 1,
-                    end: 1,
-                    symbol: "",
-                    kind: "function",
-                    content,
-                    token_count: 10,
-                },
-            )
-            .unwrap();
-            insert_embedding(&conn, chunk_id, &embeddings[i]).unwrap();
-        }
-
-        let mut hit1 = 0usize;
-        let mut hit3 = 0usize;
-        for (query, expected) in queries {
-            let qvec = crate::embed::embed_query(query).expect("embed query");
-            let results = hybrid_search(&conn, &qvec, query, 3, None).unwrap();
-            if results.first().is_some_and(|r| &r.path == expected) {
-                hit1 += 1;
-            }
-            if results.iter().any(|r| &r.path == expected) {
-                hit3 += 1;
-            }
-        }
-
-        let n = queries.len();
-        let hit1_rate = hit1 as f32 / n as f32;
-        let hit3_rate = hit3 as f32 / n as f32;
-        assert!(
-            hit1_rate >= 0.8,
-            "Hit@1 {hit1_rate:.2} below 0.80 threshold ({hit1}/{n})"
-        );
-        assert!(
-            hit3_rate >= 1.0,
-            "Hit@3 {hit3_rate:.2} below 1.00 threshold ({hit3}/{n})"
-        );
-    }
-
     #[test]
     fn test_index_staleness_fingerprint_auto_update() {
         let now = SystemTime::now()

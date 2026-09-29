@@ -55,8 +55,8 @@ jobs:
 
   # Supply-chain guard for the install path: `tokenix install-hook` /
   # `install-binary` are purely local (filesystem + PATH). The ONLY external
-  # HTTPS endpoint the binary ever contacts is huggingface.co, and that is in the
-  # indexer's model download — never in install. This job builds the binary and
+  # HTTPS endpoint the binary ever contacts is the GitHub release API/assets, and
+  # that is only the self-updater — never in install. This job builds the binary and
   # runs both install commands under harden-runner egress AUDIT, so every
   # outbound HTTPS connection is recorded in the run's "Insights → Network
   # events" report. Expected egress = build dependencies only (crates.io /

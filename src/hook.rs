@@ -1,17 +1,12 @@
 use anyhow::Result;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunker::count_tokens;
-use crate::query::{format_results, get_file_outline, query_index};
-use crate::store::{index_staleness, log_hook_event, search_by_symbol, HookEvent};
+use crate::store::{index_staleness, log_hook_event, HookEvent};
 
 const MIN_LINES_FOR_OUTLINE: usize = 200;
-const MIN_QUERY_WORDS: usize = 3;
-const DAEMON_HOOK_TIMEOUT_MS: u64 = 2_000;
 
 /// Read intercept threshold, overridable via `[hook] read_min_lines` in
 /// `.tokenix.toml`. Tune down to intercept more reads (saving more tokens) or
@@ -21,14 +16,6 @@ fn min_lines_for_outline() -> usize {
         .read_min_lines
         .filter(|n| *n > 0)
         .unwrap_or(MIN_LINES_FOR_OUTLINE)
-}
-
-/// Grep intercept threshold, overridable via `[hook] grep_min_words`.
-fn min_query_words() -> usize {
-    crate::chunker::hook_config()
-        .grep_min_words
-        .filter(|n| *n > 0)
-        .unwrap_or(MIN_QUERY_WORDS)
 }
 
 /// Normalized hook input used by tokenix.
@@ -215,41 +202,10 @@ fn now_ts() -> f64 {
         .as_secs_f64()
 }
 
-fn is_semantic_query(pattern: &str) -> bool {
-    pattern.split_whitespace().count() >= min_query_words()
-}
-
-/// True if `s` looks like a plain identifier (no regex metacharacters).
-fn looks_like_identifier(s: &str) -> bool {
-    s.len() >= 2
-        && s.chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '_' | ':' | '.'))
-}
-
-fn symbol_lookup(pattern: &str, repo_root: &Path) -> Option<String> {
-    let conn = crate::store::open_db(repo_root, false).ok()??;
-    let matches = search_by_symbol(&conn, pattern).ok()?;
-    if matches.is_empty() {
-        return None;
-    }
-    let mut lines = vec![format!(
-        "<!-- tokenix: {} symbol match(es) for '{}' -->",
-        matches.len(),
-        pattern
-    )];
-    lines.push(String::new());
-    for m in &matches {
-        lines.push(format!(
-            "{}:{} [{}] {}",
-            m.path, m.start_line, m.kind, m.symbol
-        ));
-    }
-    lines.push(String::new());
-    lines.push(format!(
-        "[Use Read with offset/limit or tokenix read --symbol {} to see content]",
-        pattern
-    ));
-    Some(lines.join("\n"))
+fn get_file_outline(file_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(file_path).ok()?;
+    let path_str = file_path.to_string_lossy().replace('\\', "/");
+    Some(crate::chunker::generate_outline(&content, &path_str))
 }
 
 fn handle_read(
@@ -438,162 +394,6 @@ fn handle_read(
     (true, msg, "generated symbol outline".to_string())
 }
 
-/// Returns a path to use as a soft lock file for concurrent embed protection.
-fn embed_lock_path() -> Option<std::path::PathBuf> {
-    Some(dirs::cache_dir()?.join("tokenix").join("embed.lock"))
-}
-
-/// Best-effort concurrency guard for the ONNX embed call.
-///
-/// The fastembed model uses ~293 MB per process (130 MB model + ORT runtime).
-/// If Claude Code fires parallel Grep hooks, each would load a separate model instance.
-/// This guard makes concurrent semantic Greps fall through (exit 0) so the original
-/// grep runs instead — limiting peak tokenix memory to one model instance at a time.
-///
-/// Implementation: timestamp file. Not atomically safe, but good enough for the
-/// typical pattern of a few concurrent hooks per second. Stale locks (>30s) are
-/// automatically overridden so a crashed process never permanently blocks the feature.
-fn try_acquire_embed_slot() -> bool {
-    let path = match embed_lock_path() {
-        Some(p) => p,
-        None => return true, // can't determine path → proceed anyway
-    };
-
-    if path.exists() {
-        let stale = std::fs::metadata(&path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.elapsed().ok())
-            .map(|e| e.as_secs() >= 30)
-            .unwrap_or(true);
-
-        if !stale {
-            return false; // another embed is in progress
-        }
-        // Remove stale lock before attempting to re-acquire
-        let _ = std::fs::remove_file(&path);
-    }
-
-    let _ = std::fs::create_dir_all(path.parent().unwrap_or(&path));
-    // create_new is atomic: exactly one concurrent caller succeeds
-    use std::io::Write;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map(|mut f| {
-            let _ = f.write_all(std::process::id().to_string().as_bytes());
-        })
-        .is_ok()
-}
-
-fn release_embed_slot() {
-    if let Some(path) = embed_lock_path() {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-fn index_has_embeddings(repo_root: &Path) -> bool {
-    let Some(conn) = crate::store::open_db(repo_root, false).ok().flatten() else {
-        return false;
-    };
-    conn.query_row("SELECT 1 FROM embeddings LIMIT 1", [], |_| Ok(()))
-        .is_ok()
-}
-
-fn daemon_search_with_hook_timeout(
-    repo_root: &Path,
-    pattern: &str,
-    k: usize,
-    budget: usize,
-    file_filter: Option<&str>,
-) -> Option<String> {
-    let (tx, rx) = mpsc::channel();
-    let repo_root = repo_root.to_path_buf();
-    let pattern = pattern.to_string();
-    let file_filter = file_filter.map(str::to_string);
-
-    std::thread::spawn(move || {
-        let out = crate::daemon::daemon_search_with_autostart(
-            &repo_root,
-            &pattern,
-            k,
-            budget,
-            file_filter.as_deref(),
-        );
-        let _ = tx.send(out);
-    });
-
-    rx.recv_timeout(Duration::from_millis(DAEMON_HOOK_TIMEOUT_MS))
-        .ok()
-        .flatten()
-}
-
-fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String, String) {
-    let pattern = match tool_input["pattern"].as_str() {
-        Some(p) => p,
-        None => return (false, String::new(), "missing pattern".to_string()),
-    };
-
-    // Short identifier-like patterns: try index symbol lookup before falling through
-    if !is_semantic_query(pattern) {
-        if looks_like_identifier(pattern) {
-            if let Some(output) = symbol_lookup(pattern, repo_root) {
-                return (
-                    true,
-                    output,
-                    format!("matched symbol exact lookup: {}", pattern),
-                );
-            }
-        }
-        return (
-            false,
-            String::new(),
-            format!("lexical query: '{}'", pattern),
-        );
-    }
-
-    if !index_has_embeddings(repo_root) {
-        return (
-            false,
-            String::new(),
-            "semantic index has no embeddings".to_string(),
-        );
-    }
-
-    // Try daemon first: model stays resident, ~30ms vs ~430ms cold embed.
-    if let Some(output) = daemon_search_with_hook_timeout(repo_root, pattern, 20, 2500, None) {
-        return (true, output, "semantic search via daemon".to_string());
-    }
-
-    // Fallback: direct embed (daemon not running or failed to start).
-    // Guard prevents N×293MB spikes from parallel hook processes.
-    if !try_acquire_embed_slot() {
-        return (
-            false,
-            String::new(),
-            "ONNX embed model slot locked".to_string(),
-        );
-    }
-    let results = match query_index(repo_root, pattern, 2500, 20, None) {
-        Ok(Some(r)) if !r.is_empty() => r,
-        _ => {
-            release_embed_slot();
-            return (
-                false,
-                String::new(),
-                "semantic search returned empty results".to_string(),
-            );
-        }
-    };
-    release_embed_slot();
-    (
-        true,
-        format_results(&results, pattern),
-        "semantic search via in-process embed".to_string(),
-    )
-}
-
 fn measured_original_tokens(
     tool_name: &str,
     tool_input: &serde_json::Value,
@@ -701,9 +501,8 @@ fn input_rewrite_output(
 
 /// Cap injected into an uncapped content-mode Grep. Measured motivation: a
 /// single unbounded lexical Grep over a large repo cost ~937k tokens because
-/// `handle_grep` only intercepts semantic/symbol queries and passes every other
-/// pattern through untouched. Override with `TOKENIX_GREP_HEAD_LIMIT`; `0`
-/// disables the cap.
+/// tokenix never answers a Grep itself and passes every pattern through.
+/// Override with `TOKENIX_GREP_HEAD_LIMIT`; `0` disables the cap.
 const DEFAULT_GREP_HEAD_LIMIT: i64 = 100;
 
 fn grep_head_limit() -> i64 {
@@ -817,6 +616,43 @@ fn shell_quote(s: &str) -> String {
 /// command string as one argument to a native exe via `& 'exe' ... 'arg'`.
 fn ps_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
+}
+
+/// True when `command`, or any of its `&&`/`;`/`||`/`|`-separated segments
+/// (raw, or after resolving a leading `cd`/`Set-Location`/package-runner
+/// prefix), is a bare `git` invocation.
+///
+/// Used to keep `git` commands visible as a plain, literal `git ...` program
+/// invocation even when a bundled filter would otherwise wrap the whole
+/// command in `tokenix run` for compression. A downstream guard that must
+/// verify a Bash/PowerShell command really is (and stays) `git` — e.g. Claude
+/// Code's worktree-isolation check on a subagent's git operations — cannot
+/// see through `'tokenix' run '<command>'` (the real invocation is now a
+/// quoted argument to an arbitrary binary) and refuses the opaque wrapper
+/// outright, even though the underlying command was exactly the transparent,
+/// safe `git` call the guard exists to allow. `git status` already gets its
+/// own transparent `--short` rewrite above (see `status_re`); this extends
+/// the same guarantee to every other git subcommand.
+fn is_git_invocation(command: &str) -> bool {
+    crate::filters::split_on_operators(command)
+        .iter()
+        .any(|segment| segment_is_git(segment))
+}
+
+fn segment_is_git(segment: &str) -> bool {
+    first_token_is_git(segment)
+        || first_token_is_git(&crate::filters::get_effective_command(segment))
+}
+
+fn first_token_is_git(s: &str) -> bool {
+    crate::filters::tokenize_command(s)
+        .first()
+        .map(|t| {
+            let t = t.as_str();
+            let stem = t.rsplit(['/', '\\']).next().unwrap_or(t);
+            stem.trim_end_matches(".exe").eq_ignore_ascii_case("git")
+        })
+        .unwrap_or(false)
 }
 
 fn is_bash_tool(name: &str) -> bool {
@@ -1038,6 +874,13 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
         // 2. Otherwise check for other active filters to wrap in tokenix run
         let unwrapped =
             crate::filters::unwrap_shell_runner(command).unwrap_or_else(|| command.to_string());
+
+        // Never hide a git invocation behind the opaque `tokenix run` wrapper
+        // (see `is_git_invocation`) — pass it through unfiltered instead.
+        if is_git_invocation(&unwrapped) {
+            pass_through(antigravity);
+        }
+
         let filters = crate::filters::load_filter_groups_for_command(&unwrapped);
 
         if crate::filters::find_filter_ranked(&unwrapped, &filters).is_some() {
@@ -1115,6 +958,12 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
             pass_through(antigravity);
         }
 
+        // Never hide a git invocation behind the opaque `tokenix run` wrapper
+        // (see `is_git_invocation`) — pass it through unfiltered instead.
+        if is_git_invocation(command) {
+            pass_through(antigravity);
+        }
+
         let filters = crate::filters::load_filter_groups_for_command(command);
         if crate::filters::find_filter_ranked(command, &filters).is_some() {
             let exe_path = std::env::current_exe()
@@ -1185,7 +1034,7 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
 
     let (intercepted, output, reason) = match input.tool_name.as_str() {
         "Read" => handle_read(&input.tool_input, &repo_root, &input.session_id),
-        "Grep" => handle_grep(&input.tool_input, &repo_root),
+        "Grep" => (false, String::new(), "grep runs natively".to_string()),
         _ => (false, String::new(), "unsupported tool".to_string()),
     };
 
@@ -1269,6 +1118,28 @@ mod tests {
         );
         // Embedded single quotes are re-opened, not left dangling.
         assert_eq!(shell_quote("it's"), r"'it'\''s'");
+    }
+
+    #[test]
+    fn is_git_invocation_recognizes_bare_and_compound_git_commands() {
+        assert!(is_git_invocation("git log -1"));
+        assert!(is_git_invocation("git status -sb"));
+        // Regression: the tail segment of a compound command still counts —
+        // a filter match on that segment used to wrap the *whole* compound
+        // command in `tokenix run`, hiding the git call just as much.
+        assert!(is_git_invocation(
+            "pwd && git status && git log --oneline -5"
+        ));
+        // A leading cd/Set-Location prefix must not hide the git call either.
+        assert!(is_git_invocation("cd /repo && git diff"));
+        assert!(is_git_invocation("Set-Location D:/repo; git log -1"));
+        assert!(is_git_invocation(
+            "'C:/Program Files/Git/bin/git.exe' log -1"
+        ));
+
+        assert!(!is_git_invocation("cargo test"));
+        assert!(!is_git_invocation("npm test && echo done"));
+        assert!(!is_git_invocation("grep -r tokenix ."));
     }
 
     #[test]
@@ -1378,23 +1249,6 @@ mod tests {
         let raw = r#"{"tool_name":"Edit","tool_input":{"file_path":"x.rs"}}"#;
         let input = HookInput::from_stdin(raw).unwrap();
         assert_eq!(input.tool_name, "Edit");
-    }
-
-    #[test]
-    fn is_semantic_query_requires_3_words() {
-        assert!(!is_semantic_query("fn main"));
-        assert!(!is_semantic_query("embed_query"));
-        assert!(is_semantic_query("how does embedding work"));
-        assert!(is_semantic_query("database connection pool"));
-    }
-
-    #[test]
-    fn looks_like_identifier_rules() {
-        assert!(looks_like_identifier("embed_query"));
-        assert!(looks_like_identifier("MyStruct::new"));
-        assert!(!looks_like_identifier("a")); // too short
-        assert!(!looks_like_identifier("foo bar")); // has space
-        assert!(!looks_like_identifier("fn.*main")); // regex meta
     }
 
     #[test]

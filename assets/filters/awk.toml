@@ -1,0 +1,28 @@
+[filters.awk]
+description = "Compact awk output — bounds oversized lines and row count"
+match_command = "^awk\\b"
+strip_ansi = true
+passthrough_when_emptied = true
+strip_lines_matching = [
+  "^\\s*$"
+]
+truncate_lines_at = 200
+max_lines = 50
+token_budget = 2000
+
+[[tests.awk]]
+name = "short output unchanged"
+command = "awk '{print $1}' input.txt"
+input = """
+foo
+bar
+baz
+"""
+expected = """foo
+bar
+baz"""
+
+[[tests.awk]]
+name = "empty input"
+input = ""
+expected = ""

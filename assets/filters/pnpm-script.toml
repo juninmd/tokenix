@@ -21,6 +21,8 @@ keep_lines_matching = [
   "TS\\d+:",
   "Type error",
   "failed",
+  "No fixes applied",
+  "successful",
 ]
 max_lines = 80
 
@@ -43,3 +45,14 @@ ELIFECYCLE Command failed with exit code 1."""
 name = "silent success stays empty"
 input = ""
 expected = ""
+
+[[tests.pnpm-script]]
+name = "lint clean success keeps verdict line"
+command = "pnpm lint"
+input = """
+> @mika/desktop@0.1.0 lint
+> biome check src/
+
+Checked 2511 files in 1216ms. No fixes applied.
+"""
+expected = """Checked 2511 files in 1216ms. No fixes applied."""

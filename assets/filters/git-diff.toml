@@ -6,7 +6,8 @@ strip_lines_matching = [
   "^\\s*$",
   "^index ",
   "^--- ",
-  "^\\+\\+\\+ "
+  "^\\+\\+\\+ ",
+  "^warning:.*(LF will be replaced by CRLF|CRLF will be replaced by LF)",
 ]
 # Hunk headers stay: they carry the only line numbers an agent can edit by.
 keep_lines_matching = [

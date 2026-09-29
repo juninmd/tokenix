@@ -263,8 +263,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Fastembed 7 / ORT 2.0.0-rc.13 prebuilts require glibc 2.38+ (__isoc23_strtoll)
-          # and GCC 13+ libstdc++ (_M_replace_cold), provided by Ubuntu 24.04.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: tokenix-linux-x86_64
@@ -277,14 +275,6 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact: tokenix-windows-x86_64.exe
-          # GPU-accelerated Windows build. DirectML ships in the pyke ORT
-          # prebuilt, so no extra toolkit is needed on the runner. CUDA is
-          # intentionally omitted — its toolkit install is too fragile for an
-          # auto-release pipeline; CUDA users build from source with --locked.
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            artifact: tokenix-windows-x86_64-directml.exe
-            features: "--features directml"
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -428,7 +418,6 @@ jobs:
             artifacts/tokenix-linux-aarch64
             artifacts/tokenix-macos-aarch64
             artifacts/tokenix-windows-x86_64.exe
-            artifacts/tokenix-windows-x86_64-directml.exe
             artifacts/sha256sums.txt
             artifacts/*.intoto.jsonl
         env:

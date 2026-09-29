@@ -56,16 +56,6 @@ pub fn kv(key: &str, value: &str) {
     println!("  {:<22} {}", format!("{key}:").dimmed(), value);
 }
 
-/// Green-bulleted advisory.
-pub fn tip(msg: &str) {
-    println!("  {} {}", "•".green(), msg);
-}
-
-/// Yellow-flagged warning.
-pub fn warn(msg: &str) {
-    println!("  {} {}", "!".yellow(), msg.yellow());
-}
-
 /// The one and only progress/proportion bar: solid `█` over `░`, clamped to
 /// `[0,1]`. Callers wrap in `[..]` or recolor as they like. Replaces the former
 /// `reduction_bar` (`█/░`) and `mini_bar` (`▓/░`) so the scheme never forks again.

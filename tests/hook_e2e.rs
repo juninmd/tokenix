@@ -85,6 +85,40 @@ fn claude_git_status_is_rewritten_to_short() {
     assert_eq!(cmd, "git status --short");
 }
 
+/// Regression: `git-log.toml` used to make the hook wrap `git log` in
+/// `tokenix run '<command>'`, hiding the real `git` invocation behind an
+/// opaque wrapper. A downstream guard that must verify a Bash command really
+/// is (and stays) `git` — e.g. Claude Code's worktree-isolation check on a
+/// subagent's git operations — cannot see through `'tokenix' run '...'` and
+/// refuses it outright, even though the command was exactly the transparent,
+/// safe `git log` such a guard exists to allow. `git log` (like every other
+/// git subcommand) must stay a plain, visible `git` invocation, exactly like
+/// `git status` already does.
+#[test]
+fn claude_git_log_is_never_wrapped_in_tokenix_run() {
+    let (stdout, code) = run_hook(&claude_bash_payload("git log -1"));
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "git log must stay a plain `git` invocation, not opaque tokenix run: {stdout}"
+    );
+}
+
+/// The same guarantee must hold when `git log` is the tail of a compound
+/// command: a filter match on that one segment used to wrap the *whole*
+/// compound command in `tokenix run`, hiding the git call just as much.
+#[test]
+fn claude_compound_command_with_trailing_git_segment_stays_plain() {
+    let (stdout, code) = run_hook(&claude_bash_payload(
+        "pwd && git status && git log --oneline -5",
+    ));
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "a compound command ending in `git log` must not be wrapped either: {stdout}"
+    );
+}
+
 #[test]
 fn tokenix_disabled_prefix_passes_through() {
     let (stdout, code) = run_hook(&claude_bash_payload("TOKENIX_DISABLED=1 terraform plan"));
@@ -342,6 +376,20 @@ fn powershell_tool_gets_pwsh_shell_rewrite() {
     );
 }
 
+/// Same guarantee as `claude_git_log_is_never_wrapped_in_tokenix_run`, for the
+/// PowerShell tool's own `run --shell pwsh` wrap path.
+#[cfg(windows)]
+#[test]
+fn powershell_git_log_is_never_wrapped_in_tokenix_run() {
+    let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"PowerShell","tool_input":{"command":"git log -1"}}"#;
+    let (stdout, code) = run_hook(payload);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "git log under PowerShell must stay plain, not wrapped in run --shell pwsh: {stdout}"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn powershell_disabled_env_passes_through() {
@@ -419,5 +467,71 @@ fn claude_read_result_secret_is_redacted_via_updated_tool_output() {
     assert!(
         updated.contains("[REDACTED]"),
         "expected a redaction marker: {updated}"
+    );
+}
+
+/// Regression for #95/#96: a compound command whose LAST segment looks like
+/// `rg` (e.g. `sed -n 1,36p file; echo ====; rg -n 'Pattern' dir`) must not
+/// let the bundled `rg` filter's `keep_lines_matching` allowlist run over the
+/// *whole* concatenated blob and silently eat the earlier `sed` segment's
+/// source lines — some of which coincidentally contain a `:` (the allowlist
+/// pattern) and survive, while plain code lines (`}`, `return widget;`)
+/// vanish with no inline marker. Fixture is fully synthetic (fake "widget"
+/// source, fake `rg`-shaped match lines) and mirrors the real failure shape
+/// more closely than the plain `echo head; echo tail` fixture in #95: real
+/// source lines are a mix of colon-bearing and colon-free lines, not a single
+/// marker string.
+#[test]
+fn compound_command_ending_in_rg_does_not_eat_earlier_code_segment() {
+    let mut code_lines = Vec::new();
+    for i in 1..=36 {
+        code_lines.push(if i % 5 == 0 {
+            "}".to_string()
+        } else if i % 3 == 0 {
+            "    return widget;".to_string()
+        } else {
+            format!("    field_{i}: WidgetKind, // WIDGETLINE{i:02}")
+        });
+    }
+    let code_block = code_lines.join("\n");
+    let stdout = format!(
+        "{code_block}\n====\nsrc\\fixtures\\widget.rs:12:    Widget::Changed(id)\n\
+         src\\fixtures\\widget.rs:40:    Widget::Changed(other)\n"
+    );
+    let command =
+        "sed -n 1,36p src/fixtures/widget.rs; echo ====; rg -n 'Widget::Changed' src/fixtures";
+    let payload = format!(
+        r#"{{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{{"command":{cmd}}},"tool_response":{{"stdout":{out},"stderr":""}}}}"#,
+        cmd = serde_json::to_string(command).unwrap(),
+        out = serde_json::to_string(&stdout).unwrap(),
+    );
+
+    let (raw_stdout, code) = run_hook_post(&payload);
+    assert_eq!(code, 0, "hook-post must always exit 0");
+
+    // No JSON on stdout means the tool result was left untouched — the code
+    // block survived verbatim. JSON means the hook rewrote it; the rewrite
+    // must still carry every fixture line, not a filtered subset.
+    let final_text = if raw_stdout.trim().is_empty() {
+        stdout.clone()
+    } else {
+        let v: serde_json::Value = serde_json::from_str(raw_stdout.trim())
+            .unwrap_or_else(|_| panic!("non-empty stdout must be JSON: {raw_stdout}"));
+        v["hookSpecificOutput"]["updatedToolOutput"]
+            .as_str()
+            .unwrap_or_else(|| panic!("expected updatedToolOutput: {raw_stdout}"))
+            .to_string()
+    };
+
+    for line in &code_lines {
+        assert!(
+            final_text.contains(line.as_str()),
+            "source line from the `sed` segment was dropped without a marker: {line:?}\n\
+             --- final text ---\n{final_text}"
+        );
+    }
+    assert!(
+        final_text.contains("Widget::Changed"),
+        "the rg segment's own matches must still be present: {final_text}"
     );
 }

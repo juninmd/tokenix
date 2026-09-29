@@ -36,7 +36,7 @@ git -C "$REPO" config user.email "test@test.com"
 git -C "$REPO" config user.name "Test"
 cd "$REPO"
 git add -A && git commit -q -m "init" 2>/dev/null || true
-"$TOKENIX" index . --no-embed --cpu-profile low &>/dev/null
+"$TOKENIX" index . --cpu-profile low &>/dev/null
 
 # ═════════════════════════════════════════════════════════════════════════════
 section "Copilot hook: stdin protocol (only supported method)"
