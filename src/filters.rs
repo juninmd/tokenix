@@ -2119,7 +2119,7 @@ fn apply_filter_with_exit_inner(output: &str, f: &FilterDef, exit_ok: Option<boo
         lines = apply_summarize_json(lines, summarize);
     }
 
-    let (mut lines, omitted_by_sizing) = apply_sizing(lines, f);
+    let (mut lines, omitted_by_sizing) = apply_sizing(lines, f, signals_failure);
     if f.notify_on_truncate && omitted_by_sizing > 0 {
         lines.push(format!(
             "[... {omitted_by_sizing} lines omitted (line limit) ...]"
@@ -2171,14 +2171,23 @@ fn apply_filter_with_exit_inner(output: &str, f: &FilterDef, exit_ok: Option<boo
         let masks_failure = failed || output_has_failure_signal(output);
         if !output.trim().is_empty() && (f.passthrough_when_emptied || masks_failure) {
             let cap = f.max_lines.unwrap_or(40);
-            let fallback: Vec<String> = s
-                .lines()
-                .take(cap)
-                .map(|l| match f.truncate_lines_at {
-                    Some(n) => truncate_at_char_boundary(l, n).to_string(),
-                    None => l.to_string(),
-                })
-                .collect();
+            // First+last window with a marker: errors usually sit at the tail.
+            let all: Vec<&str> = s.lines().collect();
+            let mut window: Vec<String> = Vec::new();
+            let shape = |l: &str| match f.truncate_lines_at {
+                Some(n) => truncate_at_char_boundary(l, n).to_string(),
+                None => l.to_string(),
+            };
+            if all.len() > cap {
+                let head = cap.div_ceil(2);
+                let tail = cap - head;
+                window.extend(all[..head].iter().map(|l| shape(l)));
+                window.push(format!("[... {} lines omitted ...]", all.len() - cap));
+                window.extend(all[all.len() - tail..].iter().map(|l| shape(l)));
+            } else {
+                window.extend(all.iter().map(|l| shape(l)));
+            }
+            let fallback = window;
             let fb_text = fallback.join("\n");
             return never_worse(
                 output,
@@ -2656,9 +2665,46 @@ fn apply_category_caps(lines: Vec<String>, caps: &[CategoryCap]) -> Vec<String> 
     out
 }
 
-fn apply_sizing(lines: Vec<String>, f: &FilterDef) -> (Vec<String>, usize) {
+/// Line-level failure hint for the bare-`max_lines` rescue. Looser than
+/// `output_has_failure_signal` on purpose: it only runs once the run is already
+/// known to have failed, where `upload failed: ... AccessDenied` must survive.
+fn is_failure_line(line: &str) -> bool {
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)error|fail|fatal|panic|exception|denied|traceback|cannot|unable")
+            .expect("static failure-line regex")
+    })
+    .is_match(line)
+}
+
+/// Failed run under a bare `max_lines`: spend the budget on failure lines first
+/// (in order), then fill what is left with the head. The tail is where errors
+/// usually are, so a plain head cut would lose exactly the line that matters.
+fn keep_failure_window(lines: &[String], max: usize, keep: &mut [bool]) {
+    keep.iter_mut().for_each(|k| *k = false);
+    let mut budget = max;
+    for (i, l) in lines.iter().enumerate() {
+        if budget > 0 && is_failure_line(l) {
+            keep[i] = true;
+            budget -= 1;
+        }
+    }
+    for k in keep.iter_mut() {
+        if budget == 0 {
+            break;
+        }
+        if !*k {
+            *k = true;
+            budget -= 1;
+        }
+    }
+}
+
+fn apply_sizing(lines: Vec<String>, f: &FilterDef, signals_failure: bool) -> (Vec<String>, usize) {
     let original_len = lines.len();
     let n = lines.len();
+    let mut bare_max_failure = false;
 
     // Positional keep mask for the configured window.
     let mut keep = vec![true; n];
@@ -2688,8 +2734,13 @@ fn apply_sizing(lines: Vec<String>, f: &FilterDef) -> (Vec<String>, usize) {
         }
         (None, None) => {
             if let Some(max) = f.max_lines {
-                for k in keep.iter_mut().skip(max) {
-                    *k = false;
+                if signals_failure && f.priority_lines.is_empty() && n > max {
+                    bare_max_failure = true;
+                    keep_failure_window(&lines, max, &mut keep);
+                } else {
+                    for k in keep.iter_mut().skip(max) {
+                        *k = false;
+                    }
                 }
             }
         }
@@ -2721,12 +2772,12 @@ fn apply_sizing(lines: Vec<String>, f: &FilterDef) -> (Vec<String>, usize) {
     for (i, line) in lines.into_iter().enumerate() {
         if keep[i] {
             result.push(line);
-        } else if head_tail_combo && !marker_inserted {
+        } else if (head_tail_combo || bare_max_failure) && !marker_inserted {
             result.push(format!("[... {dropped} lines omitted ...]"));
             marker_inserted = true;
         }
     }
-    let omitted = if head_tail_combo {
+    let omitted = if head_tail_combo || bare_max_failure {
         0
     } else {
         original_len - result.len()
@@ -3979,6 +4030,84 @@ match_command = "^second\\b"
              error: the thing that matters\n\
              Summary: 1 failed"
         );
+    }
+
+    fn noisy_run_with_error_at(n: usize, at: usize) -> String {
+        (1..=n)
+            .map(|i| {
+                if i == at {
+                    "upload failed: ./f50 An error occurred (AccessDenied) when calling PutObject"
+                        .to_string()
+                } else {
+                    format!("upload: ./f{i} to s3://bucket/f{i}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn bare_max_lines_keeps_error_beyond_cut_on_failed_run() {
+        let mut f = base_filter();
+        f.max_lines = Some(10);
+        let input = noisy_run_with_error_at(100, 50);
+        let out = apply_filter_with_exit(&input, &f, Some(false));
+        assert!(out.contains("AccessDenied"), "error lost: {out}");
+        assert!(out.contains("lines omitted"), "silent cut: {out}");
+        assert!(
+            out.lines().count() <= 11,
+            "budget blown: {}",
+            out.lines().count()
+        );
+    }
+
+    #[test]
+    fn bare_max_lines_keeps_error_on_zero_exit_with_failure_signal() {
+        let mut f = base_filter();
+        f.max_lines = Some(10);
+        let mut input = noisy_run_with_error_at(100, 0);
+        input.push_str("\nerror: transfer aborted");
+        let out = apply_filter_with_exit(&input, &f, None);
+        assert!(out.contains("error: transfer aborted"), "{out}");
+        assert!(out.contains("lines omitted"), "{out}");
+    }
+
+    #[test]
+    fn bare_bundled_aws_s3_keeps_access_denied_on_failure() {
+        let all = load_all_filters();
+        let f = find_filter("aws s3 sync dist s3://bucket", &all).expect("aws-s3 filter");
+        let input = noisy_run_with_error_at(100, 50);
+        let out = apply_filter_with_exit(&input, f, Some(false));
+        assert!(out.contains("AccessDenied"), "error lost: {out}");
+    }
+
+    #[test]
+    fn bare_max_lines_still_cuts_successful_noisy_run() {
+        let mut f = base_filter();
+        f.max_lines = Some(10);
+        let input = (1..=100)
+            .map(|i| format!("upload: ./f{i} to s3://bucket/f{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let out = apply_filter_with_exit(&input, &f, Some(true));
+        assert_eq!(out.lines().count(), 10);
+        assert!(out.starts_with("upload: ./f1 "));
+    }
+
+    #[test]
+    fn emptied_fallback_keeps_tail_with_marker() {
+        let mut f = base_filter();
+        f.keep_lines_matching = vec!["^NEVER".to_string()];
+        f.max_lines = Some(6);
+        let input = (1..=50)
+            .map(|i| format!("step {i}"))
+            .chain(["boom: cannot open socket".to_string()])
+            .collect::<Vec<_>>()
+            .join("\n");
+        let out = apply_filter_with_exit(&input, &f, Some(false));
+        assert!(out.contains("boom: cannot open socket"), "tail lost: {out}");
+        assert!(out.contains("lines omitted"), "no marker: {out}");
+        assert!(out.starts_with("step 1\n"), "{out}");
     }
 
     #[test]

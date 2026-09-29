@@ -578,6 +578,13 @@ pub fn insert_graph_edge(
     Ok(())
 }
 
+/// Escape `%`, `_` and `\` so user input matches literally under `LIKE ... ESCAPE '\'`.
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 pub fn search_graph_nodes(conn: &Connection, query: &str, limit: usize) -> Result<Vec<GraphNode>> {
     search_graph_nodes_kind(conn, query, limit, None)
 }
@@ -588,12 +595,12 @@ pub fn search_graph_nodes_kind(
     limit: usize,
     kind: Option<&str>,
 ) -> Result<Vec<GraphNode>> {
-    let pattern = format!("%{}%", query);
+    let pattern = format!("%{}%", escape_like(query));
     let query_limit = (limit.max(1) * 4) as i64;
     let mut stmt = conn.prepare(
         "SELECT chunk_id,path,name,kind,start_line,end_line
          FROM graph_nodes
-         WHERE (name = ?1 COLLATE NOCASE OR name LIKE ?2 COLLATE NOCASE OR path LIKE ?2 COLLATE NOCASE)
+         WHERE (name = ?1 COLLATE NOCASE OR name LIKE ?2 ESCAPE '\\' COLLATE NOCASE OR path LIKE ?2 ESCAPE '\\' COLLATE NOCASE)
            AND (?4 IS NULL OR kind = ?4 COLLATE NOCASE)
          ORDER BY CASE WHEN name = ?1 COLLATE NOCASE THEN 0 ELSE 1 END, rank DESC, path, start_line
          LIMIT ?3",

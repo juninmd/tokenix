@@ -53,7 +53,7 @@ so resolution never silently raises it.
 | `freshness.rs` | Inline pre-command refresh of dirty files (inline path), fails open |
 | `modules.rs` | Louvain community detection over `graph_edges` — `tokenix modules` |
 | `blast.rs` | Diff → changed symbols → reverse call graph (`tokenix blast`) |
-| `snapshot.rs` | `export-index` / `import-index` — gzipped `VACUUM INTO` copy for teams |
+| `snapshot.rs` | `export-index` / `import-index` — gzipped `VACUUM INTO` copy for teams; import caps decompressed size (2 GiB), holds the index lock and runs `integrity_check` before the swap |
 | `hook.rs` | `PreToolUse` handler — the interception decision tree |
 | `compress.rs` | Generic output compression, base64 redaction, token ceiling, EOL preservation; `run_hook_post` also redacts known secrets on every PostToolUse tool result via `secrets_scan::redact_known_secrets`, then emits `hookSpecificOutput.updatedToolOutput` for Claude Code/Codex |
 | `filters.rs` | `FilterDef` schema, filter resolution, `apply_filter_with_exit` |
@@ -70,6 +70,7 @@ so resolution never silently raises it.
 | `transcripts.rs` | Per-agent history roots and parsers |
 | `conversation_audit.rs` | `conversation-audit` + `redact_credentials()` — the single credential masker every persisted view goes through |
 | `recordings.rs` | `filter record` sessions — captures command output for filter authoring; redacted and self-gitignored, because captures land in the working tree and `filter generate` uploads them to an AI CLI |
+| `cmd_filter.rs` (spawning) | Programs (`claude`, `gh`, `git`, sample commands) resolve only through `resolve_in_path`: absolute PATH entries, never the cwd — `cmd`/`where` search the cwd first on Windows, so a cloned repo shipping `claude.cmd` would run (CWE-427). Children get `NoDefaultCurrentDirectoryInExePath=1` |
 | `memory.rs` | Cross-session notes read back with `memory list` / the MCP memory tools (no command injects them anymore); refuses text that trips a keyword *or* a bundled secret rule (`secrets_scan::redact_known_secrets`) |
 | `benchmark.rs` | Token-reduction benchmark (`tokenix benchmark`): Read outlines, symbol workflows, command filters |
 | `doctor.rs` | Install diagnosis — filter inventory and config issues, recording state |
@@ -87,7 +88,7 @@ binary. Keep this behavior documented in `README.md`.
 The GitHub token belongs only on the release API request, whose client forbids
 redirects. Asset URLs must be HTTPS links to this repo's release path and use an
 unauthenticated client; both the asset and `sha256sums.txt` are checked before a
-binary replacement.
+binary replacement. Downloads are capped: `sha256sums.txt` at 64 KB, the binary at min(`asset.size`, 512 MB).
 
 ## SQLite schema
 
@@ -301,7 +302,7 @@ shown there was run against the real binary; keep it that way.
 ## Output filters
 
 Resolution: `<repo>/.tokenix/filters` (trust-gated) → `~/.tokenix/filters` →
-bundled. Currently **528 filters / 1,150 golden cases**.
+bundled. Currently **534 filters / 1,167 golden cases**.
 
 **Hot path uses `load_filters_for_command()`, not `load_all_filters()`.** A
 prefilter narrows candidates before any regex compiles; `find_filter` matches via
@@ -310,7 +311,9 @@ filters, the hook stays in single-digit milliseconds.
 
 Engine invariants: `never_worse` (a filtered result never costs more bytes than
 raw) · `head_lines`+`tail_lines` form a first+last window with an inline
-`[... N lines omitted ...]` marker · `priority_lines` survive every sizing cut ·
+`[... N lines omitted ...]` marker · `priority_lines` survive every sizing cut · a bare `max_lines` (no head/tail/priority) on a failed run
+(nonzero exit or a failure signal) spends the budget on failure lines first and always emits the
+`[... N lines omitted ...]` marker, and the emptied-output fallback is a head+tail window with that marker ·
 `category_caps` bound repetitive classes with a count marker · `apply_filter_with_exit`
 honors per-filter `on_failure = "passthrough"|"tail:N"` · `FilterDef` is
 `deny_unknown_fields` so typo'd keys fail loudly · every regex must compile

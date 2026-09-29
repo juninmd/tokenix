@@ -13,7 +13,7 @@
 //!   commit and the local checkout, and `tokenix index` closes it incrementally.
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -23,6 +23,23 @@ use flate2::Compression;
 use rusqlite::Connection;
 
 use crate::store;
+
+/// Ceiling on the decompressed size of an imported snapshot (2 GiB). The default
+/// snapshot path sits inside the repo, so a clone controls it: without a cap a
+/// tiny gzip bomb fills the disk. Real indexes with vectors stay far below this.
+pub const MAX_IMPORT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Decompress `reader` into `writer`, failing once output would exceed `cap`.
+fn gunzip_capped<R: Read, W: Write>(reader: R, mut writer: W, cap: u64) -> std::io::Result<u64> {
+    let mut limited = GzDecoder::new(reader).take(cap + 1);
+    let n = std::io::copy(&mut limited, &mut writer)?;
+    if n > cap {
+        return Err(std::io::Error::other(format!(
+            "decompressed snapshot exceeds the {cap}-byte limit"
+        )));
+    }
+    Ok(n)
+}
 
 /// Where a team snapshot lives by default: inside the repo, next to the code it
 /// describes, so it can be committed and reviewed like any other artifact.
@@ -173,19 +190,43 @@ pub fn import(repo_root: &Path, input: Option<&Path>, force: bool) -> Result<Imp
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // Serialize with `tokenix index` so the swap never races a live writer.
+    let _lock = store::acquire_index_lock(repo_root)?;
     let staging = target.with_extension(format!("import-{}", std::process::id()));
     let _ = std::fs::remove_file(&staging);
 
     {
-        let mut decoder = GzDecoder::new(BufReader::new(File::open(&source)?));
         let mut out = BufWriter::new(File::create(&staging)?);
-        std::io::copy(&mut decoder, &mut out)
-            .with_context(|| format!("{} is not a valid gzip snapshot", source.display()))?;
+        let copied = gunzip_capped(
+            BufReader::new(File::open(&source)?),
+            &mut out,
+            MAX_IMPORT_BYTES,
+        )
+        .and_then(|_| out.flush());
+        if let Err(e) = copied {
+            drop(out);
+            let _ = std::fs::remove_file(&staging);
+            return Err(anyhow::Error::from(e)
+                .context(format!("{} is not a valid gzip snapshot", source.display())));
+        }
     }
 
     let (files, chunks, created_by, snapshot_at) = {
         let staged = Connection::open(&staging)
             .with_context(|| format!("{} is not a readable index", source.display()))?;
+        // A snapshot is clone-controlled input: verify page structure before
+        // it can replace a working index.
+        let integrity: String = staged
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap_or_else(|e| e.to_string());
+        if integrity != "ok" {
+            drop(staged);
+            let _ = std::fs::remove_file(&staging);
+            anyhow::bail!(
+                "{} failed the SQLite integrity check: {integrity}",
+                source.display()
+            );
+        }
         // Reject anything that is not actually a tokenix index before it can
         // replace a working one.
         let ok: i64 = staged
@@ -387,9 +428,46 @@ mod tests {
         let err = import(&dir, Some(&bogus), false).unwrap_err().to_string();
         assert!(
             err.contains("does not look like a tokenix index")
-                || err.contains("not a readable index"),
+                || err.contains("not a readable index")
+                || err.contains("integrity check"),
             "unexpected error: {err}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gunzip_stops_at_the_cap() {
+        let mut gz = Vec::new();
+        {
+            let mut enc = GzEncoder::new(&mut gz, Compression::default());
+            std::io::Write::write_all(&mut enc, &vec![0u8; 10_000]).unwrap();
+            enc.finish().unwrap();
+        }
+        let mut sink = Vec::new();
+        assert!(gunzip_capped(&gz[..], &mut sink, 9_999).is_err());
+        let mut sink = Vec::new();
+        assert_eq!(gunzip_capped(&gz[..], &mut sink, 10_000).unwrap(), 10_000);
+    }
+
+    #[test]
+    fn import_rejects_a_corrupted_index_and_keeps_the_local_one() {
+        let dir = temp_repo("corrupt");
+        let db = dir.join("seed.db");
+        seed_index(&db, &"fn alpha() {}\n".repeat(400), 100.0);
+        let mut bytes = std::fs::read(&db).unwrap();
+        // Scribble over the interior pages, past the header and schema page.
+        let end = bytes.len();
+        for b in &mut bytes[end / 2..end] {
+            *b = 0xA5;
+        }
+        let bad = dir.join("bad.db.gz");
+        {
+            let mut enc = GzEncoder::new(File::create(&bad).unwrap(), Compression::default());
+            std::io::Write::write_all(&mut enc, &bytes).unwrap();
+            enc.finish().unwrap();
+        }
+        assert!(import(&dir, Some(&bad), false).is_err());
+        assert!(!store::db_path(&dir).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

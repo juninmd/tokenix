@@ -20,7 +20,7 @@ use crate::store::{
 /// Upper bound on file size to index (1.5 MB). Above this, files are almost
 /// always machine-generated (lock files, bundles, data dumps) and only bloat
 /// the index. Skipped during the directory walk.
-const MAX_INDEX_FILE_BYTES: u64 = 1_500_000;
+pub(crate) const MAX_INDEX_FILE_BYTES: u64 = 1_500_000;
 
 #[allow(dead_code)]
 pub struct IndexResult {
