@@ -161,7 +161,7 @@ pub struct UpdateStatusJson {
     pub auto_install: Option<bool>,
 }
 
-pub fn get_target_asset_name(directml: bool) -> Result<&'static str> {
+pub fn get_target_asset_name() -> Result<&'static str> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
@@ -170,11 +170,7 @@ pub fn get_target_asset_name(directml: bool) -> Result<&'static str> {
         ("linux", "aarch64") => Ok("tokenix-linux-aarch64"),
         ("macos", "aarch64") => Ok("tokenix-macos-aarch64"),
         ("windows", "x86_64") => {
-            if directml || cfg!(feature = "directml") {
-                Ok("tokenix-windows-x86_64-directml.exe")
-            } else {
-                Ok("tokenix-windows-x86_64.exe")
-            }
+            Ok("tokenix-windows-x86_64.exe")
         }
         _ => anyhow::bail!(
             "Unsupported platform for prebuilt binary: {os}-{arch}. Please update via `cargo install --locked tokenix`"
@@ -690,11 +686,10 @@ fn replace_executable(temp_path: &Path, target_path: &Path) -> Result<()> {
 fn download_and_install_release(
     client: &reqwest::blocking::Client,
     release: &GithubRelease,
-    directml: bool,
     target_path: &Path,
     quiet: bool,
 ) -> Result<String> {
-    let asset_name = get_target_asset_name(directml)?;
+    let asset_name = get_target_asset_name()?;
 
     let binary_asset = release
         .assets
@@ -843,7 +838,6 @@ pub fn run_background_check_and_auto_update() -> Result<()> {
 
     let is_newer = latest_version > current_version;
     if is_newer && is_auto_install_enabled() {
-        let directml = cfg!(feature = "directml");
         let target_path = match resolve_target_path(None) {
             Ok(p) => p,
             Err(_) => return Ok(()),
@@ -855,7 +849,7 @@ pub fn run_background_check_and_auto_update() -> Result<()> {
         if std::env::current_exe().is_ok_and(|exe| exe != target_path) {
             return Ok(());
         }
-        if download_and_install_release(&client, &release, directml, &target_path, true).is_ok() {
+        if download_and_install_release(&client, &release, &target_path, true).is_ok() {
             let updated_cache = UpdateCache {
                 last_checked_epoch: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -882,7 +876,6 @@ pub struct UpdateOptions {
     pub enable_auto: bool,
     pub disable_auto: bool,
     pub json: bool,
-    pub directml: bool,
     pub version: Option<String>,
     pub target_path: Option<PathBuf>,
     pub check_background: bool,
@@ -933,7 +926,7 @@ pub fn run_update(opts: UpdateOptions) -> Result<()> {
     let is_newer = latest_version > current_version;
     let should_update = is_newer || opts.force;
 
-    let asset_name = get_target_asset_name(opts.directml)?;
+    let asset_name = get_target_asset_name()?;
     let target_path = resolve_target_path(opts.target_path)?;
 
     if opts.json {
@@ -998,8 +991,7 @@ pub fn run_update(opts: UpdateOptions) -> Result<()> {
         return Ok(());
     }
 
-    let installed_asset =
-        download_and_install_release(&client, &release, opts.directml, &target_path, opts.json)?;
+    let installed_asset = download_and_install_release(&client, &release, &target_path, opts.json)?;
 
     if opts.json {
         let status = UpdateStatusJson {
@@ -1133,7 +1125,7 @@ bc0f1a0cb0050f79d6cbc336521d759aaf080fa8095ea2a32e49425d6ce7ddde *tokenix-window
 
     #[test]
     fn test_target_asset_name() {
-        let asset = get_target_asset_name(false);
+        let asset = get_target_asset_name();
         assert!(asset.is_ok());
         let name = asset.unwrap();
         assert!(name.starts_with("tokenix-"));

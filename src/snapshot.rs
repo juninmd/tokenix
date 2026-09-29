@@ -3,7 +3,7 @@
 //! Indexing is the one expensive thing tokenix does, and today every developer
 //! on a team pays it in full on a repo where the answer is identical for all of
 //! them. A snapshot is the index itself — compacted, stripped of the local
-//! embedding cache, gzipped — small enough to commit next to the code, so the
+//! legacy embedding tables, gzipped — small enough to commit next to the code, so the
 //! second person onward bootstraps in seconds and only indexes the diff.
 //!
 //! Two rules keep this honest:
@@ -50,8 +50,6 @@ pub struct ExportReport {
     pub bytes: u64,
     pub files: i64,
     pub chunks: i64,
-    pub embeddings: i64,
-    pub model: String,
     pub head: Option<String>,
     /// Chunks whose content had a known secret masked on the way into the
     /// snapshot. Non-zero means the *index* still holds the plaintext.
@@ -65,8 +63,6 @@ pub struct ImportReport {
     pub backup: Option<PathBuf>,
     pub files: i64,
     pub chunks: i64,
-    pub embeddings: i64,
-    pub model: String,
     pub created_by: Option<String>,
     pub replaced_newer: bool,
 }
@@ -75,12 +71,11 @@ fn sql_literal(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "''"))
 }
 
-fn counts(conn: &Connection) -> (i64, i64, i64) {
+fn counts(conn: &Connection) -> (i64, i64) {
     let one = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
     (
         one("SELECT COUNT(*) FROM files"),
         one("SELECT COUNT(*) FROM chunks"),
-        one("SELECT COUNT(*) FROM embeddings"),
     )
 }
 
@@ -110,22 +105,23 @@ pub fn export(repo_root: &Path, output: Option<&Path>) -> Result<ExportReport> {
     let _ = std::fs::remove_file(&staging);
 
     let redacted;
-    let (files, chunks, embeddings, model, head) = {
+    let (files, chunks, head) = {
         let conn = Connection::open(&source)
             .with_context(|| format!("cannot open index at {}", source.display()))?;
         conn.execute_batch(&format!("VACUUM INTO {}", sql_literal(&staging)))
             .context("failed to snapshot the index (VACUUM INTO)")?;
 
         let staged = Connection::open(&staging)?;
-        // The embedding cache is a local accelerator keyed by content hash; it
-        // roughly doubles the file and the recipient rebuilds it as they index.
-        staged.execute_batch("DELETE FROM embedding_cache;")?;
+        // Indexes built before embeddings were removed still carry vector tables; they
+        // are dead weight, so they never ship.
+        staged.execute_batch(
+            "DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS embedding_cache;",
+        )?;
         // `chunks.content` is verbatim source unless the repo opted into
         // `[index] redact_secrets`, which defaults to false. A snapshot is a
         // file this tool tells you to commit and share, so it gets scrubbed on
         // the way out regardless of that setting — a hardcoded key inside a
         // gzipped blob nobody diffs is exactly how one gets published.
-        // The `chunks_au` trigger keeps chunks_fts consistent with the update.
         redacted = redact_staged_chunks(&staged)?;
         store::set_meta(&staged, "snapshot_version", crate::VERSION)?;
         store::set_meta(
@@ -136,11 +132,9 @@ pub fn export(repo_root: &Path, output: Option<&Path>) -> Result<ExportReport> {
         // VACUUM again so the deleted cache pages actually leave the file.
         staged.execute_batch("VACUUM;")?;
 
-        let (files, chunks, embeddings) = counts(&staged);
-        let model = store::meta_value(&staged, "embed_model")
-            .unwrap_or_else(|| crate::embed::DEFAULT_MODEL_ID.to_string());
+        let (files, chunks) = counts(&staged);
         let head = store::meta_value(&staged, "git_fingerprint");
-        (files, chunks, embeddings, model, head)
+        (files, chunks, head)
     };
 
     let mut reader = BufReader::new(File::open(&staging)?);
@@ -157,8 +151,6 @@ pub fn export(repo_root: &Path, output: Option<&Path>) -> Result<ExportReport> {
         bytes,
         files,
         chunks,
-        embeddings,
-        model,
         head,
         redacted,
     })
@@ -219,7 +211,7 @@ pub fn import(repo_root: &Path, input: Option<&Path>, force: bool) -> Result<Imp
         }
     }
 
-    let (files, chunks, embeddings, model, created_by, snapshot_at) = {
+    let (files, chunks, created_by, snapshot_at) = {
         let staged = Connection::open(&staging)
             .with_context(|| format!("{} is not a readable index", source.display()))?;
         // A snapshot is clone-controlled input: verify page structure before
@@ -240,12 +232,12 @@ pub fn import(repo_root: &Path, input: Option<&Path>, force: bool) -> Result<Imp
         let ok: i64 = staged
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table'
-                   AND name IN ('files','chunks','embeddings','meta','graph_nodes')",
+                   AND name IN ('files','chunks','meta','graph_nodes')",
                 [],
                 |r| r.get(0),
             )
             .unwrap_or(0);
-        if ok < 5 {
+        if ok < 4 {
             let _ = std::fs::remove_file(&staging);
             anyhow::bail!(
                 "{} does not look like a tokenix index (missing core tables)",
@@ -254,7 +246,7 @@ pub fn import(repo_root: &Path, input: Option<&Path>, force: bool) -> Result<Imp
         }
         // Bring a snapshot from an older tokenix up to the current schema.
         store::init_schema(&staged, 768)?;
-        let (files, chunks, embeddings) = counts(&staged);
+        let (files, chunks) = counts(&staged);
         if chunks == 0 {
             let _ = std::fs::remove_file(&staging);
             anyhow::bail!(
@@ -265,9 +257,6 @@ pub fn import(repo_root: &Path, input: Option<&Path>, force: bool) -> Result<Imp
         (
             files,
             chunks,
-            embeddings,
-            store::meta_value(&staged, "embed_model")
-                .unwrap_or_else(|| crate::embed::DEFAULT_MODEL_ID.to_string()),
             store::meta_value(&staged, "snapshot_version"),
             indexed_at(&staged),
         )
@@ -320,8 +309,6 @@ pub fn import(repo_root: &Path, input: Option<&Path>, force: bool) -> Result<Imp
         backup,
         files,
         chunks,
-        embeddings,
-        model,
         created_by,
         replaced_newer,
     })
@@ -357,12 +344,11 @@ mod tests {
             [chunk_body],
         )
         .unwrap();
-        conn.execute(
-            "INSERT INTO embedding_cache(content_hash,embedding,updated_at) VALUES('x',?1,1.0)",
-            [vec![0u8; 4096]],
+        conn.execute_batch(
+            "CREATE TABLE embedding_cache(content_hash TEXT PRIMARY KEY, embedding BLOB, updated_at REAL);
+             INSERT INTO embedding_cache(content_hash,embedding,updated_at) VALUES('x',zeroblob(4096),1.0)",
         )
         .unwrap();
-        store::set_meta(&conn, "embed_model", "nomic-v1.5").unwrap();
         store::set_meta(&conn, "indexed_at", &indexed_at_value.to_string()).unwrap();
     }
 
@@ -382,7 +368,9 @@ mod tests {
                 .unwrap();
             let staged = Connection::open(&staging).unwrap();
             staged
-                .execute_batch("DELETE FROM embedding_cache;")
+                .execute_batch(
+                    "DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS embedding_cache;",
+                )
                 .unwrap();
             store::set_meta(&staged, "snapshot_version", "test").unwrap();
         }
@@ -407,20 +395,20 @@ mod tests {
             std::io::copy(&mut dec, &mut w).unwrap();
         }
         let conn = Connection::open(&restored).unwrap();
-        let (files, chunks, _) = counts(&conn);
+        let (files, chunks) = counts(&conn);
         assert_eq!((files, chunks), (1, 1));
-        let cached: i64 = conn
-            .query_row("SELECT COUNT(*) FROM embedding_cache", [], |r| r.get(0))
+        let legacy_tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('embeddings','embedding_cache')",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(cached, 0, "the local embedding cache must not ship");
+        assert_eq!(legacy_tables, 0, "legacy embedding tables must not ship");
         let body: String = conn
             .query_row("SELECT content FROM chunks WHERE id=1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(body, "fn alpha() {}");
-        assert_eq!(
-            store::meta_value(&conn, "embed_model").as_deref(),
-            Some("nomic-v1.5")
-        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

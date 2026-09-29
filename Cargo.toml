@@ -1,6 +1,6 @@
 [package]
 name = "tokenix"
-version = "0.65.4"
+version = "0.67.0"
 edition = "2021"
 # Floor, not a preference. Two things break silently below it: `Command` only
 # quotes arguments safely for Windows `.cmd`/`.bat` shims since 1.77.2
@@ -9,12 +9,12 @@ edition = "2021"
 # (tree-sitter 0.27), so this costs nothing and makes the assumption fail
 # at build time instead of at exploit time.
 rust-version = "1.90"
-description = "Semantic search, symbol graphs, secrets scanning, output filters, and CLI hooks that save 60-90% LLM tokens"
+description = "Symbol graphs, lexical code search, secrets scanning, output filters, and CLI hooks that save 60-90% LLM tokens"
 license = "MIT"
 repository = "https://github.com/juninmd/tokenix"
 homepage = "https://github.com/juninmd/tokenix"
 readme = "README.md"
-keywords = ["llm", "embeddings", "code-search", "semantic-search", "cli"]
+keywords = ["llm", "code-search", "symbol-graph", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 exclude = ["/tokenix-logo.png", "/assets/screenshots", "/benchmark", "/.github"]
 
@@ -28,12 +28,6 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
-fastembed = { version = "7" }
-# default-features off: drops esaxx-rs/onig (static-CRT C/C++) which clash with
-# ort-sys's dynamic CRT at link time. nomic-embed's BERT WordPiece tokenizer
-# needs none of them; from_file + encode work with the pure-Rust core.
-tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
-ort = { version = "=2.0.0-rc.13", optional = true }
 once_cell = "1"
 walkdir = "2"
 ignore = "0.4"
@@ -54,10 +48,6 @@ toml = "1.1"
 regex = "1"
 rust-embed = { version = "8", features = ["include-exclude"] }
 libc = "0.2"
-# CSPRNG for the daemon capability token on every platform. Already in the tree
-# transitively at this exact version, so this adds no new compilation unit —
-# it just stops the non-unix path from hashing pid + clock + heap addresses.
-getrandom = "0.4"
 tree-sitter = "0.27"
 tree-sitter-rust = "0.24"
 tree-sitter-python = "0.25"
@@ -77,10 +67,3 @@ windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 [profile.dev]
 opt-level = 1
 
-[features]
-default = []
-cuda = ["dep:ort", "ort/cuda"]
-directml = ["dep:ort", "ort/directml"]
-# Enables tests that download the embedding model (~130 MB) and run inference.
-# Excluded from the default `cargo test` so CI stays fast and offline.
-model-tests = []

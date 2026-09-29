@@ -199,7 +199,7 @@ pub struct GainStats {
     pub by_phase: Vec<(String, usize, i64)>,
     /// Top Bash commands compressed by the filter system, sorted by tokens saved.
     pub by_command: Vec<(String, usize, i64)>,
-    /// Total semantic-search queries answered by the index (Read outlines + Grep).
+    /// Total Read outlines answered by the index.
     pub indexed_queries: usize,
     /// Commands that skipped filtering via the TOKENIX_DISABLED escape hatch.
     pub bypassed: usize,
@@ -382,7 +382,7 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         .collect();
     by_command.sort_by_key(|row| std::cmp::Reverse(row.2));
 
-    // Count semantic-index intercepts (Read/Grep — events without a command).
+    // Count index intercepts (Read — events without a command).
     let indexed_queries = intercepted_events
         .iter()
         .filter(|e| e.command.is_empty())

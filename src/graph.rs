@@ -117,7 +117,7 @@ fn insert_reference_edges(
 /// `delete_chunks_for_file` already dropped those files' nodes and every edge
 /// touching them, so only two repairs are needed: (1) nodes + outgoing edges
 /// for the changed files, (2) inbound edges from unchanged callers — found via
-/// FTS candidate search instead of a whole-repo reference re-extract.
+/// substring candidate search instead of a whole-repo reference re-extract.
 /// `tokenix rebuild-graph` stays available as the full-rebuild escape hatch.
 pub fn update_symbol_graph_incremental(conn: &Connection, changed_paths: &[String]) -> Result<()> {
     if changed_paths.is_empty() {
@@ -154,33 +154,21 @@ pub fn update_symbol_graph_incremental(conn: &Connection, changed_paths: &[Strin
         insert_reference_edges(conn, chunk, &by_name, &mut inserted, None)?;
     }
 
-    // (2) Inbound edges: FTS narrows unchanged chunks that mention the changed
-    // files' symbol names; only their edges INTO changed files are re-inserted.
-    // The FTS cap bounds work per symbol name, but silently dropping the tail
-    // means a hot symbol's callers past the cap keep stale edges forever (the
-    // incremental path never revisits them). Report when that happens so the
-    // gap is visible instead of looking like a complete repair.
-    const FTS_CANDIDATE_CAP: usize = 400;
+    // (2) Inbound edges: a substring scan narrows unchanged chunks that mention
+    // the changed files' symbol names; only their edges INTO changed files are
+    // re-inserted. No cap: a capped lookup left a hot symbol's callers with
+    // stale edges forever, and each candidate is re-extracted at most once.
     let mut candidate_ids: HashSet<i64> = HashSet::new();
-    let mut capped: Vec<&str> = Vec::new();
-    for chunk in &chunks {
-        let hits =
-            store::search_fts(conn, &chunk.name, FTS_CANDIDATE_CAP, None).unwrap_or_default();
-        if hits.len() >= FTS_CANDIDATE_CAP {
-            capped.push(chunk.name.as_str());
+    let mut names: Vec<&str> = chunks.iter().map(|c| c.name.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    let mut mention = conn.prepare(
+        "SELECT id FROM chunks WHERE symbol IS NOT NULL AND symbol != '' AND instr(content, ?1) > 0",
+    )?;
+    for name in names {
+        for id in mention.query_map([name], |row| row.get::<_, i64>(0))? {
+            candidate_ids.insert(id?);
         }
-        for (id, _) in hits {
-            candidate_ids.insert(id);
-        }
-    }
-    if !capped.is_empty() {
-        capped.sort_unstable();
-        capped.dedup();
-        eprintln!(
-            "tokenix: inbound-edge repair hit the {FTS_CANDIDATE_CAP}-candidate cap for {}; \
-             run `tokenix index --force` to rebuild the graph fully",
-            capped.join(", ")
-        );
     }
     let changed_ids: HashSet<i64> = chunks.iter().map(|c| c.chunk_id).collect();
     for cand_id in candidate_ids {

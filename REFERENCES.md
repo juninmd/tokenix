@@ -15,6 +15,3 @@ This document lists external repositories, specifications, and documentation cit
 
 - [Rust Language Website](https://www.rust-lang.org/) — Main site for the Rust language toolchain and documentation.
 - [rusqlite](https://crates.io/crates/rusqlite) — SQLite bindings for Rust.
-- [fastembed](https://crates.io/crates/fastembed) — Fast, local text embedding generation library.
-- [ONNX Runtime](https://onnxruntime.ai/) — Open-source project for high-performance machine learning inference.
-- [nomic-embed-text-v1.5](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5) — Text embedding model utilized locally in the project.

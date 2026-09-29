@@ -21,11 +21,7 @@ version = 2
 # default in the v2 format. Every entry below is a KNOWN, accepted exception with
 # a written rationale — any NEW advisory still fails CI.
 yanked = "deny"
-ignore = [
-  # paste: unmaintained proc-macro, pulled transitively via tokenizers/ort. No
-  # reachable maintained replacement without an upstream change.
-  { id = "RUSTSEC-2024-0436", reason = "unmaintained transitive dep via tokenizers/ort; no direct control — revisit on upstream update" },
-]
+ignore = []
 
 [licenses]
 version = 2
