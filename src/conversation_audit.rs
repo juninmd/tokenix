@@ -791,9 +791,9 @@ pub fn redact_credentials(s: &str) -> String {
             r#"(?i)(authorization|x-api-key|api-key)\s*:\s*[^\r\n"']+"#,
             r"(?i)\bbearer\s+[A-Za-z0-9._\-]+",
             // token=… / key=… / password=… in query strings or env assignments
-            r#"(?i)\b(token|api[_-]?key|secret|password|passwd|pwd)\s*[=:]\s*[^\s&"']+"#,
-            // PEM bodies
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+            r#"(?i)\b[A-Za-z0-9_]*(token|api[_-]?key|secret|password|passwd|pwd)(?:_[A-Za-z0-9_]*)?\s*[=:]\s*[^\s&"']+"#,
+            // PEM blocks: header, base64 body and footer (or end of input if cut)
+            r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)",
         ]
         .iter()
         .filter_map(|p| regex::Regex::new(p).ok())
@@ -1020,6 +1020,44 @@ mod tests {
     fn redaction_leaves_ordinary_text_alone() {
         let plain = "cargo test --locked && git status --short";
         assert_eq!(redact_credentials(plain), plain);
+    }
+
+    #[test]
+    fn redacts_prefixed_env_style_credential_names() {
+        for (input, value) in [
+            ("GITHUB_TOKEN=ghp_FAKEFAKEFAKE", "ghp_FAKEFAKEFAKE"),
+            ("export OPENAI_API_KEY=sk-FAKE1234", "sk-FAKE1234"),
+            ("AWS_SECRET_ACCESS_KEY=FAKEFAKE/abc", "FAKEFAKE/abc"),
+            ("DB_PASSWORD=hunter2fake", "hunter2fake"),
+        ] {
+            let out = redact_credentials(input);
+            assert!(
+                out.contains("[REDACTED]") && !out.contains(value),
+                "{input} -> {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn redacts_whole_pem_private_key_block() {
+        let pem = "-----BEGIN RSA PRIVATE KEY-----\nAAAAAAAAAAAAAAAA\nAAAAAAAAAAAAAAAA\n-----END RSA PRIVATE KEY-----";
+        let out = redact_credentials(&format!("key:\n{pem}\nafter"));
+        assert!(!out.contains("AAAA") && !out.contains("END RSA"), "{out}");
+        assert!(out.ends_with("\nafter"), "{out}");
+        // Truncated block (no END marker): body still goes.
+        let cut = redact_credentials("-----BEGIN PRIVATE KEY-----\nAAAAAAAA\nAAAAAAAA");
+        assert!(!cut.contains("AAAA"), "{cut}");
+    }
+
+    #[test]
+    fn redaction_near_misses_stay_untouched() {
+        for plain in [
+            "the tokenizer splits words",
+            "TOKEN_LIMIT reached",
+            "secretary: on leave",
+        ] {
+            assert_eq!(redact_credentials(plain), plain);
+        }
     }
 
     #[test]
