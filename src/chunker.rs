@@ -410,10 +410,13 @@ fn enforce_token_cap(chunks: Vec<Chunk>) -> Vec<Chunk> {
                 }
             }
             let piece = &content[start..end];
+            // Each piece owns the lines it spans, not the whole chunk's range.
+            let first = chunk.start_line + content[..start].matches('\n').count();
+            let last = first + piece.trim_end_matches('\n').matches('\n').count();
             out.push(Chunk {
                 path: chunk.path.clone(),
-                start_line: chunk.start_line,
-                end_line: chunk.end_line,
+                start_line: first,
+                end_line: last.min(chunk.end_line),
                 symbol: chunk.symbol.clone(),
                 kind: chunk.kind.clone(),
                 content: piece.to_string(),
@@ -812,6 +815,16 @@ fn sql_symbol_of(line: &str) -> Option<(String, &'static str)> {
     Some((name, kind))
 }
 
+/// The `MIN_CHUNK_TOKENS` floor only filters anonymous line blocks. A named
+/// symbol (`fn tiny() {}`) or a module-level piece (`use std::fmt;`) is
+/// searchable however short it is; dropping it made `symbols tiny` empty.
+fn worth_keeping(content: &str, token_count: usize, kind: &str) -> bool {
+    match kind {
+        "block" => token_count >= MIN_CHUNK_TOKENS,
+        _ => content.chars().any(char::is_alphanumeric),
+    }
+}
+
 fn make_chunk(
     lines: &[&str],
     path: &str,
@@ -825,7 +838,7 @@ fn make_chunk(
         .trim_end()
         .to_string();
     let token_count = count_tokens(&content);
-    if token_count < MIN_CHUNK_TOKENS {
+    if !worth_keeping(&content, token_count, kind) {
         return None;
     }
     Some(Chunk {
@@ -851,14 +864,24 @@ fn flush_chunk(
     if start > end || lines.is_empty() {
         return;
     }
-    let total = end.saturating_sub(start) + 1;
+    let end = end.min(lines.len() - 1);
+    // Measure tokens, not lines: a 30-line function of long lines is over budget.
+    let total = count_tokens(&lines[start..=end].join("\n"));
     if total > MAX_CHUNK_TOKENS {
         // Split large chunk with sliding-window overlap
         let mut s = start;
         while s <= end {
-            let e = (s + MAX_CHUNK_TOKENS).min(end);
+            let mut e = s;
+            let mut tokens = count_tokens(lines[s]);
+            while e < end && tokens + count_tokens(lines[e + 1]) <= MAX_CHUNK_TOKENS {
+                e += 1;
+                tokens += count_tokens(lines[e]);
+            }
             if let Some(c) = make_chunk(lines, path, s, e, symbol, kind) {
                 out.push(c);
+            }
+            if e >= end {
+                break;
             }
 
             // Advance s with overlap
@@ -1840,5 +1863,100 @@ void globalFunc() {
         assert!(c2.start_line < c1.end_line);
         assert!(c1.content.contains("let var_to_verify_overlap"));
         assert!(c2.content.contains("let var_to_verify_overlap"));
+    }
+
+    fn find<'a>(chunks: &'a [Chunk], symbol: &str) -> Vec<&'a Chunk> {
+        chunks.iter().filter(|c| c.symbol == symbol).collect()
+    }
+
+    #[test]
+    fn tiny_symbols_next_to_real_ones_stay_indexed() {
+        let src = "use std::fmt;\n\nfn tiny() {}\n\npub fn invoice_total(items: &[u32]) -> u32 {\n    let subtotal: u32 = items.iter().sum();\n    subtotal + subtotal / 10\n}\n";
+        let chunks = chunk_file("src/lib.rs", src);
+        let tiny = find(&chunks, "tiny");
+        assert_eq!(tiny.len(), 1, "tiny fn was dropped: {chunks:#?}");
+        assert_eq!((tiny[0].start_line, tiny[0].end_line), (3, 3));
+        let module = find(&chunks, "<module>");
+        assert!(
+            module.iter().any(|c| c.content.contains("use std::fmt;")),
+            "import line was dropped: {chunks:#?}"
+        );
+        assert_eq!(find(&chunks, "invoice_total").len(), 1);
+    }
+
+    #[test]
+    fn file_of_only_tiny_symbols_is_indexed_with_locations() {
+        let chunks = chunk_file("src/a.rs", "fn a() {}\nfn b() {}\n");
+        let a = find(&chunks, "a");
+        let b = find(&chunks, "b");
+        assert_eq!((a[0].start_line, a[0].end_line), (1, 1));
+        assert_eq!((b[0].start_line, b[0].end_line), (2, 2));
+    }
+
+    #[test]
+    fn tiny_generic_and_punctuation_only_content_still_skipped() {
+        assert!(chunk_file("notes.md", "hi").is_empty());
+        let src = "fn big_enough_function_name() -> u32 {\n    4242 + 1\n}\n";
+        let chunks = chunk_file("src/x.rs", src);
+        assert!(chunks
+            .iter()
+            .all(|c| c.content.chars().any(char::is_alphanumeric)));
+    }
+
+    #[test]
+    fn long_line_function_pieces_carry_their_own_line_ranges() {
+        let mut src = String::from("fn wide() {\n");
+        for i in 0..30 {
+            src.push_str(&format!("    let v{i:02} = \"{}\";\n", "z".repeat(90)));
+        }
+        src.push_str("}\n");
+        let source_lines: Vec<&str> = src.lines().collect();
+        let chunks = chunk_file("src/wide.rs", &src);
+        let wide = find(&chunks, "wide");
+        assert!(wide.len() > 1, "expected several windows");
+        assert!(wide.iter().all(|c| c.token_count <= MAX_CHUNK_TOKENS));
+        let distinct: std::collections::HashSet<_> =
+            wide.iter().map(|c| (c.start_line, c.end_line)).collect();
+        assert!(
+            distinct.len() > 1,
+            "all pieces share one range: {distinct:?}"
+        );
+        for c in &wide {
+            let expected = source_lines[c.start_line - 1..c.end_line].join("\n");
+            assert_eq!(c.content, expected, "L{}-{}", c.start_line, c.end_line);
+        }
+        assert_eq!(wide.first().unwrap().start_line, 1);
+        assert_eq!(wide.last().unwrap().end_line, 32);
+    }
+
+    #[test]
+    fn one_oversized_line_is_split_but_stays_on_its_own_line() {
+        let src = format!("fn blob() {{\n    let d = \"{}\";\n}}\n", "q".repeat(4000));
+        let chunks = chunk_file("src/blob.rs", &src);
+        let blob = find(&chunks, "blob");
+        let long: Vec<_> = blob.iter().filter(|c| c.content.contains('q')).collect();
+        assert!(long.len() > 1);
+        assert!(long.iter().all(|c| c.start_line == 2 && c.end_line == 2));
+    }
+
+    #[test]
+    fn enforce_token_cap_derives_line_ranges_from_newlines() {
+        let row = "w".repeat(MAX_CHUNK_TOKENS * 4 - 1);
+        let content = format!("{row}\n{row}\n{row}");
+        let chunk = Chunk {
+            path: "f.txt".into(),
+            start_line: 10,
+            end_line: 12,
+            symbol: String::new(),
+            kind: "block".into(),
+            token_count: count_tokens(&content),
+            content,
+        };
+        let out = enforce_token_cap(vec![chunk]);
+        assert!(out.len() >= 3);
+        assert_eq!(out.first().unwrap().start_line, 10);
+        assert_eq!(out.last().unwrap().end_line, 12);
+        assert!(out.windows(2).all(|w| w[0].start_line <= w[1].start_line));
+        assert!(out.iter().any(|c| c.start_line == 11));
     }
 }
