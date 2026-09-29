@@ -1031,9 +1031,9 @@ mod tests {
 
     #[test]
     fn oversized_checksum_body_is_rejected() {
-        let ok = vec![b'a'; 100];
+        let ok = [b'a'; 100];
         assert!(read_text_capped(&ok[..], 100).is_ok());
-        let big = vec![b'a'; 101];
+        let big = [b'a'; 101];
         assert!(read_text_capped(&big[..], 100).is_err());
     }
 
