@@ -54,13 +54,13 @@ so resolution never silently raises it.
 | `modules.rs` | Louvain community detection over `graph_edges` — `tokenix modules` |
 | `blast.rs` | Diff → changed symbols → reverse call graph (`tokenix blast`) |
 | `snapshot.rs` | `export-index` / `import-index` — gzipped `VACUUM INTO` copy for teams; import caps decompressed size (2 GiB), holds the index lock and runs `integrity_check` before the swap |
-| `hook.rs` | `PreToolUse` handler — the interception decision tree |
+| `hook.rs` | `PreToolUse` handler — Grep `head_limit` cap and Bash/PowerShell filter rewrite; `Read` is never intercepted |
 | `compress.rs` | Generic output compression, base64 redaction, token ceiling, EOL preservation; `run_hook_post` also redacts known secrets on every PostToolUse tool result via `secrets_scan::redact_known_secrets`, then emits `hookSpecificOutput.updatedToolOutput` for Claude Code/Codex |
 | `filters.rs` | `FilterDef` schema, filter resolution, `apply_filter_with_exit` |
 | `filters/trust.rs` | Trust gate for repo-controlled inputs: `repo_input_hashes`, `repo_inputs_trusted`, `set_repo_inputs_trust` |
 | `cmd_filter.rs` | `filter list/active/generate/verify` + recording |
 | `pack.rs` | `tokenix pack` — budgeted repo map, `order_by_priority` (reason → PageRank → path) |
-| `recall.rs` | Stash/retrieve of clipped output, re-read suppression |
+| `recall.rs` | Stash/retrieve of clipped output, identical-output dedup |
 | `gain.rs` | Savings analytics, `MODELS` pricing table |
 | `usage.rs` | Spend + cost from agent transcripts (`message.usage`, incl. cache fields) |
 | `mcp.rs` / `mcp_proxy.rs` | MCP server (`--profile slim\|full`) / stdio passthrough that compresses results |
@@ -138,10 +138,11 @@ at 5 MB (one generation). Fallback is repo-local `.tokenix/hook.log`.
 ## Intercept logic
 
 ```
-Read:  < 200 lines OR offset/limit set → exit 0 (pass)
-       ≥ 200 lines, no offset/limit    → outline, exit 2 (intercept), only for
-         code extensions (`is_code`) and when the outline saves ≥ 30%;
-         otherwise the file passes through whole
+Read:  never intercepted (exit 0). An outline hides comments, test bodies and
+       every use of a name; an LLM A/B (Haiku 4.5, 60 runs) showed multi-site
+       renames left incomplete under it (2/6 complete vs 6/6 without). The
+       re-read marker was removed for the same reason: the agent always gets
+       the file. `tokenix read`/`symbols` stay available, opt-in only
 
 Grep:  never answered by tokenix (an index answer hid textual matches of
        the identifier); passes through, and only
@@ -174,12 +175,8 @@ tool still hit: strips shell wrappers, `cd`/env prefixes, package runners
 `bunx biome` were bypassing their filters. `split_on_operators` splits compound
 commands quote-aware on `&&`/`||`/`;`/`|`.
 
-Per-project tuning in `.tokenix.toml`:
-
-```toml
-[hook]
-read_min_lines = 120   # default 200
-```
+The `[hook]` keys of `.tokenix.toml` (`read_min_lines`, `grep_min_words`) are still
+parsed but ignored: neither Read nor natural-language Grep is intercepted.
 
 ## Critical rules
 
@@ -465,7 +462,7 @@ tokenix gain --history
 `.tokenix.toml` (or `tokenix.toml`) at the project root, `[hook]`, `[index]`,
 and `[update]` sections. All are `deny_unknown_fields`, and a parse error is reported on stderr
 instead of silently falling back to defaults — the previous `.ok()` swallow left
-users convinced a misspelled `read_min_lines` was active. A bad config still
+users convinced a misspelled key was active. A bad config still
 degrades to defaults rather than failing the hook.
 
 ## CI topology

@@ -2756,7 +2756,7 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool, economics: bool) ->
         println!("  {}", "BY PHASE".bold().underline());
         for (phase, count, saved) in &stats.by_phase {
             let (label, detail) = match phase.as_str() {
-                "pre" => ("PreToolUse ", "Read / Grep intercepts"),
+                "pre" => ("PreToolUse ", "Grep head_limit cap"),
                 "ToolOutputCompressed" => ("ToolCompressed", "Bash command rewrite + compress"),
                 "post" => ("PostToolUse", "Bash / ListDirectory compression"),
                 other => (other, ""),
@@ -3275,7 +3275,7 @@ fn install_claude_code(local: bool) -> Result<()> {
 
     // Claude Code uses matcher groups. Keep interception on canonical tool names
     // that tokenix can safely rewrite or compress before execution.
-    let matcher = "^(Read|Grep|Bash|PowerShell|grep_search|run_in_terminal)$";
+    let matcher = "^(Grep|Bash|PowerShell|grep_search|run_in_terminal)$";
     let hook = serde_json::json!({
         "matcher": matcher,
         "hooks": [{"type": "command", "command": hook_command(&tokenix_bin, "hook"), "timeout": 10}]
@@ -3296,7 +3296,7 @@ fn install_claude_code(local: bool) -> Result<()> {
         settings_path.display()
     );
     println!(
-        "  PreToolUse:  {} hook (Read/Grep/Bash/PowerShell interception)",
+        "  PreToolUse:  {} hook (Grep cap, Bash/PowerShell filtering)",
         tokenix_bin
     );
     if removed_legacy_auto_index {
@@ -3411,9 +3411,9 @@ fn install_copilot(local: bool) -> Result<()> {
 
 This repository is indexed by **tokenix** for token-efficient code understanding.
 
-## Required workflow before reading files
+## Optional helpers
 
-Use tokenix first whenever you need code context:
+These commands are available when they help; nothing requires them:
 
 ```bash
 tokenix symbols <name>
@@ -3422,7 +3422,7 @@ tokenix read <file> --symbol <name>
 tokenix read <file> --lines N-M
 ```
 
-Do not call the native full-file Read tool on large files first. Use `tokenix read` for an outline, then `tokenix read --symbol` or native Read with offset/limit for the exact body you need. Only read a full file directly after tokenix shows that the file is small, or after a targeted `--symbol` / `--lines` read is not enough.
+The native Read tool is never intercepted. `tokenix read` gives an outline (definitions only: no comments, test bodies or usages), so grep a name before renaming or changing it.
 
 ## High-signal examples
 
@@ -3529,7 +3529,7 @@ fn install_codex() -> Result<()> {
         r#"{marker}
 ## tokenix - Code Index Tool
 
-This repo is indexed by tokenix. Use tokenix before reading full files:
+This repo is indexed by tokenix. These helpers are optional:
 
 ```bash
 tokenix symbols <name>
@@ -3538,7 +3538,7 @@ tokenix read <file> --symbol <name>
 tokenix read <file> --lines N-M
 ```
 
-Do not call the native full-file Read tool on large files first. Use `tokenix read` for an outline, then `tokenix read --symbol` or native Read with offset/limit for the exact body you need. Only read a full file directly after tokenix shows that the file is small, or after a targeted symbol/line read is insufficient.
+The native Read tool is never intercepted. `tokenix read` gives an outline (definitions only: no comments, test bodies or usages), so grep a name before renaming or changing it.
 
 tokenix binary: `{tokenix_bin}`
 {marker}
@@ -4027,7 +4027,7 @@ fn write_antigravity_plugin(plugin_dir: &Path, hook_cmd: &str) -> Result<()> {
         serde_json::to_string_pretty(&serde_json::json!({
             "tokenix-hooks": {
                 "PreToolUse": [{
-                    "matcher": "^(read_file|view_file|grep_search|run_command|run_in_terminal)$",
+                    "matcher": "^(grep_search|run_command|run_in_terminal)$",
                     "hooks": [{
                         "type": "command",
                         "command": hook_cmd,
