@@ -593,6 +593,20 @@ fn call_tool_guarded(name: &str, args: Value) -> Result<String> {
     }
 }
 
+/// Read a repo file for `tokenix_read`: refuse anything above the index size
+/// cap (an unbounded read is a memory sink) and mask known credential shapes,
+/// since this path hands raw file bytes to the agent without a hook in between.
+fn read_capped_redacted(path: &Path, cap: u64) -> Result<String> {
+    let len = std::fs::metadata(path)?.len();
+    if len > cap {
+        return Err(anyhow!(
+            "File is {len} bytes, above the {cap}-byte read cap (index max_file_bytes)"
+        ));
+    }
+    let content = std::fs::read_to_string(path)?;
+    Ok(crate::secrets_scan::redact_known_secrets(&content).0)
+}
+
 fn handle_tool_call(name: &str, args: Value) -> Result<String> {
     let path = Path::new(".");
     let repo_root = find_repo_root(path);
@@ -689,7 +703,10 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 return Err(anyhow!("File not found: {}", file));
             }
 
-            let content = std::fs::read_to_string(&fp)?;
+            let cap = crate::chunker::index_config()
+                .max_file_bytes
+                .unwrap_or(crate::indexer::MAX_INDEX_FILE_BYTES);
+            let content = read_capped_redacted(&fp, cap)?;
             let file_lines: Vec<&str> = content.lines().collect();
 
             if let Some(range) = lines {
@@ -1123,6 +1140,19 @@ fn open_existing_index(repo_root: &Path) -> Result<rusqlite::Connection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_capped_redacted_masks_keys_and_enforces_cap() {
+        let dir = std::env::temp_dir().join(format!("tokenix-mcp-read-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.txt");
+        std::fs::write(&f, "key = AKIAIOSFODNN7EXAMPLE\nok\n").unwrap();
+        let out = read_capped_redacted(&f, 1024).unwrap();
+        assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"), "{out}");
+        assert!(out.contains("ok"));
+        assert!(read_capped_redacted(&f, 4).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_parse_memory_scope() {
