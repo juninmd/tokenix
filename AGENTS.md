@@ -87,6 +87,7 @@ alone), so the fingerprint pins the batch shape too.
 | `transcripts.rs` | Per-agent history roots and parsers |
 | `conversation_audit.rs` | `conversation-audit` + `redact_credentials()` — the single credential masker every persisted view goes through |
 | `recordings.rs` | `filter record` sessions — captures command output for filter authoring; redacted and self-gitignored, because captures land in the working tree and `filter generate` uploads them to an AI CLI |
+| `cmd_filter.rs` (spawning) | Programs (`claude`, `gh`, `git`, sample commands) resolve only through `resolve_in_path`: absolute PATH entries, never the cwd — `cmd`/`where` search the cwd first on Windows, so a cloned repo shipping `claude.cmd` would run (CWE-427). Children get `NoDefaultCurrentDirectoryInExePath=1` |
 | `memory.rs` | Cross-session notes surfaced back into context; refuses text that trips a keyword *or* a bundled secret rule (`secrets_scan::redact_known_secrets`) |
 | `benchmark.rs` | Retrieval benchmark harness (`tokenix benchmark`) |
 | `doctor.rs` | Environment diagnosis — GPU/EP probe, cache sizes, daemon reachability |
