@@ -1039,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn redacts_whole_pem_private_key_block() {
+    fn redacts_whole_pem_private_key_block() { // gitleaks:allow synthetic test fixture
         let pem = "-----BEGIN RSA PRIVATE KEY-----\nAAAAAAAAAAAAAAAA\nAAAAAAAAAAAAAAAA\n-----END RSA PRIVATE KEY-----";
         let out = redact_credentials(&format!("key:\n{pem}\nafter"));
         assert!(!out.contains("AAAA") && !out.contains("END RSA"), "{out}");
