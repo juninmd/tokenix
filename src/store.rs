@@ -762,6 +762,13 @@ pub fn insert_graph_edge(
     Ok(())
 }
 
+/// Escape `%`, `_` and `\` so user input matches literally under `LIKE ... ESCAPE '\'`.
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 pub fn search_graph_nodes(conn: &Connection, query: &str, limit: usize) -> Result<Vec<GraphNode>> {
     search_graph_nodes_kind(conn, query, limit, None)
 }
@@ -772,12 +779,12 @@ pub fn search_graph_nodes_kind(
     limit: usize,
     kind: Option<&str>,
 ) -> Result<Vec<GraphNode>> {
-    let pattern = format!("%{}%", query);
+    let pattern = format!("%{}%", escape_like(query));
     let query_limit = (limit.max(1) * 4) as i64;
     let mut stmt = conn.prepare(
         "SELECT chunk_id,path,name,kind,start_line,end_line
          FROM graph_nodes
-         WHERE (name = ?1 COLLATE NOCASE OR name LIKE ?2 COLLATE NOCASE OR path LIKE ?2 COLLATE NOCASE)
+         WHERE (name = ?1 COLLATE NOCASE OR name LIKE ?2 ESCAPE '\\' COLLATE NOCASE OR path LIKE ?2 ESCAPE '\\' COLLATE NOCASE)
            AND (?4 IS NULL OR kind = ?4 COLLATE NOCASE)
          ORDER BY CASE WHEN name = ?1 COLLATE NOCASE THEN 0 ELSE 1 END, rank DESC, path, start_line
          LIMIT ?3",
@@ -1321,10 +1328,10 @@ pub struct SymbolMatch {
 /// Find chunks whose symbol name contains `pattern` (case-insensitive substring).
 /// Returns up to 20 matches ordered by path + start_line.
 pub fn search_by_symbol(conn: &Connection, pattern: &str) -> Result<Vec<SymbolMatch>> {
-    let like = format!("%{}%", pattern.to_lowercase());
+    let like = format!("%{}%", escape_like(&pattern.to_lowercase()));
     let mut stmt = conn.prepare(
         "SELECT path, start_line, end_line, kind, symbol FROM chunks
-         WHERE lower(symbol) LIKE ?1 AND symbol != ''
+         WHERE lower(symbol) LIKE ?1 ESCAPE '\\' AND symbol != ''
          ORDER BY path, start_line LIMIT 20",
     )?;
     let results = stmt
@@ -2189,6 +2196,33 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, chunk_id);
         assert_eq!(results[0].symbol, "my_cool_function");
+    }
+
+    #[test]
+    fn like_wildcards_in_user_input_match_literally() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn, 4).unwrap();
+        let file_id = upsert_file(&conn, "src/a.rs", 1.0, "h").unwrap();
+        for (i, sym) in ["alpha", "beta_gamma"].iter().enumerate() {
+            insert_chunk(
+                &conn,
+                NewChunk {
+                    file_id,
+                    path: "src/a.rs",
+                    start: i * 10 + 1,
+                    end: i * 10 + 5,
+                    symbol: sym,
+                    kind: "function",
+                    content: "fn x() {}",
+                    token_count: 3,
+                },
+            )
+            .unwrap();
+        }
+        assert!(search_by_symbol(&conn, "_").unwrap().len() == 1);
+        assert!(search_by_symbol(&conn, "%").unwrap().is_empty());
+        assert_eq!(search_by_symbol(&conn, "a_g").unwrap().len(), 1);
+        assert!(search_by_symbol(&conn, "a_a").unwrap().is_empty());
     }
 
     #[test]
