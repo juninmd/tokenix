@@ -382,7 +382,7 @@ pub fn chunk_file(path: &str, content: &str) -> Vec<Chunk> {
 /// Hard guarantee that no single chunk exceeds `MAX_CHUNK_TOKENS`. The
 /// language chunkers split on line boundaries, but a single very long line
 /// (minified JS/JSON, generated data) can still produce one oversized chunk —
-/// which bloats the index and its full-text search and was the historical
+/// which bloats the index and was the historical
 /// cost. Here we split such chunks by character windows (never
 /// truncating), preserving 100% of the content.
 fn enforce_token_cap(chunks: Vec<Chunk>) -> Vec<Chunk> {

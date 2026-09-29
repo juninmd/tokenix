@@ -100,7 +100,7 @@ else
 fi
 
 # Verify every expected subcommand appears in help
-EXPECTED_CMDS=(index query context explore symbols callers callees impact
+EXPECTED_CMDS=(index pack symbols callers callees impact
   read stats gain benchmark doctor install-hook remove-hook
   filter memory hook hook-post mcp rebuild-graph)
 
@@ -115,9 +115,9 @@ done
 pass "all ${#EXPECTED_CMDS[@]} subcommands present in --help"
 
 # ---------------------------------------------------------------------------
-# 2. Index + query lifecycle
+# 2. Index lifecycle
 # ---------------------------------------------------------------------------
-section "Index / query lifecycle"
+section "Index lifecycle"
 
 REPO="$TMPDIR_ROOT/repo"
 mkdir -p "$REPO/src"
@@ -166,14 +166,6 @@ if echo "$STATS" | grep -qiE 'Files:[[:space:]]+[1-9]|Chunks:[[:space:]]+[1-9]';
   pass "stats reports indexed content"
 else
   fail "stats shows no content after index" "$STATS"
-fi
-
-# Query (must not panic)
-QUERY_OUT=$("$TOKENIX" query "greet function" --path "$REPO" 2>&1 || true)
-if echo "$QUERY_OUT" | grep -qi "panic\|unwrap\|thread.*main"; then
-  fail "query panicked: $QUERY_OUT"
-else
-  pass "query exits without panic"
 fi
 
 # ---------------------------------------------------------------------------
@@ -392,22 +384,17 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 13. context / explore
+# 13. pack
 # ---------------------------------------------------------------------------
-section "context / explore"
+section "pack"
 
-CTX_OUT=$("$TOKENIX" context "arithmetic utilities" --path "$REPO" 2>&1 || true)
-if echo "$CTX_OUT" | grep -qi "panic"; then
-  fail "context panicked"
+PACK_OUT=$("$TOKENIX" pack --budget 800 --path "$REPO" 2>&1 || true)
+if echo "$PACK_OUT" | grep -qi "panic"; then
+  fail "pack panicked"
+elif echo "$PACK_OUT" | grep -q "Repository Map"; then
+  pass "pack renders a repository map"
 else
-  pass "context exits without panic"
-fi
-
-EXP_OUT=$("$TOKENIX" explore "greet" --path "$REPO" 2>&1 || true)
-if echo "$EXP_OUT" | grep -qi "panic"; then
-  fail "explore panicked"
-else
-  pass "explore exits without panic"
+  fail "pack produced no repository map" "$PACK_OUT"
 fi
 
 # ---------------------------------------------------------------------------

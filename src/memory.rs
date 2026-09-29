@@ -127,24 +127,6 @@ pub fn edit_preference(
     Ok((path, changed))
 }
 
-pub fn preferences_for_context(repo_root: &Path, task: &str, max_items: usize) -> Result<String> {
-    // Read BOTH scopes, project first. The old loop broke out as soon as the
-    // global file alone filled `max_items`, so a user with 8+ global preferences
-    // never had their repo-specific rules read at all — the most relevant scope
-    // was the one systematically dropped.
-    let mut lines = Vec::new();
-    for path in [
-        project_preferences_path(repo_root)?,
-        global_preferences_path()?,
-    ] {
-        let content = fs::read_to_string(path).unwrap_or_default();
-        lines.extend(extract_preference_lines(&content));
-    }
-    rank_preference_lines(&mut lines, task);
-    lines.truncate(max_items);
-    Ok(lines.join("\n"))
-}
-
 fn scope_path(repo_root: &Path, scope: PreferenceScope) -> Result<PathBuf> {
     match scope {
         PreferenceScope::Global => global_preferences_path(),
@@ -257,30 +239,6 @@ fn preference_matches(line: &str, query: &str) -> bool {
     !query.is_empty() && normalize_for_dedupe(line).contains(&query)
 }
 
-fn rank_preference_lines(lines: &mut [String], task: &str) {
-    let terms: Vec<String> = normalize_for_dedupe(task)
-        .split_whitespace()
-        .filter(|term| term.len() >= 3)
-        .map(str::to_string)
-        .collect();
-    if terms.is_empty() {
-        return;
-    }
-    lines.sort_by(|a, b| {
-        let score_a = preference_score(a, &terms);
-        let score_b = preference_score(b, &terms);
-        score_b.cmp(&score_a).then_with(|| a.cmp(b))
-    });
-}
-
-fn preference_score(line: &str, terms: &[String]) -> usize {
-    let normalized = normalize_for_dedupe(line);
-    terms
-        .iter()
-        .filter(|term| normalized.contains(term.as_str()))
-        .count()
-}
-
 fn reject_sensitive_preference(text: &str) -> Result<()> {
     let lower = text.to_ascii_lowercase();
     let sensitive = [
@@ -369,16 +327,6 @@ mod tests {
             );
         }
         assert!(reject_sensitive_preference("prefer Biome over ESLint").is_ok());
-    }
-
-    #[test]
-    fn ranks_preferences_by_task_terms() {
-        let mut lines = vec![
-            "- [2026-05-24] Prefer cargo check for Rust validation".to_string(),
-            "- [2026-05-24] Prefer Biome over ESLint".to_string(),
-        ];
-        rank_preference_lines(&mut lines, "migrate eslint to biome");
-        assert!(lines[0].contains("Biome"));
     }
 
     #[test]

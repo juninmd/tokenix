@@ -102,22 +102,8 @@ fn find_repo_root(path: &Path) -> PathBuf {
 fn slim_tools() -> Vec<Value> {
     vec![
         json!({
-            "name": "tokenix_context",
-            "description": "Build focused repository context for a task. Prefer this first.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "task": {"type": "string"},
-                    "mode": {"type": "string", "enum": ["plan", "debug", "audit", "security", "review"], "default": "plan"},
-                    "budget": {"type": "integer", "default": 3000},
-                    "max_files": {"type": "integer", "default": 4}
-                },
-                "required": ["task"]
-            }
-        }),
-        json!({
             "name": "tokenix_search_tools",
-            "description": "Find tokenix tool names for query/read/graph/memory/run/gain capabilities.",
+            "description": "Find tokenix tool names for read/graph/memory/run/gain capabilities.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
@@ -152,15 +138,6 @@ pub fn tool_schema_tokens(profile: McpProfile) -> usize {
 
 fn full_tool_estimate() -> Vec<Value> {
     [
-        (
-            "tokenix_query",
-            "Search the indexed codebase (full-text + symbols)",
-        ),
-        ("tokenix_context", "Build focused task context in one call"),
-        (
-            "tokenix_explore",
-            "Graph-aware source and relationship context",
-        ),
         (
             "tokenix_read",
             "Smart outline, symbol, or line-range file reader",
@@ -279,83 +256,6 @@ pub fn run_mcp_server(profile: McpProfile) -> Result<()> {
                             "result": {
                                 "tools": [
                                     {
-                                        "name": "tokenix_query",
-                                        "description": "Search the indexed codebase (full-text + symbols)",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "query": {
-                                                    "type": "string",
-                                                    "description": "Natural language query, e.g. 'how does authentication work'"
-                                                },
-                                                "budget": {
-                                                    "type": "integer",
-                                                    "description": "Optional token budget limit for query context (default 3000)",
-                                                    "default": 3000
-                                                },
-                                                "file_filter": {
-                                                    "type": "string",
-                                                    "description": "Optional path or name filter to search a specific file"
-                                                }
-                                            },
-                                            "required": ["query"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_context",
-                                        "description": "PRIMARY TOOL: build focused task context in one call by combining indexed search, preference-memory capture guidance, entry points, and compact file outlines",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "task": {
-                                                    "type": "string",
-                                                    "description": "Task, feature, bug, or architecture question to gather context for"
-                                                },
-                                                "budget": {
-                                                    "type": "integer",
-                                                    "description": "Optional token budget limit for returned context (default 3000)",
-                                                    "default": 3000
-                                                },
-                                                "mode": {
-                                                    "type": "string",
-                                                    "description": "Context mode: plan, debug, audit, security, or review",
-                                                    "enum": ["plan", "debug", "audit", "security", "review"],
-                                                    "default": "plan"
-                                                },
-                                                "max_files": {
-                                                    "type": "integer",
-                                                    "description": "Maximum number of file outlines to include (default 4)",
-                                                    "default": 4
-                                                }
-                                            },
-                                            "required": ["task"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_explore",
-                                        "description": "Graph-aware exploration in one capped call: preference-memory capture guidance, entry points, relationship map, and source grouped by file. Use after tokenix_context when you need implementation details.",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "query": {
-                                                    "type": "string",
-                                                    "description": "Symbol names, file names, or focused task terms to explore"
-                                                },
-                                                "budget": {
-                                                    "type": "integer",
-                                                    "description": "Optional token budget limit for returned source context (default 4000)",
-                                                    "default": 4000
-                                                },
-                                                "max_symbols": {
-                                                    "type": "integer",
-                                                    "description": "Maximum seed symbols to expand (default 8)",
-                                                    "default": 8
-                                                }
-                                            },
-                                            "required": ["query"]
-                                        }
-                                    },
-                                    {
                                         "name": "tokenix_read",
                                         "description": "Smart outline, symbol, or line-range file reader (token-efficient)",
                                         "inputSchema": {
@@ -428,7 +328,7 @@ pub fn run_mcp_server(profile: McpProfile) -> Result<()> {
                                     },
                                     {
                                         "name": "tokenix_memory_add",
-                                        "description": "Save a durable user preference for future tokenix context. Scope defaults to project.",
+                                        "description": "Save a durable user preference for future sessions. Scope defaults to project.",
                                         "inputSchema": {
                                             "type": "object",
                                             "properties": {
@@ -602,10 +502,7 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
     // Non-retrieval tools (memory, gain, run) never touch the index.
     if matches!(
         name,
-        "tokenix_query"
-            | "tokenix_context"
-            | "tokenix_explore"
-            | "tokenix_read"
+        "tokenix_read"
             | "tokenix_symbols"
             | "tokenix_callers"
             | "tokenix_callees"
@@ -632,44 +529,6 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 return Err(anyhow!("Refusing recursive tokenix_call"));
             }
             handle_tool_call(tool, arguments)
-        }
-        "tokenix_query" => {
-            let query = args
-                .get("query")
-                .and_then(|q| q.as_str())
-                .ok_or_else(|| anyhow!("Missing 'query' argument"))?;
-            let budget = args.get("budget").and_then(|b| b.as_u64()).unwrap_or(3000) as usize;
-            let file_filter = args.get("file_filter").and_then(|f| f.as_str());
-
-            let results = crate::query::query_index(&repo_root, query, budget, 20, file_filter)?
-                .ok_or_else(|| anyhow!("Index not found. Please index the workspace first."))?;
-
-            Ok(crate::query::format_results(&results, query))
-        }
-        "tokenix_context" => {
-            let task = args
-                .get("task")
-                .and_then(|q| q.as_str())
-                .ok_or_else(|| anyhow!("Missing 'task' argument"))?;
-            let budget = args.get("budget").and_then(|b| b.as_u64()).unwrap_or(3000) as usize;
-            let max_files = args.get("max_files").and_then(|b| b.as_u64()).unwrap_or(4) as usize;
-            let mode =
-                parse_context_mode(args.get("mode").and_then(|m| m.as_str()).unwrap_or("plan"))?;
-
-            crate::query::build_task_context_with_mode(&repo_root, task, mode, budget, max_files)
-        }
-        "tokenix_explore" => {
-            let query = args
-                .get("query")
-                .and_then(|q| q.as_str())
-                .ok_or_else(|| anyhow!("Missing 'query' argument"))?;
-            let budget = args.get("budget").and_then(|b| b.as_u64()).unwrap_or(4000) as usize;
-            let max_symbols = args
-                .get("max_symbols")
-                .and_then(|b| b.as_u64())
-                .unwrap_or(8) as usize;
-
-            crate::query::build_explore_context(&repo_root, query, budget, max_symbols)
         }
         "tokenix_read" => {
             let file = args
@@ -995,12 +854,6 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
 
 fn search_tool_catalog(query: &str) -> String {
     const TOOLS: &[(&str, &str)] = &[
-        ("tokenix_query", "code search with optional file filter"),
-        ("tokenix_context", "one-call focused context for a task"),
-        (
-            "tokenix_explore",
-            "graph-aware source and relationship context",
-        ),
         (
             "tokenix_read",
             "smart file outline, symbol, or line-range read",
@@ -1040,20 +893,6 @@ fn parse_memory_scope(scope: &str) -> Result<crate::memory::PreferenceScope> {
         "global" => Ok(crate::memory::PreferenceScope::Global),
         "project" => Ok(crate::memory::PreferenceScope::Project),
         other => Err(anyhow!("Invalid scope '{}'. Use: global | project", other)),
-    }
-}
-
-fn parse_context_mode(mode: &str) -> Result<crate::query::ContextMode> {
-    match mode {
-        "plan" => Ok(crate::query::ContextMode::Plan),
-        "debug" => Ok(crate::query::ContextMode::Debug),
-        "audit" => Ok(crate::query::ContextMode::Audit),
-        "security" => Ok(crate::query::ContextMode::Security),
-        "review" => Ok(crate::query::ContextMode::Review),
-        other => Err(anyhow!(
-            "Invalid mode '{}'. Use: plan | debug | audit | security | review",
-            other
-        )),
     }
 }
 

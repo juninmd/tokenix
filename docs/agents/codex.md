@@ -24,8 +24,8 @@ Add-Content $PROFILE '. ~/.codex/tokenix-init.ps1'      # PowerShell
 
 | File | Purpose |
 |---|---|
-| `~/.codex/instructions.md` | A block between `<!-- tokenix -->` markers asking Codex to prefer `tokenix query` / `tokenix read`. Your own text outside the markers is kept |
-| `~/.codex/tokenix-init.sh` · `tokenix-init.ps1` | `tx-read <file>` and `tx-query "<text>"`, thin wrappers over `tokenix read` / `tokenix query` |
+| `~/.codex/instructions.md` | A block between `<!-- tokenix -->` markers asking Codex to prefer `tokenix symbols` / `tokenix read`. Your own text outside the markers is kept |
+| `~/.codex/tokenix-init.sh` · `tokenix-init.ps1` | `tx-read <file>` and `tx-symbols <name>`, thin wrappers over `tokenix read` / `tokenix symbols` |
 | `~/.codex/hooks.json` | `PreToolUse` hook, matcher `^(Bash\|run_in_terminal\|grep_search)$` |
 | `~/.codex/tokenix-codex-hook.ps1` | **Windows only.** A wrapper the hook calls through `powershell -NoProfile -ExecutionPolicy Bypass`, which forwards the payload to `tokenix hook` |
 
@@ -37,7 +37,7 @@ On Linux and macOS the hook calls `"<abs path>/tokenix" hook` directly.
 |---|---|
 | A shell command that matches a filter | Rewritten to `tokenix run '<cmd>'` (`updatedInput`), same exit code |
 | `git status` | Rewritten to `git status --short` |
-| `grep_search` | Same path as Claude's `Grep`: symbol lookup or a `head_limit` cap |
+| `grep_search` | Same path as Claude's `Grep`: passes through, with a `head_limit` cap on unbounded content output |
 | Anything else, or no/stale index | Passes through |
 
 Codex's matcher does not include file reads. For big files, the instructions and

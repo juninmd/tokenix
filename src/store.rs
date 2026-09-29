@@ -336,29 +336,6 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_graph_nodes_name ON graph_nodes(name);
         CREATE INDEX IF NOT EXISTS idx_graph_edges_caller ON graph_edges(caller_chunk_id);
         CREATE INDEX IF NOT EXISTS idx_graph_edges_callee ON graph_edges(callee_chunk_id);
-
-        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-            content,
-            symbol,
-            path,
-            content='chunks',
-            content_rowid='id'
-        );
-
-        CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
-            INSERT INTO chunks_fts(rowid, content, symbol, path) VALUES (new.id, new.content, new.symbol, new.path);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, content, symbol, path) VALUES ('delete', old.id, old.content, old.symbol, old.path);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, content, symbol, path) VALUES ('delete', old.id, old.content, old.symbol, old.path);
-            INSERT INTO chunks_fts(rowid, content, symbol, path) VALUES (new.id, new.content, new.symbol, new.path);
-        END;
-
-        INSERT OR IGNORE INTO chunks_fts(rowid, content, symbol, path) SELECT id, content, symbol, path FROM chunks;
         "#,
     )?;
     // Migration for indexes created before graph centrality: add the rank
@@ -368,17 +345,22 @@ pub fn init_schema(conn: &Connection, _dim: usize) -> Result<()> {
         "ALTER TABLE graph_nodes ADD COLUMN rank REAL NOT NULL DEFAULT 0",
         [],
     );
-    // Embeddings were removed: drop the vector tables an older index still
-    // carries. DROP only frees pages, so flag the file for `vacuum_if_flagged`,
-    // which a full `tokenix index` runs (never an inline query refresh).
+    // Embeddings and full-text search were removed: drop the tables (and the
+    // triggers that feed `chunks_fts`, which must go first or every chunk write
+    // would fail) an older index still carries. DROP only frees pages, so flag
+    // the file for `vacuum_if_flagged`, which a full `tokenix index` runs
+    // (never an inline refresh).
     let had_legacy: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('embeddings','embedding_cache')",
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE name IN ('embeddings','embedding_cache','chunks_fts','chunks_ai','chunks_ad','chunks_au')",
         [],
         |r| r.get(0),
     )?;
     if had_legacy > 0 {
         conn.execute_batch(
-            "DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS embedding_cache;",
+            "DROP TRIGGER IF EXISTS chunks_ai; DROP TRIGGER IF EXISTS chunks_ad;
+             DROP TRIGGER IF EXISTS chunks_au; DROP TABLE IF EXISTS chunks_fts;
+             DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS embedding_cache;",
         )?;
         set_meta(conn, "needs_vacuum", "1")?;
     }
@@ -919,256 +901,6 @@ fn graph_relation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphRel
     })
 }
 
-pub fn sanitize_fts_query(query: &str) -> String {
-    let mut words = Vec::new();
-    for word in query.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
-        let trimmed = word.trim();
-        if !trimmed.is_empty() {
-            let escaped = trimmed.replace('"', "\"\"");
-            words.push(format!("\"{}\"", escaped));
-        }
-    }
-    if words.is_empty() {
-        "".to_string()
-    } else {
-        words.join(" OR ")
-    }
-}
-
-pub fn search_fts(
-    conn: &Connection,
-    query_text: &str,
-    limit: usize,
-    file_filter: Option<&str>,
-) -> Result<Vec<(i64, f32)>> {
-    let sanitized = sanitize_fts_query(query_text);
-    if sanitized.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut results = Vec::new();
-    if let Some(filter) = file_filter {
-        let mut stmt = conn.prepare(
-            "SELECT c.id, rank FROM chunks c JOIN chunks_fts f ON c.id = f.rowid
-             WHERE chunks_fts MATCH ?1 AND instr(c.path, ?2) > 0 ORDER BY rank LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(
-            params![sanitized, filter, i64::try_from(limit).unwrap_or(i64::MAX)],
-            |row| {
-                let id: i64 = row.get(0)?;
-                let rank: f32 = row.get(1)?;
-                Ok((id, -rank)) // Negate: FTS5 rank is negative (lower=better)
-            },
-        )?;
-        for row in rows {
-            results.push(row?);
-        }
-    } else {
-        let mut stmt = conn.prepare(
-            "SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ?1 ORDER BY rank LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(
-            params![sanitized, i64::try_from(limit).unwrap_or(i64::MAX)],
-            |row| {
-                let id: i64 = row.get(0)?;
-                let rank: f32 = row.get(1)?;
-                Ok((id, -rank)) // Negate: FTS5 rank is negative (lower=better)
-            },
-        )?;
-        for row in rows {
-            results.push(row?);
-        }
-    }
-    Ok(results)
-}
-
-/// Scan indexed chunk content with a regular expression — no embedding, no
-/// ranking. Returns chunks whose content matches `pattern`, ordered by path and
-/// start line so output reads top-to-bottom like a file. This is the exact /
-/// literal fallback for when semantic recall is not what the user wants.
-pub fn search_regex(
-    conn: &Connection,
-    pattern: &str,
-    limit: usize,
-    file_filter: Option<&str>,
-    case_insensitive: bool,
-) -> Result<Vec<SearchResult>> {
-    let full_pattern = if case_insensitive {
-        format!("(?i){pattern}")
-    } else {
-        pattern.to_string()
-    };
-    let re = regex::Regex::new(&full_pattern).context("compiling search regex")?;
-
-    let mut stmt = conn.prepare(
-        "SELECT id, path, start_line, end_line, symbol, kind, content, token_count
-         FROM chunks ORDER BY path, start_line",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(SearchResult {
-            id: row.get::<_, i64>(0)?,
-            path: row.get::<_, String>(1)?,
-            start_line: row.get::<_, i64>(2)? as usize,
-            end_line: row.get::<_, i64>(3)? as usize,
-            symbol: row.get::<_, String>(4)?,
-            kind: row.get::<_, String>(5)?,
-            content: row.get::<_, String>(6)?,
-            token_count: row.get::<_, i64>(7)? as usize,
-            distance: 0.0,
-        })
-    })?;
-
-    let mut results = Vec::new();
-    for r in rows {
-        let chunk = r?;
-        if file_filter.is_some_and(|f| !chunk.path.contains(f)) {
-            continue;
-        }
-        if re.is_match(&chunk.content) {
-            results.push(chunk);
-            if results.len() >= limit {
-                break;
-            }
-        }
-    }
-    Ok(results)
-}
-
-pub fn fetch_chunks_by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<SearchResult>> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
-    let query_str = format!(
-        "SELECT id, path, start_line, end_line, symbol, kind, content, token_count
-         FROM chunks WHERE id IN ({})",
-        placeholders.join(",")
-    );
-    let mut stmt = conn.prepare(&query_str)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
-        Ok(SearchResult {
-            id: row.get::<_, i64>(0)?,
-            path: row.get::<_, String>(1)?,
-            start_line: row.get::<_, i64>(2)? as usize,
-            end_line: row.get::<_, i64>(3)? as usize,
-            symbol: row.get::<_, String>(4)?,
-            kind: row.get::<_, String>(5)?,
-            content: row.get::<_, String>(6)?,
-            token_count: row.get::<_, i64>(7)? as usize,
-            distance: 1.0,
-        })
-    })?;
-    let mut results = Vec::new();
-    for r in rows {
-        results.push(r?);
-    }
-    Ok(results)
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-#[allow(dead_code)]
-pub struct SearchResult {
-    pub id: i64,
-    pub path: String,
-    pub start_line: usize,
-    pub end_line: usize,
-    pub symbol: String,
-    pub kind: String,
-    pub content: String,
-    pub token_count: usize,
-    /// Lower is better; `1 - fused rank score`.
-    pub distance: f32,
-}
-
-/// Reciprocal-rank-fusion damping constant (the classic k=60) shared by every
-/// ranking path (store, query graph/path recall).
-pub const RRF_K: f32 = 60.0;
-/// Weight of the normalized BM25 score blended into the sparse-side RRF term.
-pub const BM25_WEIGHT: f32 = 0.3;
-
-/// Ranked full-text search over chunks: BM25 fused with the FTS position via
-/// reciprocal rank, best (lowest `distance`) first.
-pub fn lexical_search(
-    conn: &Connection,
-    query_text: &str,
-    k: usize,
-    file_filter: Option<&str>,
-) -> Result<Vec<SearchResult>> {
-    let sparse_limit = 100.max(k * 2);
-    let sparse_results = search_fts(conn, query_text, sparse_limit, file_filter)?;
-
-    let scored: Vec<(i64, f32)> = sparse_results
-        .iter()
-        .enumerate()
-        .map(|(rank, (id, bm25_score))| {
-            let rrf_position = 1.0 / (RRF_K + rank as f32);
-            let bm25_normalized = (*bm25_score).max(0.0) / (1.0 + bm25_score.max(0.0));
-            (*id, rrf_position + BM25_WEIGHT * bm25_normalized)
-        })
-        .take(k * 2)
-        .collect();
-    if scored.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let ids: Vec<i64> = scored.iter().map(|(id, _)| *id).collect();
-    let mut by_id: HashMap<i64, SearchResult> = fetch_chunks_by_ids(conn, &ids)?
-        .into_iter()
-        .map(|r| (r.id, r))
-        .collect();
-
-    let mut results: Vec<SearchResult> = scored
-        .into_iter()
-        .filter_map(|(id, score)| {
-            by_id.remove(&id).map(|mut r| {
-                r.distance = 1.0 - score;
-                r
-            })
-        })
-        .collect();
-    results.sort_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    results.truncate(k);
-    Ok(results)
-}
-
-#[allow(dead_code)]
-pub struct SymbolMatch {
-    pub path: String,
-    pub start_line: usize,
-    pub end_line: usize,
-    pub kind: String,
-    pub symbol: String,
-}
-
-/// Find chunks whose symbol name contains `pattern` (case-insensitive substring).
-/// Returns up to 20 matches ordered by path + start_line.
-pub fn search_by_symbol(conn: &Connection, pattern: &str) -> Result<Vec<SymbolMatch>> {
-    let like = format!("%{}%", pattern.to_lowercase());
-    let mut stmt = conn.prepare(
-        "SELECT path, start_line, end_line, kind, symbol FROM chunks
-         WHERE lower(symbol) LIKE ?1 AND symbol != ''
-         ORDER BY path, start_line LIMIT 20",
-    )?;
-    let results = stmt
-        .query_map(params![like], |row| {
-            Ok(SymbolMatch {
-                path: row.get(0)?,
-                start_line: row.get::<_, i64>(1)? as usize,
-                end_line: row.get::<_, i64>(2)? as usize,
-                kind: row.get(3)?,
-                symbol: row.get(4)?,
-            })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(results)
-}
-
-/// Load all known file records into a HashMap for fast skip-detection during parallel indexing.
 pub fn load_all_file_info(conn: &Connection) -> Result<HashMap<String, (i64, f64, String)>> {
     let mut stmt = conn.prepare("SELECT id, path, mtime, content_hash FROM files")?;
     let mut map = HashMap::new();
@@ -1805,93 +1537,47 @@ mod tests {
         let file_id = upsert_file(&conn, "src/a.rs", 1.0, "h").unwrap();
         assert!(delete_chunks_for_file(&conn, file_id).is_ok());
     }
-    #[test]
-    fn test_lexical_search() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn, 4).unwrap();
-
-        // 1. Insert file
-        let file_id = upsert_file(&conn, "src/main.rs", 123.45, "abcde").unwrap();
-
-        // 2. Insert chunk
-        let chunk = NewChunk {
-            file_id,
-            path: "src/main.rs",
-            start: 1,
-            end: 10,
-            symbol: "my_cool_function",
-            kind: "function",
-            content: "fn my_cool_function() { println!(\"hello fts5 hybrid search\"); }",
-            token_count: 15,
-        };
-        let chunk_id = insert_chunk(&conn, chunk).unwrap();
-
-        // 3. Test search_fts
-        let sparse_results = search_fts(&conn, "fts5 hybrid", 10, None).unwrap();
-        assert_eq!(sparse_results.len(), 1);
-        assert_eq!(sparse_results[0].0, chunk_id);
-        assert!(sparse_results[0].1 > 0.0, "BM25 score should be positive");
-
-        // 4. Test lexical_search
-        let results = lexical_search(&conn, "hello search", 10, None).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, chunk_id);
-        assert_eq!(results[0].symbol, "my_cool_function");
-    }
 
     #[test]
-    fn search_regex_matches_literal_and_respects_case_and_filter() {
+    fn init_schema_drops_legacy_fts_and_its_triggers() {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn, 4).unwrap();
-        let file_id = upsert_file(&conn, "src/main.rs", 1.0, "h1").unwrap();
-        let other_id = upsert_file(&conn, "src/lib.rs", 1.0, "h2").unwrap();
-        let a = insert_chunk(
-            &conn,
-            NewChunk {
-                file_id,
-                path: "src/main.rs",
-                start: 1,
-                end: 2,
-                symbol: "alpha",
-                kind: "function",
-                content: "fn alpha() { let TOKEN = 1; }",
-                token_count: 9,
-            },
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE chunks_fts USING fts5(content, symbol, path, content='chunks', content_rowid='id');
+             CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+                 INSERT INTO chunks_fts(rowid, content, symbol, path) VALUES (new.id, new.content, new.symbol, new.path);
+             END;
+             CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
+                 INSERT INTO chunks_fts(chunks_fts, rowid, content, symbol, path) VALUES ('delete', old.id, old.content, old.symbol, old.path);
+             END;",
         )
         .unwrap();
+        init_schema(&conn, 4).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'chunks_%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "the FTS table and its triggers must both go");
+        // A surviving trigger would make this write fail on the missing table.
+        let file_id = upsert_file(&conn, "src/a.rs", 1.0, "h").unwrap();
         insert_chunk(
             &conn,
             NewChunk {
-                file_id: other_id,
-                path: "src/lib.rs",
+                file_id,
+                path: "src/a.rs",
                 start: 1,
                 end: 2,
-                symbol: "beta",
+                symbol: "a",
                 kind: "function",
-                content: "fn beta() {}",
-                token_count: 4,
+                content: "fn a() {}",
+                token_count: 3,
             },
         )
         .unwrap();
-
-        // Regex metacharacters honored.
-        let hits = search_regex(&conn, r"alpha\(\)", 10, None, false).unwrap();
-        assert_eq!(hits.iter().map(|r| r.id).collect::<Vec<_>>(), vec![a]);
-
-        // Case-sensitive miss, case-insensitive hit.
-        assert!(search_regex(&conn, "token", 10, None, false)
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            search_regex(&conn, "token", 10, None, true).unwrap().len(),
-            1
-        );
-
-        // File filter scopes results.
-        assert!(search_regex(&conn, "fn ", 10, Some("lib.rs"), false)
-            .unwrap()
-            .iter()
-            .all(|r| r.path == "src/lib.rs"));
+        assert!(delete_chunks_for_file(&conn, file_id).is_ok());
     }
 
     #[test]

@@ -45,9 +45,8 @@ echo '{"tool_name":"Read","tool_input":{"file_path":"Cargo.toml"}}' | cargo run 
 |---|---|
 | `src/main.rs` | CLI commands (clap). All `cmd_*` functions live here. |
 | `src/chunker.rs` | AST chunking per language + `generate_outline()`. Token counting. |
-| `src/store.rs` | SQLite schema, CRUD, FTS5 search, hook log I/O |
+| `src/store.rs` | SQLite schema, CRUD, symbol graph tables, hook log I/O |
 | `src/indexer.rs` | File walk + incremental index pipeline |
-| `src/query.rs` | Search + result formatting |
 | `src/hook.rs` | `run_hook()` — called by Claude Code's PreToolUse hook |
 | `src/gain.rs` | Analytics from `.tokenix/hook.log` |
 
