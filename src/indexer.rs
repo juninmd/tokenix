@@ -48,6 +48,8 @@ struct ChunkedFile {
 pub struct IndexOptions {
     pub force: bool,
     pub no_embed: bool,
+    /// Inline pre-query refresh: must not apply deletions (see phase 6).
+    pub inline: bool,
 }
 
 struct EmbedJob {
@@ -204,7 +206,11 @@ fn git_changed_files(repo_root: &Path) -> Option<FilePlan> {
         let rel = String::from_utf8_lossy(&field[3..]).replace('\\', "/");
 
         if x == 'R' || x == 'C' {
-            let _ = fields.next();
+            // The next NUL field is the origin: a rename removes it, a copy keeps it.
+            let origin = fields.next();
+            if let (Some(o), 'R') = (origin, x) {
+                deleted.insert(String::from_utf8_lossy(o).replace('\\', "/"));
+            }
         }
 
         if x == 'D' || y == 'D' {
@@ -432,6 +438,7 @@ where
         IndexOptions {
             force,
             no_embed: false,
+            inline: false,
         },
         &mut progress_cb,
     )
@@ -662,6 +669,7 @@ where
     let mut indexed = 0usize;
     let mut skipped = 0usize;
     let mut errors = 0usize;
+    let mut removed = false;
 
     // Surface transaction failures instead of swallowing them: a failed BEGIN
     // means every write below runs in autocommit, and a failed COMMIT means the
@@ -679,6 +687,17 @@ where
             continue;
         }
         if f.chunks.is_empty() {
+            // The file exists but yields nothing (emptied, binary, sub-minimum):
+            // its old rows would keep serving content that is no longer on disk.
+            if let Some((file_id, _, _)) = existing.get(&f.rel) {
+                match crate::store::delete_file(&conn, *file_id) {
+                    Ok(()) => removed = true,
+                    Err(e) => {
+                        errors += 1;
+                        progress_cb(&format!("ERR {}: could not drop stale rows: {e}", f.rel));
+                    }
+                }
+            }
             continue;
         }
 
@@ -751,8 +770,7 @@ where
     // back unchanged, git reports nothing and the index would stay short one
     // file. Leaving a deleted file's rows in place until the next full index is
     // the cheaper mistake: stale hits, not missing ones.
-    let mut removed = false;
-    if options.no_embed {
+    if options.inline {
         // nothing to do
     } else if file_plan.git_incremental {
         for rel_path in &file_plan.deleted {

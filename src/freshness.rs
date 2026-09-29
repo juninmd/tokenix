@@ -133,6 +133,7 @@ pub fn refresh_before_query(repo_root: &Path) -> Refresh {
         IndexOptions {
             force: false,
             no_embed: true,
+            inline: true,
         },
         &mut silent,
     ) {
