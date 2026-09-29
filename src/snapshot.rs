@@ -105,7 +105,6 @@ pub fn export(repo_root: &Path, output: Option<&Path>) -> Result<ExportReport> {
         // file this tool tells you to commit and share, so it gets scrubbed on
         // the way out regardless of that setting — a hardcoded key inside a
         // gzipped blob nobody diffs is exactly how one gets published.
-        // The `chunks_au` trigger keeps chunks_fts consistent with the update.
         redacted = redact_staged_chunks(&staged)?;
         store::set_meta(&staged, "snapshot_version", crate::VERSION)?;
         store::set_meta(

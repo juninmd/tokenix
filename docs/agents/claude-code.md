@@ -33,7 +33,6 @@ move the binary, run `install-hook` again.
 |---|---|
 | `Read` of a code file ≥ 200 lines, no `offset`/`limit` | Symbol outline instead of the file (exit `2`, Claude reads the outline from stderr), only when it saves ≥ 30% |
 | `Read` with a range, or a small file | Passes through |
-| `Grep` for an identifier | Its definition from the symbol graph |
 | `Grep` with unbounded `content` output | Adds `head_limit` (default 100) through `updatedInput` |
 | `Bash` matching a filter | Rewritten to `tokenix run '<cmd>'` through `updatedInput`, same exit code. On Windows it re-runs under the same Git Bash, so bash syntax keeps working |
 | `PowerShell` matching a filter | Rewritten to `& 'tokenix' run --shell pwsh '<cmd>'` |
@@ -62,8 +61,8 @@ tokenix                   # dashboard → Stats tab shows "Claude Code: installe
 - A filtered command whose output was clipped ends with a
   `tokenix retrieve <key>` marker, and that command returns the full output.
 - Add a line to your `CLAUDE.md` if you want Claude to reach for
-  `tokenix context "<task>"` at the start of a task. The hook itself needs no
-  instructions.
+  `tokenix symbols`, `callers` or `impact` before editing shared code. The hook
+  itself needs no instructions.
 
 ## Remove
 

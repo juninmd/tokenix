@@ -45,7 +45,7 @@
 
 | ⚡ Local Code Index | 🌲 Tree-sitter Symbol Graph | ✂️ Deterministic Output Filters |
 |:---|:---|:---|
-| SQLite FTS5 full-text search with BM25 and symbol-aware ranking. No model to download, no background process, zero external services. | Deep AST symbol parsing with PageRank importance, bidirectional caller/callee tracing, and diff blast-radius impact analysis. | 528+ bundled filters stripping noisy build/test logs without masking real errors or exit codes. |
+| A SQLite index of every file, chunked by symbol. No model to download, no background process, zero external services. | Deep AST symbol parsing with PageRank importance, bidirectional caller/callee tracing, and diff blast-radius impact analysis. | 528+ bundled filters stripping noisy build/test logs without masking real errors or exit codes. |
 
 | 🛡️ Zero-Trust Security | 📉 Measured Token Savings | 🔌 Universal Agent Compatibility |
 |:---|:---|:---|
@@ -144,8 +144,7 @@ After `install-hook`, tokenix sees each tool call before it runs and decides:
 |---|---|---|
 | Read a code file of **≥ 200 lines** with no range | Returns a symbol outline (only when it saves ≥ 30%) | The agent sees the file's structure and asks for the function it needs |
 | Read a small file, or read with `offset`/`limit` | Nothing | The read happens as asked |
-| Grep for an **identifier** (`apply_tax`) | Answers with its definition site from the symbol graph | `src/billing.rs:5 [function] apply_tax` |
-| Grep a phrase or a regex | Nothing (only the `head_limit` cap below) | The agent's own grep runs as asked |
+| Grep, any pattern | Nothing (only the `head_limit` cap below) | The agent's own grep runs as asked |
 | Grep with unbounded content output | Adds `head_limit` (100 by default) | Output is capped |
 | Run a noisy command (`cargo test`, `terraform plan`, `git status` …) | Reruns it through `tokenix run` and the matching filter | Failures and summaries stay, noise goes, and the **exit code is the real one** |
 
@@ -175,14 +174,11 @@ fn apply_tax(amount: u32) -> u32 {
 
 | You want to… | Run |
 |---|---|
-| Find code by meaning | `tokenix query "where is the invoice taxed"` |
-| Find an exact string or regex | `tokenix grep "amount / 10"` |
 | Find a symbol by name | `tokenix symbols apply_tax` |
 | See a big file's structure | `tokenix read src/billing.rs` |
 | Read exactly one function | `tokenix read src/billing.rs --symbol apply_tax` |
 | Find who calls something, and what it calls | `tokenix callers apply_tax` · `tokenix callees main` |
 | See everything a change could break | `tokenix impact apply_tax` · `tokenix flow main` |
-| Get context for a task in one call | `tokenix context "add a discount to invoices" --budget 2000` |
 | Hand a budgeted bundle to a tool without hooks | `tokenix pack --budget 8000 > context.md` |
 
 ### 3. Review a change before you push
@@ -204,7 +200,7 @@ $ tokenix blast            # vs HEAD; use --since origin/main for a branch
 
 ### 4. Keep the index current
 
-- **Edits are picked up on their own.** Before answering, every retrieval command
+- **Edits are picked up on their own.** Before answering, every index command
   re-chunks the files you changed since the last index. That takes milliseconds
   so a function you just wrote is searchable right away. Run `tokenix index`
   now and then (or `tokenix index --if-stale` in a script) for larger changes.
@@ -265,7 +261,7 @@ format.
 | Agent | Install | Integration | Guide |
 |---|---|---|---|
 | **Claude Code** | `tokenix install-hook --tool claude-code` | `PreToolUse` hook in `settings.json` | [docs/agents/claude-code.md](docs/agents/claude-code.md) |
-| **OpenAI Codex CLI** | `tokenix install-hook --tool codex` | `PreToolUse` hook for commands + `tx-read`/`tx-query` helpers | [docs/agents/codex.md](docs/agents/codex.md) |
+| **OpenAI Codex CLI** | `tokenix install-hook --tool codex` | `PreToolUse` hook for commands + `tx-read`/`tx-symbols` helpers | [docs/agents/codex.md](docs/agents/codex.md) |
 | **GitHub Copilot** | `tokenix install-hook --tool copilot` | `PreToolUse` + `PostToolUse` hooks; `--local` commits them to `.github/` | [docs/agents/copilot.md](docs/agents/copilot.md) |
 | **Antigravity** | `tokenix install-hook --tool antigravity` | Native plugin | [docs/agents/antigravity.md](docs/agents/antigravity.md) |
 | **OpenCode** | `tokenix install-hook --tool opencode` | MCP server only | [docs/agents/opencode.md](docs/agents/opencode.md) |
@@ -285,7 +281,7 @@ switch tabs, `↑`/`↓` move, `q` quits.
 On a terminal, a report command opens its own tab: `tokenix doctor` lands on
 Doctor, `tokenix scan-secrets` on Secrets. Piping, `--json`, `--statusline`,
 `--format`, `--output` and `--no-tui` (or `TOKENIX_NO_TUI=1`) keep plain text
-output. Agent-facing commands (`hook`, `run`, `mcp`, `query`, `read`, `pack`) never
+output. Agent-facing commands (`hook`, `run`, `mcp`, `read`, `pack`) never
 open a UI.
 
 | Tab | What it shows |
@@ -325,23 +321,11 @@ model.** The measurements are reproducible. They are *not* a claim about your bi
 |---|---|---|---|
 | Real sessions (7,807 hook calls) | 475,360 → 169,175 | **67.4%** | `tokenix gain` |
 | Read interception, 31 real files | 346,892 → 58,154 | **83.2%** | `tokenix benchmark` |
-| Task context vs reading the full file | 86,291 → 8,630 | **90.0%** | `tokenix benchmark` |
 | Outline + targeted symbol workflow | 55,020 → 17,384 | **68.4%** | `tokenix benchmark` |
 | Command filters, verbose output | 1,891 → 369 | **80.5%** | `cargo test verbose_real_output -- --nocapture` |
 | Command filters, full golden corpus (1,150 cases) | 46,804 → 27,728 | **40.8%** | `cargo test filters_deliver_aggregate_token_savings -- --nocapture` |
 
-Retrieval quality is checked by the same benchmark. It is a small synthetic
-self-repo set (8 labeled queries over tokenix plus `benchmark/samples/`): a
-regression tripwire, not a measure of general quality. Search is lexical
-(FTS5 + symbol graph) since embeddings were removed, so the rows below predate
-that and are stale until re-measured:
-
-| Check | Result |
-|---|---|
-| Expected file in the top 3 results (8 labeled queries) | **8/8** |
-| Expected file ranked #1 | 6/8 |
-| Budgeted context still contained the expected file | **8/8**, 0 budget violations |
-| Golden filter cases reproducing byte-exact expected output | **1,150/1,150** |
+Golden filter cases reproduce their expected output byte for byte (**1,150/1,150**).
 
 <details>
 <summary><b>Why there is no dollar figure, and how to read these numbers</b></summary>
@@ -384,10 +368,6 @@ has the full evidence review.
 
 | Command | Description |
 |---|---|
-| `tokenix context TEXT` | One-call task context: entry points, relevant source, compact outlines, strict budget modes |
-| `tokenix explore TEXT` | Graph-aware exploration: entry points, relationships, grouped source |
-| `tokenix query TEXT` | Full-text search over indexed chunks (BM25 + symbol-aware ranking) |
-| `tokenix grep PATTERN` | Exact regex/literal search over indexed content |
 | `tokenix read FILE` | Smart reader: outline for large files, full text for small ones (`--symbol`, `--lines`, `--mode full\|outline\|signatures\|diff\|density:X`) |
 | `tokenix symbols QUERY` | Find indexed symbols by name or path (`--kind` filters by symbol type) |
 | `tokenix callers SYMBOL` | Symbols that call or reference a symbol |
@@ -399,7 +379,7 @@ has the full evidence review.
 | `tokenix modules` | Functional modules found by community detection over the symbol graph (`--top`, `--json`) |
 | `tokenix blast` | Blast radius of the current diff: changed symbols and everything that calls them (`--since REF`, `--depth`, `--json`) |
 | `tokenix pack` | Budgeted repo pack for tools without hooks (`--mode/--profile`, `--changed`, `--token-map`) |
-| `tokenix memory add\|list\|remove\|edit` | Save preferences (`--global` / `--project`) for future context. Text that looks like a credential is refused |
+| `tokenix memory add\|list\|remove\|edit` | Save preferences (`--global` / `--project`); nothing injects them automatically, so read them with `memory list` or the MCP memory tools. Text that looks like a credential is refused |
 | `tokenix retrieve KEY` | Print the exact original output behind a `[tokenix: ...]` marker |
 
 ### 🧑 Commands you run
@@ -419,7 +399,7 @@ has the full evidence review.
 | `tokenix usage` | Absolute token spend and ≈USD from agent transcripts (`daily\|weekly\|monthly\|session\|model\|project\|blocks`, `--all-projects`, `--statusline`, `--json`) |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix tokenmap` | Directory tree weighted by token count, heaviest paths first (`--format html`) |
-| `tokenix benchmark` | Reproducible token-reduction and retrieval-quality benchmark, vanilla vs tokenix (`--json`) |
+| `tokenix benchmark` | Reproducible token-reduction benchmark, vanilla vs tokenix (`--json`) |
 | `tokenix filter list\|active\|generate\|record\|verify` | Browse, generate, record and golden-test output filters |
 
 | `tokenix prompt-audit` | Audit MCP/tool token weight across agents (`--agent`, `--recommend`, `--profile-impact`, `--json`) |
@@ -467,7 +447,7 @@ prints plain text instead of opening the dashboard.
 | `TOKENIX_MAX_OUTPUT_TOKENS` | Global output ceiling (default 8000, `0` disables) |
 | `TOKENIX_BRANCH_AWARE=true` | One SQLite DB per git branch |
 | `TOKENIX_GREP_HEAD_LIMIT` | `head_limit` injected into unbounded Grep (default 100, `0` disables) |
-| `TOKENIX_AUTO_REFRESH=0` | Turn off the inline refresh before retrieval commands |
+| `TOKENIX_AUTO_REFRESH=0` | Turn off the inline refresh before index commands |
 | `TOKENIX_AUTO_REFRESH_MAX` | Dirty-file count above which the inline refresh is skipped (default 25) |
 | `TOKENIX_DEDUP=0` · `TOKENIX_DEDUP_MIN_TOKENS` · `TOKENIX_DEDUP_TTL` | Cross-call dedup of identical output (defaults: on, 200 tokens, 3600 s; scoped to the project) |
 | `TOKENIX_READ_DEDUP=0` · `TOKENIX_READ_DEDUP_TTL` · `TOKENIX_READ_DEDUP_MIN_TOKENS` | Re-read suppression (defaults: on, 900 s, 1500 tokens; scoped to the agent session) |
@@ -479,15 +459,7 @@ prints plain text instead of opening the dashboard.
 `--jobs N`, `--if-stale`, `--path/-p`, `--no-low-priority` (indexing runs at below-normal priority by
 default).
 
-**`tokenix query`:** `--budget/-b` (1200), `--k` (20), `--file/-f`, `--link`
-(cross-project, repeatable), `--json`, `--path/-p`
-
-**`tokenix context`:** `--mode <plan|debug|audit|security|review>`, `--budget/-b`
-(1200), `--max-files`, `--budget-breakdown`, `--json`, `--path/-p`
-
 **`tokenix symbols`:** `--limit/-l` (20), `--kind/-k`, `--json`, `--path/-p`
-
-**`tokenix grep`:** `--limit/-l` (20), `--ignore-case/-i`, `--file/-f`, `--path/-p`
 
 **`tokenix deps`:** `--reverse`, `--transitive`, `--json`, `--path/-p`
 
@@ -534,7 +506,7 @@ exist. Rules are TOML `[[rules]]` (`id`, `pattern`, optional `capture` /
 
 **`tokenix prompt-audit`:** `--agent`, `--json`, `--recommend`, `--profile-impact`
 
-**`tokenix benchmark`:** `--budget N` (1200), `--json`, `--refresh-index`, `--cases FILE`
+**`tokenix benchmark`:** `--json`, `--refresh-index`
 
 </details>
 
@@ -615,15 +587,16 @@ truncated.
                  ▼                  ▼                  ▼
           ┌────────────┐     ┌────────────┐     ┌────────────┐
           │ SQLite     │     │  Symbol    │     │  Output    │
-          │ FTS5 +     │     │  graph +   │     │  filters   │
-          │ BM25       │     │  PageRank  │     │  (TOML)    │
+          │ chunks     │     │  graph +   │     │  filters   │
+          │            │     │  PageRank  │     │  (TOML)    │
           └────────────┘     └────────────┘     └────────────┘
 ```
 
-- **Storage:** one SQLite DB per project under `~/.tokenix/`: chunks, an FTS5
-  full-text index (BM25 fused with rank), and the symbol graph. There are no
-  embeddings, no model and no background daemon. Indexes built by older
-  versions drop their vector tables on the next `tokenix index`.
+- **Storage:** one SQLite DB per project under `~/.tokenix/`: chunks and the
+  symbol graph. There is no search engine, no embeddings, no model and no
+  background daemon: the agent's own grep stays the way to find text. Indexes
+  built by older versions drop their vector and full-text tables on the next
+  `tokenix index`.
 - **Fail-open contract:** the hook exits `0` (pass) on any error, a missing or
   stale index, or even a panic. It exits `2` only to intercept, and never exits `1`.
 
@@ -661,7 +634,7 @@ truncated.
 |---|---|
 | `No index found` | Run `tokenix index .` in the repository root. The nearest indexed directory counts as the project root, even when a parent directory has a `package.json`. |
 | The agent still reads whole files | Open `tokenix` → **Stats** tab and check that your agent shows as installed. Only code files of ≥ 200 lines are outlined, only when that saves ≥ 30%, and never when the agent passes `offset`/`limit`. After a branch switch, re-index: a stale index makes the hook pass everything through. |
-| Search misses something I just wrote | It should not: edits are re-chunked before each query. If more than 25 files changed, run `tokenix index` (or raise `TOKENIX_AUTO_REFRESH_MAX`). |
+| A symbol I just wrote is missing | It should not: edits are re-chunked before each command. If more than 25 files changed, run `tokenix index` (or raise `TOKENIX_AUTO_REFRESH_MAX`). |
 | A repo filter is ignored | Run `tokenix trust --status`. Repo filters need `tokenix trust`, and an edit revokes it. |
 | Output was cut and I need all of it | Run `tokenix retrieve <key>` from the `[tokenix: ...]` marker, or `tokenix run --raw`. |
 | First index is slow or the machine stalls | Use `tokenix index --cpu-profile low`. |

@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunker::count_tokens;
-use crate::query::get_file_outline;
-use crate::store::{index_staleness, log_hook_event, search_by_symbol, HookEvent};
+use crate::store::{index_staleness, log_hook_event, HookEvent};
 
 const MIN_LINES_FOR_OUTLINE: usize = 200;
 
@@ -203,37 +202,10 @@ fn now_ts() -> f64 {
         .as_secs_f64()
 }
 
-/// True if `s` looks like a plain identifier (no regex metacharacters).
-fn looks_like_identifier(s: &str) -> bool {
-    s.len() >= 2
-        && s.chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '_' | ':' | '.'))
-}
-
-fn symbol_lookup(pattern: &str, repo_root: &Path) -> Option<String> {
-    let conn = crate::store::open_db(repo_root, false).ok()??;
-    let matches = search_by_symbol(&conn, pattern).ok()?;
-    if matches.is_empty() {
-        return None;
-    }
-    let mut lines = vec![format!(
-        "<!-- tokenix: {} symbol match(es) for '{}' -->",
-        matches.len(),
-        pattern
-    )];
-    lines.push(String::new());
-    for m in &matches {
-        lines.push(format!(
-            "{}:{} [{}] {}",
-            m.path, m.start_line, m.kind, m.symbol
-        ));
-    }
-    lines.push(String::new());
-    lines.push(format!(
-        "[Use Read with offset/limit or tokenix read --symbol {} to see content]",
-        pattern
-    ));
-    Some(lines.join("\n"))
+fn get_file_outline(file_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(file_path).ok()?;
+    let path_str = file_path.to_string_lossy().replace('\\', "/");
+    Some(crate::chunker::generate_outline(&content, &path_str))
 }
 
 fn handle_read(
@@ -422,31 +394,6 @@ fn handle_read(
     (true, msg, "generated symbol outline".to_string())
 }
 
-fn handle_grep(tool_input: &serde_json::Value, repo_root: &Path) -> (bool, String, String) {
-    let pattern = match tool_input["pattern"].as_str() {
-        Some(p) => p,
-        None => return (false, String::new(), "missing pattern".to_string()),
-    };
-
-    // Only identifier-like patterns are answered from the index (exact symbol
-    // lookup). Everything else, natural-language included, is the agent's own
-    // grep: no retrieval here is good enough to stand in for it.
-    if looks_like_identifier(pattern) {
-        if let Some(output) = symbol_lookup(pattern, repo_root) {
-            return (
-                true,
-                output,
-                format!("matched symbol exact lookup: {}", pattern),
-            );
-        }
-    }
-    (
-        false,
-        String::new(),
-        format!("lexical query: '{}'", pattern),
-    )
-}
-
 fn measured_original_tokens(
     tool_name: &str,
     tool_input: &serde_json::Value,
@@ -554,9 +501,8 @@ fn input_rewrite_output(
 
 /// Cap injected into an uncapped content-mode Grep. Measured motivation: a
 /// single unbounded lexical Grep over a large repo cost ~937k tokens because
-/// `handle_grep` only intercepts semantic/symbol queries and passes every other
-/// pattern through untouched. Override with `TOKENIX_GREP_HEAD_LIMIT`; `0`
-/// disables the cap.
+/// tokenix never answers a Grep itself and passes every pattern through.
+/// Override with `TOKENIX_GREP_HEAD_LIMIT`; `0` disables the cap.
 const DEFAULT_GREP_HEAD_LIMIT: i64 = 100;
 
 fn grep_head_limit() -> i64 {
@@ -1088,7 +1034,7 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
 
     let (intercepted, output, reason) = match input.tool_name.as_str() {
         "Read" => handle_read(&input.tool_input, &repo_root, &input.session_id),
-        "Grep" => handle_grep(&input.tool_input, &repo_root),
+        "Grep" => (false, String::new(), "grep runs natively".to_string()),
         _ => (false, String::new(), "unsupported tool".to_string()),
     };
 
@@ -1303,15 +1249,6 @@ mod tests {
         let raw = r#"{"tool_name":"Edit","tool_input":{"file_path":"x.rs"}}"#;
         let input = HookInput::from_stdin(raw).unwrap();
         assert_eq!(input.tool_name, "Edit");
-    }
-
-    #[test]
-    fn looks_like_identifier_rules() {
-        assert!(looks_like_identifier("embed_query"));
-        assert!(looks_like_identifier("MyStruct::new"));
-        assert!(!looks_like_identifier("a")); // too short
-        assert!(!looks_like_identifier("foo bar")); // has space
-        assert!(!looks_like_identifier("fn.*main")); // regex meta
     }
 
     #[test]

@@ -1,14 +1,14 @@
-//! Freshness-on-query: bring the index up to date with the working tree before
-//! a retrieval command answers.
+//! Freshness-on-command: bring the index up to date with the working tree before
+//! a graph or pack command answers.
 //!
 //! The index is built from committed *and* working-tree state, so an edit made
-//! after the last `tokenix index` silently makes every retrieval answer stale —
-//! `query` returns the old body of a function the agent just rewrote. The hook
+//! after the last `tokenix index` silently makes every graph answer stale —
+//! `symbols` reports the old location of a function the agent just rewrote. The hook
 //! already fails open when the whole index is stale, but a CLI/MCP call has no
 //! such escape: it answers confidently from old rows.
 //!
 //! This module closes that window for the common case (a handful of dirty
-//! files) by re-chunking just those files: chunk text lands in the FTS5 index
+//! files) by re-chunking just those files: chunk rows are rewritten
 //! and the symbol graph is repaired, which costs milliseconds.
 //!
 //! Everything here fails open: any error, lock contention, or a change set too
@@ -170,7 +170,7 @@ pub fn announce(outcome: &Refresh) {
     }
 }
 
-/// Refresh and report in one call — what every retrieval command wants.
+/// Refresh and report in one call — what every index command wants.
 pub fn refresh_and_announce(repo_root: &Path) {
     let outcome = refresh_before_query(repo_root);
     announce(&outcome);

@@ -24,7 +24,6 @@ mod mcp_proxy;
 mod memory;
 mod modules;
 mod pack;
-mod query;
 mod recall;
 mod recordings;
 mod secrets_scan;
@@ -250,7 +249,7 @@ impl EgressGroupBy {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Index a repository (chunks, full-text, symbol graph)
+    /// Index a repository (chunks and symbol graph)
     Index {
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -289,64 +288,6 @@ enum Commands {
             help = "Keep normal process priority (default lowers it so indexing never starves the PC)"
         )]
         no_low_priority: bool,
-    },
-    /// Search the indexed repository (full-text + symbol graph)
-    Query {
-        text: String,
-        #[arg(short, long, default_value_t = 1200)]
-        budget: usize,
-        #[arg(long, default_value_t = 20)]
-        k: usize,
-        #[arg(short, long, help = "Filter to specific file path")]
-        file: Option<String>,
-        #[arg(long, help = "Cross-project search: additional project path(s)")]
-        link: Vec<String>,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
-        json: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Exact regex/literal search over indexed content
-    Grep {
-        pattern: String,
-        #[arg(short, long, default_value_t = 20)]
-        limit: usize,
-        #[arg(short = 'i', long, help = "Case-insensitive match")]
-        ignore_case: bool,
-        #[arg(short, long, help = "Filter to specific file path")]
-        file: Option<String>,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Build focused task context in one call
-    Context {
-        task: String,
-        #[arg(long, value_enum, default_value = "plan")]
-        mode: query::ContextMode,
-        #[arg(short, long, default_value_t = 1200)]
-        budget: usize,
-        #[arg(long, default_value_t = 4)]
-        max_files: usize,
-        #[arg(long, help = "Print per-section token breakdown to stderr")]
-        budget_breakdown: bool,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
-        json: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Explore related symbols and source in one graph-aware call
-    Explore {
-        query: String,
-        #[arg(short, long, default_value_t = 1200)]
-        budget: usize,
-        #[arg(long, default_value_t = 8)]
-        max_symbols: usize,
-        #[arg(long, help = "Print per-section token breakdown to stderr")]
-        budget_breakdown: bool,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
-        json: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
     },
     /// Store or list user preference memory
     Memory {
@@ -591,16 +532,12 @@ enum Commands {
         #[arg(short, long, help = "Write pack output to a file instead of stdout")]
         output: Option<PathBuf>,
     },
-    /// Run a reproducible token-savings and retrieval-quality benchmark
+    /// Run a reproducible token-savings benchmark
     Benchmark {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
         #[arg(long, help = "Refresh index metadata before measuring")]
         refresh_index: bool,
-        #[arg(long, default_value_t = 1200, help = "Token budget for queries")]
-        budget: usize,
-        #[arg(long, help = "TOML file with project-specific benchmark cases")]
-        cases: Option<PathBuf>,
         #[arg(long, help = "Emit machine-readable benchmark summary")]
         json: bool,
     },
@@ -1173,9 +1110,6 @@ fn should_check_update_on_start(command: Option<&Commands>) -> bool {
                 | Commands::Mcp { .. }
                 | Commands::McpProxy { .. }
                 | Commands::Run { .. }
-                | Commands::Query { .. }
-                | Commands::Grep { .. }
-                | Commands::Context { .. }
                 | Commands::Pack { .. }
                 | Commands::Read { .. }
                 | Commands::Retrieve { .. }
@@ -1261,47 +1195,6 @@ fn main() -> Result<()> {
             }
             cmd_index(&path, force, if_stale)
         }
-        Commands::Query {
-            text,
-            budget,
-            k,
-            file,
-            link,
-            json,
-            path,
-        } => cmd_query(&text, budget, k, file.as_deref(), &link, json, &path),
-        Commands::Grep {
-            pattern,
-            limit,
-            ignore_case,
-            file,
-            path,
-        } => cmd_grep(&pattern, limit, ignore_case, file.as_deref(), &path),
-        Commands::Context {
-            task,
-            mode,
-            budget,
-            max_files,
-            budget_breakdown,
-            json,
-            path,
-        } => cmd_context(
-            &task,
-            mode,
-            budget,
-            max_files,
-            budget_breakdown,
-            json,
-            &path,
-        ),
-        Commands::Explore {
-            query,
-            budget,
-            max_symbols,
-            budget_breakdown,
-            json,
-            path,
-        } => cmd_explore(&query, budget, max_symbols, budget_breakdown, json, &path),
         Commands::Memory { action } => cmd_memory(action),
         Commands::Read {
             file,
@@ -1426,12 +1319,10 @@ fn main() -> Result<()> {
         Commands::Benchmark {
             path,
             refresh_index,
-            budget,
-            cases,
             json,
         } => {
             let repo_root = find_repo_root(&path);
-            benchmark::run_benchmark(&repo_root, refresh_index, budget, cases.as_deref(), json)
+            benchmark::run_benchmark(&repo_root, refresh_index, json)
         }
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
         Commands::InstallBinary => cmd_install_binary(),
@@ -1780,37 +1671,6 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_context(
-    task: &str,
-    mode: query::ContextMode,
-    budget: usize,
-    max_files: usize,
-    breakdown: bool,
-    json: bool,
-    path: &Path,
-) -> Result<()> {
-    let repo_root = find_repo_root(path);
-    freshness::refresh_and_announce(&repo_root);
-    let out = query::build_task_context_with_mode(&repo_root, task, mode, budget, max_files)?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "task": task,
-                "budget": budget,
-                "tokens": chunker::count_tokens(&out),
-                "context": out,
-            }))?
-        );
-        return Ok(());
-    }
-    println!("{}", out);
-    if breakdown {
-        print_budget_breakdown(&out, budget);
-    }
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn cmd_pack(
     path: &Path,
@@ -1958,52 +1818,6 @@ fn cmd_artifacts_show(path: &Path, name: &str) -> Result<()> {
     crate::artifacts::show_artifact(&repo_root, name)
 }
 
-/// Print a per-section token breakdown of a generated context to stderr, so the
-/// agent-facing stdout stays clean. Shared by `context` and `explore`.
-fn print_budget_breakdown(context: &str, budget: usize) {
-    let sections = query::budget_breakdown(context);
-    let total: usize = sections.iter().map(|(_, t)| *t).sum();
-    eprintln!("\ntokenix budget breakdown ({total}/{budget} tokens):");
-    for (section, tokens) in &sections {
-        let pct = if total > 0 {
-            (*tokens as f64 / total as f64) * 100.0
-        } else {
-            0.0
-        };
-        eprintln!("  {section:<22} {tokens:>6}  ({pct:.0}%)");
-    }
-}
-
-fn cmd_explore(
-    query_text: &str,
-    budget: usize,
-    max_symbols: usize,
-    breakdown: bool,
-    json: bool,
-    path: &Path,
-) -> Result<()> {
-    let repo_root = find_repo_root(path);
-    freshness::refresh_and_announce(&repo_root);
-    let out = query::build_explore_context(&repo_root, query_text, budget, max_symbols)?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "query": query_text,
-                "budget": budget,
-                "tokens": chunker::count_tokens(&out),
-                "context": out,
-            }))?
-        );
-        return Ok(());
-    }
-    println!("{}", out);
-    if breakdown {
-        print_budget_breakdown(&out, budget);
-    }
-    Ok(())
-}
-
 fn cmd_memory(action: MemoryAction) -> Result<()> {
     match action {
         MemoryAction::Add {
@@ -2092,62 +1906,6 @@ fn selected_memory_scopes(global: bool, project: bool) -> Vec<memory::Preference
     } else {
         vec![memory::PreferenceScope::Project]
     }
-}
-
-fn cmd_query(
-    text: &str,
-    budget: usize,
-    k: usize,
-    file: Option<&str>,
-    link: &[String],
-    json: bool,
-    path: &Path,
-) -> Result<()> {
-    if k == 0 {
-        anyhow::bail!("k must be >= 1");
-    }
-    let repo_root = find_repo_root(path);
-    freshness::refresh_and_announce(&repo_root);
-
-    // Cross-project search: include linked projects
-    if !link.is_empty() {
-        let mut roots: Vec<PathBuf> = vec![repo_root.clone()];
-        for link_path in link {
-            roots.push(find_repo_root(Path::new(link_path)));
-        }
-        let root_refs: Vec<&Path> = roots.iter().map(|p| p.as_path()).collect();
-        let results = query::query_index_multi(&root_refs, text, budget, k, file)?
-            .ok_or_else(|| anyhow::anyhow!("No indexed projects found. Run: tokenix index"))?;
-        print_search_results(&results, text, json)?;
-        return Ok(());
-    }
-
-    let results = query::query_index(&repo_root, text, budget, k, file)?
-        .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))?;
-    print_search_results(&results, text, json)?;
-    Ok(())
-}
-
-fn print_search_results(results: &[store::SearchResult], text: &str, json: bool) -> Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(results)?);
-    } else {
-        println!("{}", query::format_results(results, text));
-    }
-    Ok(())
-}
-
-fn cmd_grep(
-    pattern: &str,
-    limit: usize,
-    ignore_case: bool,
-    file: Option<&str>,
-    path: &Path,
-) -> Result<()> {
-    let conn = open_existing_index(path)?;
-    let results = store::search_regex(&conn, pattern, limit, file, ignore_case)?;
-    println!("{}", query::format_results(&results, pattern));
-    Ok(())
 }
 
 fn open_existing_index(path: &Path) -> Result<rusqlite::Connection> {
@@ -3649,7 +3407,7 @@ fn install_copilot(local: bool) -> Result<()> {
         // copilot-instructions.md — workspace custom instructions (committed to repo)
         let instructions_path = github_dir.join("copilot-instructions.md");
         let instructions = format!(
-            r#"# tokenix - Semantic Context Tool
+            r#"# tokenix - Code Index Tool
 
 This repository is indexed by **tokenix** for token-efficient code understanding.
 
@@ -3658,7 +3416,7 @@ This repository is indexed by **tokenix** for token-efficient code understanding
 Use tokenix first whenever you need code context:
 
 ```bash
-tokenix query "what you need to understand"
+tokenix symbols <name>
 tokenix read <file>
 tokenix read <file> --symbol <name>
 tokenix read <file> --lines N-M
@@ -3669,8 +3427,8 @@ Do not call the native full-file Read tool on large files first. Use `tokenix re
 ## High-signal examples
 
 ```bash
-tokenix query "how does authentication work"
-tokenix query "where is JWT validated" --budget 2000
+tokenix symbols validate_token
+tokenix callers validate_token
 tokenix read src/auth/middleware.rs --symbol validate_token
 ```
 
@@ -3769,12 +3527,12 @@ fn install_codex() -> Result<()> {
     let marker = "<!-- tokenix -->";
     let block = format!(
         r#"{marker}
-## tokenix - Semantic Context Tool
+## tokenix - Code Index Tool
 
 This repo is indexed by tokenix. Use tokenix before reading full files:
 
 ```bash
-tokenix query "natural language query"
+tokenix symbols <name>
 tokenix read <file>
 tokenix read <file> --symbol <name>
 tokenix read <file> --lines N-M
@@ -3818,9 +3576,9 @@ tx-read() {{
     "{tokenix_bin}" read "$@"
 }}
 
-# tx-query: search the index
-tx-query() {{
-    "{tokenix_bin}" query "$@"
+# tx-symbols: find indexed symbols
+tx-symbols() {{
+    "{tokenix_bin}" symbols "$@"
 }}
 "#
     );
@@ -3837,7 +3595,7 @@ tx-query() {{
 # Add to your $PROFILE: . ~/.codex/tokenix-init.ps1
 
 function tx-read {{ & "{tokenix_bin}" read @args }}
-function tx-query {{ & "{tokenix_bin}" query @args }}
+function tx-symbols {{ & "{tokenix_bin}" symbols @args }}
 "#
     );
     std::fs::write(&ps1_path, &ps1_content)?;
@@ -4723,22 +4481,6 @@ fn banner() -> String {
 fn help_catalog() -> String {
     // (command, args, one-line description)
     let ai: &[(&str, &str, &str)] = &[
-        (
-            "context",
-            "<task>",
-            "Build focused task context in one call",
-        ),
-        (
-            "explore",
-            "<symbol>",
-            "Graph-aware related symbols + source",
-        ),
-        (
-            "query",
-            "<text>",
-            "Search the indexed repo (full-text + symbols)",
-        ),
-        ("grep", "<pattern>", "Exact regex/literal search"),
         ("read", "<file>", "Smart reader: outline for large files"),
         ("symbols", "<name>", "Find indexed symbols by name or path"),
         ("callers", "<symbol>", "Symbols that call the target"),
@@ -4763,7 +4505,7 @@ fn help_catalog() -> String {
         (
             "index",
             "[path]",
-            "Index a repository (chunks, full-text, symbol graph)",
+            "Index a repository (chunks and symbol graph)",
         ),
         (
             "install-hook",
@@ -4874,10 +4616,9 @@ fn help_catalog() -> String {
         "# AI agents — token-lean retrieval".dimmed()
     ));
     for ex in [
-        "tokenix context \"add rate limiting to the API\"",
-        "tokenix query \"where is JWT validated\" --budget 2000",
+        "tokenix symbols validate_token",
         "tokenix read src/auth.rs --symbol validate_token",
-        "tokenix explore TokenStore",
+        "tokenix impact TokenStore",
     ] {
         out.push_str(&format!("  {}\n", ui::accent(ex)));
     }
@@ -4925,7 +4666,9 @@ mod tests {
             "tokenix", "hook"
         ]))));
         assert!(!should_check_update_on_start(Some(&parse(&[
-            "tokenix", "query", "example"
+            "tokenix",
+            "read",
+            "src/main.rs"
         ]))));
         assert!(!should_check_update_on_start(Some(&parse(&[
             "tokenix", "update", "--check"
@@ -5049,8 +4792,6 @@ mod tests {
             vec!["tokenix", "hook-antigravity"],
             vec!["tokenix", "run", "cargo test"],
             vec!["tokenix", "mcp"],
-            vec!["tokenix", "query", "how does indexing work"],
-            vec!["tokenix", "context", "task"],
             vec!["tokenix", "read", "src/main.rs"],
             vec!["tokenix", "symbols", "run_hook"],
             vec!["tokenix", "pack"],

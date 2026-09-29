@@ -1,7 +1,7 @@
 # AGENTS.md — tokenix
 
 Rust CLI that gives AI coding agents compact repository context: a local
-SQLite index (FTS5 + tree-sitter symbol graph, no embeddings or model), deterministic output filters,
+SQLite index (chunks + tree-sitter symbol graph; no embeddings, no model, no text search), deterministic output filters,
 and `PreToolUse` hooks for Claude Code / Copilot / Codex / Antigravity (OpenCode
 is MCP-only: no hook wiring is installed for it).
 User-facing docs live in `README.md`; this file is the engineering contract.
@@ -10,8 +10,8 @@ User-facing docs live in `README.md`; this file is the engineering contract.
 
 ```bash
 cargo build --release
-cargo test --bin tokenix          # 473 unit + golden tests
-cargo test --tests                # + 40 end-to-end tests (one Windows-only) against the real binary
+cargo test --bin tokenix          # 449 unit + golden tests
+cargo test --tests                # + 39 end-to-end tests (one Windows-only) against the real binary
 cargo fmt --check                 # CI runs fmt FIRST — run it before pushing
 cargo clippy --all-targets --locked -- -D warnings
 ./scripts/verify.sh [--models]    # every CI gate locally, in CI order
@@ -49,9 +49,8 @@ so resolution never silently raises it.
 | `chunker.rs` | Symbol-aware chunking, `count_tokens`, outline generation, `enforce_token_cap` |
 | `indexer.rs` | Walks + indexes files. `filter_entry` (dirs) vs `should_index` (files) are separate on purpose |
 | `store.rs` | SQLite access, `index_staleness`, graph tables, hook log, `global_dir()`, `find_project_root` |
-| `query.rs` | Lexical retrieval (FTS5 BM25 fused with rank), symbol recall, budgeting. The reranker is repo-agnostic: it never names tokenix symbols or paths, and its test penalty fires only on real test locations (`tests/`, `*_test.*`, `*.spec.*`, `#[test]`/`#[cfg(test)]`), never on content substrings such as `assert!` |
 | `graph.rs` | Symbol graph, PageRank, Tarjan SCC cycles, import graph, repo hotspots |
-| `freshness.rs` | Inline pre-query refresh of dirty files (inline path), fails open |
+| `freshness.rs` | Inline pre-command refresh of dirty files (inline path), fails open |
 | `modules.rs` | Louvain community detection over `graph_edges` — `tokenix modules` |
 | `blast.rs` | Diff → changed symbols → reverse call graph (`tokenix blast`) |
 | `snapshot.rs` | `export-index` / `import-index` — gzipped `VACUUM INTO` copy for teams |
@@ -71,8 +70,8 @@ so resolution never silently raises it.
 | `transcripts.rs` | Per-agent history roots and parsers |
 | `conversation_audit.rs` | `conversation-audit` + `redact_credentials()` — the single credential masker every persisted view goes through |
 | `recordings.rs` | `filter record` sessions — captures command output for filter authoring; redacted and self-gitignored, because captures land in the working tree and `filter generate` uploads them to an AI CLI |
-| `memory.rs` | Cross-session notes surfaced back into context; refuses text that trips a keyword *or* a bundled secret rule (`secrets_scan::redact_known_secrets`) |
-| `benchmark.rs` | Retrieval benchmark harness (`tokenix benchmark`) |
+| `memory.rs` | Cross-session notes read back with `memory list` / the MCP memory tools (no command injects them anymore); refuses text that trips a keyword *or* a bundled secret rule (`secrets_scan::redact_known_secrets`) |
+| `benchmark.rs` | Token-reduction benchmark (`tokenix benchmark`): Read outlines, symbol workflows, command filters |
 | `doctor.rs` | Install diagnosis — filter inventory and config issues, recording state |
 | `artifacts.rs` | Reads build artifacts referenced by agent output |
 | `docshot.rs` | `#[cfg(test)]` only — renders README screenshots as SVG, never ships in the binary |
@@ -81,7 +80,7 @@ so resolution never silently raises it.
 
 The interactive CLI startup triggers the background update check before the bare
 TUI opens. It is limited to terminal, human commands: no network or cache work in
-hooks, MCP, query/pack/read, piped output or CI. The check is cached for 24 hours;
+hooks, MCP, pack/read, piped output or CI. The check is cached for 24 hours;
 the installed binary changes for the next invocation. A development binary under
 `target/` may check and notify but must never silently overwrite the per-user
 binary. Keep this behavior documented in `README.md`.
@@ -95,7 +94,6 @@ binary replacement.
 ```sql
 files(id, path UNIQUE, mtime, content_hash)
 chunks(id, file_id, path, start_line, end_line, symbol, kind, content, token_count)
-chunks_fts(rowid, content, symbol, path)     -- FTS5
 graph_nodes(chunk_id PK, file_id, path, name, kind, start_line, end_line, rank)
 graph_edges(id, caller_chunk_id, callee_chunk_id, reference, edge_kind)
 graph_imports(id, source_path, target, resolved_path, kind, line)  -- NULL = external
@@ -120,7 +118,7 @@ than left serving the old body.
 The inline refresh (`freshness.rs`) counts a dirty file the index does not know
 only if `indexer::stores_content` says indexing it would write a row. Empty,
 binary and sub-`MIN_CHUNK_TOKENS` files never get one, and counting them made
-every retrieval command pay a refresh, forever. The git-incremental plan applies
+every index command pay a refresh, forever. The git-incremental plan applies
 the same `max_file_bytes` cap as the full walk (`within_size_cap`); it used to
 index oversized dirty files the walk skips.
 
@@ -131,7 +129,7 @@ Project root = nearest ancestor that **was indexed** (`<id>.db` or `<id>.name` i
 `global_dir()`) or carries a marker (`.git`, `Cargo.toml`, `package.json`, …).
 The index check comes first: `tokenix index <dir>` roots at `<dir>`, and a
 `package.json` in a parent (a home directory, often) used to capture every
-marker-less repo below it, so `stats`/`query`/the hook never found its index.
+marker-less repo below it, so `stats`/`symbols`/the hook never found its index.
 
 Hook log: `~/.tokenix/<project-id>.log`, NDJSON, one `HookEvent` per line, rotates
 at 5 MB (one generation). Fallback is repo-local `.tokenix/hook.log`.
@@ -144,8 +142,8 @@ Read:  < 200 lines OR offset/limit set → exit 0 (pass)
          code extensions (`is_code`) and when the outline saves ≥ 30%;
          otherwise the file passes through whole
 
-Grep:  identifier-like → symbol lookup from the graph, exit 2 when found;
-       anything else (phrases, regexes) passes through, and only
+Grep:  never answered by tokenix (an index answer hid textual matches of
+       the identifier); passes through, and only
          output_mode="content" without head_limit → updatedInput injects
          head_limit (TOKENIX_GREP_HEAD_LIMIT, default 100, 0 disables);
          logged saved_tokens=0 because the unbounded output never ran
@@ -203,6 +201,18 @@ Antigravity's `decision:allow`), which is the one outcome the contract exists to
 prevent. The MCP server has the same guard per `tools/call`
 (`mcp::call_tool_guarded`) — one bad request must not take the session's server
 down with it.
+
+**No text search, no answer in place of the agent's grep.** `tokenix query`,
+`context`, `explore`, `grep`, the FTS5 table and the Grep identifier lookup were
+removed on purpose: an index answer stands in for the agent's own search and hides
+what it would have found, and no lexical or embedding retrieval here was shown to
+beat plain grep. What stays is what an agent cannot get from grep — the symbol
+graph (`symbols`, `callers`, `callees`, `impact`, `flow`, `blast`, `modules`),
+outlines for big files, `pack`, and output filters. `init_schema` drops the
+`chunks_fts` table **and its triggers** from older indexes (a surviving trigger
+would fail every chunk write); the inbound-edge repair in `graph.rs` finds
+candidate callers with an `instr` scan, uncapped. Do not reintroduce a retrieval
+command without an A/B measurement against the agent's native grep.
 
 **Hook exit codes:** `0` = pass through · `2` = block tool (stderr becomes the
 agent's context). Never exit `1`.
@@ -417,7 +427,7 @@ A bare `tokenix` or any human report command on a TTY opens the ratatui shell on
 that command's tab. `should_open()` is the single TTY/`--no-tui` gate;
 `run_entry(Entry)` seeds the tab and scope. Piping, `--json`, `--statusline`,
 `--format`, `--output`, and any flag a tab cannot represent keep plain output.
-Agent-facing commands (`hook`, `run`, `mcp`, `query`, `read`, `pack`) never open a
+Agent-facing commands (`hook`, `run`, `mcp`, `read`, `pack`) never open a
 UI. Every data-loading tab loads on a background thread behind one shared spinner
 (`draw_loading` / `spinner_frame`); only Index runs as a foreground drop-out
 because it needs the child's own progress bar.
