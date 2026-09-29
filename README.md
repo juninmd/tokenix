@@ -333,7 +333,13 @@ model.** The measurements are reproducible. They are *not* a claim about your bi
 | Command filters, verbose output | 1,891 → 369 | **80.5%** | `cargo test verbose_real_output -- --nocapture` |
 | Command filters, full golden corpus (1,150 cases) | 46,804 → 27,728 | **40.8%** | `cargo test filters_deliver_aggregate_token_savings -- --nocapture` |
 
-Retrieval quality is checked by the same benchmark:
+Retrieval quality is checked by the same benchmark. It is a small synthetic
+self-repo set (8 labeled queries over tokenix plus `benchmark/samples/`): a
+regression tripwire, not a measure of general quality. The reranker used to
+hardcode tokenix symbols and `src/benchmark.rs`, which inflated it; those rules
+are removed. The rows below predate that removal and are stale until re-measured
+with embeddings. A lexical-only run (`index --no-embed`) now scores 4/8 at #1 and
+6/8 in the top 3 (was 6/8 and 7/8 with the old rules):
 
 | Check | Result |
 |---|---|
