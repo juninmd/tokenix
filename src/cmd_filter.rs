@@ -512,7 +512,7 @@ fn run_command_sample(argv: &[String]) -> String {
     let Some(program) = resolve_program(&argv[0]) else {
         return format!("(could not run `{}`)", full_cmd);
     };
-    let output = Command::new(program)
+    let output = program_command(program)
         .args(&argv[1..])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -549,20 +549,68 @@ fn detect_ai_clis() -> Vec<(String, String)> {
 
 /// Probe the CLI by running `--version` — filters out stale shims in PATH.
 fn is_cli_available(name: &str) -> bool {
-    let ok = if cfg!(windows) {
-        Command::new("cmd")
-            .args(["/C", name, "--version"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-    } else {
-        Command::new(name)
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+    let Some(program) = resolve_program(name) else {
+        return false;
     };
-    ok.map(|s| s.success()).unwrap_or(false)
+    program_command(program)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// A `Command` that never searches the current directory for programs the
+/// child itself launches (a `.cmd` shim calling `node`, say). Windows-only
+/// switch; harmless elsewhere.
+fn program_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.env("NoDefaultCurrentDirectoryInExePath", "1");
+    cmd
+}
+
+/// PATH lookup that never returns a hit from the current directory. `cmd` and
+/// `where` search the cwd before PATH on Windows, so a cloned repo shipping
+/// `claude.cmd` would run as soon as `filter generate` probed for the CLI
+/// (CWE-427). Relative and empty PATH entries are dropped for the same reason.
+fn resolve_in_path(
+    name: &str,
+    path_var: &std::ffi::OsStr,
+    pathext: &[String],
+    cwd: Option<&Path>,
+) -> Option<std::path::PathBuf> {
+    if name.is_empty() || name.contains(['/', '\\']) {
+        return None;
+    }
+    let cwd = cwd.and_then(|c| c.canonicalize().ok());
+    let lower = name.to_ascii_lowercase();
+    let has_ext = pathext
+        .iter()
+        .any(|e| lower.ends_with(&e.to_ascii_lowercase()));
+    let mut names = Vec::new();
+    if has_ext {
+        names.push(name.to_string());
+    } else {
+        names.extend(pathext.iter().map(|e| format!("{name}{e}")));
+    }
+    for dir in std::env::split_paths(path_var) {
+        if !dir.is_absolute() {
+            continue;
+        }
+        if let (Some(cwd), Ok(canon)) = (&cwd, dir.canonicalize()) {
+            if &canon == cwd {
+                continue;
+            }
+        }
+        for n in &names {
+            let cand = dir.join(n);
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    None
 }
 
 pub fn is_gh_available() -> bool {
@@ -577,20 +625,19 @@ fn resolve_program(name: &str) -> Option<std::path::PathBuf> {
     if !cfg!(windows) {
         return Some(std::path::PathBuf::from(name));
     }
-    let out = Command::new("where")
-        .arg(name)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .map(std::path::PathBuf::from)
+    let pathext: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+        .split(';')
+        .filter(|e| e.starts_with('.'))
+        .map(str::to_string)
+        .collect();
+    let path = std::env::var_os("PATH")?;
+    resolve_in_path(
+        name,
+        &path,
+        &pathext,
+        std::env::current_dir().ok().as_deref(),
+    )
 }
 
 fn invoke_ai_cli(name: &str, flag: &str, prompt: &str) -> Result<String> {
@@ -599,7 +646,7 @@ fn invoke_ai_cli(name: &str, flag: &str, prompt: &str) -> Result<String> {
     // of handing the whole line to `cmd /C` (see `resolve_program`).
     let program = resolve_program(name)
         .ok_or_else(|| anyhow::anyhow!("could not resolve {} on PATH", name))?;
-    let mut cmd = Command::new(program);
+    let mut cmd = program_command(program);
     cmd.args([flag, prompt]);
     let child = cmd
         .stdout(Stdio::piped())
@@ -726,7 +773,10 @@ fn gh_run(args: &[&str], cwd: &std::path::Path) -> Result<()> {
     // from repo-controlled sample output.
     let program =
         resolve_program("gh").ok_or_else(|| anyhow::anyhow!("could not resolve gh on PATH"))?;
-    let ok = Command::new(program).args(args).current_dir(cwd).status()?;
+    let ok = program_command(program)
+        .args(args)
+        .current_dir(cwd)
+        .status()?;
     if ok.success() {
         Ok(())
     } else {
@@ -736,13 +786,9 @@ fn gh_run(args: &[&str], cwd: &std::path::Path) -> Result<()> {
 
 /// Run a `git` subcommand (no working-dir needed; uses -C flag instead).
 fn git_run(args: &[&str]) -> Result<()> {
-    let ok = if cfg!(windows) {
-        let mut full = vec!["/C", "git"];
-        full.extend_from_slice(args);
-        Command::new("cmd").args(&full).status()?
-    } else {
-        Command::new("git").args(args).status()?
-    };
+    let program =
+        resolve_program("git").ok_or_else(|| anyhow::anyhow!("could not resolve git on PATH"))?;
+    let ok = program_command(program).args(args).status()?;
     if ok.success() {
         Ok(())
     } else {
@@ -1116,6 +1162,54 @@ pub fn cmd_untrust() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("tokenix-cwd-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn resolve_in_path_skips_cwd_and_relative_entries_but_finds_path_copy() {
+        let cwd = scratch("cwd");
+        let bin = scratch("bin");
+        std::fs::write(cwd.join("zzcli.cmd"), "@echo pwned").unwrap();
+        let ext = vec![".cmd".to_string()];
+        let path = std::env::join_paths([cwd.clone(), std::path::PathBuf::from("."), bin.clone()])
+            .unwrap();
+
+        // Only the cwd copy exists: nothing may resolve.
+        assert_eq!(resolve_in_path("zzcli", &path, &ext, Some(&cwd)), None);
+
+        // A PATH copy still resolves, and wins over the cwd one.
+        std::fs::write(bin.join("zzcli.cmd"), "@echo ok").unwrap();
+        assert_eq!(
+            resolve_in_path("zzcli", &path, &ext, Some(&cwd)),
+            Some(bin.join("zzcli.cmd"))
+        );
+        assert_eq!(
+            resolve_in_path("zzcli.cmd", &path, &ext, Some(&cwd)),
+            Some(bin.join("zzcli.cmd"))
+        );
+        assert_eq!(resolve_in_path(".\\zzcli", &path, &ext, Some(&cwd)), None);
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(&bin);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_program_ignores_cwd_shim_on_windows() {
+        // Synthetic shim in a dir that is not the process cwd but is on PATH
+        // only via `resolve_in_path`'s cwd argument; guards the real wiring.
+        let cwd = scratch("win");
+        std::fs::write(cwd.join("zzcli.bat"), "@echo pwned").unwrap();
+        let ext = vec![".BAT".to_string()];
+        let path = std::env::join_paths([cwd.clone()]).unwrap();
+        assert_eq!(resolve_in_path("zzcli", &path, &ext, Some(&cwd)), None);
+        assert!(resolve_program("zzcli-does-not-exist").is_none());
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
 
     #[test]
     fn validate_command_name_accepts_real_commands() {
