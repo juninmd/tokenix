@@ -6,7 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::chunker::{count_tokens, generate_outline};
-use crate::query::query_index;
 use crate::store::{get_file_token_counts, open_db};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -33,7 +32,6 @@ struct JsonPack {
     tokens: usize,
     safety: SafetyReport,
     files: Vec<JsonFile>,
-    context: String,
 }
 
 #[derive(Serialize)]
@@ -72,20 +70,8 @@ pub fn build_pack(repo_root: &Path, options: PackOptions) -> Result<String> {
         .ok_or_else(|| anyhow!("Index not found. Please index the workspace first."))?;
     let profile = options.profile;
     let budget = options.budget;
-    let task = profile_task(profile);
-    let context_budget = (budget / 3).clamp(800, 4_000);
-    let context = crate::query::build_task_context_with_mode(
-        repo_root,
-        task,
-        context_mode(profile),
-        context_budget,
-        4,
-    )?;
-    let mut selected = selected_paths(repo_root, task, budget / 2)?;
+    let mut selected = BTreeSet::<String>::new();
     let mut reasons = std::collections::BTreeMap::<String, String>::new();
-    for path in &selected {
-        reasons.insert(path.clone(), "semantic".to_string());
-    }
 
     if options.changed || options.since.is_some() {
         for path in changed_paths(repo_root, options.since.as_deref()) {
@@ -135,14 +121,14 @@ pub fn build_pack(repo_root: &Path, options: PackOptions) -> Result<String> {
     }
 
     // `selected` is a BTreeSet, so iterating it directly meant the budget cut
-    // files by *alphabetical order*: a semantic hit or a changed file could be
+    // files by *alphabetical order*: a changed file could be
     // dropped so that an alphabetically-earlier filler file fit. Order by why
     // the file is here, then by graph centrality, then by path for determinism.
     let ordered = order_by_priority(&selected, &reasons, &graph_ranks);
 
     let mut files = Vec::new();
-    let mut used = count_tokens(&context);
-    let file_budget = budget.saturating_sub(used).max(400);
+    let mut used = 0usize;
+    let file_budget = budget.max(400);
     for path in ordered {
         if used >= budget {
             break;
@@ -174,7 +160,6 @@ pub fn build_pack(repo_root: &Path, options: PackOptions) -> Result<String> {
             profile,
             budget,
             used,
-            &context,
             &files,
             &safety,
             options.token_map,
@@ -184,23 +169,21 @@ pub fn build_pack(repo_root: &Path, options: PackOptions) -> Result<String> {
             profile,
             budget,
             used,
-            &context,
             &files,
             &safety,
             options.token_map,
         )),
-        PackFormat::Json => format_json(repo_root, profile, budget, used, context, files, safety),
+        PackFormat::Json => format_json(repo_root, profile, budget, used, files, safety),
     }
 }
 
 /// Rank reasons by how load-bearing they are for the task at hand.
-/// `changed` beats `semantic` because a file the user just touched is why they
-/// are packing at all; both beat `top-file`, which is only filler.
+/// `changed` beats `top-file` because a file the user just touched is why they
+/// are packing at all; `top-file` is only filler.
 fn reason_priority(reason: &str) -> u8 {
     match reason {
         "changed" => 0,
-        "semantic" => 1,
-        _ => 2,
+        _ => 1,
     }
 }
 
@@ -229,16 +212,6 @@ fn order_by_priority(
     ordered
 }
 
-fn selected_paths(repo_root: &Path, task: &str, budget: usize) -> Result<BTreeSet<String>> {
-    let results = query_index(repo_root, task, budget.max(4_000), 16, None)?
-        .ok_or_else(|| anyhow!("Index not found. Please index the workspace first."))?;
-    Ok(results
-        .into_iter()
-        .filter(|r| should_pack_path(&r.path, PackProfile::Plan))
-        .map(|r| r.path)
-        .collect())
-}
-
 fn compact_outline(path: &str, content: &str, budget: usize) -> String {
     let outline = generate_outline(content, path);
     let mut out = Vec::new();
@@ -257,26 +230,6 @@ fn compact_outline(path: &str, content: &str, budget: usize) -> String {
 
 fn remaining_file_budget(total_file_budget: usize, used: usize) -> usize {
     total_file_budget.saturating_sub(used / 4).clamp(120, 900)
-}
-
-fn profile_task(profile: PackProfile) -> &'static str {
-    match profile {
-        PackProfile::Plan => "repository architecture entry points public interfaces",
-        PackProfile::Debug => "failure handling hooks tests diagnostics command output errors",
-        PackProfile::Audit => "security supply chain secrets authentication configuration risk",
-        PackProfile::Security => "secrets credentials tokens env files security sensitive data",
-        PackProfile::Review => "code review regressions tests edge cases public interfaces",
-    }
-}
-
-fn context_mode(profile: PackProfile) -> crate::query::ContextMode {
-    match profile {
-        PackProfile::Plan => crate::query::ContextMode::Plan,
-        PackProfile::Debug => crate::query::ContextMode::Debug,
-        PackProfile::Audit => crate::query::ContextMode::Audit,
-        PackProfile::Security => crate::query::ContextMode::Security,
-        PackProfile::Review => crate::query::ContextMode::Review,
-    }
 }
 
 fn should_pack_path(path: &str, profile: PackProfile) -> bool {
@@ -352,7 +305,6 @@ fn format_markdown(
     profile: PackProfile,
     budget: usize,
     used: usize,
-    context: &str,
     files: &[PackFile],
     safety: &SafetyReport,
     token_map: bool,
@@ -365,9 +317,7 @@ fn format_markdown(
         budget,
         used
     ));
-    out.push_str("## Focused Context\n\n");
-    out.push_str(context);
-    out.push_str("\n\n## Safety Report\n");
+    out.push_str("## Safety Report\n");
     out.push_str(&format!(
         "- Sensitive paths omitted: {}\n- Budget omissions: {}\n",
         safety.omitted_sensitive_paths, safety.omitted_budget_paths
@@ -400,7 +350,6 @@ fn format_xml(
     profile: PackProfile,
     budget: usize,
     used: usize,
-    context: &str,
     files: &[PackFile],
     safety: &SafetyReport,
     token_map: bool,
@@ -413,9 +362,6 @@ fn format_xml(
         budget,
         used
     ));
-    out.push_str("  <context><![CDATA[");
-    out.push_str(context);
-    out.push_str("]]></context>\n");
     out.push_str(&format!(
         "  <safety omitted_sensitive_paths=\"{}\" omitted_budget_paths=\"{}\" />\n",
         safety.omitted_sensitive_paths, safety.omitted_budget_paths
@@ -451,7 +397,6 @@ fn format_json(
     profile: PackProfile,
     budget: usize,
     used: usize,
-    context: String,
     files: Vec<PackFile>,
     safety: SafetyReport,
 ) -> Result<String> {
@@ -471,7 +416,6 @@ fn format_json(
         tokens: used,
         safety,
         files,
-        context,
     };
     Ok(serde_json::to_string_pretty(&pack)?)
 }
@@ -505,21 +449,15 @@ mod tests {
     }
 
     #[test]
-    fn budget_order_puts_changed_and_semantic_before_filler() {
+    fn budget_order_puts_changed_before_filler() {
         // The defect this pins: `selected` is a BTreeSet, so the budget used to
         // cut files alphabetically — `zzz.rs` (a changed file) lost to `aaa.rs`
         // (filler) purely because of its name.
-        let selected: BTreeSet<String> = ["aaa.rs", "mmm.rs", "zzz.rs"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let reasons = reasons_of(&[
-            ("aaa.rs", "top-file"),
-            ("mmm.rs", "semantic"),
-            ("zzz.rs", "changed"),
-        ]);
+        let selected: BTreeSet<String> =
+            ["aaa.rs", "zzz.rs"].iter().map(|s| s.to_string()).collect();
+        let reasons = reasons_of(&[("aaa.rs", "top-file"), ("zzz.rs", "changed")]);
         let ordered = order_by_priority(&selected, &reasons, &std::collections::HashMap::new());
-        assert_eq!(ordered, vec!["zzz.rs", "mmm.rs", "aaa.rs"]);
+        assert_eq!(ordered, vec!["zzz.rs", "aaa.rs"]);
     }
 
     #[test]
@@ -529,9 +467,9 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let reasons = reasons_of(&[
-            ("a.rs", "semantic"),
-            ("b.rs", "semantic"),
-            ("c.rs", "semantic"),
+            ("a.rs", "top-file"),
+            ("b.rs", "top-file"),
+            ("c.rs", "top-file"),
         ]);
         let ranks: std::collections::HashMap<String, f32> = [
             ("a.rs".to_string(), 0.01),
@@ -550,7 +488,7 @@ mod tests {
         // No index graph (fresh repo): fall back to a stable alphabetical order
         // rather than an arbitrary one.
         let selected: BTreeSet<String> = ["b.rs", "a.rs"].iter().map(|s| s.to_string()).collect();
-        let reasons = reasons_of(&[("a.rs", "semantic"), ("b.rs", "semantic")]);
+        let reasons = reasons_of(&[("a.rs", "top-file"), ("b.rs", "top-file")]);
         let ranks = std::collections::HashMap::new();
         assert_eq!(
             order_by_priority(&selected, &reasons, &ranks),
@@ -561,7 +499,7 @@ mod tests {
     #[test]
     fn unknown_reason_sorts_as_filler() {
         let selected: BTreeSet<String> = ["a.rs", "b.rs"].iter().map(|s| s.to_string()).collect();
-        let reasons = reasons_of(&[("a.rs", "mystery"), ("b.rs", "semantic")]);
+        let reasons = reasons_of(&[("a.rs", "mystery"), ("b.rs", "changed")]);
         let ordered = order_by_priority(&selected, &reasons, &std::collections::HashMap::new());
         assert_eq!(ordered, vec!["b.rs", "a.rs"]);
     }

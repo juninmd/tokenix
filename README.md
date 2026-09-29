@@ -5,7 +5,7 @@
 
   <p><strong>Give your AI coding agent the exact slice of the repo it needs — not the whole file.</strong></p>
 
-  <p><em>Local ONNX semantic search · Tree-sitter symbol graph · Surgical reads · Deterministic output filters · Native agent hooks</em></p>
+  <p><em>Local code index · Tree-sitter symbol graph · Surgical reads · Deterministic output filters · Native agent hooks</em></p>
 
   <p>
     <a href="https://github.com/juninmd/tokenix/releases"><img src="https://img.shields.io/github/v/release/juninmd/tokenix?style=flat-square&color=ff7700&label=release" alt="Latest Release" /></a>
@@ -43,9 +43,9 @@
 
 ## ✨ Features at a glance
 
-| ⚡ Local Semantic Retrieval | 🌲 Tree-sitter Symbol Graph | ✂️ Deterministic Output Filters |
+| ⚡ Local Code Index | 🌲 Tree-sitter Symbol Graph | ✂️ Deterministic Output Filters |
 |:---|:---|:---|
-| Fast on-device ONNX embeddings with int8 quantized cosine search and SQLite FTS5 hybrid RRF ranking. Zero external services, zero latency. | Deep AST symbol parsing with PageRank importance, bidirectional caller/callee tracing, and diff blast-radius impact analysis. | 528+ bundled filters stripping noisy build/test logs without masking real errors or exit codes. |
+| A SQLite index of every file, chunked by symbol. No model to download, no background process, zero external services. | Deep AST symbol parsing with PageRank importance, bidirectional caller/callee tracing, and diff blast-radius impact analysis. | 528+ bundled filters stripping noisy build/test logs without masking real errors or exit codes. |
 
 | 🛡️ Zero-Trust Security | 📉 Measured Token Savings | 🔌 Universal Agent Compatibility |
 |:---|:---|:---|
@@ -56,7 +56,7 @@
 ## ⚡ Quick start
 
 > [!NOTE]
-> Four simple steps, about three minutes. Step 2 is the only one that takes a moment initially, as the first index downloads the compact local embedding model (~130 MB, cached permanently).
+> Four simple steps, about three minutes. Nothing is downloaded besides the binary.
 
 ### 1️⃣ Install the binary
 
@@ -91,7 +91,7 @@ what gets installed, what gets intercepted and how to undo it.
 ### 4️⃣ Verify that it works
 
 ```bash
-tokenix doctor     # binary, model, GPU, daemon, filters
+tokenix doctor     # binary, filters, recordings
 tokenix            # dashboard → Stats tab: which agents are wired
 tokenix gain       # after a session: hook calls, intercepts, tokens removed
 ```
@@ -110,7 +110,6 @@ Every release ships one binary per platform. The version-less
 | Linux arm64 (aarch64) | `tokenix-linux-aarch64` |
 | macOS (Apple Silicon / aarch64) | `tokenix-macos-aarch64` |
 | Windows x86_64 | `tokenix-windows-x86_64.exe` |
-| Windows x86_64 (GPU / DirectML) | `tokenix-windows-x86_64-directml.exe` |
 
 *(Intel macOS `x86_64` users can install from source using `cargo install tokenix --locked`)*
 
@@ -145,8 +144,7 @@ After `install-hook`, tokenix sees each tool call before it runs and decides:
 |---|---|---|
 | Read a code file of **≥ 200 lines** with no range | Returns a symbol outline (only when it saves ≥ 30%) | The agent sees the file's structure and asks for the function it needs |
 | Read a small file, or read with `offset`/`limit` | Nothing | The read happens as asked |
-| Grep for an **identifier** (`apply_tax`) | Answers with its definition site from the symbol graph | `src/billing.rs:5 [function] apply_tax` |
-| Grep a **phrase of 3+ words** (`where is the invoice taxed`) | Answers from semantic search | Relevant chunks, ranked |
+| Grep, any pattern | Nothing (only the `head_limit` cap below) | The agent's own grep runs as asked |
 | Grep with unbounded content output | Adds `head_limit` (100 by default) | Output is capped |
 | Run a noisy command (`cargo test`, `terraform plan`, `git status` …) | Reruns it through `tokenix run` and the matching filter | Failures and summaries stay, noise goes, and the **exit code is the real one** |
 
@@ -176,14 +174,11 @@ fn apply_tax(amount: u32) -> u32 {
 
 | You want to… | Run |
 |---|---|
-| Find code by meaning | `tokenix query "where is the invoice taxed"` |
-| Find an exact string or regex | `tokenix grep "amount / 10"` |
 | Find a symbol by name | `tokenix symbols apply_tax` |
 | See a big file's structure | `tokenix read src/billing.rs` |
 | Read exactly one function | `tokenix read src/billing.rs --symbol apply_tax` |
 | Find who calls something, and what it calls | `tokenix callers apply_tax` · `tokenix callees main` |
 | See everything a change could break | `tokenix impact apply_tax` · `tokenix flow main` |
-| Get context for a task in one call | `tokenix context "add a discount to invoices" --budget 2000` |
 | Hand a budgeted bundle to a tool without hooks | `tokenix pack --budget 8000 > context.md` |
 
 ### 3. Review a change before you push
@@ -205,11 +200,10 @@ $ tokenix blast            # vs HEAD; use --since origin/main for a branch
 
 ### 4. Keep the index current
 
-- **Edits are picked up on their own.** Before answering, every retrieval command
+- **Edits are picked up on their own.** Before answering, every index command
   re-chunks the files you changed since the last index. That takes milliseconds
-  and loads no model, so a function you just wrote is searchable right away.
-- **Embeddings catch up later.** Run `tokenix index` now and then (or
-  `tokenix index --if-stale` in a script) to embed what changed.
+  so a function you just wrote is searchable right away. Run `tokenix index`
+  now and then (or `tokenix index --if-stale` in a script) for larger changes.
 - **Branch switches are detected.** The index records the branch and `HEAD`. When
   they change, the hook passes calls through until you re-index, so it never
   answers from the wrong branch.
@@ -235,7 +229,6 @@ silently ignored.
 ```toml
 [hook]
 read_min_lines = 120    # outline files from 120 lines instead of 200
-grep_min_words = 3      # words before a Grep is treated as semantic
 
 [index]
 exclude = ["fixtures", "vendor"]   # extra directories to skip
@@ -268,7 +261,7 @@ format.
 | Agent | Install | Integration | Guide |
 |---|---|---|---|
 | **Claude Code** | `tokenix install-hook --tool claude-code` | `PreToolUse` hook in `settings.json` | [docs/agents/claude-code.md](docs/agents/claude-code.md) |
-| **OpenAI Codex CLI** | `tokenix install-hook --tool codex` | `PreToolUse` hook for commands + `tx-read`/`tx-query` helpers | [docs/agents/codex.md](docs/agents/codex.md) |
+| **OpenAI Codex CLI** | `tokenix install-hook --tool codex` | `PreToolUse` hook for commands + `tx-read`/`tx-symbols` helpers | [docs/agents/codex.md](docs/agents/codex.md) |
 | **GitHub Copilot** | `tokenix install-hook --tool copilot` | `PreToolUse` + `PostToolUse` hooks; `--local` commits them to `.github/` | [docs/agents/copilot.md](docs/agents/copilot.md) |
 | **Antigravity** | `tokenix install-hook --tool antigravity` | Native plugin | [docs/agents/antigravity.md](docs/agents/antigravity.md) |
 | **OpenCode** | `tokenix install-hook --tool opencode` | MCP server only | [docs/agents/opencode.md](docs/agents/opencode.md) |
@@ -288,7 +281,7 @@ switch tabs, `↑`/`↓` move, `q` quits.
 On a terminal, a report command opens its own tab: `tokenix doctor` lands on
 Doctor, `tokenix scan-secrets` on Secrets. Piping, `--json`, `--statusline`,
 `--format`, `--output` and `--no-tui` (or `TOKENIX_NO_TUI=1`) keep plain text
-output. Agent-facing commands (`hook`, `run`, `mcp`, `query`, `read`, `pack`) never
+output. Agent-facing commands (`hook`, `run`, `mcp`, `read`, `pack`) never
 open a UI.
 
 | Tab | What it shows |
@@ -304,7 +297,7 @@ open a UI.
 | **Tokenmap** | The repository as a tree weighted by token count, heaviest paths first |
 | **Discover** | Replays the current filters over past agent output: savings you could have had, plus commands no filter covers |
 | **Audit** | MCP/tool weight of each agent's effective system prompt, plus always-on instruction files and skills |
-| **Doctor** | Build/GPU support, detected GPU + CUDA/cuDNN, active embedding model, bundled-filter inventory |
+| **Doctor** | Bundled-filter inventory, user/local filter config issues, active recording session |
 
 <table>
 <tr>
@@ -328,21 +321,13 @@ model.** The measurements are reproducible. They are *not* a claim about your bi
 |---|---|---|---|
 | Real sessions (7,807 hook calls, one developer's machine) | 475,360 → 169,175 | **67.4%** | `tokenix gain` |
 | Read interception, 31 real files | 346,892 → 58,154 | **83.2%** | `tokenix benchmark` |
-| Task context vs reading the full file | 86,291 → 8,630 | **90.0%** | `tokenix benchmark` |
 | Outline + targeted symbol workflow | 55,020 → 17,384 | **68.4%** | `tokenix benchmark` |
 | Command filters, verbose output | 1,891 → 369 | **80.5%** | `cargo test verbose_real_output -- --nocapture` |
 | Command filters, full golden corpus (1,167 cases) | 46,804 → 27,728 | **40.8%** | `cargo test filters_deliver_aggregate_token_savings -- --nocapture` |
 
 Baselines assume the agent would have read the whole file; there is no holdout group, so these are token measurements, not a causal effect. The benchmark rows use a small synthetic set from this repo and `benchmark/samples`, not a foreign codebase.
 
-Retrieval quality is checked by the same benchmark:
-
-| Check | Result |
-|---|---|
-| Expected file in the top 3 results (8 labeled queries) | **8/8** |
-| Expected file ranked #1 | 6/8 |
-| Budgeted context still contained the expected file | **8/8**, 0 budget violations |
-| Golden filter cases reproducing byte-exact expected output | **1,167/1,167** |
+Golden filter cases reproduce their expected output byte for byte (**1,167/1,167**).
 
 <details>
 <summary><b>Why there is no dollar figure, and how to read these numbers</b></summary>
@@ -366,8 +351,6 @@ has the full evidence review.
   masked as success.
 - **`tokenix benchmark`'s command arm reports about 26%** because its sample
   commands print only 27–148 tokens each, which leaves little to compress.
-- **Semantic Grep is never counted as savings.** The native grep output is unknown
-  before interception, so `tokenix gain` logs it as neutral usage.
 - **Runs that saved nothing are in the denominator.** The 67.4% row was measured
   before that rule existed, so it reads high. It will be re-measured before the
   next release.
@@ -387,10 +370,6 @@ has the full evidence review.
 
 | Command | Description |
 |---|---|
-| `tokenix context TEXT` | One-call task context: entry points, relevant source, compact outlines, strict budget modes |
-| `tokenix explore TEXT` | Graph-aware exploration: entry points, relationships, grouped source |
-| `tokenix query TEXT` | Semantic search over indexed chunks |
-| `tokenix grep PATTERN` | Exact regex/literal search over indexed content (no embedding) |
 | `tokenix read FILE` | Smart reader: outline for large files, full text for small ones (`--symbol`, `--lines`, `--mode full\|outline\|signatures\|diff\|density:X`) |
 | `tokenix symbols QUERY` | Find indexed symbols by name or path (`--kind` filters by symbol type) |
 | `tokenix callers SYMBOL` | Symbols that call or reference a symbol |
@@ -402,7 +381,7 @@ has the full evidence review.
 | `tokenix modules` | Functional modules found by community detection over the symbol graph (`--top`, `--json`) |
 | `tokenix blast` | Blast radius of the current diff: changed symbols and everything that calls them (`--since REF`, `--depth`, `--json`) |
 | `tokenix pack` | Budgeted repo pack for tools without hooks (`--mode/--profile`, `--changed`, `--token-map`) |
-| `tokenix memory add\|list\|remove\|edit` | Save preferences (`--global` / `--project`) for future context. Text that looks like a credential is refused |
+| `tokenix memory add\|list\|remove\|edit` | Save preferences (`--global` / `--project`); nothing injects them automatically, so read them with `memory list` or the MCP memory tools. Text that looks like a credential is refused |
 | `tokenix retrieve KEY` | Print the exact original output behind a `[tokenix: ...]` marker |
 
 ### 🧑 Commands you run
@@ -415,16 +394,14 @@ has the full evidence review.
 | `tokenix install-hook` / `remove-hook` | Install or remove agent hooks and instructions (default `--tool all`) |
 | `tokenix install-binary` | Copy the running executable to a per-user bin dir and put it on PATH |
 | `tokenix update` | Check for, install, or toggle automatic updates from GitHub releases (`--check`, `--auto`, `--enable-auto`, `--disable-auto`) |
-| `tokenix doctor` | Diagnose embedding backend, GPU, model cache, daemon, filter inventory and filter config |
-| `tokenix serve` / `stop` | Start or stop the background embedding daemon |
-| `tokenix daemon status\|stop\|restart` | Inspect (pid, port, uptime, model, cache RAM) or control the daemon |
+| `tokenix doctor` | Diagnose the install: filter inventory, filter config and recording state |
 | `tokenix gain` | Tokens removed, split by source (Read interception vs command filters), plus session shape. Dollar estimates only with `--cost-estimate` / `--economics` |
 | `tokenix discover` | Replay current filters over past agent output: recoverable savings plus uncovered commands (`--agent`, `--top`, `--json`) |
 | `tokenix trust` / `untrust` | Approve (SHA-256 pinned) or revoke this repo's executable inputs (`--status`) |
 | `tokenix usage` | Absolute token spend and ≈USD from agent transcripts (`daily\|weekly\|monthly\|session\|model\|project\|blocks`, `--all-projects`, `--statusline`, `--json`) |
-| `tokenix stats` | Index statistics (files, chunks, tokens, age, files waiting for embeddings) |
+| `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix tokenmap` | Directory tree weighted by token count, heaviest paths first (`--format html`) |
-| `tokenix benchmark` | Reproducible token-reduction and retrieval-quality benchmark, vanilla vs tokenix (`--json`) |
+| `tokenix benchmark` | Reproducible token-reduction benchmark, vanilla vs tokenix (`--json`) |
 | `tokenix filter list\|active\|generate\|record\|verify` | Browse, generate, record and golden-test output filters |
 
 | `tokenix prompt-audit` | Audit MCP/tool token weight across agents (`--agent`, `--recommend`, `--profile-impact`, `--json`) |
@@ -434,7 +411,7 @@ has the full evidence review.
 | `tokenix egress-audit` | Scan agent transcripts for external DNS/IP destinations, checked against local reputation lists |
 | `tokenix artifacts list\|show` | Context artifacts from `.tokenix/artifacts.json` |
 | `tokenix cycles` | Detect circular dependencies (Tarjan's SCC) |
-| `tokenix rebuild-graph` | Rebuild graph tables from existing chunks without re-embedding |
+| `tokenix rebuild-graph` | Rebuild graph tables from existing chunks from the stored chunks |
 | `tokenix generate-ignores` | Write `.gitignore` entries for tokenix artifacts |
 
 When you open `tokenix` in a terminal, it checks GitHub releases in the background
@@ -459,21 +436,20 @@ Checks are skipped in CI, piped commands, hooks, and agent-facing commands. Set
 <details>
 <summary><b>Flags and environment variables</b></summary>
 
-**Global:** `--only-cpu` forces CPU embedding. `--no-tui` (or `TOKENIX_NO_TUI=1`)
+**Global:** `--no-tui` (or `TOKENIX_NO_TUI=1`)
 prints plain text instead of opening the dashboard.
 
 **Environment:**
 
 | Variable | Effect |
 |---|---|
-| `TOKENIX_HOME` | Absolute path that replaces `~/.tokenix` (indexes, hook log, trust store, daemon token, recall stash). Relative values are ignored. Useful for CI and throwaway runs |
+| `TOKENIX_HOME` | Absolute path that replaces `~/.tokenix` (indexes, hook log, trust store, recall stash). Relative values are ignored. Useful for CI and throwaway runs |
 | `TOKENIX_DISABLED=1` | Bypass the hook for one command |
 | `TOKENIX_RAW=1` | Same as `tokenix run --raw` |
 | `TOKENIX_MAX_OUTPUT_TOKENS` | Global output ceiling (default 8000, `0` disables) |
 | `TOKENIX_BRANCH_AWARE=true` | One SQLite DB per git branch |
-| `TOKENIX_EMBED_MODEL` | Embedding model id (see below) |
 | `TOKENIX_GREP_HEAD_LIMIT` | `head_limit` injected into unbounded Grep (default 100, `0` disables) |
-| `TOKENIX_AUTO_REFRESH=0` | Turn off the inline refresh before retrieval commands |
+| `TOKENIX_AUTO_REFRESH=0` | Turn off the inline refresh before index commands |
 | `TOKENIX_AUTO_REFRESH_MAX` | Dirty-file count above which the inline refresh is skipped (default 25) |
 | `TOKENIX_DEDUP=0` · `TOKENIX_DEDUP_MIN_TOKENS` · `TOKENIX_DEDUP_TTL` | Cross-call dedup of identical output (defaults: on, 200 tokens, 3600 s; scoped to the project) |
 | `TOKENIX_READ_DEDUP=0` · `TOKENIX_READ_DEDUP_TTL` · `TOKENIX_READ_DEDUP_MIN_TOKENS` | Re-read suppression (defaults: on, 900 s, 1500 tokens; scoped to the agent session) |
@@ -481,28 +457,11 @@ prints plain text instead of opening the dashboard.
 | `TOKENIX_AUTO_UPDATE=1\|0\|notify` | Control auto-update behavior (`1`/`install` auto-updates in background; `0` disables checks) |
 | `TOKENIX_NO_UPDATE=1` | Disable all update checks and auto-updates |
 
-**`tokenix index`:** `--force/-f`, `--no-embed`, `--cpu-profile <low|default|max>`,
-`--jobs N`, `--embed-batch N` (default 16 CPU / 64 GPU), `--if-stale`, `--path/-p`,
-`--model <id>`, `--no-low-priority` (indexing runs at below-normal priority by
+**`tokenix index`:** `--force/-f`, `--cpu-profile <low|default|max>`,
+`--jobs N`, `--if-stale`, `--path/-p`, `--no-low-priority` (indexing runs at below-normal priority by
 default).
 
-**Embedding model:** the default is `nomic-v1.5` (768d). Choose another with
-`tokenix index --model <id>` or `TOKENIX_EMBED_MODEL=<id>`; `tokenix doctor` lists
-the ids (`nomic-v1.5`, `bge-small`, `bge-base`, `minilm-l6`, `e5-small`,
-`jina-code`). `bge-small` (384d) indexes faster, `e5-small` is multilingual and
-`jina-code` is code-specialized. The model is stamped into the index and read back
-at query time, so search always uses the model the index was built with. An
-explicit switch re-embeds everything.
-
-**`tokenix query`:** `--budget/-b` (1200), `--k` (20), `--file/-f`, `--link`
-(cross-project, repeatable), `--json`, `--path/-p`
-
-**`tokenix context`:** `--mode <plan|debug|audit|security|review>`, `--budget/-b`
-(1200), `--max-files`, `--budget-breakdown`, `--json`, `--path/-p`
-
 **`tokenix symbols`:** `--limit/-l` (20), `--kind/-k`, `--json`, `--path/-p`
-
-**`tokenix grep`:** `--limit/-l` (20), `--ignore-case/-i`, `--file/-f`, `--path/-p`
 
 **`tokenix deps`:** `--reverse`, `--transitive`, `--json`, `--path/-p`
 
@@ -518,7 +477,7 @@ explicit switch re-embeds everything.
 
 **`tokenix export-index` / `import-index`:** `--output/-o` and `--input/-i` (default
 `.tokenix/index.db.gz`), `--force` on import to replace a newer local index. The
-snapshot is a compacted copy of the index with the local embedding cache stripped.
+snapshot is a compacted copy of the index (legacy embedding tables are dropped).
 Import refuses anything that is not a tokenix index, keeps the previous DB as
 `*.pre-import.bak`, and keeps the snapshot's git fingerprint so `tokenix index`
 only has to catch up on the diff.
@@ -549,7 +508,7 @@ exist. Rules are TOML `[[rules]]` (`id`, `pattern`, optional `capture` /
 
 **`tokenix prompt-audit`:** `--agent`, `--json`, `--recommend`, `--profile-impact`
 
-**`tokenix benchmark`:** `--budget N` (1200), `--json`, `--refresh-index`, `--cases FILE`
+**`tokenix benchmark`:** `--json`, `--refresh-index`
 
 </details>
 
@@ -630,22 +589,16 @@ truncated.
                  ▼                  ▼                  ▼
           ┌────────────┐     ┌────────────┐     ┌────────────┐
           │ SQLite     │     │  Symbol    │     │  Output    │
-          │ FTS5 +     │     │  graph +   │     │  filters   │
-          │ int8 vecs  │     │  PageRank  │     │  (TOML)    │
+          │ chunks     │     │  graph +   │     │  filters   │
+          │            │     │  PageRank  │     │  (TOML)    │
           └────────────┘     └────────────┘     └────────────┘
 ```
 
-- **Storage:** one SQLite DB per project under `~/.tokenix/`, with int8-quantized
-  embeddings and FTS5 for lexical search. Semantic and lexical results are fused
-  with reciprocal-rank fusion.
-- **Embeddings:** in-process ONNX via `fastembed`. `tokenix serve` is optional. It
-  keeps the model in RAM and answers over `127.0.0.1`, authenticated with a
-  capability token in `~/.tokenix/daemon.token` (owner-only, regenerated on every
-  start). Loopback alone would let any other local account read your indexed
-  source.
-- **GPU (opt-in):** DirectML on Windows (use the `-directml` asset), CUDA 12.x +
-  cuDNN 9.x on Linux/Windows when built with `--features cuda`. `tokenix doctor`
-  reports what it detects.
+- **Storage:** one SQLite DB per project under `~/.tokenix/`: chunks and the
+  symbol graph. There is no search engine, no embeddings, no model and no
+  background daemon: the agent's own grep stays the way to find text. Indexes
+  built by older versions drop their vector and full-text tables on the next
+  `tokenix index`.
 - **Fail-open contract:** the hook exits `0` (pass) on any error, a missing or
   stale index, or even a panic. It exits `2` only to intercept, and never exits `1`.
 
@@ -655,7 +608,7 @@ truncated.
 
 - **Your code stays local.** Indexing, search and interception make no network
   calls. The network is used for:
-  - the one-time model download from Hugging Face, pinned to a commit SHA;
+  - the self-updater, which talks to this repo's GitHub releases only;
   - `tokenix filter generate`, which sends your recorded (redacted) output to an AI
     CLI **you** have installed, and asks before it re-runs any command.
 - **Repositories are untrusted by default.** A repo's `.tokenix/filters`,
@@ -683,11 +636,11 @@ truncated.
 |---|---|
 | `No index found` | Run `tokenix index .` in the repository root. The nearest indexed directory counts as the project root, even when a parent directory has a `package.json`. |
 | The agent still reads whole files | Open `tokenix` → **Stats** tab and check that your agent shows as installed. Only code files of ≥ 200 lines are outlined, only when that saves ≥ 30%, and never when the agent passes `offset`/`limit`. After a branch switch, re-index: a stale index makes the hook pass everything through. |
-| Search misses something I just wrote | It should not: edits are re-chunked before each query. If more than 25 files changed, run `tokenix index` (or raise `TOKENIX_AUTO_REFRESH_MAX`). |
+| A symbol I just wrote is missing | It should not: edits are re-chunked before each command. If more than 25 files changed, run `tokenix index` (or raise `TOKENIX_AUTO_REFRESH_MAX`). |
 | A repo filter is ignored | Run `tokenix trust --status`. Repo filters need `tokenix trust`, and an edit revokes it. |
 | Output was cut and I need all of it | Run `tokenix retrieve <key>` from the `[tokenix: ...]` marker, or `tokenix run --raw`. |
-| First index is slow or the machine stalls | Use `tokenix index --cpu-profile low` or a smaller `--embed-batch`. `tokenix index --no-embed` gives you graph and text search in seconds, and the embeddings can follow later. |
-| Offline or air-gapped | Copy the model cache from a connected machine (`tokenix doctor` prints its path), or use `--no-embed` and lexical search only. |
+| First index is slow or the machine stalls | Use `tokenix index --cpu-profile low`. |
+| Offline or air-gapped | Nothing to download: the only network use is the self-updater (`TOKENIX_NO_UPDATE=1` disables it). |
 | Remove everything | `tokenix remove-hook --tool all`, then delete `~/.tokenix` (or your `TOKENIX_HOME`). |
 
 ---
@@ -696,7 +649,7 @@ truncated.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). `./scripts/verify.sh` runs every CI gate
 locally, in CI order: fmt, clippy, unit, golden and end-to-end tests, release build
-and the homologation scripts. Add `--models` for the ONNX-backed tests. It never
+and the homologation scripts. It never
 touches your real `~/.tokenix`. New filters need at least two golden cases, and
 [`AGENTS.md`](AGENTS.md) lists the engine rules a change must not break.
 

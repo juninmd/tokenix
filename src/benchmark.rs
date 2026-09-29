@@ -1,14 +1,11 @@
 use anyhow::Result;
 use colored::Colorize;
-use serde::Deserialize;
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::chunker::{count_tokens, generate_outline, should_index};
 
 use crate::indexer;
-use crate::query::{build_task_context, query_index};
 use crate::store::index_staleness;
 
 struct ReadRow {
@@ -37,70 +34,16 @@ struct WorkflowRow {
     quality_ok: bool,
 }
 
-struct QueryCase {
-    label: String,
-    query: String,
-    expected_paths: Vec<String>,
-}
-
-struct QueryRow {
-    label: String,
-    query: String,
-    tokens: usize,
-    latency_ms: u128,
-    top_files: Vec<String>,
-    hit_top1: bool,
-    hit_top3: bool,
-}
-
-#[derive(Clone)]
-struct ContextBenchCase {
-    label: String,
-    task: String,
-    expected_paths: Vec<String>,
-}
-
-struct ContextArmRow {
-    label: String,
-    arm: &'static str,
-    tokens: Option<usize>,
-    latency_ms: Option<u128>,
-    quality_ok: Option<bool>,
-    note: &'static str,
-}
-
-#[derive(Deserialize)]
-struct BenchCases {
-    #[serde(default)]
-    context: Vec<BenchContextCase>,
-}
-
-#[derive(Deserialize)]
-struct BenchContextCase {
-    label: String,
-    task: String,
-    expected_path: String,
-    #[serde(default)]
-    acceptable_paths: Vec<String>,
-}
-
-pub fn run_benchmark(
-    repo_root: &Path,
-    refresh_index: bool,
-    query_budget: usize,
-    cases_path: Option<&Path>,
-    json_out: bool,
-) -> Result<()> {
+pub fn run_benchmark(repo_root: &Path, refresh_index: bool, json_out: bool) -> Result<()> {
     if json_out {
-        return run_benchmark_json(repo_root, refresh_index, query_budget, cases_path);
+        return run_benchmark_json(repo_root, refresh_index);
     }
 
     println!();
     println!("{}", "=== tokenix real benchmark ===".bold());
     println!(
         "{}",
-        "Measures token reduction and retrieval quality using the actual index/search code."
-            .dimmed()
+        "Measures token reduction using the actual outline, symbol and filter code.".dimmed()
     );
     println!();
 
@@ -121,13 +64,11 @@ pub fn run_benchmark(
     } else if index_needs_refresh(repo_root) {
         println!(
             "{}",
-            "Index is stale or missing; benchmark will use available metadata only. Pass --refresh-index to re-embed."
+            "Index is stale or missing; benchmark will use available metadata only. Pass --refresh-index to re-index."
                 .yellow()
         );
         println!();
     }
-
-    let context_cases = load_context_bench_cases(cases_path)?;
 
     let read_rows = measure_read_reduction(repo_root)?;
     print_read_reduction(&read_rows);
@@ -135,34 +76,20 @@ pub fn run_benchmark(
     let workflow_rows = measure_targeted_workflows(repo_root)?;
     print_targeted_workflows(&workflow_rows);
 
-    let query_rows = measure_semantic_quality(repo_root, query_budget, &context_cases)?;
-    print_semantic_quality(&query_rows, query_budget);
-
-    let context_rows = measure_context_homologation(repo_root, &context_cases)?;
-    print_context_homologation(&context_rows);
-
     let cmd_rows = measure_command_compression(repo_root)?;
     print_command_compression(&cmd_rows);
 
-    print_verdict(&read_rows, &workflow_rows, &query_rows, &cmd_rows);
+    print_verdict(&read_rows, &workflow_rows, &cmd_rows);
     print_internal_graph_stats(repo_root)?;
     Ok(())
 }
 
-fn run_benchmark_json(
-    repo_root: &Path,
-    refresh_index: bool,
-    query_budget: usize,
-    cases_path: Option<&Path>,
-) -> Result<()> {
+fn run_benchmark_json(repo_root: &Path, refresh_index: bool) -> Result<()> {
     if refresh_index {
         let _ = indexer::index_repo(repo_root, false, |_| {})?;
     }
-    let context_cases = load_context_bench_cases(cases_path)?;
     let read_rows = measure_read_reduction(repo_root)?;
     let workflow_rows = measure_targeted_workflows(repo_root)?;
-    let query_rows = measure_semantic_quality(repo_root, query_budget, &context_cases)?;
-    let context_rows = measure_context_homologation(repo_root, &context_cases)?;
     let cmd_rows = measure_command_compression(repo_root)?;
     let out = serde_json::json!({
         "read_saved_pct": saved_pct(
@@ -173,12 +100,6 @@ fn run_benchmark_json(
             workflow_rows.iter().map(|r| r.raw_tokens).sum(),
             workflow_rows.iter().map(|r| r.total_tokens).sum(),
         ),
-        "hit_top3": query_rows.iter().filter(|r| r.hit_top3).count(),
-        "query_cases": query_rows.len(),
-        "context_budget_violations": context_rows
-            .iter()
-            .filter(|r| r.arm == "tokenix" && r.tokens.is_some_and(|t| t > 1200))
-            .count(),
         "command_saved_pct": saved_pct(
             cmd_rows.iter().map(|r| r.vanilla).sum(),
             cmd_rows.iter().map(|r| r.tokenix).sum(),
@@ -186,176 +107,6 @@ fn run_benchmark_json(
     });
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
-}
-
-fn default_context_bench_cases() -> Vec<ContextBenchCase> {
-    vec![
-        ContextBenchCase {
-            label: "Hook fail-open".to_string(),
-            task: "how does hook fail open when index is stale or missing".to_string(),
-            expected_paths: vec!["src/hook.rs".to_string()],
-        },
-        ContextBenchCase {
-            label: "Chunking".to_string(),
-            task: "how are rust files chunked into symbols and outlines".to_string(),
-            expected_paths: vec!["src/chunker.rs".to_string()],
-        },
-        ContextBenchCase {
-            label: "Database repo".to_string(),
-            task: "postgres transaction pool user repository pagination".to_string(),
-            expected_paths: vec!["benchmark/samples/database_client.ts".to_string()],
-        },
-        ContextBenchCase {
-            label: "Compression".to_string(),
-            task: "how does cargo output compression keep errors".to_string(),
-            expected_paths: vec!["src/compress.rs".to_string()],
-        },
-        ContextBenchCase {
-            label: "Vector search".to_string(),
-            task: "how is cosine similarity vector search implemented over sqlite blobs"
-                .to_string(),
-            expected_paths: vec!["src/store.rs".to_string()],
-        },
-        ContextBenchCase {
-            label: "Savings analytics".to_string(),
-            task: "how are token savings computed from the hook event log".to_string(),
-            expected_paths: vec!["src/gain.rs".to_string(), "src/store.rs".to_string()],
-        },
-        ContextBenchCase {
-            label: "Python auth".to_string(),
-            task: "python jwt bearer token validation refresh revocation role guard".to_string(),
-            expected_paths: vec!["benchmark/samples/auth_middleware.py".to_string()],
-        },
-        ContextBenchCase {
-            label: "Go middleware".to_string(),
-            task: "go http auth middleware bearer token rate limiting handler".to_string(),
-            expected_paths: vec!["benchmark/samples/api_handler.go".to_string()],
-        },
-    ]
-}
-
-fn load_context_bench_cases(cases_path: Option<&Path>) -> Result<Vec<ContextBenchCase>> {
-    let Some(path) = cases_path else {
-        return Ok(default_context_bench_cases());
-    };
-    let raw = std::fs::read_to_string(path)?;
-    let cases: BenchCases = toml::from_str(&raw)?;
-    if cases.context.is_empty() {
-        return Ok(default_context_bench_cases());
-    }
-    Ok(cases
-        .context
-        .into_iter()
-        .map(|case| {
-            let mut expected_paths = vec![case.expected_path];
-            expected_paths.extend(case.acceptable_paths);
-            expected_paths.sort();
-            expected_paths.dedup();
-            ContextBenchCase {
-                label: case.label,
-                task: case.task,
-                expected_paths,
-            }
-        })
-        .collect())
-}
-
-fn measure_context_homologation(
-    repo_root: &Path,
-    cases: &[ContextBenchCase],
-) -> Result<Vec<ContextArmRow>> {
-    let mut rows = Vec::new();
-    for case in cases {
-        let expected_path = case
-            .expected_paths
-            .first()
-            .map(String::as_str)
-            .unwrap_or_default();
-        let expected_file = repo_root.join(expected_path);
-        let start = Instant::now();
-        let vanilla = std::fs::read_to_string(&expected_file).unwrap_or_default();
-        rows.push(ContextArmRow {
-            label: case.label.clone(),
-            arm: "vanilla",
-            tokens: Some(count_tokens(&vanilla)),
-            latency_ms: Some(start.elapsed().as_millis()),
-            quality_ok: Some(!vanilla.is_empty()),
-            note: "full expected file",
-        });
-
-        let start = Instant::now();
-        let tokenix = build_task_context(repo_root, &case.task, 1200, 2).unwrap_or_default();
-        rows.push(ContextArmRow {
-            label: case.label.clone(),
-            arm: "tokenix",
-            tokens: Some(count_tokens(&tokenix)),
-            latency_ms: Some(start.elapsed().as_millis()),
-            quality_ok: Some(matches_expected_path(&tokenix, &case.expected_paths)),
-            note: "context --budget 1200",
-        });
-    }
-    Ok(rows)
-}
-
-fn matches_expected_path(output: &str, expected_paths: &[String]) -> bool {
-    expected_paths.iter().any(|path| output.contains(path))
-}
-
-fn print_context_homologation(rows: &[ContextArmRow]) {
-    println!("{}", "4. Context Homologation: Vanilla vs tokenix".bold());
-    println!(
-        "  {:<18} {:<10} {:>9} {:>8} {:>7}  Note",
-        "Case", "Arm", "Tokens", "ms", "OK"
-    );
-    println!("  {}", "-".repeat(86).dimmed());
-    for row in rows {
-        let tokens = row
-            .tokens
-            .map(|t| format_num(t as i64))
-            .unwrap_or_else(|| "n/a".to_string());
-        let latency = row
-            .latency_ms
-            .map(|ms| ms.to_string())
-            .unwrap_or_else(|| "n/a".to_string());
-        let ok = row
-            .quality_ok
-            .map(|ok| if ok { "yes".green() } else { "no".red() }.to_string())
-            .unwrap_or_else(|| "n/a".to_string());
-        println!(
-            "  {:<18} {:<10} {:>9} {:>8} {:>7}  {}",
-            truncate(&row.label, 18),
-            row.arm,
-            tokens,
-            latency,
-            ok,
-            row.note.dimmed()
-        );
-    }
-
-    println!("  {}", "-".repeat(86).dimmed());
-    for arm in ["vanilla", "tokenix"] {
-        let arm_rows: Vec<&ContextArmRow> = rows
-            .iter()
-            .filter(|row| row.arm == arm && row.tokens.is_some())
-            .collect();
-        if arm_rows.is_empty() {
-            continue;
-        }
-        let token_sum: usize = arm_rows.iter().filter_map(|row| row.tokens).sum();
-        let hits = arm_rows
-            .iter()
-            .filter(|row| row.quality_ok == Some(true))
-            .count();
-        println!(
-            "  {:<18} {:<10} {:>9} {:>8} {:>7}",
-            "TOTAL",
-            arm,
-            format_num(token_sum as i64),
-            "",
-            format!("{hits}/{}", arm_rows.len())
-        );
-    }
-    println!();
 }
 
 struct CmdRow {
@@ -649,109 +400,6 @@ fn symbol_content(path: &str, content: &str, symbol: &str) -> String {
         .join("\n")
 }
 
-fn measure_semantic_quality(
-    repo_root: &Path,
-    query_budget: usize,
-    context_cases: &[ContextBenchCase],
-) -> Result<Vec<QueryRow>> {
-    let cases = if context_cases.is_empty() {
-        default_query_cases()
-    } else {
-        context_cases
-            .iter()
-            .map(|case| QueryCase {
-                label: case.label.clone(),
-                query: case.task.clone(),
-                expected_paths: case.expected_paths.clone(),
-            })
-            .collect()
-    };
-
-    let mut rows = Vec::new();
-    for case in cases {
-        let start = Instant::now();
-        let results =
-            query_index(repo_root, &case.query, query_budget, 20, None)?.unwrap_or_default();
-        let latency_ms = start.elapsed().as_millis();
-        let tokens: usize = results.iter().map(|r| r.token_count).sum();
-        let top_files = unique_files(results.iter().map(|r| r.path.as_str()));
-        let hit_top1 = top_files
-            .first()
-            .map(|p| path_expected(p, &case.expected_paths))
-            .unwrap_or(false);
-        let hit_top3 = top_files
-            .iter()
-            .take(3)
-            .any(|p| path_expected(p, &case.expected_paths));
-
-        rows.push(QueryRow {
-            label: case.label,
-            query: case.query,
-            tokens,
-            latency_ms,
-            top_files,
-            hit_top1,
-            hit_top3,
-        });
-    }
-    Ok(rows)
-}
-
-fn default_query_cases() -> Vec<QueryCase> {
-    vec![
-        QueryCase {
-            label: "Hook behavior".to_string(),
-            query: "how does hook fail open when index is stale or missing".to_string(),
-            expected_paths: vec!["src/hook.rs".to_string()],
-        },
-        QueryCase {
-            label: "Chunking".to_string(),
-            query: "how are rust files chunked into symbols and outlines".to_string(),
-            expected_paths: vec!["src/chunker.rs".to_string()],
-        },
-        QueryCase {
-            label: "Vector search".to_string(),
-            query: "how is cosine similarity search implemented in sqlite".to_string(),
-            expected_paths: vec!["src/store.rs".to_string()],
-        },
-        QueryCase {
-            label: "Savings analytics".to_string(),
-            query: "how are token savings calculated from hook log".to_string(),
-            expected_paths: vec!["src/gain.rs".to_string(), "src/store.rs".to_string()],
-        },
-        QueryCase {
-            label: "Output compression".to_string(),
-            query: "how does cargo output compression keep errors".to_string(),
-            expected_paths: vec!["src/compress.rs".to_string()],
-        },
-        QueryCase {
-            label: "Authentication sample".to_string(),
-            query: "jwt validation refresh token revocation role dependency".to_string(),
-            expected_paths: vec!["benchmark/samples/auth_middleware.py".to_string()],
-        },
-        QueryCase {
-            label: "Database sample".to_string(),
-            query: "postgres transaction pool user repository pagination".to_string(),
-            expected_paths: vec!["benchmark/samples/database_client.ts".to_string()],
-        },
-    ]
-}
-
-fn unique_files<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
-    for path in paths {
-        if seen.insert(path.to_string()) {
-            out.push(path.to_string());
-        }
-    }
-    out
-}
-
-fn path_expected(path: &str, expected: &[String]) -> bool {
-    expected.iter().any(|candidate| candidate == path)
-}
-
 fn print_read_reduction(rows: &[ReadRow]) {
     println!("{}", "1. Read Interception: Gross Token Reduction".bold());
     if rows.is_empty() {
@@ -856,69 +504,11 @@ fn print_targeted_workflows(rows: &[WorkflowRow]) {
     println!();
 }
 
-fn print_semantic_quality(rows: &[QueryRow], query_budget: usize) {
-    println!("{}", "3. Semantic Search Quality".bold());
-    println!(
-        "  Budget: {} tokens/query. Hit@1 means the first returned file is expected; Hit@3 allows the first three files.",
-        format_num(query_budget as i64)
-    );
-    println!(
-        "  {:<22} {:>8} {:>8} {:>7} {:>7}  Top files",
-        "Case", "Tokens", "ms", "Hit@1", "Hit@3"
-    );
-    println!("  {}", "-".repeat(104).dimmed());
-
-    let mut hit1 = 0usize;
-    let mut hit3 = 0usize;
-    for row in rows {
-        if row.hit_top1 {
-            hit1 += 1;
-        }
-        if row.hit_top3 {
-            hit3 += 1;
-        }
-        let top = row
-            .top_files
-            .iter()
-            .take(3)
-            .map(|p| truncate(p, 28))
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!(
-            "  {:<22} {:>8} {:>8} {:>7} {:>7}  {}",
-            truncate(&row.label, 22),
-            format_num(row.tokens as i64),
-            row.latency_ms,
-            yes_no(row.hit_top1),
-            yes_no(row.hit_top3),
-            top
-        );
-        println!("    {}", row.query.dimmed());
-    }
-
-    println!("  {}", "-".repeat(104).dimmed());
-    println!(
-        "  {:<22} {:>8} {:>8} {:>7} {:>7}",
-        "TOTAL",
-        "",
-        "",
-        format!("{}/{}", hit1, rows.len()),
-        format!("{}/{}", hit3, rows.len())
-    );
-    println!();
-}
-
-fn print_verdict(
-    read_rows: &[ReadRow],
-    workflow_rows: &[WorkflowRow],
-    query_rows: &[QueryRow],
-    cmd_rows: &[CmdRow],
-) {
+fn print_verdict(read_rows: &[ReadRow], workflow_rows: &[WorkflowRow], cmd_rows: &[CmdRow]) {
     let read_raw: usize = read_rows.iter().map(|r| r.raw_tokens).sum();
     let read_outline: usize = read_rows.iter().map(|r| r.outline_tokens).sum();
     let flow_raw: usize = workflow_rows.iter().map(|r| r.raw_tokens).sum();
     let flow_tokenix: usize = workflow_rows.iter().map(|r| r.total_tokens).sum();
-    let hit3 = query_rows.iter().filter(|r| r.hit_top3).count();
     let cmd_vanilla: usize = cmd_rows.iter().map(|r| r.vanilla).sum();
     let cmd_tokenix: usize = cmd_rows.iter().map(|r| r.tokenix).sum();
 
@@ -946,11 +536,6 @@ fn print_verdict(
         saved_pct(cmd_vanilla, cmd_tokenix),
         format_num((cmd_vanilla.saturating_sub(cmd_tokenix)) as i64)
     );
-    println!(
-        "  Semantic search found an expected file in the top 3 for {}/{} labeled queries.",
-        hit3,
-        query_rows.len()
-    );
     println!();
 }
 
@@ -977,14 +562,6 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}~", s.chars().take(keep).collect::<String>())
 }
 
-fn yes_no(value: bool) -> colored::ColoredString {
-    if value {
-        "yes".green()
-    } else {
-        "no".red()
-    }
-}
-
 fn format_num(n: i64) -> String {
     let s = n.to_string();
     let mut out = String::new();
@@ -1009,33 +586,8 @@ mod tests {
     }
 
     #[test]
-    fn matches_expected_path_checks_substring() {
-        let expected = vec!["src/hook.rs".to_string()];
-        assert!(matches_expected_path(
-            "see src/hook.rs:88 for detail",
-            &expected
-        ));
-        assert!(!matches_expected_path("see src/query.rs", &expected));
-    }
-
-    #[test]
     fn format_num_groups_thousands() {
         assert_eq!(format_num(1_234_567), "1,234,567");
         assert_eq!(format_num(42), "42");
-    }
-
-    #[test]
-    fn default_cases_cover_multiple_languages() {
-        let cases = default_context_bench_cases();
-        assert!(cases.len() >= 8, "expected broadened scenario set");
-        let paths: String = cases
-            .iter()
-            .flat_map(|c| c.expected_paths.iter())
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(" ");
-        for needle in ["src/store.rs", ".py", ".go", ".ts", ".rs"] {
-            assert!(paths.contains(needle), "missing coverage for {needle}");
-        }
     }
 }

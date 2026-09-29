@@ -5,7 +5,6 @@ mod chunker;
 mod cmd_filter;
 mod compress;
 mod conversation_audit;
-mod daemon;
 mod discover;
 /// Documentation screenshots are a test-time artifact, so this never ships in
 /// the binary. See `tui::tests::render_docs_svg`.
@@ -13,7 +12,6 @@ mod discover;
 mod docshot;
 mod doctor;
 mod egress_scan;
-mod embed;
 mod filters;
 mod freshness;
 mod gain;
@@ -26,7 +24,6 @@ mod mcp_proxy;
 mod memory;
 mod modules;
 mod pack;
-mod query;
 mod recall;
 mod recordings;
 mod secrets_scan;
@@ -51,14 +48,13 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[command(
     name = "tokenix",
     version = VERSION,
-    about = "Local semantic index for LLM token optimization",
+    about = "Local code index and output filters for LLM token optimization",
     help_template = HELP_TEMPLATE
 )]
 struct Cli {
-    /// Force CPU-only embedding, skipping the GPU even on a GPU-enabled build.
-    /// GPU (DirectML/CUDA) is used by default when compiled with that support.
-    #[arg(long, global = true)]
-    only_cpu: bool,
+    /// No-op, kept so existing scripts that pass it keep working.
+    #[arg(long = "only-cpu", global = true, hide = true)]
+    _only_cpu: bool,
 
     /// Print plain text instead of opening the interactive shell. Human report
     /// commands (stats, doctor, gain, usage, tokenmap, graph, scan-secrets,
@@ -76,16 +72,16 @@ struct Cli {
 /// block is intentionally omitted so commands can be grouped by audience.
 const HELP_TEMPLATE: &str = "{before-help}{usage-heading} {usage}{after-help}";
 
-/// CPU usage profile for indexing. Embedding batch size (which drives peak
-/// memory) stays bounded across all profiles; profiles mainly scale thread use.
+/// CPU usage profile for indexing: scales the number of chunking worker
+/// threads.
 #[derive(Clone, Copy, ValueEnum, Debug, Default)]
 enum CpuProfile {
-    /// 1 worker, 1 ONNX thread, tiny batches — minimal footprint.
+    /// 1 worker thread — minimal footprint.
     Low,
-    /// Use available cores with a bounded ONNX thread count (safe default).
+    /// Use all available cores (safe default).
     #[default]
     Default,
-    /// Use cores aggressively (higher ONNX thread cap) for strong machines.
+    /// Same as default; kept for existing scripts.
     Max,
 }
 
@@ -253,7 +249,7 @@ impl EgressGroupBy {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Index a repository for semantic search
+    /// Index a repository (chunks and symbol graph)
     Index {
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -273,78 +269,25 @@ enum Commands {
             help = "Max rayon worker threads for chunking/search during indexing"
         )]
         jobs: Option<usize>,
-        #[arg(long, help = "Embedding batch size for indexing")]
-        embed_batch: Option<usize>,
         #[arg(
             long,
-            help = "Embedding model id (e.g. nomic-v1.5, bge-small). See `tokenix doctor`"
+            hide = true,
+            help = "No-op, kept so existing scripts keep working"
         )]
-        model: Option<String>,
-        #[arg(long, help = "Update file chunks and symbol graph without embedding")]
         no_embed: bool,
+        #[arg(
+            long = "embed-batch",
+            hide = true,
+            help = "No-op, kept for existing scripts"
+        )]
+        _embed_batch: Option<usize>,
+        #[arg(long = "model", hide = true, help = "No-op, kept for existing scripts")]
+        _model: Option<String>,
         #[arg(
             long,
             help = "Keep normal process priority (default lowers it so indexing never starves the PC)"
         )]
         no_low_priority: bool,
-    },
-    /// Semantic search over the indexed repository
-    Query {
-        text: String,
-        #[arg(short, long, default_value_t = 1200)]
-        budget: usize,
-        #[arg(long, default_value_t = 20)]
-        k: usize,
-        #[arg(short, long, help = "Filter to specific file path")]
-        file: Option<String>,
-        #[arg(long, help = "Cross-project search: additional project path(s)")]
-        link: Vec<String>,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
-        json: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Exact regex/literal search over indexed content (no embedding)
-    Grep {
-        pattern: String,
-        #[arg(short, long, default_value_t = 20)]
-        limit: usize,
-        #[arg(short = 'i', long, help = "Case-insensitive match")]
-        ignore_case: bool,
-        #[arg(short, long, help = "Filter to specific file path")]
-        file: Option<String>,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Build focused task context in one call
-    Context {
-        task: String,
-        #[arg(long, value_enum, default_value = "plan")]
-        mode: query::ContextMode,
-        #[arg(short, long, default_value_t = 1200)]
-        budget: usize,
-        #[arg(long, default_value_t = 4)]
-        max_files: usize,
-        #[arg(long, help = "Print per-section token breakdown to stderr")]
-        budget_breakdown: bool,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
-        json: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Explore related symbols and source in one graph-aware call
-    Explore {
-        query: String,
-        #[arg(short, long, default_value_t = 1200)]
-        budget: usize,
-        #[arg(long, default_value_t = 8)]
-        max_symbols: usize,
-        #[arg(long, help = "Print per-section token breakdown to stderr")]
-        budget_breakdown: bool,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
-        json: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
     },
     /// Store or list user preference memory
     Memory {
@@ -589,20 +532,12 @@ enum Commands {
         #[arg(short, long, help = "Write pack output to a file instead of stdout")]
         output: Option<PathBuf>,
     },
-    /// Run a reproducible token-savings and retrieval-quality benchmark
+    /// Run a reproducible token-savings benchmark
     Benchmark {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
         #[arg(long, help = "Refresh index metadata before measuring")]
         refresh_index: bool,
-        #[arg(
-            long,
-            default_value_t = 1200,
-            help = "Token budget for semantic queries"
-        )]
-        budget: usize,
-        #[arg(long, help = "TOML file with project-specific benchmark cases")]
-        cases: Option<PathBuf>,
         #[arg(long, help = "Emit machine-readable benchmark summary")]
         json: bool,
     },
@@ -651,9 +586,9 @@ enum Commands {
         /// Output update status in JSON format
         #[arg(long)]
         json: bool,
-        /// On Windows, install the DirectML GPU-accelerated variant
-        #[arg(long)]
-        directml: bool,
+        /// No-op, kept so existing update scripts keep working
+        #[arg(long = "directml", hide = true)]
+        _directml: bool,
         /// Target a specific version tag (e.g. "v0.64.1") instead of latest
         #[arg(long)]
         version: Option<String>,
@@ -683,22 +618,7 @@ enum Commands {
         )]
         output: String,
     },
-    /// Start the background embedding daemon (keeps model in memory)
-    Serve {
-        #[arg(
-            long,
-            help = "TCP port to listen on (default: 47392 or $TOKENIX_DAEMON_PORT)"
-        )]
-        port: Option<u16>,
-    },
-    /// Stop the background embedding daemon
-    Stop,
-    /// Inspect or control the background embedding daemon
-    Daemon {
-        #[command(subcommand)]
-        action: DaemonAction,
-    },
-    /// Diagnose embedding backend, GPU availability, model cache, and daemon
+    /// Diagnose the install: bundled/user filters and recording sessions
     Doctor,
     /// Trust this repo's .tokenix/filters so they are applied (SHA-256 pinned)
     Trust {
@@ -877,16 +797,6 @@ enum ArtifactsAction {
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
-}
-
-#[derive(Subcommand)]
-enum DaemonAction {
-    /// Show daemon state: pid, port, uptime, model, cache size
-    Status,
-    /// Stop the running daemon
-    Stop,
-    /// Stop (if running) and start a fresh daemon
-    Restart,
 }
 
 #[derive(Subcommand)]
@@ -1200,9 +1110,6 @@ fn should_check_update_on_start(command: Option<&Commands>) -> bool {
                 | Commands::Mcp { .. }
                 | Commands::McpProxy { .. }
                 | Commands::Run { .. }
-                | Commands::Query { .. }
-                | Commands::Grep { .. }
-                | Commands::Context { .. }
                 | Commands::Pack { .. }
                 | Commands::Read { .. }
                 | Commands::Retrieve { .. }
@@ -1227,10 +1134,6 @@ fn main() -> Result<()> {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
-
-    // Must be set before the embedding model is first initialized.
-    let only_cpu = cli.only_cpu;
-    crate::embed::set_force_cpu(only_cpu);
 
     // `--no-tui` is just the flag form of the env every nested tokenix already
     // honors, so a single check covers both the flag and self-exec'd children.
@@ -1279,68 +1182,19 @@ fn main() -> Result<()> {
             if_stale,
             cpu_profile,
             jobs,
-            embed_batch,
-            model,
-            no_embed,
+            no_embed: _,
+            _embed_batch: _,
+            _model: _,
             no_low_priority,
         } => {
-            if let Some(model) = model.as_deref() {
-                if !crate::embed::is_known_model(model) {
-                    let ids: Vec<&str> = crate::embed::MODELS.iter().map(|m| m.id).collect();
-                    anyhow::bail!("unknown --model '{model}'. Available: {}", ids.join(", "));
-                }
-                crate::embed::set_active_model(model);
-                set_env_override("TOKENIX_EMBED_MODEL", model);
-            }
-            configure_index_limits(cpu_profile, only_cpu, jobs, embed_batch);
+            configure_index_limits(cpu_profile, jobs);
             // PC-friendliness: indexing is the one long CPU-bound run; drop to
             // below-normal priority unless the user opts out (flag or env).
             if !no_low_priority && std::env::var_os("TOKENIX_FOREGROUND").is_none() {
                 indexer::lower_process_priority();
             }
-            cmd_index(&path, force, if_stale, no_embed)
+            cmd_index(&path, force, if_stale)
         }
-        Commands::Query {
-            text,
-            budget,
-            k,
-            file,
-            link,
-            json,
-            path,
-        } => cmd_query(&text, budget, k, file.as_deref(), &link, json, &path),
-        Commands::Grep {
-            pattern,
-            limit,
-            ignore_case,
-            file,
-            path,
-        } => cmd_grep(&pattern, limit, ignore_case, file.as_deref(), &path),
-        Commands::Context {
-            task,
-            mode,
-            budget,
-            max_files,
-            budget_breakdown,
-            json,
-            path,
-        } => cmd_context(
-            &task,
-            mode,
-            budget,
-            max_files,
-            budget_breakdown,
-            json,
-            &path,
-        ),
-        Commands::Explore {
-            query,
-            budget,
-            max_symbols,
-            budget_breakdown,
-            json,
-            path,
-        } => cmd_explore(&query, budget, max_symbols, budget_breakdown, json, &path),
         Commands::Memory { action } => cmd_memory(action),
         Commands::Read {
             file,
@@ -1465,12 +1319,10 @@ fn main() -> Result<()> {
         Commands::Benchmark {
             path,
             refresh_index,
-            budget,
-            cases,
             json,
         } => {
             let repo_root = find_repo_root(&path);
-            benchmark::run_benchmark(&repo_root, refresh_index, budget, cases.as_deref(), json)
+            benchmark::run_benchmark(&repo_root, refresh_index, json)
         }
         Commands::InstallHook { tool, local } => cmd_install_hook(tool, local),
         Commands::InstallBinary => cmd_install_binary(),
@@ -1481,7 +1333,7 @@ fn main() -> Result<()> {
             enable_auto,
             disable_auto,
             json,
-            directml,
+            _directml: _,
             version,
             target_path,
             check_background,
@@ -1492,7 +1344,6 @@ fn main() -> Result<()> {
             enable_auto,
             disable_auto,
             json,
-            directml,
             version: version.clone(),
             target_path: target_path.clone(),
             check_background,
@@ -1504,24 +1355,6 @@ fn main() -> Result<()> {
             format,
             output,
         } => cmd_tokenmap(&path, &format, &output),
-        Commands::Serve { port } => {
-            // Set before any handler thread exists. `build_text_embedding` also
-            // sets it lazily, but there it runs while other handler threads may
-            // be reading the environment — `set_var` concurrent with `var` is UB.
-            #[allow(unused_unsafe)]
-            unsafe {
-                if std::env::var("OMP_NUM_THREADS").is_err() {
-                    std::env::set_var("OMP_NUM_THREADS", "1");
-                }
-            }
-            daemon::run_serve(port)
-        }
-        Commands::Stop => daemon::run_stop(),
-        Commands::Daemon { action } => match action {
-            DaemonAction::Status => daemon::run_status(),
-            DaemonAction::Stop => daemon::run_stop(),
-            DaemonAction::Restart => daemon::run_restart(),
-        },
         Commands::Doctor => doctor::run_doctor(),
         Commands::Filter { action } => {
             let repo_root = find_repo_root(&PathBuf::from("."));
@@ -1678,12 +1511,10 @@ fn main() -> Result<()> {
         },
         Commands::Hook => {
             // Hook is a short-lived subprocess: limit thread pools before any init.
-            // OMP_NUM_THREADS controls ONNX Runtime threads on Windows (MS prebuilt uses OpenMP).
             // RAYON_NUM_THREADS prevents rayon from spawning N_CPU worker threads.
             // SAFETY: single-threaded here, no other threads spawned yet.
             #[allow(unused_unsafe)]
             unsafe {
-                std::env::set_var("OMP_NUM_THREADS", "1");
                 std::env::set_var("RAYON_NUM_THREADS", "1");
             }
             if let Err(e) = guard_hook(|| hook::run_hook(false)) {
@@ -1694,7 +1525,6 @@ fn main() -> Result<()> {
         Commands::HookAntigravity => {
             #[allow(unused_unsafe)]
             unsafe {
-                std::env::set_var("OMP_NUM_THREADS", "1");
                 std::env::set_var("RAYON_NUM_THREADS", "1");
             }
             if let Err(e) = guard_hook(|| hook::run_hook(true)) {
@@ -1721,7 +1551,6 @@ fn main() -> Result<()> {
         Commands::Mcp { profile } => {
             #[allow(unused_unsafe)]
             unsafe {
-                std::env::set_var("OMP_NUM_THREADS", "1");
                 std::env::set_var("RAYON_NUM_THREADS", "1");
             }
             let profile = match profile {
@@ -1780,46 +1609,18 @@ fn set_env_override(key: &str, value: impl ToString) {
     }
 }
 
-fn configure_index_limits(
-    profile: CpuProfile,
-    only_cpu: bool,
-    jobs: Option<usize>,
-    embed_batch: Option<usize>,
-) {
+fn configure_index_limits(profile: CpuProfile, jobs: Option<usize>) {
     if matches!(profile, CpuProfile::Low) {
         set_env_override("RAYON_NUM_THREADS", jobs.unwrap_or(1).max(1));
-        set_env_override("OMP_NUM_THREADS", 1);
-        set_env_override("TOKENIX_EMBED_BATCH", embed_batch.unwrap_or(8).max(1));
         return;
     }
-
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    let rayon_threads = jobs.unwrap_or(cpus).max(1);
-    set_env_default("RAYON_NUM_THREADS", rayon_threads);
-    // Cap ONNX OpenMP threads: `default` stays conservative; `max` lets a
-    // strong CPU use more cores. Memory is bounded by batch size, not threads.
-    let omp_cap = match profile {
-        CpuProfile::Max => 16,
-        _ => 8,
-    };
-    set_env_default("OMP_NUM_THREADS", rayon_threads.min(omp_cap));
-
-    // Embedding batch size drives ONNX peak memory (the historical PC-freeze
-    // cause on CPU). Keep CPU small (≈2.8 GB RAM) and GPU moderate (fits 8 GB
-    // VRAM). GPU build run with --only-cpu falls back to the CPU default.
-    let gpu_active = cfg!(any(feature = "cuda", feature = "directml")) && !only_cpu;
-    if let Some(batch) = embed_batch {
-        set_env_override("TOKENIX_EMBED_BATCH", batch.max(1));
-    } else if gpu_active {
-        set_env_default("TOKENIX_EMBED_BATCH", 64);
-    } else {
-        set_env_default("TOKENIX_EMBED_BATCH", 16);
-    }
+    set_env_default("RAYON_NUM_THREADS", jobs.unwrap_or(cpus).max(1));
 }
 
-fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result<()> {
+fn cmd_index(path: &Path, force: bool, if_stale: bool) -> Result<()> {
     if !path.exists() {
         eprintln!(
             "{} Path does not exist: {}",
@@ -1831,9 +1632,7 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result
 
     if if_stale && !force {
         let staleness = store::index_staleness(&repo_root);
-        // A fresh index can still owe embeddings to files an inline refresh wrote
-        // as text only, and this is the run that pays that debt.
-        if !staleness.stale && store::pending_embed_count(&repo_root) == 0 {
+        if !staleness.stale {
             return Ok(());
         }
     }
@@ -1848,7 +1647,10 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result
     let mut progress = |msg: &str| println!("  {}", msg);
     let (result, stats) = indexer::index_repo_with_options(
         &repo_root,
-        indexer::IndexOptions { force, no_embed },
+        indexer::IndexOptions {
+            force,
+            inline: false,
+        },
         &mut progress,
     )?;
 
@@ -1866,37 +1668,6 @@ fn cmd_index(path: &Path, force: bool, if_stale: bool, no_embed: bool) -> Result
         stats.chunks,
         format_num(stats.total_tokens)
     );
-    Ok(())
-}
-
-fn cmd_context(
-    task: &str,
-    mode: query::ContextMode,
-    budget: usize,
-    max_files: usize,
-    breakdown: bool,
-    json: bool,
-    path: &Path,
-) -> Result<()> {
-    let repo_root = find_repo_root(path);
-    freshness::refresh_and_announce(&repo_root);
-    let out = query::build_task_context_with_mode(&repo_root, task, mode, budget, max_files)?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "task": task,
-                "budget": budget,
-                "tokens": chunker::count_tokens(&out),
-                "context": out,
-            }))?
-        );
-        return Ok(());
-    }
-    println!("{}", out);
-    if breakdown {
-        print_budget_breakdown(&out, budget);
-    }
     Ok(())
 }
 
@@ -2047,52 +1818,6 @@ fn cmd_artifacts_show(path: &Path, name: &str) -> Result<()> {
     crate::artifacts::show_artifact(&repo_root, name)
 }
 
-/// Print a per-section token breakdown of a generated context to stderr, so the
-/// agent-facing stdout stays clean. Shared by `context` and `explore`.
-fn print_budget_breakdown(context: &str, budget: usize) {
-    let sections = query::budget_breakdown(context);
-    let total: usize = sections.iter().map(|(_, t)| *t).sum();
-    eprintln!("\ntokenix budget breakdown ({total}/{budget} tokens):");
-    for (section, tokens) in &sections {
-        let pct = if total > 0 {
-            (*tokens as f64 / total as f64) * 100.0
-        } else {
-            0.0
-        };
-        eprintln!("  {section:<22} {tokens:>6}  ({pct:.0}%)");
-    }
-}
-
-fn cmd_explore(
-    query_text: &str,
-    budget: usize,
-    max_symbols: usize,
-    breakdown: bool,
-    json: bool,
-    path: &Path,
-) -> Result<()> {
-    let repo_root = find_repo_root(path);
-    freshness::refresh_and_announce(&repo_root);
-    let out = query::build_explore_context(&repo_root, query_text, budget, max_symbols)?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "query": query_text,
-                "budget": budget,
-                "tokens": chunker::count_tokens(&out),
-                "context": out,
-            }))?
-        );
-        return Ok(());
-    }
-    println!("{}", out);
-    if breakdown {
-        print_budget_breakdown(&out, budget);
-    }
-    Ok(())
-}
-
 fn cmd_memory(action: MemoryAction) -> Result<()> {
     match action {
         MemoryAction::Add {
@@ -2181,71 +1906,6 @@ fn selected_memory_scopes(global: bool, project: bool) -> Vec<memory::Preference
     } else {
         vec![memory::PreferenceScope::Project]
     }
-}
-
-fn cmd_query(
-    text: &str,
-    budget: usize,
-    k: usize,
-    file: Option<&str>,
-    link: &[String],
-    json: bool,
-    path: &Path,
-) -> Result<()> {
-    if k == 0 {
-        anyhow::bail!("k must be >= 1");
-    }
-    let repo_root = find_repo_root(path);
-    freshness::refresh_and_announce(&repo_root);
-
-    // Cross-project search: include linked projects
-    if !link.is_empty() {
-        let mut roots: Vec<PathBuf> = vec![repo_root.clone()];
-        for link_path in link {
-            roots.push(find_repo_root(Path::new(link_path)));
-        }
-        let root_refs: Vec<&Path> = roots.iter().map(|p| p.as_path()).collect();
-        let results = query::query_index_multi(&root_refs, text, budget, k, file)?
-            .ok_or_else(|| anyhow::anyhow!("No indexed projects found. Run: tokenix index"))?;
-        print_search_results(&results, text, json)?;
-        return Ok(());
-    }
-
-    // Try to query via daemon if it's running. The daemon returns pre-formatted
-    // text, so JSON output takes the direct path instead.
-    if !json {
-        if let Some(output) = daemon::daemon_search(&repo_root, text, k, budget, file) {
-            println!("{}", output);
-            return Ok(());
-        }
-    }
-
-    let results = query::query_index(&repo_root, text, budget, k, file)?
-        .ok_or_else(|| anyhow::anyhow!("Index not found. Run: tokenix index"))?;
-    print_search_results(&results, text, json)?;
-    Ok(())
-}
-
-fn print_search_results(results: &[store::SearchResult], text: &str, json: bool) -> Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(results)?);
-    } else {
-        println!("{}", query::format_results(results, text));
-    }
-    Ok(())
-}
-
-fn cmd_grep(
-    pattern: &str,
-    limit: usize,
-    ignore_case: bool,
-    file: Option<&str>,
-    path: &Path,
-) -> Result<()> {
-    let conn = open_existing_index(path)?;
-    let results = store::search_regex(&conn, pattern, limit, file, ignore_case)?;
-    println!("{}", query::format_results(&results, pattern));
-    Ok(())
 }
 
 fn open_existing_index(path: &Path) -> Result<rusqlite::Connection> {
@@ -2393,11 +2053,9 @@ fn cmd_export_index(output: Option<&Path>, path: &Path) -> Result<()> {
         report.output.display()
     );
     println!(
-        "  {} files, {} chunks, {} embeddings, model {} — {}",
+        "  {} files, {} chunks — {}",
         format_num(report.files),
         format_num(report.chunks),
-        format_num(report.embeddings),
-        report.model,
         ui::format_bytes(report.bytes)
     );
     if let Some(head) = report.head {
@@ -2425,11 +2083,9 @@ fn cmd_import_index(input: Option<&Path>, force: bool, path: &Path) -> Result<()
         report.target.display()
     );
     println!(
-        "  {} files, {} chunks, {} embeddings, model {}",
+        "  {} files, {} chunks",
         format_num(report.files),
         format_num(report.chunks),
-        format_num(report.embeddings),
-        report.model
     );
     if let Some(version) = report.created_by {
         println!("  written by tokenix {version}");
@@ -3751,7 +3407,7 @@ fn install_copilot(local: bool) -> Result<()> {
         // copilot-instructions.md — workspace custom instructions (committed to repo)
         let instructions_path = github_dir.join("copilot-instructions.md");
         let instructions = format!(
-            r#"# tokenix - Semantic Context Tool
+            r#"# tokenix - Code Index Tool
 
 This repository is indexed by **tokenix** for token-efficient code understanding.
 
@@ -3760,7 +3416,7 @@ This repository is indexed by **tokenix** for token-efficient code understanding
 Use tokenix first whenever you need code context:
 
 ```bash
-tokenix query "what you need to understand"
+tokenix symbols <name>
 tokenix read <file>
 tokenix read <file> --symbol <name>
 tokenix read <file> --lines N-M
@@ -3771,8 +3427,8 @@ Do not call the native full-file Read tool on large files first. Use `tokenix re
 ## High-signal examples
 
 ```bash
-tokenix query "how does authentication work"
-tokenix query "where is JWT validated" --budget 2000
+tokenix symbols validate_token
+tokenix callers validate_token
 tokenix read src/auth/middleware.rs --symbol validate_token
 ```
 
@@ -3871,12 +3527,12 @@ fn install_codex() -> Result<()> {
     let marker = "<!-- tokenix -->";
     let block = format!(
         r#"{marker}
-## tokenix - Semantic Context Tool
+## tokenix - Code Index Tool
 
 This repo is indexed by tokenix. Use tokenix before reading full files:
 
 ```bash
-tokenix query "natural language query"
+tokenix symbols <name>
 tokenix read <file>
 tokenix read <file> --symbol <name>
 tokenix read <file> --lines N-M
@@ -3920,9 +3576,9 @@ tx-read() {{
     "{tokenix_bin}" read "$@"
 }}
 
-# tx-query: semantic search
-tx-query() {{
-    "{tokenix_bin}" query "$@"
+# tx-symbols: find indexed symbols
+tx-symbols() {{
+    "{tokenix_bin}" symbols "$@"
 }}
 "#
     );
@@ -3939,7 +3595,7 @@ tx-query() {{
 # Add to your $PROFILE: . ~/.codex/tokenix-init.ps1
 
 function tx-read {{ & "{tokenix_bin}" read @args }}
-function tx-query {{ & "{tokenix_bin}" query @args }}
+function tx-symbols {{ & "{tokenix_bin}" symbols @args }}
 "#
     );
     std::fs::write(&ps1_path, &ps1_content)?;
@@ -4502,15 +4158,6 @@ fn cmd_stats(path: &Path) -> Result<()> {
     ui::kv("chunks", &stats.chunks.to_string());
     ui::kv("tokens", &format_num(stats.total_tokens));
     ui::kv("age", &age_str);
-    // Files an inline refresh (or `--no-embed`) wrote as text only. They are
-    // searchable now; the next `tokenix index` gives them vectors back.
-    let pending = store::pending_embed_files(&conn);
-    if pending > 0 {
-        ui::kv(
-            "pending embed",
-            &format!("{pending} file(s) — run `tokenix index`"),
-        );
-    }
     println!();
     Ok(())
 }
@@ -4834,22 +4481,6 @@ fn banner() -> String {
 fn help_catalog() -> String {
     // (command, args, one-line description)
     let ai: &[(&str, &str, &str)] = &[
-        (
-            "context",
-            "<task>",
-            "Build focused task context in one call",
-        ),
-        (
-            "explore",
-            "<symbol>",
-            "Graph-aware related symbols + source",
-        ),
-        ("query", "<text>", "Semantic search over the indexed repo"),
-        (
-            "grep",
-            "<pattern>",
-            "Exact regex/literal search (no embedding)",
-        ),
         ("read", "<file>", "Smart reader: outline for large files"),
         ("symbols", "<name>", "Find indexed symbols by name or path"),
         ("callers", "<symbol>", "Symbols that call the target"),
@@ -4871,19 +4502,18 @@ fn help_catalog() -> String {
         ),
     ];
     let human: &[(&str, &str, &str)] = &[
-        ("index", "[path]", "Index a repository for semantic search"),
+        (
+            "index",
+            "[path]",
+            "Index a repository (chunks and symbol graph)",
+        ),
         (
             "install-hook",
             "",
             "Wire tokenix into Claude / Copilot / Codex / OpenCode / Antigravity",
         ),
         ("remove-hook", "", "Remove tokenix hooks"),
-        ("doctor", "", "Diagnose embedding backend, GPU, daemon"),
-        (
-            "serve / stop",
-            "",
-            "Run/stop the background embedding daemon",
-        ),
+        ("doctor", "", "Diagnose filters and recordings"),
         ("gain", "", "Token-savings analytics (--cost-estimate)"),
         ("stats", "", "Index statistics"),
         ("tokenmap", "", "Token counts per file/folder tree"),
@@ -4986,10 +4616,9 @@ fn help_catalog() -> String {
         "# AI agents — token-lean retrieval".dimmed()
     ));
     for ex in [
-        "tokenix context \"add rate limiting to the API\"",
-        "tokenix query \"where is JWT validated\" --budget 2000",
+        "tokenix symbols validate_token",
         "tokenix read src/auth.rs --symbol validate_token",
-        "tokenix explore TokenStore",
+        "tokenix impact TokenStore",
     ] {
         out.push_str(&format!("  {}\n", ui::accent(ex)));
     }
@@ -4998,7 +4627,7 @@ fn help_catalog() -> String {
         ("tokenix index .", "build the index"),
         ("tokenix install-hook --tool all", "wire into your AI tools"),
         ("tokenix gain --cost-estimate", "see tokens & $ saved"),
-        ("tokenix doctor", "check GPU / model / daemon"),
+        ("tokenix doctor", "check filters and recordings"),
     ] {
         out.push_str(&format!(
             "  {:<36} {}\n",
@@ -5008,9 +4637,7 @@ fn help_catalog() -> String {
     }
 
     out.push_str(&format!(
-        "\n{}  {}   {}  {}\n",
-        "Global:".bold(),
-        ui::accent("--only-cpu"),
+        "\n{}  {}\n",
         "Details:".bold(),
         ui::accent("tokenix <command> --help")
     ));
@@ -5039,7 +4666,9 @@ mod tests {
             "tokenix", "hook"
         ]))));
         assert!(!should_check_update_on_start(Some(&parse(&[
-            "tokenix", "query", "example"
+            "tokenix",
+            "read",
+            "src/main.rs"
         ]))));
         assert!(!should_check_update_on_start(Some(&parse(&[
             "tokenix", "update", "--check"
@@ -5163,13 +4792,10 @@ mod tests {
             vec!["tokenix", "hook-antigravity"],
             vec!["tokenix", "run", "cargo test"],
             vec!["tokenix", "mcp"],
-            vec!["tokenix", "query", "how does embedding work"],
-            vec!["tokenix", "context", "task"],
             vec!["tokenix", "read", "src/main.rs"],
             vec!["tokenix", "symbols", "run_hook"],
             vec!["tokenix", "pack"],
             vec!["tokenix", "index"],
-            vec!["tokenix", "serve"],
             vec!["tokenix", "retrieve", "abc123"],
             vec!["tokenix", "install-hook"],
             vec!["tokenix", "benchmark"],
