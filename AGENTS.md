@@ -53,7 +53,7 @@ so resolution never silently raises it.
 | `freshness.rs` | Inline pre-command refresh of dirty files (inline path), fails open |
 | `modules.rs` | Louvain community detection over `graph_edges` — `tokenix modules` |
 | `blast.rs` | Diff → changed symbols → reverse call graph (`tokenix blast`) |
-| `snapshot.rs` | `export-index` / `import-index` — gzipped `VACUUM INTO` copy for teams |
+| `snapshot.rs` | `export-index` / `import-index` — gzipped `VACUUM INTO` copy for teams; import caps decompressed size (2 GiB), holds the index lock and runs `integrity_check` before the swap |
 | `hook.rs` | `PreToolUse` handler — the interception decision tree |
 | `compress.rs` | Generic output compression, base64 redaction, token ceiling, EOL preservation; `run_hook_post` also redacts known secrets on every PostToolUse tool result via `secrets_scan::redact_known_secrets`, then emits `hookSpecificOutput.updatedToolOutput` for Claude Code/Codex |
 | `filters.rs` | `FilterDef` schema, filter resolution, `apply_filter_with_exit` |
@@ -87,7 +87,7 @@ binary. Keep this behavior documented in `README.md`.
 The GitHub token belongs only on the release API request, whose client forbids
 redirects. Asset URLs must be HTTPS links to this repo's release path and use an
 unauthenticated client; both the asset and `sha256sums.txt` are checked before a
-binary replacement.
+binary replacement. Downloads are capped: `sha256sums.txt` at 64 KB, the binary at min(`asset.size`, 512 MB).
 
 ## SQLite schema
 
