@@ -10,6 +10,45 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const GITHUB_REPO: &str = "juninmd/tokenix";
 const USER_AGENT: &str = concat!("tokenix/", env!("CARGO_PKG_VERSION"));
 const CACHE_TTL_SECS: u64 = 86400; // 24 hours
+/// A checksum manifest is a few hundred bytes; 64 KB is generous.
+const MAX_CHECKSUM_BYTES: u64 = 64 * 1024;
+/// Hard ceiling on a release binary, applied on top of the declared asset size.
+const MAX_BINARY_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Read at most `cap` bytes as UTF-8 text; a longer body is an error, not a truncation.
+fn read_text_capped<R: Read>(reader: R, cap: u64) -> Result<String> {
+    let mut buf = Vec::new();
+    reader.take(cap + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > cap {
+        anyhow::bail!("response exceeds the {cap}-byte limit");
+    }
+    String::from_utf8(buf).map_err(|_| anyhow!("response is not valid UTF-8"))
+}
+
+/// Stream `reader` into `writer`, hashing as it goes; fails once more than `cap` bytes arrive.
+fn copy_hashed_capped<R: Read, W: Write>(mut reader: R, mut writer: W, cap: u64) -> Result<String> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        let n = reader
+            .read(&mut buffer)
+            .with_context(|| "Error reading download stream")?;
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        if total > cap {
+            anyhow::bail!("download exceeds the {cap}-byte limit");
+        }
+        hasher.update(&buffer[..n]);
+        writer
+            .write_all(&buffer[..n])
+            .with_context(|| "Error writing to temporary file")?;
+    }
+    writer.flush()?;
+    Ok(hex::encode(hasher.finalize()))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
@@ -680,14 +719,16 @@ fn download_and_install_release(
     if !quiet {
         println!("Fetching sha256sums.txt...");
     }
-    let checksums_raw = client
-        .get(checksum_url)
-        .send()
-        .with_context(|| "Failed to download sha256sums.txt")?
-        .error_for_status()
-        .with_context(|| "GitHub returned an error for sha256sums.txt")?
-        .text()
-        .with_context(|| "Failed to read sha256sums.txt content")?;
+    let checksums_raw = read_text_capped(
+        client
+            .get(checksum_url)
+            .send()
+            .with_context(|| "Failed to download sha256sums.txt")?
+            .error_for_status()
+            .with_context(|| "GitHub returned an error for sha256sums.txt")?,
+        MAX_CHECKSUM_BYTES,
+    )
+    .with_context(|| "Failed to read sha256sums.txt content")?;
 
     let expected_hash = parse_sha256sums(&checksums_raw, asset_name)
         .ok_or_else(|| anyhow!("Asset '{asset_name}' not found in release checksums file"))?;
@@ -725,25 +766,16 @@ fn download_and_install_release(
         )
     })?;
 
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-
-    loop {
-        let bytes_read = response
-            .read(&mut buffer)
-            .with_context(|| "Error reading download stream")?;
-        if bytes_read == 0 {
-            break;
+    let cap = binary_asset.size.min(MAX_BINARY_BYTES);
+    let calculated_hash = match copy_hashed_capped(&mut response, &mut temp_file, cap) {
+        Ok(h) => h,
+        Err(e) => {
+            drop(temp_file);
+            let _ = std::fs::remove_file(&temp_file_path);
+            return Err(e);
         }
-        hasher.update(&buffer[..bytes_read]);
-        temp_file
-            .write_all(&buffer[..bytes_read])
-            .with_context(|| "Error writing to temporary file")?;
-    }
-    temp_file.flush()?;
+    };
     drop(temp_file);
-
-    let calculated_hash = hex::encode(hasher.finalize());
     if calculated_hash != expected_hash {
         let _ = std::fs::remove_file(&temp_file_path);
         anyhow::bail!(
@@ -996,6 +1028,25 @@ pub fn run_update(opts: UpdateOptions) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_checksum_body_is_rejected() {
+        let ok = vec![b'a'; 100];
+        assert!(read_text_capped(&ok[..], 100).is_ok());
+        let big = vec![b'a'; 101];
+        assert!(read_text_capped(&big[..], 100).is_err());
+    }
+
+    #[test]
+    fn download_beyond_declared_size_is_rejected() {
+        let data = vec![7u8; 1000];
+        let mut sink = Vec::new();
+        assert!(copy_hashed_capped(&data[..], &mut sink, 999).is_err());
+        let mut sink = Vec::new();
+        let hash = copy_hashed_capped(&data[..], &mut sink, 1000).unwrap();
+        assert_eq!(sink, data);
+        assert_eq!(hash.len(), 64);
+    }
 
     #[test]
     fn test_version_parse_and_compare() {
