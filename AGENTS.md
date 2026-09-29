@@ -10,8 +10,8 @@ User-facing docs live in `README.md`; this file is the engineering contract.
 
 ```bash
 cargo build --release
-cargo test --bin tokenix          # 469 unit + golden tests
-cargo test --tests                # + 31 end-to-end tests (one Windows-only) against the real binary
+cargo test --bin tokenix          # 487 unit + golden tests
+cargo test --tests                # + 38 end-to-end tests (one Windows-only) against the real binary
 cargo fmt --check                 # CI runs fmt FIRST — run it before pushing
 cargo clippy --all-targets --locked -- -D warnings
 ./scripts/verify.sh [--models]    # every CI gate locally, in CI order
@@ -327,7 +327,7 @@ shown there was run against the real binary; keep it that way.
 ## Output filters
 
 Resolution: `<repo>/.tokenix/filters` (trust-gated) → `~/.tokenix/filters` →
-bundled. Currently **528 filters / 1,150 golden cases**.
+bundled. Currently **534 filters / 1,167 golden cases**.
 
 **Hot path uses `load_filters_for_command()`, not `load_all_filters()`.** A
 prefilter narrows candidates before any regex compiles; `find_filter` matches via

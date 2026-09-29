@@ -296,7 +296,7 @@ open a UI.
 | **Stats** | Version, per-agent hook status, index summary, one-key actions: index repo · install hooks · install binary on PATH |
 | **Gain** | Tokens removed with a reduction bar, split by source and by command. `c` adds a ≈USD table at list input rates · `a` all projects · `r` refresh |
 | **Usage** | Absolute token spend and ≈USD cost from agent transcripts. `s` cycles daily · model · 5-hour blocks · project · session |
-| **Filters** | All 528 bundled filters by tool, with a live input → output preview and a per-filter token gauge |
+| **Filters** | All 534 bundled filters by tool, with a live input → output preview and a per-filter token gauge |
 | **Studio** | Record → preview → generate filters. Ranks the biggest unfiltered token sinks first (`⚠`), marks filtered commands (`✓`) and recordings (`●`) |
 | **Secrets** | Credentials found in agent transcripts, grouped by rule, attributed to repo + branch. `v` reveal · `c` copy · `x` redact |
 | **Egress** | External DNS/IP destinations in transcripts, checked against local reputation lists |
@@ -326,12 +326,14 @@ model.** The measurements are reproducible. They are *not* a claim about your bi
 
 | What | Baseline → tokenix | Tokens removed | Reproduce |
 |---|---|---|---|
-| Real sessions (7,807 hook calls) | 475,360 → 169,175 | **67.4%** | `tokenix gain` |
+| Real sessions (7,807 hook calls, one developer's machine) | 475,360 → 169,175 | **67.4%** | `tokenix gain` |
 | Read interception, 31 real files | 346,892 → 58,154 | **83.2%** | `tokenix benchmark` |
 | Task context vs reading the full file | 86,291 → 8,630 | **90.0%** | `tokenix benchmark` |
 | Outline + targeted symbol workflow | 55,020 → 17,384 | **68.4%** | `tokenix benchmark` |
 | Command filters, verbose output | 1,891 → 369 | **80.5%** | `cargo test verbose_real_output -- --nocapture` |
-| Command filters, full golden corpus (1,150 cases) | 46,804 → 27,728 | **40.8%** | `cargo test filters_deliver_aggregate_token_savings -- --nocapture` |
+| Command filters, full golden corpus (1,167 cases) | 46,804 → 27,728 | **40.8%** | `cargo test filters_deliver_aggregate_token_savings -- --nocapture` |
+
+Baselines assume the agent would have read the whole file; there is no holdout group, so these are token measurements, not a causal effect. The benchmark rows use a small synthetic set from this repo and `benchmark/samples`, not a foreign codebase.
 
 Retrieval quality is checked by the same benchmark:
 
@@ -340,7 +342,7 @@ Retrieval quality is checked by the same benchmark:
 | Expected file in the top 3 results (8 labeled queries) | **8/8** |
 | Expected file ranked #1 | 6/8 |
 | Budgeted context still contained the expected file | **8/8**, 0 budget violations |
-| Golden filter cases reproducing byte-exact expected output | **1,150/1,150** |
+| Golden filter cases reproducing byte-exact expected output | **1,167/1,167** |
 
 <details>
 <summary><b>Why there is no dollar figure, and how to read these numbers</b></summary>
@@ -555,7 +557,7 @@ exist. Rules are TOML `[[rules]]` (`id`, `pattern`, optional `capture` /
 
 ## 🔧 Output filters
 
-528 bundled filters, 1,150 golden cases. A filter matches a command and shapes its
+534 bundled filters, 1,167 golden cases. A filter matches a command and shapes its
 output:
 
 ```toml
