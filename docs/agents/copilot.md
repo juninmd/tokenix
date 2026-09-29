@@ -26,7 +26,7 @@ git commit -m "chore: wire tokenix into Copilot"
 | Scope | Files |
 |---|---|
 | Global (default) | `~/.copilot/hooks/tokenix.json` |
-| `--local` | `.github/hooks/hooks.json` and `.github/copilot-instructions.md`, which tells Copilot to prefer `tokenix query` / `tokenix read` |
+| `--local` | `.github/hooks/hooks.json` and `.github/copilot-instructions.md`, which tells Copilot to prefer `tokenix symbols` / `tokenix read` |
 
 Both hook files have the same shape:
 
@@ -50,7 +50,7 @@ tokenix maps it onto the same decisions Claude Code gets:
 | Copilot tool | Treated as | Result |
 |---|---|---|
 | `view`, `read` (`path`/`file` argument) | Read | Outline for large code files, pass-through otherwise |
-| `grep`, `grep_search` (`query`/`regex`/`search`) | Grep | Symbol lookup, semantic results or a `head_limit` cap |
+| `grep`, `grep_search` (`query`/`regex`/`search`) | Grep | Passes through, with a `head_limit` cap on unbounded content output |
 | Terminal commands | Bash | Filtered through `tokenix run` |
 | Any tool result (PostToolUse) | n/a | Known secrets redacted, noisy output compressed |
 

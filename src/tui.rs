@@ -1923,7 +1923,7 @@ impl Shell {
         ));
         lines.push(Line::from(""));
 
-        // Index capability: how many tokens are indexed for semantic search.
+        // Index capability: how many tokens are indexed.
         lines.push(Line::from("index".bold()));
         // Reuse the cached counts. Opening SQLite and re-running the stats
         // queries here blocked the event loop on every single frame — including

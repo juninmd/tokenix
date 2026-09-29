@@ -34,15 +34,15 @@ For every other client, add the entry to its MCP config by hand.
 
 | Profile | Tools |
 |---|---|
-| **full** | `tokenix_query`, `tokenix_context`, `tokenix_explore`, `tokenix_read`, `tokenix_symbols`, `tokenix_callers`, `tokenix_callees`, `tokenix_impact`, `tokenix_memory_add`, `tokenix_memory_list`, `tokenix_memory_remove`, `tokenix_memory_edit`, `tokenix_run`, `tokenix_gain` |
-| **slim** | `tokenix_context`, `tokenix_search_tools`, `tokenix_call` (`tokenix_call` reaches any full-profile tool by name) |
+| **full** | `tokenix_read`, `tokenix_symbols`, `tokenix_callers`, `tokenix_callees`, `tokenix_impact`, `tokenix_memory_add`, `tokenix_memory_list`, `tokenix_memory_remove`, `tokenix_memory_edit`, `tokenix_run`, `tokenix_gain` |
+| **slim** | `tokenix_search_tools`, `tokenix_call` (`tokenix_call` reaches any full-profile tool by name) |
 
 Every tool schema costs prompt tokens on every turn. Use `slim` when the client
 loads all MCP schemas up front, and `full` when it defers them.
 `tokenix prompt-audit --profile-impact` measures the difference for your agents.
 
 Each `tools/call` runs behind a panic guard, so one bad request cannot take the
-server down. The index is refreshed for edited files before retrieval tools
+server down. The index is refreshed for edited files before graph and read tools
 answer, just like the CLI.
 
 ## Compress another MCP server's output

@@ -100,8 +100,8 @@ else
 fi
 
 # Verify every expected subcommand appears in help
-EXPECTED_CMDS=(index query context explore symbols callers callees impact
-  read stats gain benchmark serve stop doctor install-hook remove-hook
+EXPECTED_CMDS=(index pack symbols callers callees impact
+  read stats gain benchmark doctor install-hook remove-hook
   filter memory hook hook-post mcp rebuild-graph)
 
 HELP_OUT=$("$TOKENIX" --help 2>&1)
@@ -115,9 +115,9 @@ done
 pass "all ${#EXPECTED_CMDS[@]} subcommands present in --help"
 
 # ---------------------------------------------------------------------------
-# 2. Index + query lifecycle
+# 2. Index lifecycle
 # ---------------------------------------------------------------------------
-section "Index / query lifecycle"
+section "Index lifecycle"
 
 REPO="$TMPDIR_ROOT/repo"
 mkdir -p "$REPO/src"
@@ -152,12 +152,12 @@ This is a test repository for tokenix homologation.
 It contains arithmetic utilities and a greeting function.
 MD
 
-# Index (CPU, no-embed for speed — validates file walk + chunker, skips ONNX download)
-INDEX_OUT=$("$TOKENIX" index "$REPO" --no-embed --cpu-profile low 2>&1)
+# Index (validates file walk + chunker)
+INDEX_OUT=$("$TOKENIX" index "$REPO" --cpu-profile low 2>&1)
 if echo "$INDEX_OUT" | grep -qE "^error:|thread.*main.*panicked|Error:"; then
-  fail "index --no-embed produced errors: $INDEX_OUT"
+  fail "index produced errors: $INDEX_OUT"
 else
-  pass "index --no-embed succeeds on synthetic repo"
+  pass "index succeeds on synthetic repo"
 fi
 
 # Stats should show files > 0
@@ -166,14 +166,6 @@ if echo "$STATS" | grep -qiE 'Files:[[:space:]]+[1-9]|Chunks:[[:space:]]+[1-9]';
   pass "stats reports indexed content"
 else
   fail "stats shows no content after index" "$STATS"
-fi
-
-# Query (no-embed index → should handle gracefully, not panic)
-QUERY_OUT=$("$TOKENIX" query "greet function" --path "$REPO" 2>&1 || true)
-if echo "$QUERY_OUT" | grep -qi "panic\|unwrap\|thread.*main"; then
-  fail "query panicked: $QUERY_OUT"
-else
-  pass "query exits without panic (no-embed expected)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -296,13 +288,6 @@ if echo "$DOCTOR_OUT" | grep -q "version"; then
 else
   fail "doctor output missing version field: $DOCTOR_OUT"
 fi
-
-if echo "$DOCTOR_OUT" | grep -q "Embedding model"; then
-  pass "doctor reports embedding model section"
-else
-  fail "doctor missing 'Embedding model' section"
-fi
-
 # ---------------------------------------------------------------------------
 # 8. install-hook / remove-hook (dry, local only)
 # ---------------------------------------------------------------------------
@@ -373,38 +358,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 10. Daemon lifecycle (optional — skips if port already in use)
-# ---------------------------------------------------------------------------
-section "daemon lifecycle"
-
-DAEMON_PORT=47399  # non-default to avoid conflict
-
-# Check if port is free
-if ! ss -ltn 2>/dev/null | grep -q ":$DAEMON_PORT "; then
-  "$TOKENIX" serve --port "$DAEMON_PORT" &
-  DAEMON_PID=$!
-  sleep 2
-
-  # Health check via nc
-  if command -v nc &>/dev/null; then
-    HEALTH=$(echo '{"type":"health"}' | nc -w 1 127.0.0.1 "$DAEMON_PORT" 2>/dev/null || true)
-    if echo "$HEALTH" | grep -q '"ok":true'; then
-      pass "daemon health check returns ok:true"
-    else
-      fail "daemon health check failed: $HEALTH"
-    fi
-  else
-    skip "daemon health check via nc" "nc not installed"
-  fi
-
-  kill "$DAEMON_PID" 2>/dev/null || true
-  wait "$DAEMON_PID" 2>/dev/null || true
-  pass "daemon started and stopped cleanly"
-else
-  skip "daemon lifecycle" "port $DAEMON_PORT already in use"
-fi
-
-# ---------------------------------------------------------------------------
 # 11. gain subcommand
 # ---------------------------------------------------------------------------
 section "gain"
@@ -431,22 +384,17 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 13. context / explore (no-embed graceful)
+# 13. pack
 # ---------------------------------------------------------------------------
-section "context / explore"
+section "pack"
 
-CTX_OUT=$("$TOKENIX" context "arithmetic utilities" --path "$REPO" 2>&1 || true)
-if echo "$CTX_OUT" | grep -qi "panic"; then
-  fail "context panicked"
+PACK_OUT=$("$TOKENIX" pack --budget 800 --path "$REPO" 2>&1 || true)
+if echo "$PACK_OUT" | grep -qi "panic"; then
+  fail "pack panicked"
+elif echo "$PACK_OUT" | grep -q "Repository Map"; then
+  pass "pack renders a repository map"
 else
-  pass "context exits without panic"
-fi
-
-EXP_OUT=$("$TOKENIX" explore "greet" --path "$REPO" 2>&1 || true)
-if echo "$EXP_OUT" | grep -qi "panic"; then
-  fail "explore panicked"
-else
-  pass "explore exits without panic"
+  fail "pack produced no repository map" "$PACK_OUT"
 fi
 
 # ---------------------------------------------------------------------------
