@@ -1733,6 +1733,11 @@ fn strip_cd_and_operators(mut argv: &[String]) -> &[String] {
                 argv = &argv[3..];
                 continue;
             }
+            // `cd /app; cmd` tokenizes the `;` glued to the directory.
+            if argv.len() >= 3 && argv[1].ends_with(';') {
+                argv = &argv[2..];
+                continue;
+            }
         }
         break;
     }
