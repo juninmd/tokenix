@@ -71,34 +71,27 @@ fn read_outlines_a_large_file_and_extracts_one_symbol_exactly() {
 }
 
 #[test]
-fn read_hook_outlines_large_files_and_passes_small_or_ranged_reads() {
+fn read_hook_never_replaces_a_read_with_an_outline_or_a_marker() {
     let sb = Sandbox::indexed("hook-read");
     let big = sb.path("src/billing.rs").to_string_lossy().into_owned();
-    let small = sb.path("src/main.rs").to_string_lossy().into_owned();
-
-    let whole = sb.hook("Read", json!({ "file_path": big }));
-    assert_eq!(
-        whole.code, 2,
-        "a whole read of a 232-line file is intercepted"
-    );
-    assert!(
-        whole.stderr.contains("[function] apply_tax"),
-        "{}",
-        whole.stderr
-    );
-    assert!(whole.stderr.lines().count() < line_count(&sb.path("src/billing.rs")));
-
+    // An outline hides comments, test bodies and every use of a name, and an
+    // A/B with an LLM showed multi-site edits going incomplete because of it.
+    // The same holds for the second read of an unchanged file: the agent gets
+    // the file, always.
+    for attempt in ["first", "second (unchanged)"] {
+        let run = sb.hook("Read", json!({ "file_path": big }));
+        assert_eq!(
+            run.code, 0,
+            "{attempt} whole read must pass: {}",
+            run.stderr
+        );
+        assert!(run.stderr.is_empty(), "{attempt}: {}", run.stderr);
+    }
     let ranged = sb.hook(
         "Read",
         json!({ "file_path": big, "offset": 1, "limit": 20 }),
     );
-    assert_eq!(
-        ranged.code, 0,
-        "an explicit range is what the agent asked for"
-    );
-
-    let short = sb.hook("Read", json!({ "file_path": small }));
-    assert_eq!(short.code, 0, "files under 200 lines pass through");
+    assert_eq!(ranged.code, 0);
 }
 
 #[test]

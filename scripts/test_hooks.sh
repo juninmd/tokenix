@@ -5,7 +5,7 @@
 #   bash scripts/test_hooks.sh [/path/to/tokenix]
 #
 # Tests every code path defined in hook.rs and compress.rs:
-#   hook     : unknown tool, Read pass-through (small/non-code/offset), Read intercept,
+#   hook     : unknown tool, Read pass-through (never intercepted),
 #              Grep pass-through (short/non-identifier/no-index), invalid JSON, BOM
 #   hook-post: invalid JSON, unknown tool, no response, Bash compress, no-op pass-through,
 #              ListDirectory compress, exit codes
@@ -190,32 +190,21 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════
-section "hook — Read intercept (large code file → outline, exit 2)"
+section "hook — Read is never intercepted (large code file, exit 0, no output)"
 
 run_hook '{"tool_name":"Read","tool_input":{"file_path":"src/large.rs"}}'
-if [ "$CODE" = "2" ]; then
-  pass "Read exits 2 (intercepted) for large .rs file"
+if [ "$CODE" = "0" ] && [ -z "$ERR" ]; then
+  pass "Read exits 0 with no output for a large .rs file"
 else
-  fail "Read exits $CODE for large .rs file (expected 2)" "stderr: $ERR"
+  fail "Read exits $CODE for a large .rs file (expected 0, silent)" "stderr: $ERR"
 fi
 
-# Outline must mention the file's line count.
-# Use a here-string (not `echo | grep -q`): under `set -o pipefail`, grep -q exits
-# on first match and SIGPIPEs the upstream echo, turning a successful match into a
-# pipeline failure (exit 141) — a race that grows with stderr size.
-if grep -qE '[0-9]+ lines|tokenix' <<<"$ERR"; then
-  pass "Read intercept stderr contains outline/tokenix message"
+# A second read of the same unchanged file must pass too (no re-read marker).
+run_hook '{"tool_name":"Read","tool_input":{"file_path":"src/large.rs"}}'
+if [ "$CODE" = "0" ] && [ -z "$ERR" ]; then
+  pass "second Read of an unchanged file exits 0 (no suppression)"
 else
-  fail "Read intercept stderr missing expected content" "got: $ERR"
-fi
-
-# Large .rs whose outline is not meaningfully smaller (many tiny symbols) →
-# passes through, because intercepting would lose tokens (outline + re-read).
-run_hook '{"tool_name":"Read","tool_input":{"file_path":"src/dense.rs"}}'
-if [ "$CODE" = "0" ]; then
-  pass "Read exits 0 for large .rs with low-savings outline"
-else
-  fail "Read exits $CODE for low-savings .rs file (expected 0)" "stderr: $ERR"
+  fail "second Read exits $CODE (expected 0, silent)" "stderr: $ERR"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════

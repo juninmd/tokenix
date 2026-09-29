@@ -1,7 +1,7 @@
 # tokenix with Claude Code
 
 Claude Code has the deepest integration. A native `PreToolUse` hook sees every
-`Read`, `Grep`, `Bash` and `PowerShell` call before it runs, with no prompt changes.
+`Grep`, `Bash` and `PowerShell` call before it runs, with no prompt changes.
 
 ## Install
 
@@ -19,7 +19,7 @@ One entry in `hooks.PreToolUse`. Other hooks in the file are left alone:
 
 ```json
 {
-  "matcher": "^(Read|Grep|Bash|PowerShell|grep_search|run_in_terminal)$",
+  "matcher": "^(Grep|Bash|PowerShell|grep_search|run_in_terminal)$",
   "hooks": [{ "type": "command", "command": "\"/abs/path/to/tokenix\" hook", "timeout": 10 }]
 }
 ```
@@ -31,15 +31,14 @@ move the binary, run `install-hook` again.
 
 | Claude calls | tokenix answers |
 |---|---|
-| `Read` of a code file ≥ 200 lines, no `offset`/`limit` | Symbol outline instead of the file (exit `2`, Claude reads the outline from stderr), only when it saves ≥ 30% |
-| `Read` with a range, or a small file | Passes through |
+| `Read` (any file) | Never intercepted |
 | `Grep` with unbounded `content` output | Adds `head_limit` (default 100) through `updatedInput` |
 | `Bash` matching a filter | Rewritten to `tokenix run '<cmd>'` through `updatedInput`, same exit code. On Windows it re-runs under the same Git Bash, so bash syntax keeps working |
 | `PowerShell` matching a filter | Rewritten to `& 'tokenix' run --shell pwsh '<cmd>'` |
 | Anything else, or no/stale index | Passes through (exit `0`) |
 
-Claude then asks for what it needs, typically `Read` with `offset`/`limit` or
-`tokenix read <file> --symbol <name>`.
+`tokenix read <file> --symbol <name>` and `tokenix symbols` stay available if Claude
+chooses to call them.
 
 > The installer wires `PreToolUse` only. `tokenix hook-post` (PostToolUse
 > redaction and compression) is not installed for Claude Code.
@@ -48,7 +47,7 @@ Claude then asks for what it needs, typically `Read` with `offset`/`limit` or
 
 ```bash
 echo '{"tool_name":"Read","tool_input":{"file_path":"src/big_file.rs"}}' | tokenix hook; echo "exit=$?"
-# exit=2 and an outline on stderr → interception works (use a ≥200-line code file)
+# exit=0 and no output: Read is never intercepted
 
 tokenix gain              # after a session: calls, intercepts, tokens removed
 tokenix gain --history    # recent hook decisions

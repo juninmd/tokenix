@@ -126,8 +126,8 @@ pub fn redact_secrets(content: &str) -> String {
 
 /// `deny_unknown_fields` for the same reason `FilterDef` has it: a typo'd key
 /// that silently does nothing is worse than a loud failure, because the user
-/// believes the setting is active. A misspelled `read_min_lines` left the hook
-/// on its 200-line default with no way to notice.
+/// believes the setting is active. A misspelled key left a setting
+/// on its default with no way to notice.
 #[derive(serde::Deserialize, Default, Clone)]
 #[serde(deny_unknown_fields)]
 struct ProjectConfig {
@@ -135,7 +135,9 @@ struct ProjectConfig {
     languages: std::collections::HashMap<String, String>,
     #[serde(default)]
     index: IndexConfig,
+    /// Parsed for compatibility only; see `HookConfig`.
     #[serde(default)]
+    #[allow(dead_code)]
     hook: HookConfig,
     #[serde(default)]
     update: UpdateConfig,
@@ -158,23 +160,16 @@ pub fn update_config() -> UpdateConfig {
     load_project_config().map(|c| c.update).unwrap_or_default()
 }
 
-/// `[hook]` section of `.tokenix.toml`. All fields optional; defaults live at
-/// the use sites in hook.rs so the fail-open contract is untouched.
+/// `[hook]` section of `.tokenix.toml`. Both keys are ignored now: Read and
+/// natural-language Grep are never intercepted. Kept so existing files
+/// (`deny_unknown_fields`) still parse.
 #[derive(serde::Deserialize, Default, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct HookConfig {
-    /// Read intercept: files with at least this many lines return an outline
-    /// instead of full content (default 200).
+    #[allow(dead_code)]
     pub read_min_lines: Option<usize>,
-    /// Ignored: Grep is no longer intercepted for natural-language patterns. Kept
-    /// so existing `.tokenix.toml` files (`deny_unknown_fields`) still parse.
     #[allow(dead_code)]
     pub grep_min_words: Option<usize>,
-}
-
-/// The resolved `[hook]` config for the current project (defaults if absent).
-pub fn hook_config() -> HookConfig {
-    load_project_config().map(|c| c.hook).unwrap_or_default()
 }
 
 /// `[index]` section of `.tokenix.toml`. All fields optional.

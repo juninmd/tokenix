@@ -1,7 +1,7 @@
 # tokenix with GitHub Copilot
 
-Copilot is the one agent that gets **both** hooks: `PreToolUse` intercepts reads,
-greps and commands, and `PostToolUse` (`tokenix hook-post`) redacts secrets and
+Copilot is the one agent that gets **both** hooks: `PreToolUse` caps greps and
+filters commands, and `PostToolUse` (`tokenix hook-post`) redacts secrets and
 compresses tool output before the model sees it.
 
 ## Install
@@ -49,7 +49,7 @@ tokenix maps it onto the same decisions Claude Code gets:
 
 | Copilot tool | Treated as | Result |
 |---|---|---|
-| `view`, `read` (`path`/`file` argument) | Read | Outline for large code files, pass-through otherwise |
+| `view`, `read` (`path`/`file` argument) | Read | Always passes through |
 | `grep`, `grep_search` (`query`/`regex`/`search`) | Grep | Passes through, with a `head_limit` cap on unbounded content output |
 | Terminal commands | Bash | Filtered through `tokenix run` |
 | Any tool result (PostToolUse) | n/a | Known secrets redacted, noisy output compressed |

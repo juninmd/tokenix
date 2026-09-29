@@ -32,12 +32,12 @@
 
 ---
 
-> ⚡ **tokenix** is a high-performance Rust CLI that sits directly between your AI coding agent and your repository. It indexes your codebase locally, and when an agent reaches for an unwieldy 1,500-line file or triggers a verbose 10,000-line test run, tokenix hands back only the symbol outline, targeted function, or pertinent errors.
+> ⚡ **tokenix** is a high-performance Rust CLI that sits directly between your AI coding agent and your repository. It indexes your codebase locally, and it never changes what the agent reads. It trims verbose command output (a 10,000-line test run keeps its errors) and offers a symbol graph and outlines the agent can call when it wants them.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Without tokenix:  Read(src/hook.rs)        → 1,518 lines  → 13,498 tokens (bloats context) │
-│ With tokenix:     tokenix read src/hook.rs → outline      →  2,395 tokens (82.3% saved!)   │
+│ Native Read(src/hook.rs)   → 1,518 lines  → 13,498 tokens (always allowed, untouched)   │
+│ tokenix read src/hook.rs   → outline      →  2,395 tokens (opt-in; omits usages/tests) │
 └─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -142,8 +142,7 @@ After `install-hook`, tokenix sees each tool call before it runs and decides:
 
 | The agent tries to… | tokenix does | Result |
 |---|---|---|
-| Read a code file of **≥ 200 lines** with no range | Returns a symbol outline (only when it saves ≥ 30%) | The agent sees the file's structure and asks for the function it needs |
-| Read a small file, or read with `offset`/`limit` | Nothing | The read happens as asked |
+| Read any file | Nothing: `Read` is never intercepted | The agent gets the file. A measured A/B showed outlines hiding usages during renames |
 | Grep, any pattern | Nothing (only the `head_limit` cap below) | The agent's own grep runs as asked |
 | Grep with unbounded content output | Adds `head_limit` (100 by default) | Output is capped |
 | Run a noisy command (`cargo test`, `terraform plan`, `git status` …) | Reruns it through `tokenix run` and the matching filter | Failures and summaries stay, noise goes, and the **exit code is the real one** |
@@ -227,9 +226,6 @@ Put a `.tokenix.toml` in the repository root. Unknown keys are reported, not
 silently ignored.
 
 ```toml
-[hook]
-read_min_lines = 120    # outline files from 120 lines instead of 200
-
 [index]
 exclude = ["fixtures", "vendor"]   # extra directories to skip
 extensions = ["proto"]             # extra extensions to index
@@ -320,7 +316,7 @@ model.** The measurements are reproducible. They are *not* a claim about your bi
 | What | Baseline → tokenix | Tokens removed | Reproduce |
 |---|---|---|---|
 | Real sessions (7,807 hook calls, one developer's machine) | 475,360 → 169,175 | **67.4%** | `tokenix gain` |
-| Read interception, 31 real files | 346,892 → 58,154 | **83.2%** | `tokenix benchmark` |
+| `tokenix read` outline vs the whole file, 31 real files (opt-in, not applied by the hook) | 346,892 → 58,154 | **83.2%** | `tokenix benchmark` |
 | Outline + targeted symbol workflow | 55,020 → 17,384 | **68.4%** | `tokenix benchmark` |
 | Command filters, verbose output | 1,891 → 369 | **80.5%** | `cargo test verbose_real_output -- --nocapture` |
 | Command filters, full golden corpus (1,167 cases) | 46,804 → 27,728 | **40.8%** | `cargo test filters_deliver_aggregate_token_savings -- --nocapture` |
@@ -395,7 +391,7 @@ has the full evidence review.
 | `tokenix install-binary` | Copy the running executable to a per-user bin dir and put it on PATH |
 | `tokenix update` | Check for, install, or toggle automatic updates from GitHub releases (`--check`, `--auto`, `--enable-auto`, `--disable-auto`) |
 | `tokenix doctor` | Diagnose the install: filter inventory, filter config and recording state |
-| `tokenix gain` | Tokens removed, split by source (Read interception vs command filters), plus session shape. Dollar estimates only with `--cost-estimate` / `--economics` |
+| `tokenix gain` | Tokens removed, split by source (command filters vs Grep cap), plus session shape. Dollar estimates only with `--cost-estimate` / `--economics` |
 | `tokenix discover` | Replay current filters over past agent output: recoverable savings plus uncovered commands (`--agent`, `--top`, `--json`) |
 | `tokenix trust` / `untrust` | Approve (SHA-256 pinned) or revoke this repo's executable inputs (`--status`) |
 | `tokenix usage` | Absolute token spend and ≈USD from agent transcripts (`daily\|weekly\|monthly\|session\|model\|project\|blocks`, `--all-projects`, `--statusline`, `--json`) |
@@ -427,7 +423,7 @@ Checks are skipped in CI, piped commands, hooks, and agent-facing commands. Set
 
 | Command | Description |
 |---|---|
-| `tokenix hook` | `PreToolUse` handler: intercepts large reads, greps and noisy commands |
+| `tokenix hook` | `PreToolUse` handler: caps unbounded Grep output and filters noisy commands (never touches `Read`) |
 | `tokenix hook-post` | `PostToolUse` handler: redacts secrets and compresses tool output (agents whose install wires it, see the [agent guides](#-agent-guides)) |
 | `tokenix run "CMD"` | Run a command and compress its output (`--shell`, `--path/-p`, `--raw`) |
 | `tokenix mcp` | MCP server exposing context, read/search, graph and gain tools (`--profile slim\|full`) |
@@ -635,7 +631,7 @@ truncated.
 | Symptom | Fix |
 |---|---|
 | `No index found` | Run `tokenix index .` in the repository root. The nearest indexed directory counts as the project root, even when a parent directory has a `package.json`. |
-| The agent still reads whole files | Open `tokenix` → **Stats** tab and check that your agent shows as installed. Only code files of ≥ 200 lines are outlined, only when that saves ≥ 30%, and never when the agent passes `offset`/`limit`. After a branch switch, re-index: a stale index makes the hook pass everything through. |
+| The agent still reads whole files | By design: tokenix never intercepts `Read`. The agent can call `tokenix read` or `tokenix symbols` itself. |
 | A symbol I just wrote is missing | It should not: edits are re-chunked before each command. If more than 25 files changed, run `tokenix index` (or raise `TOKENIX_AUTO_REFRESH_MAX`). |
 | A repo filter is ignored | Run `tokenix trust --status`. Repo filters need `tokenix trust`, and an edit revokes it. |
 | Output was cut and I need all of it | Run `tokenix retrieve <key>` from the `[tokenix: ...]` marker, or `tokenix run --raw`. |

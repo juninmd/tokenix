@@ -401,7 +401,10 @@ fn symbol_content(path: &str, content: &str, symbol: &str) -> String {
 }
 
 fn print_read_reduction(rows: &[ReadRow]) {
-    println!("{}", "1. Read Interception: Gross Token Reduction".bold());
+    println!(
+        "{}",
+        "1. `tokenix read` outline vs full file (opt-in, not applied by the hook)".bold()
+    );
     if rows.is_empty() {
         println!(
             "  {}",
@@ -514,10 +517,10 @@ fn print_verdict(read_rows: &[ReadRow], workflow_rows: &[WorkflowRow], cmd_rows:
 
     println!("{}", "Verdict".bold());
     if read_rows.is_empty() {
-        println!("  Read-only exploration: n/a for this benchmark case set.");
+        println!("  tokenix read outlines: n/a for this benchmark case set.");
     } else {
         println!(
-            "  Read-only exploration saved {:.1}% ({}) tokens on large files (Vanilla baseline).",
+            "  tokenix read outlines would save {:.1}% ({}) tokens on large files (Vanilla baseline).",
             saved_pct(read_raw, read_outline),
             format_num((read_raw.saturating_sub(read_outline)) as i64)
         );

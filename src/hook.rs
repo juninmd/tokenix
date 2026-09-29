@@ -6,18 +6,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::chunker::count_tokens;
 use crate::store::{index_staleness, log_hook_event, HookEvent};
 
-const MIN_LINES_FOR_OUTLINE: usize = 200;
-
-/// Read intercept threshold, overridable via `[hook] read_min_lines` in
-/// `.tokenix.toml`. Tune down to intercept more reads (saving more tokens) or
-/// up for more verbatim file content.
-fn min_lines_for_outline() -> usize {
-    crate::chunker::hook_config()
-        .read_min_lines
-        .filter(|n| *n > 0)
-        .unwrap_or(MIN_LINES_FOR_OUTLINE)
-}
-
 /// Normalized hook input used by tokenix.
 ///
 /// Claude Code sends `tool_name` and `tool_input` on stdin.
@@ -200,198 +188,6 @@ fn now_ts() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs_f64()
-}
-
-fn get_file_outline(file_path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(file_path).ok()?;
-    let path_str = file_path.to_string_lossy().replace('\\', "/");
-    Some(crate::chunker::generate_outline(&content, &path_str))
-}
-
-fn handle_read(
-    tool_input: &serde_json::Value,
-    repo_root: &Path,
-    session: &str,
-) -> (bool, String, String) {
-    let file_path = match tool_input["file_path"].as_str() {
-        Some(p) => p,
-        None => return (false, String::new(), "missing file_path".to_string()),
-    };
-
-    // Let targeted reads through (offset or limit already specified with a numeric value)
-    let has_offset = tool_input["offset"].is_number();
-    let has_limit = tool_input["limit"].is_number();
-    if has_offset || has_limit {
-        return (
-            false,
-            String::new(),
-            "targeted read (offset/limit specified)".to_string(),
-        );
-    }
-
-    let full_path = {
-        let p = Path::new(file_path);
-        if p.exists() {
-            p.to_path_buf()
-        } else {
-            repo_root.join(file_path)
-        }
-    };
-
-    if !full_path.exists() {
-        return (
-            false,
-            String::new(),
-            format!("file not found: {}", file_path),
-        );
-    }
-
-    // Only ever buffer a regular file of bounded size. A FIFO/device would block
-    // `read_to_string` until the harness kills the hook, and a huge file would be
-    // held in memory twice (here and in `measured_original_tokens`).
-    const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
-    match std::fs::metadata(&full_path) {
-        Ok(m) if !m.is_file() => {
-            return (false, String::new(), "not a regular file".to_string());
-        }
-        Ok(m) if m.len() > MAX_READ_BYTES => {
-            return (
-                false,
-                String::new(),
-                "file too large to outline".to_string(),
-            );
-        }
-        Ok(_) => {}
-        Err(_) => return (false, String::new(), format!("read error: {}", file_path)),
-    }
-
-    let content = match std::fs::read_to_string(&full_path) {
-        Ok(c) => c,
-        Err(_) => return (false, String::new(), format!("read error: {}", file_path)),
-    };
-
-    // Re-read suppression: if the agent already received these exact bytes
-    // recently, resending the file is pure waste. Unlike the outline path this
-    // works for any language, since it does not parse the file.
-    //
-    // Only reads that actually delivered the *full content* are remembered — a
-    // read answered with an outline must stay re-readable, or the agent could
-    // never get past the outline. `remember_full_read` is therefore called on
-    // the pass-through paths only.
-    let recall_path = full_path.to_string_lossy().replace('\\', "/");
-    let content_tokens = count_tokens(&content);
-    let now = now_ts();
-    if let Some(hit) =
-        crate::recall::find_recent_read(&recall_path, &content, content_tokens, now, session)
-    {
-        return (
-            true,
-            crate::recall::read_marker(&hit, now),
-            "unchanged since a recent full read".to_string(),
-        );
-    }
-    let remember_full_read =
-        || crate::recall::remember_read(&recall_path, &content, content_tokens, now, session);
-
-    let line_count = content.lines().count();
-    let min_lines = min_lines_for_outline();
-    if line_count < min_lines {
-        remember_full_read();
-        return (
-            false,
-            String::new(),
-            format!("small file ({} < {} lines)", line_count, min_lines),
-        );
-    }
-
-    let outline = match get_file_outline(&full_path) {
-        Some(o) => o,
-        None => {
-            remember_full_read();
-            return (
-                false,
-                String::new(),
-                "failed to generate outline".to_string(),
-            );
-        }
-    };
-
-    let rel = full_path
-        .strip_prefix(repo_root)
-        .unwrap_or(&full_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-
-    // Extensions the outliner (`chunker::detect_lang`) actually supports — keep in
-    // sync with it. C/C++, VB and SQL were previously excluded here, so their large
-    // files passed through full even though `generate_outline` can outline them; the
-    // >=30% savings gate below still rejects any outline that isn't worth it.
-    let ext = full_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let is_code = matches!(
-        ext.as_str(),
-        "rs" | "py"
-            | "ts"
-            | "tsx"
-            | "js"
-            | "jsx"
-            | "mjs"
-            | "cjs"
-            | "go"
-            | "c"
-            | "cpp"
-            | "h"
-            | "hpp"
-            | "cc"
-            | "cxx"
-            | "bas"
-            | "cls"
-            | "ctl"
-            | "frm"
-            | "sql"
-            | "fnc"
-            | "trg"
-            | "pkg"
-            | "prc"
-            | "tab"
-            | "vw"
-    );
-
-    if !is_code {
-        return (
-            false,
-            String::new(),
-            format!("unsupported language: .{}", ext),
-        );
-    }
-
-    // Only intercept when the outline is materially smaller than the file. For
-    // files of many tiny symbols the outline can be ~as large as (or larger than)
-    // the source, so intercepting would cost ~full price for the outline AND force
-    // a re-read for the bodies — a net token loss. Require >=30% savings.
-    let file_tokens = count_tokens(&content) as i64;
-    let outline_tokens = count_tokens(&outline) as i64;
-    if file_tokens <= 0 || (file_tokens - outline_tokens) * 100 < file_tokens * 30 {
-        return (
-            false,
-            String::new(),
-            format!(
-                "outline saves <30% ({} vs {} tokens) — passing through",
-                outline_tokens, file_tokens
-            ),
-        );
-    }
-
-    let msg = format!(
-        "{}\n\n[tokenix] File has {} lines. Showing symbol outline above.\n\
-        To read a specific symbol: tokenix read {} --symbol <name>\n\
-        To read specific lines:   use Read with offset/limit parameters.",
-        outline, line_count, rel
-    );
-    (true, msg, "generated symbol outline".to_string())
 }
 
 fn measured_original_tokens(
@@ -1033,7 +829,6 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
     }
 
     let (intercepted, output, reason) = match input.tool_name.as_str() {
-        "Read" => handle_read(&input.tool_input, &repo_root, &input.session_id),
         "Grep" => (false, String::new(), "grep runs natively".to_string()),
         _ => (false, String::new(), "unsupported tool".to_string()),
     };
@@ -1305,53 +1100,6 @@ mod tests {
         let input = HookInput::from_stdin(raw).unwrap();
         assert_eq!(input.tool_name, "Read");
         assert_eq!(input.tool_input["file_path"], "src/main.rs");
-    }
-
-    #[test]
-    fn read_intercepts_only_when_outline_saves_tokens() {
-        use std::io::Write;
-        let dir = std::env::temp_dir().join(format!("tokenix_read_hook_{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-
-        // Many small-but-indexable one-line functions: the per-symbol outline is
-        // ~as large as the file, so intercepting would not save tokens and would
-        // force a re-read. handle_read must pass through (intercepted == false).
-        let dense = dir.join("dense.rs");
-        let mut f = std::fs::File::create(&dense).unwrap();
-        for i in 0..220 {
-            writeln!(f, "pub fn s{i}(x: i64, y: i64) -> i64 {{ x + y + {i} }}").unwrap();
-        }
-        drop(f);
-        let input = serde_json::json!({ "file_path": dense.to_string_lossy() });
-        let (intercepted, _, reason) = handle_read(&input, &dir, "");
-        assert!(
-            !intercepted,
-            "dense small-symbol file should pass through, got: {reason}"
-        );
-
-        // A few large functions: the outline is far smaller than the file → intercept.
-        let sparse = dir.join("sparse.rs");
-        let mut f = std::fs::File::create(&sparse).unwrap();
-        for i in 0..6 {
-            writeln!(f, "pub fn big{i}(x: i64) -> i64 {{").unwrap();
-            for j in 0..50 {
-                writeln!(
-                    f,
-                    "    let v{j} = x + {j} * {i}; // body line padding the function"
-                )
-                .unwrap();
-            }
-            writeln!(f, "    x\n}}").unwrap();
-        }
-        drop(f);
-        let input = serde_json::json!({ "file_path": sparse.to_string_lossy() });
-        let (intercepted, _, reason) = handle_read(&input, &dir, "");
-        assert!(
-            intercepted,
-            "large-body file should be intercepted, got: {reason}"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
