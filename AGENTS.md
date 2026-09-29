@@ -65,7 +65,7 @@ alone), so the fingerprint pins the batch shape too.
 | `embed.rs` | ONNX via fastembed 7; `MODELS` registry, custom HF models. Each loaded model sits behind a `Mutex` (fastembed ≥ 5 embeds through `&mut self`) |
 | `store.rs` | SQLite access, `index_staleness`, graph tables, hook log, `global_dir()`, `find_project_root` |
 | `store/vector.rs` | int8 quantization, cosine scoring, two-pass top-k `search_similar` |
-| `query.rs` | Semantic + lexical retrieval, RRF fusion, budgeting |
+| `query.rs` | Semantic + lexical retrieval, RRF fusion, budgeting. The reranker is repo-agnostic: it never names tokenix symbols or paths, and its test penalty fires only on real test locations (`tests/`, `*_test.*`, `*.spec.*`, `#[test]`/`#[cfg(test)]`), never on content substrings such as `assert!` |
 | `graph.rs` | Symbol graph, PageRank, Tarjan SCC cycles, import graph, repo hotspots |
 | `freshness.rs` | Inline pre-query refresh of dirty files (`--no-embed` path), fails open |
 | `modules.rs` | Louvain community detection over `graph_edges` — `tokenix modules` |

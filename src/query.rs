@@ -262,7 +262,6 @@ fn lexical_boost(result: &SearchResult, terms: &[String]) -> f32 {
         }
     }
     boost += (matched_terms as f32 * PER_TERM_BONUS).min(PER_TERM_BONUS_CAP);
-    boost += intent_boost(&path, &symbol, &content, terms);
     boost += domain_boost(&path, &symbol, &content, terms);
     boost += language_boost(&path, terms);
     // Clamp the positives first, then subtract. Summing penalties *before* the
@@ -271,88 +270,14 @@ fn lexical_boost(result: &SearchResult, terms: &[String]) -> f32 {
     // clamp then erases the penalty that was supposed to demote it.
     let positive = boost.min(LEXICAL_BOOST_CAP);
     positive
-        + benchmark_leak_penalty(&path, terms)
-        + test_leak_penalty(&symbol, &content, terms)
+        + test_leak_penalty(result, terms)
         + markdown_doc_penalty(&path, terms)
         + non_code_asset_penalty(&path, terms)
 }
 
-fn intent_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f32 {
-    let mut boost = 0.0;
-    let has_hook = terms.iter().any(|t| t == "hook") || path.contains("hook");
-    let has_fail_open = terms.iter().any(|t| t == "fail") && terms.iter().any(|t| t == "open");
-    if has_hook
-        && has_fail_open
-        && (content.contains("exit 0")
-            || content.contains("process exit 0")
-            || content.contains("pass through")
-            || content.contains("action pass")
-            || symbol.contains("run_hook"))
-    {
-        boost += 0.75;
-    }
-
-    let has_stale_index =
-        terms.iter().any(|t| t == "stale") && terms.iter().any(|t| t == "index" || t == "missing");
-    if has_hook
-        && has_stale_index
-        && (content.contains("index_staleness")
-            || content.contains("staleness stale")
-            || content.contains("max_index_age_secs"))
-    {
-        boost += 0.55;
-    }
-
-    let asks_token_savings =
-        terms.iter().any(|t| t == "token") && terms.iter().any(|t| t.starts_with("sav"));
-    let asks_hook_log = terms.iter().any(|t| t == "hook") && terms.iter().any(|t| t == "log");
-    if asks_token_savings
-        && asks_hook_log
-        && (path.contains("gain")
-            || symbol.contains("compute_gain")
-            || content.contains("read_hook_log")
-            || content.contains("tokens_saved")
-            || content.contains("original_estimate"))
-    {
-        boost += if path.contains("gain") || symbol.contains("compute_gain") {
-            1.5
-        } else if content.contains("read_hook_log") {
-            1.1
-        } else {
-            0.45
-        };
-    }
-    let asks_output_compression = terms.iter().any(|t| t == "output")
-        && terms.iter().any(|t| t.starts_with("compress"))
-        && (terms.iter().any(|t| t == "cargo") || terms.iter().any(|t| t.starts_with("error")));
-    if asks_output_compression
-        && (path.contains("compress")
-            || symbol.contains("compress_cargo")
-            || symbol.contains("compress_bash_output")
-            || content.contains("compress cargo")
-            || content.contains("cargo output"))
-    {
-        boost += 1.2;
-    }
-    boost
-}
-
+// Generic domain hint only: no repo-specific symbol or path is named here, so
+// scores on any repository (including tokenix's own benchmark set) stay honest.
 fn domain_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f32 {
-    let mut boost = 0.0;
-    let asks_chunking = has_any(terms, &["chunk", "chunker", "symbol", "outline", "outlin"])
-        && has_any(terms, &["rust", "file", "files", "code", "agent"]);
-    if asks_chunking
-        && (path.contains("chunker")
-            || symbol.contains("chunk_file")
-            || symbol.contains("chunk_rust")
-            || symbol.contains("generate_outline")
-            || content.contains("chunk_file")
-            || content.contains("generate_outline")
-            || content.contains("symbol aware"))
-    {
-        boost += 1.4;
-    }
-
     let has_db_query = terms.iter().any(|t| {
         matches!(
             t.as_str(),
@@ -367,54 +292,41 @@ fn domain_boost(path: &str, symbol: &str, content: &str, terms: &[String]) -> f3
             || content.contains("postgres")
             || content.contains("from pg"))
     {
-        boost += 0.18;
-    }
-    let asks_vector_similarity = terms
-        .iter()
-        .any(|t| matches!(t.as_str(), "cosine" | "similarity" | "vector"))
-        && terms
-            .iter()
-            .any(|t| matches!(t.as_str(), "sqlite" | "search" | "implemented"));
-    if asks_vector_similarity
-        && (path.contains("store")
-            || symbol.contains("cosine_similarity")
-            || content.contains("cosine similarity")
-            || content.contains("cosine_similarity_to_bytes"))
-    {
-        boost += 1.0;
-    }
-    boost
-}
-
-fn has_any(terms: &[String], needles: &[&str]) -> bool {
-    terms
-        .iter()
-        .any(|term| needles.iter().any(|needle| term == needle))
-}
-
-fn benchmark_leak_penalty(path: &str, terms: &[String]) -> f32 {
-    let asks_benchmark = terms
-        .iter()
-        .any(|t| matches!(t.as_str(), "benchmark" | "bench" | "evaluation" | "test"));
-    if !asks_benchmark && path == "src benchmark rs" {
-        return -0.8;
+        return 0.18;
     }
     0.0
 }
 
-fn test_leak_penalty(symbol: &str, content: &str, terms: &[String]) -> f32 {
+/// True only for real test locations, judged from the raw (un-normalized)
+/// path, symbol and content. A bare `assert!` in production code is not a test.
+fn is_test_chunk(path: &str, symbol: &str, content: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let file = lower.rsplit('/').next().unwrap_or("");
+    let stem = file.split('.').next().unwrap_or("");
+    let in_test_dir = lower
+        .split('/')
+        .any(|seg| matches!(seg, "tests" | "test" | "__tests__" | "spec" | "specs"));
+    let test_file = stem.starts_with("test_")
+        || stem.ends_with("_test")
+        || stem.ends_with("_tests")
+        || file.contains(".test.")
+        || file.contains(".spec.");
+    let test_symbol = symbol.starts_with("test_")
+        || (symbol.starts_with("Test") && symbol.chars().nth(4).is_some_and(|c| c.is_uppercase()));
+    let test_marker = content.contains("#[test]")
+        || content.contains("#[cfg(test)]")
+        || content.contains("::test]");
+    in_test_dir || test_file || test_symbol || test_marker
+}
+
+fn test_leak_penalty(result: &SearchResult, terms: &[String]) -> f32 {
     let asks_test = terms
         .iter()
         .any(|t| matches!(t.as_str(), "test" | "tests" | "benchmark" | "bench"));
     if asks_test {
         return 0.0;
     }
-    let looks_like_test = symbol.starts_with("test ")
-        || symbol.contains(" test")
-        || symbol.starts_with("rerank ")
-        || content.contains("assert ")
-        || content.contains("assert eq");
-    if looks_like_test {
+    if is_test_chunk(&result.path, &result.symbol, &result.content) {
         return -1.5;
     }
     0.0
@@ -1137,71 +1049,6 @@ mod tests {
     }
 
     #[test]
-    fn rerank_penalizes_unit_test_leakage_for_code_queries() {
-        let mut results = vec![
-            SearchResult {
-                distance: 0.01,
-                ..make_result(
-                    "src/query.rs",
-                    728,
-                    758,
-                    "rerank_prefers_hook_fail_open_implementation",
-                    "assert_eq hook fail open stale missing index",
-                )
-            },
-            SearchResult {
-                distance: 0.16,
-                ..make_result(
-                    "src/hook.rs",
-                    327,
-                    407,
-                    "run_hook",
-                    "index_staleness staleness stale std::process::exit(0) action pass",
-                )
-            },
-        ];
-
-        rerank_results(
-            &mut results,
-            "how does hook fail open when index is stale or missing",
-        );
-        assert_eq!(results[0].path, "src/hook.rs");
-    }
-
-    #[test]
-    fn rerank_prefers_gain_for_hook_log_savings_analytics() {
-        let mut results = vec![
-            SearchResult {
-                distance: 0.01,
-                ..make_result(
-                    "src/hook.rs",
-                    327,
-                    407,
-                    "run_hook",
-                    "log_hook_event saved_tokens actual_tokens original_estimate",
-                )
-            },
-            SearchResult {
-                distance: 0.16,
-                ..make_result(
-                    "src/gain.rs",
-                    75,
-                    135,
-                    "compute_gain",
-                    "compute_gain read_hook_log tokens_saved original_estimate hook log",
-                )
-            },
-        ];
-
-        rerank_results(
-            &mut results,
-            "how are token savings calculated from hook log",
-        );
-        assert_eq!(results[0].path, "src/gain.rs");
-        assert_eq!(results[0].symbol, "compute_gain");
-    }
-
-    #[test]
     fn rerank_prefers_compress_for_cargo_output_errors() {
         let mut results = vec![
             SearchResult {
@@ -1232,38 +1079,6 @@ mod tests {
         );
         assert_eq!(results[0].path, "src/compress.rs");
         assert_eq!(results[0].symbol, "compress_cargo");
-    }
-
-    #[test]
-    fn rerank_penalizes_benchmark_fixture_leakage() {
-        let mut results = vec![
-            SearchResult {
-                distance: 0.01,
-                ..make_result(
-                    "src/benchmark.rs",
-                    1,
-                    20,
-                    "measure_semantic_quality",
-                    "postgres transaction pool user repository pagination expected_paths",
-                )
-            },
-            SearchResult {
-                distance: 0.15,
-                ..make_result(
-                    "benchmark/samples/database_client.ts",
-                    175,
-                    248,
-                    "UserRepository",
-                    "postgres transaction pool user repository pagination",
-                )
-            },
-        ];
-
-        rerank_results(
-            &mut results,
-            "postgres transaction pool user repository pagination",
-        );
-        assert_eq!(results[0].path, "benchmark/samples/database_client.ts");
     }
 
     #[test]
@@ -1374,5 +1189,152 @@ mod tests {
         assert!(terms.contains(&"analise".to_string()));
         assert!(terms.contains(&"coerencia".to_string()));
         assert!(terms.contains(&"recomendacoes".to_string()));
+    }
+
+    fn top_after_rerank(mut results: Vec<SearchResult>, query: &str) -> String {
+        rerank_results(&mut results, query);
+        results[0].path.clone()
+    }
+
+    #[test]
+    fn production_code_with_assert_is_not_demoted_but_test_files_are() {
+        let guarded = "fn validate_session(token: &str) { assert!(!token.is_empty()); \
+                       debug_assert_eq!(token.len(), 32); check session token }";
+        let prod = SearchResult {
+            distance: 0.20,
+            ..make_result("src/session.rs", 1, 20, "validate_session", guarded)
+        };
+        let test_file = SearchResult {
+            distance: 0.10,
+            ..make_result("tests/session_it.rs", 1, 20, "session_flow", guarded)
+        };
+        assert_eq!(
+            top_after_rerank(vec![test_file, prod], "how is the session token validated"),
+            "src/session.rs"
+        );
+        // Without the test-location signal, assert! alone must not cost 1.5.
+        let a = SearchResult {
+            distance: 0.20,
+            ..make_result("src/session.rs", 1, 20, "validate_session", guarded)
+        };
+        let b = SearchResult {
+            distance: 0.25,
+            ..make_result(
+                "src/other.rs",
+                1,
+                20,
+                "other",
+                "fn other() { session token }",
+            )
+        };
+        assert_eq!(
+            top_after_rerank(vec![b, a], "how is the session token validated"),
+            "src/session.rs"
+        );
+    }
+
+    #[test]
+    fn test_locations_are_recognized_by_path_and_marker_not_content() {
+        assert!(is_test_chunk("tests/a.rs", "f", ""));
+        assert!(is_test_chunk("web/user.spec.ts", "f", ""));
+        assert!(is_test_chunk("web/user.test.tsx", "f", ""));
+        assert!(is_test_chunk("pkg/test_user.py", "f", ""));
+        assert!(is_test_chunk("pkg/user_test.go", "f", ""));
+        assert!(is_test_chunk("src/a.rs", "f", "#[test]\nfn f() {}"));
+        assert!(is_test_chunk(
+            "src/a.rs",
+            "tests",
+            "#[cfg(test)]\nmod tests {}"
+        ));
+        assert!(!is_test_chunk(
+            "src/a.rs",
+            "f",
+            "assert!(x); assert_eq!(a, b);"
+        ));
+        assert!(!is_test_chunk(
+            "src/latest.rs",
+            "rerank_results",
+            "debug_assert!(x)"
+        ));
+        assert!(!is_test_chunk("src/contest.rs", "attest", ""));
+    }
+
+    #[test]
+    fn rerank_symbol_prefix_is_not_a_test_signal() {
+        let renamed = SearchResult {
+            distance: 0.20,
+            ..make_result(
+                "src/ranker.rs",
+                1,
+                9,
+                "rerank_candidates",
+                "rank candidates",
+            )
+        };
+        let other = SearchResult {
+            distance: 0.25,
+            ..make_result("src/misc.rs", 1, 9, "misc", "rank candidates")
+        };
+        assert_eq!(
+            top_after_rerank(vec![other, renamed], "rank candidates"),
+            "src/ranker.rs"
+        );
+    }
+
+    #[test]
+    fn foreign_symbols_named_like_removed_rules_get_no_boost() {
+        // These names used to earn up to +1.5 because tokenix ranked itself.
+        let q = "how are token savings calculated from hook log";
+        let decoy = SearchResult {
+            distance: 0.20,
+            ..make_result(
+                "src/billing.rs",
+                1,
+                9,
+                "compute_gain",
+                "read_hook_log tokens_saved original_estimate",
+            )
+        };
+        let plain = SearchResult {
+            distance: 0.10,
+            ..make_result("src/other.rs", 1, 9, "other", "token savings hook log")
+        };
+        assert_eq!(top_after_rerank(vec![decoy, plain], q), "src/other.rs");
+
+        let chunky = SearchResult {
+            distance: 0.30,
+            ..make_result(
+                "src/engine.rs",
+                1,
+                9,
+                "prepare",
+                "chunk_file generate_outline",
+            )
+        };
+        let near = SearchResult {
+            distance: 0.0,
+            ..make_result("src/misc.rs", 1, 9, "misc", "rust file symbols outlines")
+        };
+        assert_eq!(
+            top_after_rerank(
+                vec![chunky, near],
+                "how are rust files chunked into symbols and outlines"
+            ),
+            "src/misc.rs"
+        );
+
+        let bench = SearchResult {
+            distance: 0.10,
+            ..make_result("src/benchmark.rs", 1, 9, "run", "postgres pool")
+        };
+        let base = SearchResult {
+            distance: 0.12,
+            ..make_result("src/other.rs", 1, 9, "run", "postgres pool")
+        };
+        // Same lexical profile: the closer vector wins, no path-specific -0.8.
+        assert_eq!(
+            top_after_rerank(vec![base, bench], "postgres pool"),
+            "src/benchmark.rs"
+        );
     }
 }
