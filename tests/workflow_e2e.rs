@@ -71,15 +71,6 @@ fn read_outlines_a_large_file_and_extracts_one_symbol_exactly() {
 }
 
 #[test]
-fn grep_finds_a_literal_inside_its_enclosing_symbol() {
-    let sb = Sandbox::indexed("grep");
-    let run = sb.tokenix(&["grep", "amount / 10"]);
-    assert_eq!(run.code, 0, "{}", run.stderr);
-    assert!(run.stdout.contains("src/billing.rs"), "{}", run.stdout);
-    assert!(run.stdout.contains("apply_tax"), "{}", run.stdout);
-}
-
-#[test]
 fn read_hook_outlines_large_files_and_passes_small_or_ranged_reads() {
     let sb = Sandbox::indexed("hook-read");
     let big = sb.path("src/billing.rs").to_string_lossy().into_owned();
@@ -111,11 +102,13 @@ fn read_hook_outlines_large_files_and_passes_small_or_ranged_reads() {
 }
 
 #[test]
-fn grep_hook_resolves_an_identifier_to_its_definition() {
+fn grep_hook_never_answers_in_place_of_the_native_grep() {
     let sb = Sandbox::indexed("hook-grep");
+    // An identifier used to be answered from the index, hiding every textual
+    // match of it; the agent's own grep must always be the one that runs.
     let run = sb.hook("Grep", json!({ "pattern": "apply_tax" }));
-    assert_eq!(run.code, 2, "{}", run.stderr);
-    assert!(run.stderr.contains("src/billing.rs:5"), "{}", run.stderr);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(run.stderr.is_empty(), "{}", run.stderr);
 }
 
 #[test]

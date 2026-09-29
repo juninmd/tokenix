@@ -2,24 +2,19 @@ use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunker::{
     chunk_file, count_tokens, file_hash, index_config, redact_secrets, should_index, Chunk,
     IGNORED_DIRS,
 };
-use crate::embed::embed_documents;
 use crate::store::{
-    cached_embeddings, count_stats, delete_chunks_for_file, init_schema, insert_chunk,
-    insert_embedding, load_all_file_info, open_db, upsert_embedding_cache, upsert_file,
-    write_project_name, IndexStats, NewChunk,
+    count_stats, delete_chunks_for_file, init_schema, insert_chunk, load_all_file_info, open_db,
+    upsert_file, write_project_name, IndexStats, NewChunk,
 };
 
 /// Upper bound on file size to index (1.5 MB). Above this, files are almost
@@ -47,14 +42,8 @@ struct ChunkedFile {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct IndexOptions {
     pub force: bool,
-    pub no_embed: bool,
-}
-
-struct EmbedJob {
-    file_idx: usize,
-    chunk_idx: usize,
-    cache_key: String,
-    text: String,
+    /// Inline pre-query refresh: must not apply deletions (see phase 6).
+    pub inline: bool,
 }
 
 struct FilePlan {
@@ -80,12 +69,6 @@ pub fn lower_process_priority() {
         let _ = libc::nice(10);
     }
 }
-
-/// Marks a file whose chunks were written without embeddings (`--no-embed`, or
-/// the inline refresh in `crate::freshness`). The stored content hash never
-/// matches the real one while this prefix is on it, so the next full index
-/// re-chunks and embeds the file instead of skipping it as unchanged.
-pub const NO_EMBED_HASH_PREFIX: &str = "ne:";
 
 fn mtime_of(path: &Path) -> f64 {
     std::fs::metadata(path)
@@ -123,18 +106,6 @@ pub fn stores_content(abs: &Path, rel: &str) -> bool {
 
 fn within_size_cap(abs: &Path, max_bytes: u64) -> bool {
     std::fs::metadata(abs).is_ok_and(|m| m.len() <= max_bytes)
-}
-
-fn chunk_embedding_key(text: &str) -> String {
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(text.as_bytes());
-    // Namespace the cache by model: vectors from different models are not
-    // interchangeable, so re-indexing under a new model must not reuse old ones.
-    format!(
-        "{}:{}",
-        crate::embed::active_model_id(),
-        hex::encode(hasher.finalize())
-    )
 }
 
 fn rel_path(repo_root: &Path, abs: &Path) -> String {
@@ -204,7 +175,11 @@ fn git_changed_files(repo_root: &Path) -> Option<FilePlan> {
         let rel = String::from_utf8_lossy(&field[3..]).replace('\\', "/");
 
         if x == 'R' || x == 'C' {
-            let _ = fields.next();
+            // The next NUL field is the origin: a rename removes it, a copy keeps it.
+            let origin = fields.next();
+            if let (Some(o), 'R') = (origin, x) {
+                deleted.insert(String::from_utf8_lossy(o).replace('\\', "/"));
+            }
         }
 
         if x == 'D' || y == 'D' {
@@ -227,30 +202,6 @@ fn git_changed_files(repo_root: &Path) -> Option<FilePlan> {
         deleted,
         git_incremental: true,
     })
-}
-
-/// Files the index holds only as text (written by a `--no-embed` run or an
-/// inline freshness refresh) and that still exist on disk. A git-incremental
-/// plan cannot see them — they are unchanged as far as git is concerned — so
-/// they are appended explicitly, otherwise their chunks would stay vectorless
-/// until the file happened to change again.
-fn pending_embed_files(
-    repo_root: &Path,
-    existing: &HashMap<String, (i64, f64, String)>,
-    already: &[(PathBuf, String)],
-) -> Vec<(PathBuf, String)> {
-    let planned: HashSet<&str> = already.iter().map(|(_, rel)| rel.as_str()).collect();
-    let mut extra: Vec<(PathBuf, String)> = existing
-        .iter()
-        .filter(|(rel, (_, _, hash))| {
-            hash.starts_with(NO_EMBED_HASH_PREFIX) && !planned.contains(rel.as_str())
-        })
-        .map(|(rel, _)| (repo_root.join(rel), rel.clone()))
-        .filter(|(abs, _)| abs.is_file())
-        .collect();
-    // Deterministic order so two runs over the same backlog behave identically.
-    extra.sort_by(|a, b| a.1.cmp(&b.1));
-    extra
 }
 
 /// Tracked files that exist on disk but have no row in the index.
@@ -300,11 +251,9 @@ fn plan_files(
     if !options.force && !existing.is_empty() {
         if let Some(mut plan) = git_changed_files(repo_root) {
             // Only a full run reconciles these, and only it should pay for them:
-            // a `--no-embed` refresh runs inline on a query, where the extra
+            // an inline refresh runs on a query, where the extra
             // work is unbounded and the backlog would not shrink anyway.
-            if !options.no_embed {
-                plan.files
-                    .extend(pending_embed_files(repo_root, existing, &plan.files));
+            if !options.inline {
                 plan.files
                     .extend(restored_files(repo_root, existing, &plan.files));
             }
@@ -431,7 +380,7 @@ where
         repo_root,
         IndexOptions {
             force,
-            no_embed: false,
+            inline: false,
         },
         &mut progress_cb,
     )
@@ -445,41 +394,18 @@ pub fn index_repo_with_options<F>(
 where
     F: FnMut(&str),
 {
-    // Resolve and pin the embedding model for this whole run so documents and the
-    // stamped meta agree. Precedence: an explicit TOKENIX_EMBED_MODEL wins; else
-    // keep the model the existing index already uses (sticky — a plain re-index
-    // must not silently switch models); else the default.
-    let prev_model = crate::store::index_model_id(repo_root);
-    let explicit_model = std::env::var("TOKENIX_EMBED_MODEL")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(|s| crate::embed::spec_for(&s).id.to_string());
-    let model_id = explicit_model
-        .clone()
-        .or_else(|| prev_model.clone())
-        .unwrap_or_else(|| crate::embed::DEFAULT_MODEL_ID.to_string());
-    crate::embed::set_active_model(&model_id);
-
-    // An explicit model switch makes the existing per-chunk vectors incompatible,
-    // so force a full re-embed to keep the index single-model.
-    let mut options = options;
-    if let (Some(prev), Some(explicit)) = (&prev_model, &explicit_model) {
-        if prev != explicit {
-            options.force = true;
-        }
-    }
-
     let _lock = crate::store::acquire_index_lock(repo_root)?;
 
     let conn = open_db(repo_root, true)?.unwrap();
     init_schema(&conn, 768)?;
-    // One-time int8 migration of legacy f32 rows: pure re-encode, no embedding.
-    let migrated = crate::store::backfill_quantized_embeddings(&conn)?;
-    if migrated > 0 {
-        progress_cb(&format!(
-            "quantized {migrated} stored embedding(s) to int8 (4x smaller, same recall)"
-        ));
+    if !options.inline {
+        match crate::store::vacuum_if_flagged(&conn) {
+            Ok(true) => progress_cb("reclaimed the space of the removed embedding tables (VACUUM)"),
+            Ok(false) => {}
+            Err(e) => progress_cb(&format!(
+                "warning: VACUUM failed, will retry next index: {e}"
+            )),
+        }
     }
     let existing: Arc<HashMap<String, (i64, f64, String)>> = Arc::new(load_all_file_info(&conn)?);
 
@@ -520,7 +446,7 @@ where
         progress_cb(&format!("discovered {} file(s) — chunking", total));
     }
 
-    // Phase 1: parallel file read + chunk (no embedding)
+    // Phase 1: parallel file read + chunk
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
         ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} {msg}")
@@ -540,135 +466,18 @@ where
 
     pb.finish_and_clear();
 
-    // Phase 2: collect embeddings, reusing cache by chunk text hash.
-    let mut file_embeddings: HashMap<usize, Vec<Option<Vec<f32>>>> = HashMap::new();
-    let mut embed_jobs = Vec::new();
-    let mut candidate_count = 0usize;
-
-    if options.no_embed {
-        progress_cb("skipping embeddings (--no-embed); updating chunks and graph only");
-    } else {
-        let mut candidate_jobs = Vec::new();
-        let mut candidate_keys = Vec::new();
-
-        for (fi, f) in chunked.iter().enumerate() {
-            if f.skipped || f.error.is_some() || f.chunks.is_empty() {
-                continue;
-            }
-            let embeddings = vec![None; f.chunks.len()];
-            for (ci, chunk) in f.chunks.iter().enumerate() {
-                let text = format!("{}\n{}", f.rel, chunk.content);
-                let cache_key = chunk_embedding_key(&text);
-                candidate_keys.push(cache_key.clone());
-                candidate_jobs.push(EmbedJob {
-                    file_idx: fi,
-                    chunk_idx: ci,
-                    cache_key,
-                    text,
-                });
-            }
-            file_embeddings.insert(fi, embeddings);
-        }
-
-        candidate_count = candidate_keys.len();
-        let cached = cached_embeddings(&conn, &candidate_keys)?;
-        for job in candidate_jobs {
-            if let Some(embedding) = cached.get(&job.cache_key) {
-                if let Some(file_embs) = file_embeddings.get_mut(&job.file_idx) {
-                    file_embs[job.chunk_idx] = Some(embedding.clone());
-                }
-            } else {
-                embed_jobs.push(job);
-            }
-        }
-    }
-
-    // Phase 3: embed in batches to cap peak memory. ONNX Runtime can allocate
-    // large intermediate buffers on Windows, so keep the default conservative
-    // and allow local tuning for larger machines.
-    let embed_batch = std::env::var("TOKENIX_EMBED_BATCH")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(16);
-    let embed_sleep = std::env::var("TOKENIX_EMBED_SLEEP_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(0);
-    if !embed_jobs.is_empty() {
-        let cached_hits = candidate_count.saturating_sub(embed_jobs.len());
-        // A leftover checkpoint means the previous run died mid-embed. Its
-        // completed batches were committed to the embedding cache per batch,
-        // so they surface as cache hits here — only the remainder re-embeds.
-        if let Some((phase, batches_done)) = read_checkpoint(&conn) {
-            if phase == "embed" {
-                progress_cb(&format!(
-                    "resuming interrupted run: {batches_done} batch(es) already embedded (now cache hits)"
-                ));
-            }
-        }
-        progress_cb(&format!(
-            "embedding {} uncached chunks ({} cache hits) via fastembed (ONNX), batch size {}...",
-            embed_jobs.len(),
-            cached_hits,
-            embed_batch
-        ));
-        let embed_pb = ProgressBar::new(embed_jobs.len() as u64);
-        embed_pb.set_style(
-            ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} chunks (eta {eta}) {msg}")
-                .unwrap()
-                .progress_chars("=>-"),
-        );
-        let total_batches = embed_jobs.len().div_ceil(embed_batch);
-        for (batch_idx, batch) in embed_jobs.chunks(embed_batch).enumerate() {
-            embed_pb.set_message(format!("batch {}/{}", batch_idx + 1, total_batches));
-            let texts: Vec<String> = batch.iter().map(|job| job.text.clone()).collect();
-            let batch_embs = embed_documents(&texts).map_err(|e| {
-                anyhow::anyhow!(
-                    "embedding failed at batch {}/{} with {} chunk(s): {}",
-                    batch_idx + 1,
-                    total_batches,
-                    batch.len(),
-                    e
-                )
-            })?;
-            // Per-batch durability: commit this batch to the embedding cache
-            // now, so a crash/kill loses at most one batch of work. On rerun
-            // these chunks resolve as cache hits and are never re-embedded.
-            conn.execute_batch("BEGIN IMMEDIATE")?;
-            for (job, embedding) in batch.iter().zip(batch_embs.iter()) {
-                upsert_embedding_cache(&conn, &job.cache_key, embedding)?;
-            }
-            conn.execute_batch("COMMIT")?;
-            // Move each vector straight into its file slot. Accumulating the
-            // whole repo's embeddings here and cloning them again in a later
-            // pass held two full copies in RAM at once — the batch knob caps
-            // the ONNX buffers, not that.
-            for (job, embedding) in batch.iter().zip(batch_embs) {
-                if let Some(file_embs) = file_embeddings.get_mut(&job.file_idx) {
-                    file_embs[job.chunk_idx] = Some(embedding);
-                }
-            }
-            embed_pb.inc(batch.len() as u64);
-            save_checkpoint(&conn, "embed", batch_idx + 1)?;
-            if embed_sleep > 0 && batch_idx + 1 < total_batches {
-                thread::sleep(Duration::from_millis(embed_sleep));
-            }
-        }
-        embed_pb.finish_and_clear();
-    }
-
     // Phase 5: write to SQLite in a single transaction
     let mut indexed = 0usize;
     let mut skipped = 0usize;
     let mut errors = 0usize;
+    let mut removed = false;
 
     // Surface transaction failures instead of swallowing them: a failed BEGIN
     // means every write below runs in autocommit, and a failed COMMIT means the
     // whole phase was rolled back while the run still reported success.
     conn.execute_batch("BEGIN IMMEDIATE")
         .context("failed to open the index write transaction")?;
-    for (fi, f) in chunked.iter().enumerate() {
+    for f in &chunked {
         if f.skipped {
             skipped += 1;
             continue;
@@ -679,18 +488,21 @@ where
             continue;
         }
         if f.chunks.is_empty() {
+            // The file exists but yields nothing (emptied, binary, sub-minimum):
+            // its old rows would keep serving content that is no longer on disk.
+            if let Some((file_id, _, _)) = existing.get(&f.rel) {
+                match crate::store::delete_file(&conn, *file_id) {
+                    Ok(()) => removed = true,
+                    Err(e) => {
+                        errors += 1;
+                        progress_cb(&format!("ERR {}: could not drop stale rows: {e}", f.rel));
+                    }
+                }
+            }
             continue;
         }
 
-        // A no-embed write stores a sentinel hash so the file reads as changed to
-        // the next embedding run; otherwise its chunks would keep no vectors for
-        // as long as the body stays the same.
-        let stored_hash = if options.no_embed {
-            format!("{NO_EMBED_HASH_PREFIX}{}", f.hash)
-        } else {
-            f.hash.clone()
-        };
-        let file_id = match upsert_file(&conn, &f.rel, f.mtime, &stored_hash) {
+        let file_id = match upsert_file(&conn, &f.rel, f.mtime, &f.hash) {
             Ok(id) => id,
             Err(e) => {
                 errors += 1;
@@ -708,8 +520,8 @@ where
             continue;
         }
 
-        for (ci, chunk) in f.chunks.iter().enumerate() {
-            let chunk_id = match insert_chunk(
+        for chunk in &f.chunks {
+            if let Err(e) = insert_chunk(
                 &conn,
                 NewChunk {
                     file_id,
@@ -722,11 +534,8 @@ where
                     token_count: chunk.token_count,
                 },
             ) {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-            if let Some(Some(embedding)) = file_embeddings.get(&fi).and_then(|embs| embs.get(ci)) {
-                let _ = insert_embedding(&conn, chunk_id, embedding);
+                errors += 1;
+                progress_cb(&format!("ERR {}: could not insert chunk: {e}", f.rel));
             }
         }
 
@@ -735,24 +544,15 @@ where
     conn.execute_batch("COMMIT")
         .context("failed to commit the index write transaction")?;
 
-    // Bound the embedding cache: entries older than this were never referenced
-    // by any run in that window, so keeping them only grows the DB.
-    const EMBED_CACHE_MAX_AGE_DAYS: f64 = 90.0;
-    match crate::store::prune_embedding_cache(&conn, EMBED_CACHE_MAX_AGE_DAYS) {
-        Ok(n) if n > 0 => progress_cb(&format!("pruned {n} stale embedding cache entr(ies)")),
-        _ => {}
-    }
-
     // Phase 6: clean up removed files from index.
     //
-    // An inline refresh (`no_embed`) deliberately skips this. It runs on every
+    // An inline refresh (`inline`) deliberately skips this. It runs on every
     // query, so it would see a file that is momentarily absent — mid-rebase,
     // mid-stash, a checkout in flight — and drop its rows; when the file comes
     // back unchanged, git reports nothing and the index would stay short one
     // file. Leaving a deleted file's rows in place until the next full index is
     // the cheaper mistake: stale hits, not missing ones.
-    let mut removed = false;
-    if options.no_embed {
+    if options.inline {
         // nothing to do
     } else if file_plan.git_incremental {
         for rel_path in &file_plan.deleted {
@@ -798,9 +598,6 @@ where
         progress_cb("no changes — skipping graph rebuild");
     }
 
-    // Clear checkpoint on success
-    crate::store::set_meta(&conn, "index_checkpoint", "")?;
-
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -819,17 +616,6 @@ where
         },
         stats,
     ))
-}
-
-fn save_checkpoint(conn: &rusqlite::Connection, phase: &str, count: usize) -> Result<()> {
-    crate::store::set_meta(conn, "index_checkpoint", &format!("{phase}:{count}"))
-}
-
-fn read_checkpoint(conn: &rusqlite::Connection) -> Option<(String, usize)> {
-    crate::store::meta_value(conn, "index_checkpoint").and_then(|val| {
-        val.split_once(':')
-            .and_then(|(p, c)| c.parse().ok().map(|n| (p.to_string(), n)))
-    })
 }
 
 #[cfg(test)]
@@ -867,24 +653,6 @@ mod tests {
 
         let abs_windows = Path::new("/workspace/project/src\\main.rs");
         assert_eq!(rel_path(root, abs_windows), "src/main.rs");
-    }
-
-    #[test]
-    fn test_chunk_embedding_key() {
-        let text = "hello world";
-        let key = chunk_embedding_key(text);
-        // "<model-id>:<64-hex>" — namespaced so different models never collide.
-        let (model, hash) = key.split_once(':').expect("key has model prefix");
-        assert_eq!(model, crate::embed::active_model_id());
-        assert_eq!(hash.len(), 64); // SHA-256 hex is 64 chars
-
-        let key2 = chunk_embedding_key(text);
-        assert_eq!(key, key2); // deterministic
-
-        // Switching the model changes the namespace, preventing cache reuse.
-        crate::embed::set_active_model("bge-small");
-        assert!(chunk_embedding_key(text).starts_with("bge-small:"));
-        crate::embed::set_active_model(crate::embed::DEFAULT_MODEL_ID);
     }
 
     #[test]

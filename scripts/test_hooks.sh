@@ -92,7 +92,7 @@ cd "$REPO"
 # Commit so git HEAD exists — otherwise the staleness fingerprint differs
 # between `index` (no HEAD) and `hook` (still no HEAD), causing stale=true.
 git add -A && git commit -q -m "init" 2>/dev/null || true
-"$TOKENIX" index . --no-embed --cpu-profile low &>/dev/null
+"$TOKENIX" index . --cpu-profile low &>/dev/null
 
 # ══════════════════════════════════════════════════════════════════════════
 section "hook — unknown / irrelevant tools"
@@ -245,12 +245,12 @@ else
   fail "Grep exits $CODE when pattern key missing (expected 0)"
 fi
 
-# Semantic query (≥3 words) but no embedding index → exit 0 (stale or no results)
+# Natural-language greps are never intercepted: pass through untouched
 run_hook '{"tool_name":"Grep","tool_input":{"pattern":"how does authentication work"}}'
-if [ "$CODE" = "0" ] || [ "$CODE" = "2" ]; then
-  pass "Grep exits 0 or 2 for semantic query (no embed index)"
+if [ "$CODE" = "0" ]; then
+  pass "Grep exits 0 for a natural-language query"
 else
-  fail "Grep exits $CODE for semantic query (expected 0 or 2)"
+  fail "Grep exits $CODE for a natural-language query (expected 0)"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════
