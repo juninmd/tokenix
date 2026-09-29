@@ -214,7 +214,11 @@ grep_min_words = 3     # default 3
 files (.md, .txt, .yaml, .json) use `clean_generic_text()` — full content,
 formatting stripped. Truncated previews are forbidden. Files are *skipped* whole,
 never truncated, above `max_file_bytes` (1.5 MB default) or when binary (NUL
-sniff). Tree-sitter parses Rust, Python, JS/TS, Go and C/C++; VB and SQL use
+sniff). The `MIN_CHUNK_TOKENS` floor applies only to anonymous line blocks:
+named symbols and module-level pieces (`fn tiny() {}`, `use std::fmt;`) are kept
+at any size. Oversized chunks split on line boundaries by tokens, and only a
+single over-long line is byte-split, each piece keeping the line it lives on.
+Tree-sitter parses Rust, Python, JS/TS, Go and C/C++; VB and SQL use
 line-based symbol chunking; everything else is generic line chunking.
 
 **Never break hook fallback.** `run_hook()` must `exit(0)` on any error — missing
