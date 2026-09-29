@@ -310,7 +310,9 @@ filters, the hook stays in single-digit milliseconds.
 
 Engine invariants: `never_worse` (a filtered result never costs more bytes than
 raw) · `head_lines`+`tail_lines` form a first+last window with an inline
-`[... N lines omitted ...]` marker · `priority_lines` survive every sizing cut ·
+`[... N lines omitted ...]` marker · `priority_lines` survive every sizing cut · a bare `max_lines` (no head/tail/priority) on a failed run
+(nonzero exit or a failure signal) spends the budget on failure lines first and always emits the
+`[... N lines omitted ...]` marker, and the emptied-output fallback is a head+tail window with that marker ·
 `category_caps` bound repetitive classes with a count marker · `apply_filter_with_exit`
 honors per-filter `on_failure = "passthrough"|"tail:N"` · `FilterDef` is
 `deny_unknown_fields` so typo'd keys fail loudly · every regex must compile
