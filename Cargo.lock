@@ -2997,7 +2997,7 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokenix"
-version = "0.67.1"
+version = "0.67.2"
 dependencies = [
  "anyhow",
  "chrono",
