@@ -59,6 +59,9 @@ reqwest = { version = "0.13.4", features = ["blocking", "json"] }
 # already in the tree via reqwest) instead of pulling a C zlib.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
+[patch.crates-io]
+rustls = "0.23.46"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 
