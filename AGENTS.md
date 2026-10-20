@@ -10,7 +10,7 @@ User-facing docs live in `README.md`; this file is the engineering contract.
 
 ```bash
 cargo build --release
-cargo test --bin tokenix          # 449 unit + golden tests
+cargo test --bin tokenix          # 463 unit + golden tests
 cargo test --tests                # + 39 end-to-end tests (one Windows-only) against the real binary
 cargo fmt --check                 # CI runs fmt FIRST — run it before pushing
 cargo clippy --all-targets --locked -- -D warnings
@@ -76,7 +76,8 @@ so resolution never silently raises it.
 | `doctor.rs` | Install diagnosis — filter inventory and config issues, recording state |
 | `artifacts.rs` | Reads build artifacts referenced by agent output |
 | `docshot.rs` | `#[cfg(test)]` only — renders README screenshots as SVG, never ships in the binary |
-| `tui.rs` | Ratatui shell — the only human interface |
+| `tui.rs` | Ratatui shell — the only human interface. 17 tabs in four sections (`Cmd::SECTIONS`: Overview · Code · Savings · Health; `1`–`4` jump, `?` help overlay, `y` copies a report). Code/Health report tabs (Modules, Blast, Pack, Memory) self-exec the binary through `argv`/`dyn_argv`, so they can never drift from the CLI |
+| `tui/explorer.rs` | Symbols tab — reads only `graph_nodes`/`graph_edges` (ranked list, callers/callees by `chunk_id`, source from disk). No content search, per the rule below |
 | `self_update.rs` | Self-update from GitHub releases: SHA-256 validation, atomic binary replacement, background auto-update and update caching |
 
 The interactive CLI startup triggers the background update check before the bare

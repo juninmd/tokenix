@@ -670,6 +670,14 @@ pub fn all_graph_edge_pairs(conn: &Connection) -> Result<Vec<(i64, i64)>> {
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
+/// Distinct symbol kinds present in the graph, most common first.
+pub fn graph_node_kinds(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT kind FROM graph_nodes GROUP BY kind ORDER BY COUNT(*) DESC, kind")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
 pub fn graph_callers(conn: &Connection, symbol: &str, limit: usize) -> Result<Vec<GraphRelation>> {
     graph_relations(conn, symbol, limit, true)
 }
@@ -834,7 +842,7 @@ fn exact_nodes_if_present(mut nodes: Vec<GraphNode>, symbol: &str) -> Vec<GraphN
     nodes
 }
 
-fn relations_for_node(
+pub fn relations_for_node(
     conn: &Connection,
     chunk_id: i64,
     callers: bool,

@@ -271,8 +271,10 @@ registration lives in the repository, so you have to ask for it explicitly.
 
 ## 🖥 Dashboard
 
-Run bare `tokenix` for a terminal dashboard with twelve tabs and no flags. `←`/`→`
-switch tabs, `↑`/`↓` move, `q` quits.
+Run bare `tokenix` for a terminal dashboard with seventeen tabs and no flags,
+grouped in four sections: **1·Overview**, **2·Code**, **3·Savings**, **4·Health**.
+`1`–`4` jump to a section, `←`/`→` walk the tabs, `↑`/`↓` move, `?` lists the keys
+of the current tab, `y` copies a report tab's text to the clipboard, `q` quits.
 
 On a terminal, a report command opens its own tab: `tokenix doctor` lands on
 Doctor, `tokenix scan-secrets` on Secrets. Piping, `--json`, `--statusline`,
@@ -282,7 +284,12 @@ open a UI.
 
 | Tab | What it shows |
 |---|---|
-| **Stats** | Version, per-agent hook status, index summary, one-key actions: index repo · install hooks · install binary on PATH |
+| **Stats** | Version, a “next steps” list (not indexed, stale index, agents without a hook, `tokenix` off PATH), per-agent hook status, index summary, one-key actions: index repo · install hooks · install binary on PATH |
+| **Symbols** | Browse the symbol graph: symbols ranked by PageRank, `/` filters by name or path, `t` cycles the kind. The right side shows callers, callees and the source; `Tab` + `Enter` jump into a relation, `⌫` walks back, `c` copies `path:line`, `y` copies the source |
+| **Modules** | Functional modules discovered from the symbol graph (`tokenix modules`) |
+| **Blast** | Symbols that depend on your uncommitted diff (`tokenix blast`). `s` picks the base (HEAD · HEAD~1 · origin/main), `d` the caller hops |
+| **Pack** | The budgeted repo map (`tokenix pack`), ready to paste: `b` budget · `p` profile · `c` changed files only · `y` copy |
+| **Memory** | Saved global and project preferences (`tokenix memory list`) |
 | **Gain** | Tokens removed with a reduction bar, split by source and by command. `c` adds a ≈USD table at list input rates · `a` all projects · `r` refresh |
 | **Usage** | Absolute token spend and ≈USD cost from agent transcripts. `s` cycles daily · model · 5-hour blocks · project · session |
 | **Filters** | All 534 bundled filters by tool, with a live input → output preview and a per-filter token gauge |
