@@ -1,5 +1,7 @@
 # tokenix with OpenCode
 
+> `tokenix install-hook --tool opencode` is part of the `agents-extra` build feature. Release binaries include it; with `cargo install` add `--features agents-extra` (or `--features full`).
+
 OpenCode uses tokenix as an **MCP server**. No hook is installed, so nothing is
 intercepted automatically. OpenCode gets tokenix tools and calls them when it
 decides to.

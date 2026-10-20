@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+#[cfg(feature = "authoring")]
 use std::io::{self, BufRead, Write};
 use std::path::Path;
+#[cfg(feature = "authoring")]
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Result};
@@ -43,6 +45,7 @@ fn is_filter_savings_event(e: &store::HookEvent) -> bool {
         && matches!(e.phase.as_str(), "post" | "ToolOutputCompressed")
 }
 
+#[cfg(feature = "authoring")]
 /// Reject command names that aren't plain executable identifiers. `base_cmd`
 /// reaches `cmd /C <base_cmd> --help` (Windows shell metacharacter injection),
 /// a `<base_cmd>.toml` filename (path traversal), and a git branch / PR head.
@@ -98,6 +101,7 @@ fn collect_stats(repo_root: &Path) -> Vec<CmdStats> {
 /// A command-by-command hint for the Studio tab: how many tokens it wasted, and
 /// whether it already has a filter / any recorded samples. Used to surface the
 /// biggest *unfiltered* sinks as filter candidates.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub struct FilterSuggestion {
     pub base_cmd: String,
     pub wasted: i64,
@@ -107,6 +111,7 @@ pub struct FilterSuggestion {
 /// True when `active` already contains a filter targeting `base`. Mirrors the
 /// loose match used by the Studio preview: an exact name, a `match_command` that
 /// mentions the base, or a base that extends the filter name (e.g. `cargo-nextest`).
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 fn base_has_filter(base: &str, active: &[filters::ActiveFilter]) -> bool {
     active.iter().any(|f| {
         f.name == base || f.filter.match_command.contains(base) || base.starts_with(f.name.as_str())
@@ -116,6 +121,7 @@ fn base_has_filter(base: &str, active: &[filters::ActiveFilter]) -> bool {
 /// Cross the tokens-wasted ranking with the active filters and recordings to
 /// surface unfiltered token sinks, biggest waste first. Filtered commands are
 /// dropped — they are already handled.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn suggest_filters(
     repo_root: &Path,
     active: &[filters::ActiveFilter],
@@ -252,6 +258,7 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}~", s.chars().take(keep).collect::<String>())
 }
 
+#[cfg(feature = "authoring")]
 pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<()> {
     let base_cmd = match command {
         Some(c) => c,
@@ -403,6 +410,7 @@ pub fn cmd_filter_generate(command: Option<String>, repo_root: &Path) -> Result<
     Ok(())
 }
 
+#[cfg(feature = "authoring")]
 fn preview_and_confirm_sample(cmd: &str, sample: String) -> Result<String> {
     let preview_lines: Vec<&str> = sample.lines().take(30).collect();
     println!(
@@ -445,6 +453,7 @@ fn preview_and_confirm_sample(cmd: &str, sample: String) -> Result<String> {
     }
 }
 
+#[cfg(feature = "authoring")]
 /// Read the log `compress::log_unfiltered_cmd` writes — the *home* directory,
 /// never a repo-local path. A repo-local file would be authored by whatever
 /// repository the user happens to be in, and the line it yields is executed.
@@ -468,6 +477,7 @@ fn find_latest_unfiltered_command(base_cmd: &str) -> Option<String> {
     latest_match
 }
 
+#[cfg(feature = "authoring")]
 /// Split a logged command line into argv. Returns `None` when the line carries
 /// shell metacharacters: those would need a shell to run, and a shell must never
 /// see a command line we did not build ourselves.
@@ -487,6 +497,7 @@ fn sample_argv(full_cmd: &str) -> Option<Vec<String>> {
     }
 }
 
+#[cfg(feature = "authoring")]
 /// Confirm before re-executing a command recovered from the unfiltered-command
 /// log. Defaults to "no": the safe answer is the bare base command.
 fn confirm_rerun(argv: &[String]) -> Result<bool> {
@@ -505,6 +516,7 @@ fn confirm_rerun(argv: &[String]) -> Result<bool> {
     ))
 }
 
+#[cfg(feature = "authoring")]
 /// Run the sample command directly (no shell): argv elements reach the child
 /// verbatim, so nothing in the logged line can be re-interpreted as syntax.
 fn run_command_sample(argv: &[String]) -> String {
@@ -534,6 +546,7 @@ fn run_command_sample(argv: &[String]) -> String {
     }
 }
 
+#[cfg(feature = "authoring")]
 /// Returns Vec of (name, invoke_flag) for detected, working AI CLIs.
 fn detect_ai_clis() -> Vec<(String, String)> {
     // flag: how to pass the prompt as an argument
@@ -547,6 +560,7 @@ fn detect_ai_clis() -> Vec<(String, String)> {
     found
 }
 
+#[cfg(feature = "authoring")]
 /// Probe the CLI by running `--version` — filters out stale shims in PATH.
 fn is_cli_available(name: &str) -> bool {
     let Some(program) = resolve_program(name) else {
@@ -561,6 +575,7 @@ fn is_cli_available(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(feature = "authoring")]
 /// A `Command` that never searches the current directory for programs the
 /// child itself launches (a `.cmd` shim calling `node`, say). Windows-only
 /// switch; harmless elsewhere.
@@ -570,6 +585,7 @@ fn program_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     cmd
 }
 
+#[cfg(feature = "authoring")]
 /// PATH lookup that never returns a hit from the current directory. `cmd` and
 /// `where` search the cwd before PATH on Windows, so a cloned repo shipping
 /// `claude.cmd` would run as soon as `filter generate` probed for the CLI
@@ -613,10 +629,12 @@ fn resolve_in_path(
     None
 }
 
+#[cfg(feature = "authoring")]
 pub fn is_gh_available() -> bool {
     is_cli_available("gh")
 }
 
+#[cfg(feature = "authoring")]
 /// Resolve an executable through PATH/PATHEXT without routing it through
 /// `cmd /C`. `cmd` re-parses the joined command line, so `& | > < ^ %` in an
 /// argument stay live even when Rust passes that argument as its own argv slot
@@ -640,6 +658,7 @@ fn resolve_program(name: &str) -> Option<std::path::PathBuf> {
     )
 }
 
+#[cfg(feature = "authoring")]
 fn invoke_ai_cli(name: &str, flag: &str, prompt: &str) -> Result<String> {
     // On Windows these CLIs are usually .cmd/.bat shims, which is why PATHEXT
     // resolution is needed — but resolve the path and spawn it directly instead
@@ -661,6 +680,7 @@ fn invoke_ai_cli(name: &str, flag: &str, prompt: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+#[cfg(feature = "authoring")]
 /// Extract TOML from AI response — handles prose + fences, partial fences, bare TOML.
 fn extract_toml_from_response(s: &str) -> String {
     // 1. Find ```toml...``` block anywhere (AI often wraps in markdown)
@@ -690,6 +710,7 @@ fn extract_toml_from_response(s: &str) -> String {
     s.trim().to_string()
 }
 
+#[cfg(feature = "authoring")]
 fn contribute_filter(cmd: &str, toml_content: &str) {
     if !is_gh_available() {
         println!("{} gh CLI not found — manual steps:", "⚠".yellow());
@@ -702,6 +723,7 @@ fn contribute_filter(cmd: &str, toml_content: &str) {
     }
 }
 
+#[cfg(feature = "authoring")]
 fn create_pr(cmd: &str, toml_content: &str) -> Result<()> {
     let tmp = std::env::temp_dir().join(format!("tokenix-filter-{}", cmd));
     if tmp.exists() {
@@ -767,6 +789,7 @@ fn create_pr(cmd: &str, toml_content: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "authoring")]
 /// Run a `gh` subcommand, optionally in a working directory.
 fn gh_run(args: &[&str], cwd: &std::path::Path) -> Result<()> {
     // Direct spawn, not `cmd /C`: the PR body carries AI-generated TOML built
@@ -784,6 +807,7 @@ fn gh_run(args: &[&str], cwd: &std::path::Path) -> Result<()> {
     }
 }
 
+#[cfg(feature = "authoring")]
 /// Run a `git` subcommand (no working-dir needed; uses -C flag instead).
 fn git_run(args: &[&str]) -> Result<()> {
     let program =
@@ -796,6 +820,7 @@ fn git_run(args: &[&str]) -> Result<()> {
     }
 }
 
+#[cfg(feature = "authoring")]
 fn print_contribution_instructions(cmd: &str, toml_content: &str) {
     println!("  1. Fork https://github.com/juninmd/tokenix");
     println!("  2. Create file: filters/{}.toml", cmd);
@@ -805,6 +830,7 @@ fn print_contribution_instructions(cmd: &str, toml_content: &str) {
     println!("  3. PR title: \"filter: add {} filter\"", cmd);
 }
 
+#[cfg(feature = "authoring")]
 pub fn cmd_filter_record_start(command: Option<String>, repo_root: &Path) -> Result<()> {
     if recordings::is_active(repo_root) {
         println!(
@@ -832,6 +858,7 @@ pub fn cmd_filter_record_start(command: Option<String>, repo_root: &Path) -> Res
     Ok(())
 }
 
+#[cfg(feature = "authoring")]
 pub fn cmd_filter_record_stop(repo_root: &Path) -> Result<()> {
     if !recordings::is_active(repo_root) {
         println!("{} No active recording session.", "⚠".yellow());
@@ -869,6 +896,7 @@ pub fn cmd_filter_record_stop(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "authoring")]
 /// Visualize captured-command token economy: a per-command bar of how much the
 /// matching bundled filter would compress the recorded output, plus a total.
 fn print_economy_table(econ: &[recordings::Economy]) {
@@ -932,6 +960,7 @@ fn print_economy_table(econ: &[recordings::Economy]) {
     }
 }
 
+#[cfg(feature = "authoring")]
 /// 12-cell bar visualizing percent compression. Filled cells scale with pct.
 fn savings_bar(pct: f64) -> String {
     const WIDTH: usize = 12;
@@ -948,6 +977,7 @@ fn savings_bar(pct: f64) -> String {
     }
 }
 
+#[cfg(feature = "authoring")]
 pub fn cmd_filter_record_status(repo_root: &Path) -> Result<()> {
     match recordings::active_session(repo_root) {
         Some(s) => {
@@ -1163,6 +1193,7 @@ pub fn cmd_untrust() -> Result<()> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "authoring")]
     fn scratch(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("tokenix-cwd-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -1170,6 +1201,7 @@ mod tests {
         d
     }
 
+    #[cfg(feature = "authoring")]
     #[test]
     fn resolve_in_path_skips_cwd_and_relative_entries_but_finds_path_copy() {
         let cwd = scratch("cwd");
@@ -1211,6 +1243,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cwd);
     }
 
+    #[cfg(feature = "authoring")]
     #[test]
     fn validate_command_name_accepts_real_commands() {
         for ok in [
@@ -1282,6 +1315,7 @@ mod tests {
         assert!(!is_filter_savings_event(&rewrite_marker));
     }
 
+    #[cfg(feature = "authoring")]
     #[test]
     fn validate_command_name_rejects_injection_and_traversal() {
         for bad in [

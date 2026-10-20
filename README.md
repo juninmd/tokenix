@@ -117,15 +117,29 @@ Each release also publishes `sha256sums.txt` and SLSA build-provenance attestati
 [SECURITY.md](SECURITY.md) explains how to verify a download.
 
 ```bash
-cargo install tokenix --locked                     # from crates.io
+cargo install tokenix --locked                     # from crates.io: the lean core
+cargo install tokenix --locked --features full     # everything the release binaries have
 git clone https://github.com/juninmd/tokenix && cd tokenix
-cargo install --path . --locked                    # from source
+cargo install --path . --locked --features full    # from source
 ```
 
-Use `--locked`. It builds against the committed `Cargo.lock`. Without it, `cargo
-install` re-resolves dependencies and can pull an incompatible `ureq` into the
-`ort-sys` build script. Building from source needs a recent stable
+Use `--locked`. It builds against the committed `Cargo.lock`; without it, `cargo
+install` re-resolves dependencies. Building from source needs a recent stable
 [Rust](https://www.rust-lang.org/tools/install) toolchain (MSRV 1.90).
+
+**Lean core or full build.** The default build is what an agent needs: the hook,
+the MCP server, the index, the symbol graph (`symbols`, `callers`, `callees`,
+`impact`, `flow`, `blast`, `modules`, `deps`, `graph`, `tokenmap`, `pack`), the
+output filters, `scan-secrets` and `install-hook --tool claude-code`. Release
+binaries are built with `--features full`. Cargo features add the rest:
+
+| Feature | Adds |
+|---|---|
+| `tui` | The terminal dashboard (bare `tokenix`). Implies `forensics` and `authoring` |
+| `forensics` | `usage`, `discover`, `conversation-audit`, `prompt-audit`, `session-audit`, `egress-audit`, `benchmark` |
+| `authoring` | `filter generate` and `filter record` |
+| `agents-extra` | `install-hook` / `remove-hook` for Copilot, Codex, OpenCode, Antigravity and `mcp` |
+| `full` | All of the above |
 
 > [!TIP]
 > **For AI agents installing tokenix:** Use the prebuilt binary, not `cargo install`. It needs no toolchain and no compile step. Fetch the version-less URL and **never hard-code a version**. Detect the platform, download the matching asset, mark it executable, then run `tokenix doctor`.
@@ -272,7 +286,7 @@ registration lives in the repository, so you have to ask for it explicitly.
 
 ## 🖥 Dashboard
 
-Run bare `tokenix` for a terminal dashboard with sixteen tabs and no flags,
+Run bare `tokenix` (a build with the `tui` feature, which the release binaries have) for a terminal dashboard with sixteen tabs and no flags,
 grouped in four sections: **1·Overview**, **2·Code**, **3·Savings**, **4·Health**.
 `1`–`4` jump to a section, `←`/`→` walk the tabs, `↑`/`↓` move, `?` lists the keys
 of the current tab, `y` copies a report tab's text to the clipboard, `q` quits.
@@ -286,7 +300,7 @@ open a UI.
 | Tab | What it shows |
 |---|---|
 | **Stats** | Version, a “next steps” list (not indexed, stale index, agents without a hook, `tokenix` off PATH), per-agent hook status, index summary, one-key actions: index repo · install hooks · install binary on PATH |
-| **Symbols** | Browse the symbol graph: symbols ranked by PageRank, `/` filters by name or path, `t` cycles the kind. The right side shows callers, callees and the source; `Tab` + `Enter` jump into a relation, `⌫` walks back, `c` copies `path:line`, `y` copies the source |
+| **Symbols** | Browse the symbol graph: symbols ranked by PageRank, `/` filters by name or path, `t` cycles the kind. The right side shows callers, callees and the source; `Tab` + `Enter` jump into a relation, `⌫` walks back, `c` copies `path:line`, `y` copies the source, `m` / `d` copy the impact graph as Mermaid / DOT, `h` opens it as an HTML page |
 | **Modules** | Functional modules discovered from the symbol graph (`tokenix modules`) |
 | **Blast** | Symbols that depend on your uncommitted diff (`tokenix blast`). `s` picks the base (HEAD · HEAD~1 · origin/main), `d` the caller hops |
 | **Pack** | The budgeted repo map (`tokenix pack`), ready to paste: `b` budget · `p` profile · `c` changed files only · `y` copy |

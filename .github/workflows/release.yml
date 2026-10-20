@@ -154,7 +154,10 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: |
+          # The default build is the lean agent core; `--all-features` is what ships.
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo clippy --all-targets --all-features --locked -- -D warnings
 
   ci-test:
     name: CI test
@@ -192,7 +195,9 @@ jobs:
             ${{ runner.os }}-ci-gate-cargo-
             ${{ runner.os }}-cargo-
       - name: Test
-        run: cargo test --locked
+        run: |
+          cargo test --locked
+          cargo test --all-features --locked
 
   bump-version:
     needs: [check-version, ci-lint, ci-test]
@@ -313,7 +318,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.artifact }}-cargo-
 
       - name: Build release binary
-        run: cargo build --release --locked --target ${{ matrix.target }} ${{ matrix.features }}
+        run: cargo build --release --locked --target ${{ matrix.target }} --features full
 
       - name: Prepare artifact (Unix)
         if: runner.os != 'Windows'

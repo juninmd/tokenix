@@ -39,7 +39,7 @@ fn log_unfiltered_cmd(cmd: &str) {
     // Shell input is where credentials actually live (`curl -H "Authorization:
     // Bearer …"`, `psql postgres://user:pw@host`). The failure tee already
     // masks them before writing; this log did not, and it is long-lived.
-    let entry = format!("{}\n", crate::conversation_audit::redact_credentials(cmd));
+    let entry = format!("{}\n", crate::redact::redact_credentials(cmd));
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -2430,10 +2430,7 @@ fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Opti
     // The command line itself is the most reliable place to find a credential in
     // a failing run (`curl -H "Authorization: …"`, `psql postgres://u:pw@h`), and
     // this file outlives the session. Mask it like every other persisted view.
-    let mut body = format!(
-        "$ {}\n",
-        crate::conversation_audit::redact_credentials(command_str)
-    );
+    let mut body = format!("$ {}\n", crate::redact::redact_credentials(command_str));
     let mut push_stream = |label: &str, raw: &str| {
         if !raw.trim().is_empty() {
             body.push_str(&format!("--- {label} ---\n"));
@@ -2445,7 +2442,7 @@ fn tee_raw_output(command_str: &str, stdout_raw: &str, stderr_raw: &str) -> Opti
             // echoes an auth header. The masking is shape-targeted (auth headers,
             // URL userinfo, `token=`/`password=`, PEM headers), so stack traces
             // and compiler errors — the reason this file exists — survive intact.
-            body.push_str(&crate::conversation_audit::redact_credentials(&raw[..cut]));
+            body.push_str(&crate::redact::redact_credentials(&raw[..cut]));
             if cut < raw.len() {
                 body.push_str("\n[tee capped at 1MB]");
             }

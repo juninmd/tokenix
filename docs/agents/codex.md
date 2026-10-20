@@ -1,5 +1,7 @@
 # tokenix with OpenAI Codex CLI
 
+> `tokenix install-hook --tool codex` is part of the `agents-extra` build feature. Release binaries include it; with `cargo install` add `--features agents-extra` (or `--features full`).
+
 Codex gets three things: instructions that point it at tokenix, two shell helpers,
 and a `PreToolUse` hook for terminal commands and `grep_search`.
 

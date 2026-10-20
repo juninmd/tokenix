@@ -671,6 +671,7 @@ pub fn all_graph_edge_pairs(conn: &Connection) -> Result<Vec<(i64, i64)>> {
 }
 
 /// Distinct symbol kinds present in the graph, most common first.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn graph_node_kinds(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt =
         conn.prepare("SELECT kind FROM graph_nodes GROUP BY kind ORDER BY COUNT(*) DESC, kind")?;
@@ -1173,7 +1174,7 @@ pub fn restrict_to_owner(path: &Path) {
 /// values had no business being on disk. `scan-secrets` and `session-audit`
 /// already redact before printing — the writer must do the same.
 fn redacted_event(event: &HookEvent) -> HookEvent {
-    use crate::conversation_audit::redact_credentials;
+    use crate::redact::redact_credentials;
     HookEvent {
         ts: event.ts,
         tool: event.tool.clone(),

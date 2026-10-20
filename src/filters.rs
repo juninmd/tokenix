@@ -321,6 +321,7 @@ fn parse_filter_file_named(content: &str) -> Vec<(String, FilterDef)> {
     }
 }
 
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn load_user_filters() -> Vec<FilterDef> {
     load_user_filters_named()
         .into_iter()
@@ -348,6 +349,7 @@ pub fn load_user_filters_named() -> Vec<(String, FilterDef)> {
 }
 
 /// This repo's `.tokenix/filters` directory.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn local_filters_dir() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     crate::store::find_project_root(&cwd)
@@ -664,6 +666,7 @@ pub fn find_filter_ranked<'a>(cmd: &str, groups: &'a [Vec<FilterDef>]) -> Option
 
 /// First embedded `[[tests.<name>]].input` of one filter file, keyed by filter
 /// name.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 fn samples_in(content: &str) -> HashMap<String, String> {
     #[derive(Deserialize)]
     struct SampleCase {
@@ -692,6 +695,7 @@ fn samples_in(content: &str) -> HashMap<String, String> {
 /// user just generated carries its own `[[tests]]` and would otherwise show
 /// "no embedded sample" in the one place built to inspect it. Local overrides
 /// user overrides bundled, matching filter precedence.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn sample_inputs() -> HashMap<String, String> {
     let mut map = HashMap::new();
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -787,6 +791,7 @@ pub fn load_active_filters() -> Vec<ActiveFilter> {
 }
 
 /// Returns local filters (highest priority), then user filters, then bundled filters as fallback.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn load_all_filters() -> Vec<FilterDef> {
     let mut all = load_local_filters();
     all.extend(load_user_filters());
@@ -2785,6 +2790,7 @@ fn apply_sizing(lines: Vec<String>, f: &FilterDef, signals_failure: bool) -> (Ve
     (result, omitted)
 }
 
+#[cfg(feature = "authoring")]
 /// Generate the TOML prompt to send to an AI CLI for filter creation.
 pub fn build_filter_prompt(command: &str, sample_output: &str) -> String {
     format!(

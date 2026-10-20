@@ -18,6 +18,7 @@ fn find_repo_root(path: &Path) -> PathBuf {
 }
 
 /// Estimated prompt cost of the tool schemas this server advertises.
+#[cfg_attr(not(feature = "forensics"), allow(dead_code))]
 pub fn tool_schema_tokens() -> usize {
     tool_list()
         .iter()

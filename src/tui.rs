@@ -27,9 +27,7 @@ use crate::filters::{self, ActiveFilter};
 
 mod explorer;
 
-/// Set to `1` by any tokenix process that must print instead of opening the
-/// shell: the TUI's own self-exec captures, and the user's `--no-tui` escape.
-pub const NO_TUI_ENV: &str = "TOKENIX_NO_TUI";
+use crate::NO_TUI_ENV;
 
 /// A tab of the shell. Also the target a direct command redirects to, so
 /// `tokenix doctor` and the Doctor tab are one interface, not two.

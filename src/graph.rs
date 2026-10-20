@@ -773,6 +773,7 @@ impl Format {
     }
 
     /// File extension for `--output` / exports.
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     pub fn extension(self) -> &'static str {
         match self {
             Format::Text => "txt",

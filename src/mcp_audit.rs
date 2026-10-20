@@ -228,7 +228,7 @@ fn collect_audit(
             // credential leak.
             Transport::Http { url } => Status::Unknown(format!(
                 "HTTP/SSE not introspected: {}",
-                crate::conversation_audit::redact_credentials(url)
+                crate::redact::redact_credentials(url)
             )),
             Transport::Stdio { .. } if spec.repo_local && !repo_trusted => Status::Unknown(
                 "declared by this repo — not spawned; run `tokenix trust` to introspect"

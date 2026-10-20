@@ -47,7 +47,10 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: |
+          # The default build is the lean agent core; `--all-features` is what ships.
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo clippy --all-targets --all-features --locked -- -D warnings
 
   # Windows is a first-class target here (the hook rewrites PowerShell, quotes
   # for cmd, and handles `C:\` paths), and none of that code was ever executed
@@ -79,4 +82,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
       - name: Test
-        run: cargo test --locked
+        run: |
+          cargo test --locked
+          cargo test --all-features --locked

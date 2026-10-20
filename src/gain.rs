@@ -1,6 +1,7 @@
 use crate::store::{list_all_project_logs, read_hook_log, read_hook_log_from_path, HookEvent};
 use std::path::Path;
 
+#[cfg_attr(not(feature = "forensics"), allow(dead_code))]
 pub struct ModelPrice {
     pub name: &'static str,
     pub input_per_1m: f64,
@@ -105,6 +106,7 @@ pub const MODELS: &[ModelPrice] = &[
 
 /// Look up pricing for a model id, matching by exact name then by prefix
 /// (transcripts may carry suffixed ids like `claude-opus-4-8-20260101`).
+#[cfg_attr(not(feature = "forensics"), allow(dead_code))]
 pub fn price_for(model: &str) -> Option<&'static ModelPrice> {
     MODELS
         .iter()
@@ -120,6 +122,7 @@ pub fn price_for(model: &str) -> Option<&'static ModelPrice> {
 }
 
 /// Absolute USD cost of a single usage record, per token category.
+#[cfg_attr(not(feature = "forensics"), allow(dead_code))]
 pub fn usage_cost(
     price: &ModelPrice,
     input: u64,
@@ -162,6 +165,7 @@ pub struct Economics {
 /// weighting that splits it into a per-input-token rate is approximate when the
 /// transcripts are dominated by a non-Anthropic model. The output is an
 /// estimate and is presented as one.
+#[cfg(feature = "forensics")]
 pub fn economics(tokens_saved: i64) -> Option<Economics> {
     let mix = crate::usage::spend_mix()?;
     let units = mix.input as f64
@@ -183,6 +187,12 @@ pub fn economics(tokens_saved: i64) -> Option<Economics> {
         total_tokens: mix.input + mix.output + mix.cache_read + mix.cache_write,
         saved_tokens: tokens_saved.max(0),
     })
+}
+
+/// Without the `forensics` feature there are no transcripts to price against.
+#[cfg(not(feature = "forensics"))]
+pub fn economics(_tokens_saved: i64) -> Option<Economics> {
+    None
 }
 
 #[allow(dead_code)]

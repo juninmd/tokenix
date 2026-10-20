@@ -1,16 +1,20 @@
 mod artifacts;
+#[cfg(feature = "forensics")]
 mod benchmark;
 mod blast;
 mod chunker;
 mod cmd_filter;
 mod compress;
+#[cfg(feature = "forensics")]
 mod conversation_audit;
+#[cfg(feature = "forensics")]
 mod discover;
 /// Documentation screenshots are a test-time artifact, so this never ships in
 /// the binary. See `tui::tests::render_docs_svg`.
-#[cfg(test)]
+#[cfg(all(test, feature = "tui"))]
 mod docshot;
 mod doctor;
+#[cfg(feature = "forensics")]
 mod egress_scan;
 mod filters;
 mod freshness;
@@ -19,19 +23,28 @@ mod graph;
 mod hook;
 mod indexer;
 mod mcp;
+#[cfg(feature = "forensics")]
 mod mcp_audit;
 mod mcp_proxy;
 mod modules;
 mod pack;
 mod recall;
 mod recordings;
+mod redact;
 mod secrets_scan;
 mod self_update;
 mod store;
+#[cfg(feature = "forensics")]
 mod transcripts;
+#[cfg(feature = "tui")]
 mod tui;
 mod ui;
+#[cfg(feature = "forensics")]
 mod usage;
+
+/// Set to `1` by any tokenix process that must print instead of opening the
+/// shell: the TUI's own self-exec captures, and the user's `--no-tui` escape.
+pub const NO_TUI_ENV: &str = "TOKENIX_NO_TUI";
 
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
@@ -87,20 +100,26 @@ enum CpuProfile {
 enum Tool {
     #[value(name = "claude-code")]
     ClaudeCode,
+    #[cfg(feature = "agents-extra")]
     #[value(name = "copilot")]
     Copilot,
+    #[cfg(feature = "agents-extra")]
     #[value(name = "codex")]
     Codex,
+    #[cfg(feature = "agents-extra")]
     #[value(name = "mcp")]
     Mcp,
+    #[cfg(feature = "agents-extra")]
     #[value(name = "opencode")]
     OpenCode,
+    #[cfg(feature = "agents-extra")]
     #[value(name = "antigravity")]
     Antigravity,
     #[value(name = "all")]
     All,
 }
 
+#[cfg(feature = "forensics")]
 #[derive(Clone, Copy, ValueEnum, Debug)]
 enum AuditAgent {
     #[value(name = "claude")]
@@ -117,6 +136,7 @@ enum AuditAgent {
     All,
 }
 
+#[cfg(feature = "forensics")]
 #[derive(Clone, Copy, ValueEnum, Debug)]
 enum ConversationAgent {
     #[value(name = "claude")]
@@ -131,6 +151,7 @@ enum ConversationAgent {
     All,
 }
 
+#[cfg(feature = "forensics")]
 impl ConversationAgent {
     fn to_audit_agent(self) -> conversation_audit::Agent {
         match self {
@@ -207,6 +228,7 @@ enum EgressAgent {
 }
 
 impl EgressAgent {
+    #[cfg_attr(not(feature = "forensics"), allow(dead_code))]
     fn as_str(self) -> &'static str {
         match self {
             EgressAgent::Claude => "claude",
@@ -218,6 +240,7 @@ impl EgressAgent {
     }
 }
 
+#[cfg(feature = "forensics")]
 #[derive(Copy, Clone, ValueEnum)]
 enum EgressGroupBy {
     None,
@@ -227,6 +250,7 @@ enum EgressGroupBy {
     File,
 }
 
+#[cfg(feature = "forensics")]
 impl EgressGroupBy {
     fn to_mode(self) -> egress_scan::GroupMode {
         match self {
@@ -447,6 +471,7 @@ enum Commands {
         )]
         global: bool,
     },
+    #[cfg(feature = "forensics")]
     /// Show absolute token spend and USD cost from agent transcripts
     Usage {
         /// Breakdown dimension
@@ -492,6 +517,7 @@ enum Commands {
         #[arg(short, long, help = "Write pack output to a file instead of stdout")]
         output: Option<PathBuf>,
     },
+    #[cfg(feature = "forensics")]
     /// Run a reproducible token-savings benchmark
     Benchmark {
         #[arg(short, long, default_value = ".")]
@@ -507,7 +533,7 @@ enum Commands {
             long,
             value_enum,
             default_value = "all",
-            help = "Target tool: claude-code | copilot | codex | mcp | opencode | antigravity | all"
+            help = "Target tool (default: every agent this build supports; see possible values)"
         )]
         tool: Tool,
         #[arg(
@@ -626,6 +652,7 @@ enum Commands {
         /// Stash key from a tokenix marker
         key: String,
     },
+    #[cfg(feature = "forensics")]
     /// Audit MCP/tool "weight" of the effective system prompt across AI agents
     PromptAudit {
         /// Which agent to audit (default: all that have config)
@@ -641,6 +668,7 @@ enum Commands {
         #[arg(long)]
         profile_impact: bool,
     },
+    #[cfg(feature = "forensics")]
     /// Summarize token economy risks for this session/repository
     SessionAudit {
         #[arg(short, long, default_value = ".")]
@@ -652,6 +680,7 @@ enum Commands {
         #[arg(long)]
         cache_hygiene: bool,
     },
+    #[cfg(feature = "forensics")]
     /// Scan agent transcripts for missed savings: replay the current filters
     /// over historical command outputs and rank recoverable + uncovered waste
     Discover {
@@ -668,6 +697,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    #[cfg(feature = "forensics")]
     /// Audit local AI conversation histories for token-waste patterns
     ConversationAudit {
         /// Which agent's conversation history to audit
@@ -705,6 +735,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    #[cfg(feature = "forensics")]
     /// Scan AI agent conversation transcripts for external DNS/IP destinations
     EgressAudit {
         /// Which agent's conversations to scan
@@ -765,11 +796,13 @@ enum FilterAction {
     },
     /// List active user and bundled output filters
     Active,
+    #[cfg(feature = "authoring")]
     /// Generate a TOML filter for a command using an AI CLI
     Generate {
         /// Base command name (e.g. cargo, git). Omit to select from the list.
         command: Option<String>,
     },
+    #[cfg(feature = "authoring")]
     /// Record real command output into .tokenix/recordings for richer generation
     Record {
         #[command(subcommand)]
@@ -785,6 +818,7 @@ enum FilterAction {
     },
 }
 
+#[cfg(feature = "authoring")]
 #[derive(Subcommand)]
 enum RecordAction {
     /// Start capturing command output (optionally limited to one command)
@@ -798,6 +832,7 @@ enum RecordAction {
     Status,
 }
 
+#[cfg(feature = "tui")]
 /// The shell entry a direct command should be redirected to, or `None` when it
 /// must keep printing: not a terminal, `--no-tui`/`TOKENIX_NO_TUI`, or the
 /// invocation asked for output the tab cannot represent (JSON, a status line,
@@ -811,6 +846,7 @@ fn tui_entry_for(command: &Commands) -> Option<tui::Entry> {
     tui::should_open(machine).then_some(entry)
 }
 
+#[cfg(feature = "tui")]
 /// The pure half of the rule: where a command *would* open and whether this
 /// invocation demands plain output. Split out from the TTY gate so the whole
 /// table is unit-testable.
@@ -951,6 +987,7 @@ fn tui_target(command: &Commands) -> Option<(bool, tui::Entry)> {
     Some((machine, entry))
 }
 
+#[cfg(feature = "tui")]
 /// True when `--path` points somewhere other than the current directory. The
 /// shell always reports on the repo it was opened in, so a foreign `--path`
 /// must keep printing instead of silently answering about the wrong project.
@@ -958,6 +995,7 @@ fn elsewhere(path: &Path) -> bool {
     path != Path::new(".")
 }
 
+#[cfg(feature = "tui")]
 /// Usage breakdown → Usage tab index, or `None` for a breakdown the tab cannot
 /// cycle to (weekly / monthly), which therefore keeps printing.
 fn usage_tab_index(group: &usage::Group) -> Option<usize> {
@@ -1046,7 +1084,7 @@ fn main() -> Result<()> {
     // `--no-tui` is just the flag form of the env every nested tokenix already
     // honors, so a single check covers both the flag and self-exec'd children.
     if cli.no_tui {
-        set_env_override(tui::NO_TUI_ENV, "1");
+        set_env_override(NO_TUI_ENV, "1");
     }
 
     // Only foreground, human invocations trigger the background updater. Hooks,
@@ -1061,6 +1099,7 @@ fn main() -> Result<()> {
     let command = match cli.command {
         Some(command) => command,
         None => {
+            #[cfg(feature = "tui")]
             if tui::should_open(false) {
                 return tui::run();
             }
@@ -1079,6 +1118,7 @@ fn main() -> Result<()> {
     // Route the TUI through the same error handler as everything else — a bare
     // `return` here propagated to `fn main`'s `Result`, which Rust reports by
     // panicking-style exit 101 instead of the documented exit 1.
+    #[cfg(feature = "tui")]
     if let Some(entry) = tui_entry_for(&command) {
         finish(tui::run_entry(entry));
     }
@@ -1189,6 +1229,7 @@ fn main() -> Result<()> {
                 cmd_gain(&path, history, cost_estimate, economics)
             }
         }
+        #[cfg(feature = "forensics")]
         Commands::Usage {
             group,
             since,
@@ -1220,6 +1261,7 @@ fn main() -> Result<()> {
         } => cmd_pack(
             &path, profile, budget, format, changed, since, token_map, output,
         ),
+        #[cfg(feature = "forensics")]
         Commands::Benchmark {
             path,
             refresh_index,
@@ -1270,9 +1312,11 @@ fn main() -> Result<()> {
             match action {
                 FilterAction::List { index } => cmd_filter::cmd_filter_list(index, &repo_root),
                 FilterAction::Active => cmd_filter::cmd_filter_active(),
+                #[cfg(feature = "authoring")]
                 FilterAction::Generate { command } => {
                     cmd_filter::cmd_filter_generate(command, &repo_root)
                 }
+                #[cfg(feature = "authoring")]
                 FilterAction::Record { action } => match action {
                     RecordAction::Start { command } => {
                         cmd_filter::cmd_filter_record_start(command, &repo_root)
@@ -1328,6 +1372,7 @@ fn main() -> Result<()> {
                 anyhow::bail!("no stashed output for key `{key}` (it may have been pruned)")
             }
         },
+        #[cfg(feature = "forensics")]
         Commands::PromptAudit {
             agent,
             json,
@@ -1345,11 +1390,13 @@ fn main() -> Result<()> {
             let cwd = std::env::current_dir()?;
             mcp_audit::run_audit(filter, json, recommend, profile_impact, &cwd)
         }
+        #[cfg(feature = "forensics")]
         Commands::SessionAudit {
             path,
             json,
             cache_hygiene,
         } => cmd_session_audit(&path, json, cache_hygiene),
+        #[cfg(feature = "forensics")]
         Commands::Discover {
             agent,
             top,
@@ -1361,6 +1408,7 @@ fn main() -> Result<()> {
             json,
             since_days,
         }),
+        #[cfg(feature = "forensics")]
         Commands::ConversationAudit {
             agent,
             min_chars,
@@ -1393,6 +1441,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        #[cfg(feature = "forensics")]
         Commands::EgressAudit {
             agent,
             filter,
@@ -1596,6 +1645,7 @@ fn cmd_pack(
     pack::write_or_print(output, &content)
 }
 
+#[cfg(feature = "forensics")]
 fn cmd_session_audit(path: &Path, json: bool, cache_hygiene: bool) -> Result<()> {
     let repo_root = find_repo_root(path);
     let conn = store::open_db(&repo_root, false)?;
@@ -3016,17 +3066,27 @@ fn add_to_windows_user_path(dir: &Path) -> Result<()> {
 fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
     match tool {
         Tool::ClaudeCode => install_claude_code(local)?,
+        #[cfg(feature = "agents-extra")]
         Tool::Copilot => install_copilot(local)?,
+        #[cfg(feature = "agents-extra")]
         Tool::Codex => install_codex()?,
+        #[cfg(feature = "agents-extra")]
         Tool::Mcp => install_mcp_server()?,
+        #[cfg(feature = "agents-extra")]
         Tool::OpenCode => install_opencode()?,
+        #[cfg(feature = "agents-extra")]
         Tool::Antigravity => install_antigravity(local)?,
         Tool::All => {
             install_claude_code(local)?;
+            #[cfg(feature = "agents-extra")]
             install_copilot(local)?;
+            #[cfg(feature = "agents-extra")]
             install_codex()?;
+            #[cfg(feature = "agents-extra")]
             install_mcp_server()?;
+            #[cfg(feature = "agents-extra")]
             install_opencode()?;
+            #[cfg(feature = "agents-extra")]
             install_antigravity(local)?;
         }
     }
@@ -3151,6 +3211,7 @@ fn remove_legacy_claude_auto_index_hook(settings: &mut serde_json::Value) -> boo
     changed
 }
 
+#[cfg(feature = "agents-extra")]
 fn install_copilot(local: bool) -> Result<()> {
     // Global path: ~/.copilot/hooks/tokenix.json (user-level, picked up by VS Code for all repos).
     // Local path:  .github/hooks/hooks.json       (workspace-level, commit to share with team).
@@ -3289,6 +3350,7 @@ Index location: `~/.tokenix/<project-id>.db` (global, one DB per project)
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn install_codex() -> Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
     let codex_dir = home.join(".codex");
@@ -3483,6 +3545,7 @@ fn install_codex_hooks_json_windows(hooks_path: &Path, hook_ps1_path: &Path) -> 
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 #[cfg(not(windows))]
 fn install_codex_hooks_json_unix(hooks_path: &Path, tokenix_bin: &str) -> Result<()> {
     let mut hooks = load_codex_hooks_json(hooks_path)?;
@@ -3497,6 +3560,7 @@ fn install_codex_hooks_json_unix(hooks_path: &Path, tokenix_bin: &str) -> Result
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn load_codex_hooks_json(hooks_path: &Path) -> Result<serde_json::Value> {
     let mut hooks = load_agent_config(hooks_path)?;
     if !hooks["hooks"].is_object() {
@@ -3505,6 +3569,7 @@ fn load_codex_hooks_json(hooks_path: &Path) -> Result<serde_json::Value> {
     Ok(hooks)
 }
 
+#[cfg(feature = "agents-extra")]
 fn upsert_codex_hook(slot: &mut serde_json::Value, hook: serde_json::Value) {
     if !slot.is_array() {
         *slot = serde_json::json!([]);
@@ -3525,17 +3590,27 @@ fn upsert_codex_hook(slot: &mut serde_json::Value, hook: serde_json::Value) {
 fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
     match tool {
         Tool::ClaudeCode => remove_claude_code(local)?,
+        #[cfg(feature = "agents-extra")]
         Tool::Copilot => remove_copilot(local)?,
+        #[cfg(feature = "agents-extra")]
         Tool::Codex => remove_codex()?,
+        #[cfg(feature = "agents-extra")]
         Tool::Mcp => remove_mcp_server()?,
+        #[cfg(feature = "agents-extra")]
         Tool::OpenCode => remove_opencode()?,
+        #[cfg(feature = "agents-extra")]
         Tool::Antigravity => remove_antigravity(local)?,
         Tool::All => {
             remove_claude_code(local)?;
+            #[cfg(feature = "agents-extra")]
             remove_copilot(local)?;
+            #[cfg(feature = "agents-extra")]
             remove_codex()?;
+            #[cfg(feature = "agents-extra")]
             remove_mcp_server()?;
+            #[cfg(feature = "agents-extra")]
             remove_opencode()?;
+            #[cfg(feature = "agents-extra")]
             remove_antigravity(local)?;
         }
     }
@@ -3565,6 +3640,7 @@ fn remove_claude_code(local: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn remove_copilot(local: bool) -> Result<()> {
     if local {
         let cwd = std::env::current_dir()?;
@@ -3588,6 +3664,7 @@ fn remove_copilot(local: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn remove_codex() -> Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
     let marker = "<!-- tokenix -->";
@@ -3626,6 +3703,7 @@ fn remove_codex() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn remove_codex_hooks_json(json: &mut serde_json::Value) {
     for phase in ["PreToolUse", "PostToolUse"] {
         let Some(arr) = json["hooks"][phase].as_array_mut() else {
@@ -3638,6 +3716,7 @@ fn remove_codex_hooks_json(json: &mut serde_json::Value) {
     }
 }
 
+#[cfg(any(feature = "agents-extra", feature = "forensics"))]
 fn mcp_config_path() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
     Ok(home
@@ -3646,12 +3725,14 @@ fn mcp_config_path() -> Result<PathBuf> {
         .join("mcp_config.json"))
 }
 
+#[cfg(feature = "agents-extra")]
 fn opencode_config_path() -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     let repo_root = store::find_project_root(&cwd);
     Ok(repo_root.join("opencode.json"))
 }
 
+#[cfg(feature = "agents-extra")]
 fn opencode_mcp_entry(tokenix_bin: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "local",
@@ -3659,6 +3740,7 @@ fn opencode_mcp_entry(tokenix_bin: &str) -> serde_json::Value {
     })
 }
 
+#[cfg(feature = "agents-extra")]
 fn upsert_opencode_mcp(config: &mut serde_json::Value, tokenix_bin: &str) {
     if !config.get("mcp").is_some_and(serde_json::Value::is_object) {
         config["mcp"] = serde_json::json!({});
@@ -3666,6 +3748,7 @@ fn upsert_opencode_mcp(config: &mut serde_json::Value, tokenix_bin: &str) {
     config["mcp"]["tokenix"] = opencode_mcp_entry(tokenix_bin);
 }
 
+#[cfg(feature = "agents-extra")]
 fn remove_opencode_mcp(config: &mut serde_json::Value) -> bool {
     let Some(mcp) = config.get_mut("mcp").and_then(|v| v.as_object_mut()) else {
         return false;
@@ -3680,6 +3763,7 @@ fn remove_opencode_mcp(config: &mut serde_json::Value) -> bool {
     removed
 }
 
+#[cfg(feature = "agents-extra")]
 fn install_opencode() -> Result<()> {
     let config_path = opencode_config_path()?;
     if let Some(parent) = config_path.parent() {
@@ -3709,6 +3793,7 @@ fn install_opencode() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn remove_opencode() -> Result<()> {
     let config_path = opencode_config_path()?;
     if !config_path.exists() {
@@ -3728,6 +3813,7 @@ fn remove_opencode() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn install_mcp_server() -> Result<()> {
     let config_path = mcp_config_path()?;
     if let Some(parent) = config_path.parent() {
@@ -3756,6 +3842,7 @@ fn install_mcp_server() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn remove_mcp_server() -> Result<()> {
     let config_path = mcp_config_path()?;
     if !config_path.exists() {
@@ -3778,6 +3865,7 @@ fn remove_mcp_server() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn antigravity_plugin_dir(home: &Path, repo_root: &Path, local: bool) -> PathBuf {
     if local {
         repo_root.join(".agents").join("plugins").join("tokenix")
@@ -3789,6 +3877,7 @@ fn antigravity_plugin_dir(home: &Path, repo_root: &Path, local: bool) -> PathBuf
     }
 }
 
+#[cfg(feature = "agents-extra")]
 fn legacy_antigravity_plugin_dir(home: &Path) -> PathBuf {
     home.join(".gemini")
         .join("antigravity-cli")
@@ -3796,6 +3885,7 @@ fn legacy_antigravity_plugin_dir(home: &Path) -> PathBuf {
         .join("tokenix")
 }
 
+#[cfg(feature = "agents-extra")]
 fn write_antigravity_plugin(plugin_dir: &Path, hook_cmd: &str) -> Result<()> {
     std::fs::create_dir_all(plugin_dir)?;
     std::fs::write(
@@ -3820,6 +3910,7 @@ fn write_antigravity_plugin(plugin_dir: &Path, hook_cmd: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn run_agy_plugin(args: &[&str]) -> Result<()> {
     let output = std::process::Command::new("agy")
         .args(["plugin"])
@@ -3836,6 +3927,7 @@ fn run_agy_plugin(args: &[&str]) -> Result<()> {
     ))
 }
 
+#[cfg(feature = "agents-extra")]
 fn install_antigravity(local: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let repo_root = store::find_project_root(&cwd);
@@ -3875,6 +3967,7 @@ fn install_antigravity(local: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "agents-extra")]
 fn remove_antigravity(local: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let repo_root = store::find_project_root(&cwd);
@@ -4274,6 +4367,12 @@ fn help_catalog() -> String {
         ("pack", "", "Bundle focused context for hookless tools"),
         ("deps", "<file>", "File-level import dependencies"),
         ("graph", "", "Symbol-graph overview and hotspots"),
+        ("blast", "", "Symbols that depend on your uncommitted diff"),
+        (
+            "modules",
+            "",
+            "Functional modules and how they depend on each other",
+        ),
         (
             "retrieve",
             "<key>",
@@ -4328,7 +4427,9 @@ fn help_catalog() -> String {
             "Audit external DNS/IP targets in agent conversations",
         ),
         ("artifacts", "", "Manage non-code context artifacts"),
+        #[cfg(feature = "forensics")]
         ("usage", "", "Absolute token spend from agent transcripts"),
+        #[cfg(feature = "forensics")]
         ("discover", "", "Find commands worth filtering in this repo"),
         (
             "trust / untrust",
@@ -4501,6 +4602,7 @@ mod tests {
             .expect("subcommand")
     }
 
+    #[cfg(feature = "tui")]
     #[test]
     fn human_report_commands_target_their_tab() {
         for (argv, tab) in [
@@ -4526,6 +4628,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "tui")]
     #[test]
     fn machine_and_unrepresentable_invocations_keep_printing() {
         // Never swallow output the invocation explicitly asked for.
@@ -4571,6 +4674,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "tui")]
     #[test]
     fn agent_facing_commands_never_open_the_shell() {
         // A hook, a compressed run, an MCP session or a query is consumed by a
@@ -4596,6 +4700,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "tui")]
     #[test]
     fn scoping_flags_are_carried_into_the_tab() {
         let (_, e) = tui_target(&parse(&["tokenix", "usage", "model", "--all-projects"])).unwrap();
@@ -4623,6 +4728,7 @@ mod tests {
         assert!(ps1.contains("ReadToEndAsync()"));
     }
 
+    #[cfg(feature = "agents-extra")]
     #[test]
     fn codex_hook_json_preserves_unrelated_hooks() {
         let mut json = serde_json::json!({
@@ -4726,6 +4832,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "agents-extra")]
     #[test]
     fn remove_codex_hook_json_removes_only_tokenix_entries() {
         let mut json = serde_json::json!({
@@ -4750,6 +4857,7 @@ mod tests {
         assert!(!json.to_string().contains("tokenix-codex-hook.ps1"));
     }
 
+    #[cfg(feature = "agents-extra")]
     #[test]
     fn remove_codex_hook_json_removes_unix_style_hooks() {
         let mut json = serde_json::json!({
@@ -4775,6 +4883,7 @@ mod tests {
         assert!(!json.to_string().contains("tokenix hook-post"));
     }
 
+    #[cfg(feature = "agents-extra")]
     #[test]
     fn antigravity_plugin_paths_use_current_global_and_workspace_locations() {
         let home = Path::new("/home/tester");
@@ -4793,6 +4902,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "agents-extra")]
     #[test]
     fn upsert_opencode_mcp_preserves_foreign_keys() {
         let mut config = serde_json::json!({
@@ -4823,6 +4933,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "agents-extra")]
     #[test]
     fn remove_opencode_mcp_preserves_foreign_servers() {
         let mut config = serde_json::json!({
@@ -4845,6 +4956,7 @@ mod tests {
         assert_eq!(config["mcp"]["docs"]["url"], "https://example.com/mcp");
     }
 
+    #[cfg(feature = "agents-extra")]
     #[test]
     fn remove_opencode_mcp_drops_empty_mcp_container() {
         let mut config = serde_json::json!({
@@ -4872,7 +4984,14 @@ mod tests {
             .map(|value| value.get_name().to_string())
             .collect();
         assert!(!targets.iter().any(|target| target == "gemini"));
-        assert!(targets.iter().any(|target| target == "antigravity"));
-        assert!(targets.iter().any(|target| target == "opencode"));
+        assert!(targets.iter().any(|target| target == "claude-code"));
+        assert!(targets.iter().any(|target| target == "all"));
+        // The other agents' installers are an opt-in build.
+        let has_extra = targets.iter().any(|target| target == "antigravity");
+        assert_eq!(has_extra, cfg!(feature = "agents-extra"));
+        assert_eq!(
+            targets.iter().any(|target| target == "opencode"),
+            cfg!(feature = "agents-extra")
+        );
     }
 }

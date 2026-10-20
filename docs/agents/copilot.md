@@ -1,5 +1,7 @@
 # tokenix with GitHub Copilot
 
+> `tokenix install-hook --tool copilot` is part of the `agents-extra` build feature. Release binaries include it; with `cargo install` add `--features agents-extra` (or `--features full`).
+
 Copilot is the one agent that gets **both** hooks: `PreToolUse` caps greps and
 filters commands, and `PostToolUse` (`tokenix hook-post`) redacts secrets and
 compresses tool output before the model sees it.

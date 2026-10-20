@@ -1,5 +1,7 @@
 # tokenix with Antigravity
 
+> `tokenix install-hook --tool antigravity` is part of the `agents-extra` build feature. Release binaries include it; with `cargo install` add `--features agents-extra` (or `--features full`).
+
 Antigravity loads tokenix as a native plugin. Its hooks speak Antigravity's own
 dialect: a `toolCall` payload in, and `decision: allow | deny` out instead of exit
 codes.
