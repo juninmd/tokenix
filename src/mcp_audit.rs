@@ -1072,7 +1072,7 @@ fn print_human(
             println!("      {} {}", "⚠".yellow(), reason.yellow());
         }
         if recommend {
-            for rec in recommendations_for_agent(*agent, &rows, &totals, th) {
+            for rec in recommendations_for_agent(&rows, &totals, th) {
                 println!("      {} {}", "rec:".cyan(), rec.cyan());
             }
         }
@@ -1187,8 +1187,7 @@ fn print_json(
             "reasons": totals.reasons,
         });
         if recommend {
-            agent_json["recommendations"] =
-                json!(recommendations_for_agent(*agent, &rows, &totals, th));
+            agent_json["recommendations"] = json!(recommendations_for_agent(&rows, &totals, th));
         }
         agents_json.push(agent_json);
     }
@@ -1203,42 +1202,17 @@ fn print_json(
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
 }
 
-fn tokenix_profile_counts() -> (usize, usize, usize) {
-    let slim_tools = crate::mcp::tool_schema_tokens(crate::mcp::McpProfile::Slim);
-    let full_tools = crate::mcp::tool_schema_tokens(crate::mcp::McpProfile::Full);
-    let saved = full_tools.saturating_sub(slim_tools);
-    (full_tools, slim_tools, saved)
-}
-
 fn print_profile_impact() {
-    let (full, slim, saved) = tokenix_profile_counts();
     println!();
-    println!("{}", "tokenix MCP profile impact".bold());
-    println!("  full: ~{full} tool-schema tok");
-    println!("  slim: ~{slim} tool-schema tok");
-    println!(
-        "  saved: ~{} tok ({:.1}%)",
-        saved,
-        if full > 0 {
-            (saved as f64 / full as f64) * 100.0
-        } else {
-            0.0
-        }
-    );
+    println!("{}", "tokenix MCP tool schemas".bold());
+    println!("  ~{} tool-schema tok", crate::mcp::tool_schema_tokens());
 }
 
 fn profile_impact_json() -> Value {
-    let (full, slim, saved) = tokenix_profile_counts();
-    json!({
-        "full_tokens": full,
-        "slim_tokens": slim,
-        "saved_tokens": saved,
-        "saved_pct": if full > 0 { (saved as f64 / full as f64) * 100.0 } else { 0.0 }
-    })
+    json!({ "tool_schema_tokens": crate::mcp::tool_schema_tokens() })
 }
 
 fn recommendations_for_agent(
-    agent: Agent,
     rows: &[(String, Status)],
     totals: &AgentTotals,
     th: &Thresholds,
@@ -1276,16 +1250,6 @@ fn recommendations_for_agent(
     {
         recs.push(
             "HTTP/SSE servers were not introspected; count them as unknown prompt risk".to_string(),
-        );
-    }
-    if agent == Agent::Antigravity
-        && rows
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("tokenix"))
-    {
-        recs.push(
-            "run `tokenix mcp --profile slim` when the host supports a smaller tool surface"
-                .to_string(),
         );
     }
     recs

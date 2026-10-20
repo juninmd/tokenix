@@ -437,7 +437,7 @@ Checks are skipped in CI, piped commands, hooks, and agent-facing commands. Set
 | `tokenix hook` | `PreToolUse` handler: caps unbounded Grep output and filters noisy commands (never touches `Read`) |
 | `tokenix hook-post` | `PostToolUse` handler: redacts secrets and compresses tool output (agents whose install wires it, see the [agent guides](#-agent-guides)) |
 | `tokenix run "CMD"` | Run a command and compress its output (`--shell`, `--path/-p`, `--raw`) |
-| `tokenix mcp` | MCP server exposing context, read/search, graph and gain tools (`--profile slim\|full`) |
+| `tokenix mcp` | MCP server exposing read, symbol-graph, memory, run and gain tools (one tool set; `--profile` is accepted and ignored) |
 | `tokenix mcp-proxy -- CMD` | Wrap another stdio MCP server and compress only its `tools/call` text results |
 
 <details>

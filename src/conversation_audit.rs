@@ -81,7 +81,7 @@ impl Scenario {
             Scenario::HookMetadata => {
                 "Keep hook success payloads minimal and avoid duplicated updatedInput fields."
             }
-            Scenario::ToolSchema => "Disable unused MCP servers or switch to a slim MCP profile.",
+            Scenario::ToolSchema => "Disable unused MCP servers.",
             Scenario::DiffDump => "Use git diff --stat/name-only first, then targeted hunks.",
             Scenario::TestLog => {
                 "Keep failures, summaries, and first diagnostics; collapse passing noise."

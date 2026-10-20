@@ -4,12 +4,6 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum McpProfile {
-    Slim,
-    Full,
-}
-
 /// Wall-clock cap for `tokenix_run`, overridable per environment.
 fn run_timeout_secs() -> u64 {
     std::env::var("TOKENIX_MCP_RUN_TIMEOUT_SECS")
@@ -99,38 +93,9 @@ fn find_repo_root(path: &Path) -> PathBuf {
     crate::store::find_project_root(&abs)
 }
 
-fn slim_tools() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "tokenix_search_tools",
-            "description": "Find tokenix tool names for read/graph/memory/run/gain capabilities.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"]
-            }
-        }),
-        json!({
-            "name": "tokenix_call",
-            "description": "Call a tokenix tool by name with JSON arguments after tokenix_search_tools.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "arguments": {"type": "object"}
-                },
-                "required": ["name"]
-            }
-        }),
-    ]
-}
-
-pub fn tool_schema_tokens(profile: McpProfile) -> usize {
-    let schemas = match profile {
-        McpProfile::Slim => slim_tools(),
-        McpProfile::Full => full_tool_estimate(),
-    };
-    schemas
+/// Estimated prompt cost of the tool schemas this server advertises.
+pub fn tool_schema_tokens() -> usize {
+    full_tool_estimate()
         .iter()
         .map(|tool| crate::chunker::count_tokens(&tool.to_string()))
         .sum()
@@ -180,7 +145,7 @@ fn full_tool_estimate() -> Vec<Value> {
     .collect()
 }
 
-pub fn run_mcp_server(profile: McpProfile) -> Result<()> {
+pub fn run_mcp_server() -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut reader = stdin.lock();
@@ -241,181 +206,171 @@ pub fn run_mcp_server(profile: McpProfile) -> Result<()> {
                     continue;
                 }
                 "tools/list" => {
-                    if profile == McpProfile::Slim {
-                        json!({
-                            "jsonrpc": "2.0",
-                            "id": id,
-                            "result": {
-                                "tools": slim_tools()
-                            }
-                        })
-                    } else {
-                        json!({
-                            "jsonrpc": "2.0",
-                            "id": id,
-                            "result": {
-                                "tools": [
-                                    {
-                                        "name": "tokenix_read",
-                                        "description": "Smart outline, symbol, or line-range file reader (token-efficient)",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "file": {
-                                                    "type": "string",
-                                                    "description": "Relative path to the file to read"
-                                                },
-                                                "symbol": {
-                                                    "type": "string",
-                                                    "description": "Optional symbol/class/function name to extract"
-                                                },
-                                                "lines": {
-                                                    "type": "string",
-                                                    "description": "Optional line range, e.g. '1-50'"
-                                                }
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "tools": [
+                                {
+                                    "name": "tokenix_read",
+                                    "description": "Smart outline, symbol, or line-range file reader (token-efficient)",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "file": {
+                                                "type": "string",
+                                                "description": "Relative path to the file to read"
                                             },
-                                            "required": ["file"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_symbols",
-                                        "description": "Find indexed symbols by name or path",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "query": {"type": "string", "description": "Symbol name, partial name, or path fragment"},
-                                                "limit": {"type": "integer", "description": "Maximum results (default 20)", "default": 20}
+                                            "symbol": {
+                                                "type": "string",
+                                                "description": "Optional symbol/class/function name to extract"
                                             },
-                                            "required": ["query"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_callers",
-                                        "description": "Find symbols that call or reference a target symbol",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "symbol": {"type": "string", "description": "Target symbol name"},
-                                                "limit": {"type": "integer", "description": "Maximum relationships (default 20)", "default": 20}
-                                            },
-                                            "required": ["symbol"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_callees",
-                                        "description": "Find symbols called or referenced by a target symbol",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "symbol": {"type": "string", "description": "Target symbol name"},
-                                                "limit": {"type": "integer", "description": "Maximum relationships (default 20)", "default": 20}
-                                            },
-                                            "required": ["symbol"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_impact",
-                                        "description": "Show a bidirectional impact graph around a symbol",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "symbol": {"type": "string", "description": "Target symbol name"},
-                                                "depth": {"type": "integer", "description": "Graph traversal depth (default 2)", "default": 2},
-                                                "limit": {"type": "integer", "description": "Maximum relationships (default 50)", "default": 50}
-                                            },
-                                            "required": ["symbol"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_memory_add",
-                                        "description": "Save a durable user preference for future sessions. Scope defaults to project.",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "text": {
-                                                    "type": "string",
-                                                    "description": "Preference to remember, e.g. 'Prefer Biome over ESLint for linting migrations'"
-                                                },
-                                                "scope": {
-                                                    "type": "string",
-                                                    "description": "Preference scope: project or global",
-                                                    "default": "project"
-                                                }
-                                            },
-                                            "required": ["text"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_memory_list",
-                                        "description": "List saved tokenix preferences from global, project, or all scopes",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "scope": {
-                                                    "type": "string",
-                                                    "description": "Scope to list: all, project, or global",
-                                                    "default": "all"
-                                                }
+                                            "lines": {
+                                                "type": "string",
+                                                "description": "Optional line range, e.g. '1-50'"
                                             }
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_memory_remove",
-                                        "description": "Remove saved preferences matching text from project or global memory",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "query": {"type": "string", "description": "Text to match in saved preferences"},
-                                                "scope": {"type": "string", "description": "Scope to edit: project or global", "default": "project"}
+                                        },
+                                        "required": ["file"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_symbols",
+                                    "description": "Find indexed symbols by name or path",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "query": {"type": "string", "description": "Symbol name, partial name, or path fragment"},
+                                            "limit": {"type": "integer", "description": "Maximum results (default 20)", "default": 20}
+                                        },
+                                        "required": ["query"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_callers",
+                                    "description": "Find symbols that call or reference a target symbol",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "symbol": {"type": "string", "description": "Target symbol name"},
+                                            "limit": {"type": "integer", "description": "Maximum relationships (default 20)", "default": 20}
+                                        },
+                                        "required": ["symbol"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_callees",
+                                    "description": "Find symbols called or referenced by a target symbol",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "symbol": {"type": "string", "description": "Target symbol name"},
+                                            "limit": {"type": "integer", "description": "Maximum relationships (default 20)", "default": 20}
+                                        },
+                                        "required": ["symbol"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_impact",
+                                    "description": "Show a bidirectional impact graph around a symbol",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "symbol": {"type": "string", "description": "Target symbol name"},
+                                            "depth": {"type": "integer", "description": "Graph traversal depth (default 2)", "default": 2},
+                                            "limit": {"type": "integer", "description": "Maximum relationships (default 50)", "default": 50}
+                                        },
+                                        "required": ["symbol"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_memory_add",
+                                    "description": "Save a durable user preference for future sessions. Scope defaults to project.",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "text": {
+                                                "type": "string",
+                                                "description": "Preference to remember, e.g. 'Prefer Biome over ESLint for linting migrations'"
                                             },
-                                            "required": ["query"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_memory_edit",
-                                        "description": "Replace saved preferences matching text in project or global memory",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "query": {"type": "string", "description": "Text to match in saved preferences"},
-                                                "replacement": {"type": "string", "description": "Replacement preference text"},
-                                                "scope": {"type": "string", "description": "Scope to edit: project or global", "default": "project"}
-                                            },
-                                            "required": ["query", "replacement"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_run",
-                                        "description": "Execute a shell command with token-efficient output compression (removes noise, truncates long logs)",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "command": {
-                                                    "type": "string",
-                                                    "description": "Shell command to execute, e.g. 'npm install' or 'cargo test'"
-                                                }
-                                            },
-                                            "required": ["command"]
-                                        }
-                                    },
-                                    {
-                                        "name": "tokenix_gain",
-                                        "description": "Show measured token savings statistics from tokenix hooks",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "history": {
-                                                    "type": "boolean",
-                                                    "description": "Optional flag to show per-call history",
-                                                    "default": false
-                                                }
+                                            "scope": {
+                                                "type": "string",
+                                                "description": "Preference scope: project or global",
+                                                "default": "project"
+                                            }
+                                        },
+                                        "required": ["text"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_memory_list",
+                                    "description": "List saved tokenix preferences from global, project, or all scopes",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "scope": {
+                                                "type": "string",
+                                                "description": "Scope to list: all, project, or global",
+                                                "default": "all"
                                             }
                                         }
                                     }
-                                ]
-                            }
-                        })
-                    }
+                                },
+                                {
+                                    "name": "tokenix_memory_remove",
+                                    "description": "Remove saved preferences matching text from project or global memory",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "query": {"type": "string", "description": "Text to match in saved preferences"},
+                                            "scope": {"type": "string", "description": "Scope to edit: project or global", "default": "project"}
+                                        },
+                                        "required": ["query"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_memory_edit",
+                                    "description": "Replace saved preferences matching text in project or global memory",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "query": {"type": "string", "description": "Text to match in saved preferences"},
+                                            "replacement": {"type": "string", "description": "Replacement preference text"},
+                                            "scope": {"type": "string", "description": "Scope to edit: project or global", "default": "project"}
+                                        },
+                                        "required": ["query", "replacement"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_run",
+                                    "description": "Execute a shell command with token-efficient output compression (removes noise, truncates long logs)",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "command": {
+                                                "type": "string",
+                                                "description": "Shell command to execute, e.g. 'npm install' or 'cargo test'"
+                                            }
+                                        },
+                                        "required": ["command"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_gain",
+                                    "description": "Show measured token savings statistics from tokenix hooks",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "history": {
+                                                "type": "boolean",
+                                                "description": "Optional flag to show per-call history",
+                                                "default": false
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    })
                 }
                 "tools/call" => {
                     let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
@@ -526,24 +481,6 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
     }
 
     match name {
-        "tokenix_search_tools" => {
-            let query = args
-                .get("query")
-                .and_then(|q| q.as_str())
-                .ok_or_else(|| anyhow!("Missing 'query' argument"))?;
-            Ok(search_tool_catalog(query))
-        }
-        "tokenix_call" => {
-            let tool = args
-                .get("name")
-                .and_then(|q| q.as_str())
-                .ok_or_else(|| anyhow!("Missing 'name' argument"))?;
-            let arguments = args.get("arguments").cloned().unwrap_or(Value::Null);
-            if matches!(tool, "tokenix_call" | "tokenix_search_tools") {
-                return Err(anyhow!("Refusing recursive tokenix_call"));
-            }
-            handle_tool_call(tool, arguments)
-        }
         "tokenix_read" => {
             let file = args
                 .get("file")
@@ -866,42 +803,6 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
             Ok(out)
         }
         _ => Err(anyhow!("Unknown tool '{}'", name)),
-    }
-}
-
-fn search_tool_catalog(query: &str) -> String {
-    const TOOLS: &[(&str, &str)] = &[
-        (
-            "tokenix_read",
-            "smart file outline, symbol, or line-range read",
-        ),
-        ("tokenix_symbols", "find indexed symbols by name or path"),
-        ("tokenix_callers", "find symbols that reference a target"),
-        ("tokenix_callees", "find symbols referenced by a target"),
-        ("tokenix_impact", "bidirectional symbol impact graph"),
-        ("tokenix_memory_add", "save durable preference memory"),
-        ("tokenix_memory_list", "list saved preference memory"),
-        ("tokenix_memory_remove", "remove saved preference memory"),
-        ("tokenix_memory_edit", "edit saved preference memory"),
-        ("tokenix_run", "run shell command with compressed output"),
-        ("tokenix_gain", "show hook token savings"),
-    ];
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .map(|s| s.to_ascii_lowercase())
-        .collect();
-    let mut rows = Vec::new();
-    for (name, desc) in TOOLS {
-        let haystack = format!("{name} {desc}").to_ascii_lowercase();
-        if terms.is_empty() || terms.iter().any(|term| haystack.contains(term)) {
-            rows.push(format!("- {name}: {desc}"));
-        }
-    }
-    if rows.is_empty() {
-        "No tokenix tools matched. Try query, context, read, graph, memory, run, or gain."
-            .to_string()
-    } else {
-        rows.join("\n")
     }
 }
 

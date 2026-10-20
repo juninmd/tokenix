@@ -11,7 +11,7 @@ User-facing docs live in `README.md`; this file is the engineering contract.
 ```bash
 cargo build --release
 cargo test --bin tokenix          # 463 unit + golden tests
-cargo test --tests                # + 39 end-to-end tests (one Windows-only) against the real binary
+cargo test --tests                # + 40 end-to-end tests (one Windows-only) against the real binary
 cargo fmt --check                 # CI runs fmt FIRST — run it before pushing
 cargo clippy --all-targets --locked -- -D warnings
 ./scripts/verify.sh [--models]    # every CI gate locally, in CI order
@@ -63,7 +63,7 @@ so resolution never silently raises it.
 | `recall.rs` | Stash/retrieve of clipped output, identical-output dedup |
 | `gain.rs` | Savings analytics, `MODELS` pricing table |
 | `usage.rs` | Spend + cost from agent transcripts (`message.usage`, incl. cache fields) |
-| `mcp.rs` / `mcp_proxy.rs` | MCP server (`--profile slim\|full`) / stdio passthrough that compresses results |
+| `mcp.rs` / `mcp_proxy.rs` | MCP server (one tool set; `--profile` is a hidden no-op for old configs) / stdio passthrough that compresses results |
 | `mcp_audit.rs` | `prompt-audit` / `session-audit`, `context_weight()` |
 | `secrets_scan.rs` / `egress_scan.rs` | Transcript forensics — credentials and outbound destinations |
 | `discover.rs` | Replays current filters over historical agent output |

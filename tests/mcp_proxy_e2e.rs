@@ -20,8 +20,6 @@ fn proxy_wrapping_own_server() -> std::process::Child {
             "--",
             env!("CARGO_BIN_EXE_tokenix"),
             "mcp",
-            "--profile",
-            "slim",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -100,4 +98,40 @@ fn proxy_exits_when_the_child_exits() {
             None => std::thread::sleep(Duration::from_millis(100)),
         }
     }
+}
+
+/// There is one MCP profile. Configs written when `--profile slim` existed must
+/// keep starting, and must now get the real tools instead of a two-tool facade.
+#[test]
+fn legacy_profile_flag_still_starts_and_serves_every_tool() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["mcp", "--profile", "slim"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mcp");
+    writeln!(
+        child.stdin.as_mut().expect("stdin"),
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list"}}"#
+    )
+    .unwrap();
+    let stdout = child.stdout.take().expect("stdout");
+    let line = BufReader::new(stdout)
+        .lines()
+        .next()
+        .expect("tools line")
+        .expect("io");
+    let list: serde_json::Value = serde_json::from_str(&line).expect("tools json");
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(names.contains(&"tokenix_symbols"), "{names:?}");
+    assert!(names.contains(&"tokenix_impact"), "{names:?}");
+    assert!(!names.contains(&"tokenix_call"), "{names:?}");
+    let _ = child.kill();
+    let _ = child.wait();
 }

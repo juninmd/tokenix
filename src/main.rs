@@ -145,12 +145,6 @@ impl ConversationAgent {
     }
 }
 
-#[derive(Clone, Copy, ValueEnum, Debug)]
-enum McpProfile {
-    Slim,
-    Full,
-}
-
 #[derive(Copy, Clone, ValueEnum)]
 enum ScanAgent {
     #[value(name = "claude")]
@@ -677,7 +671,7 @@ enum Commands {
         /// Include token-saving recommendations
         #[arg(long)]
         recommend: bool,
-        /// Show estimated full vs slim tokenix MCP profile impact
+        /// Show the prompt weight of tokenix's own MCP tool schemas
         #[arg(long)]
         profile_impact: bool,
     },
@@ -774,8 +768,10 @@ enum Commands {
     HookPost,
     /// Run as a Model Context Protocol (MCP) server over stdin/stdout
     Mcp {
-        #[arg(long, value_enum, default_value = "full")]
-        profile: McpProfile,
+        /// Accepted and ignored: there is one profile now. Kept so existing
+        /// client configs that still pass `--profile slim|full` keep starting.
+        #[arg(long, hide = true, value_parser = ["slim", "full"])]
+        profile: Option<String>,
     },
     /// Generate agent ignore files (.claudeignore, .geminiignore, etc.) from .gitignore
     GenerateIgnores {
@@ -1548,16 +1544,12 @@ fn main() -> Result<()> {
             }
             std::process::exit(0);
         }
-        Commands::Mcp { profile } => {
+        Commands::Mcp { profile: _ } => {
             #[allow(unused_unsafe)]
             unsafe {
                 std::env::set_var("RAYON_NUM_THREADS", "1");
             }
-            let profile = match profile {
-                McpProfile::Slim => mcp::McpProfile::Slim,
-                McpProfile::Full => mcp::McpProfile::Full,
-            };
-            mcp::run_mcp_server(profile)
+            mcp::run_mcp_server()
         }
         Commands::GenerateIgnores { path } => cmd_generate_ignores(&path),
     };
@@ -1726,10 +1718,8 @@ fn cmd_session_audit(path: &Path, json: bool, cache_hygiene: bool) -> Result<()>
         ));
     }
     if cache_hygiene && prompt.combined_tokens > 6_000 {
-        recommendations.push(
-            "cache hygiene: keep MCP/tool profiles stable and prefer `tokenix mcp --profile slim`"
-                .to_string(),
-        );
+        recommendations
+            .push("cache hygiene: keep the MCP server list stable between sessions".to_string());
     }
     if recommendations.is_empty() {
         recommendations.push("token economy looks healthy for this repository".to_string());
@@ -1753,7 +1743,6 @@ fn cmd_session_audit(path: &Path, json: bool, cache_hygiene: bool) -> Result<()>
             },
             "cache_hygiene": cache_hygiene.then(|| serde_json::json!({
                 "stable_prefix_risk": prompt.combined_tokens > 6_000 || stale.as_ref().is_some_and(|s| s.stale),
-                "mcp_profile_hint": "prefer slim tokenix MCP profile for routine sessions",
                 "index_stale": stale.as_ref().map(|s| s.stale).unwrap_or(false),
             })),
             "recommendations": recommendations,
@@ -1799,7 +1788,6 @@ fn cmd_session_audit(path: &Path, json: bool, cache_hygiene: bool) -> Result<()>
                 "review MCP/index churn".yellow()
             }
         );
-        println!("  Hint: prefer `tokenix mcp --profile slim` for routine sessions");
     }
     println!("\nRecommendations:");
     for rec in recommendations {
