@@ -142,25 +142,6 @@ fn invalid_user_filter_regex_still_names_the_fix() {
         run.stderr
     );
 }
-
-#[test]
-fn memory_roundtrips_notes_and_refuses_credentials() {
-    let sb = Sandbox::new("memory");
-    assert_eq!(
-        sb.tokenix(&["memory", "add", "prefer small focused diffs"])
-            .code,
-        0
-    );
-
-    let key = "AKIAIOSFODNN7EXAMPLE"; // gitleaks:allow AWS docs example key
-    let refused = sb.tokenix(&["memory", "add", &format!("deploy with {key}")]);
-    assert_ne!(refused.code, 0, "a bare credential must be refused");
-
-    let list = sb.tokenix(&["memory", "list"]).stdout;
-    assert!(list.contains("prefer small focused diffs"), "{list}");
-    assert!(!list.contains(key), "{list}");
-}
-
 #[test]
 fn an_edited_file_is_searchable_without_reindexing() {
     let sb = Sandbox::indexed("freshness");

@@ -10,8 +10,8 @@ User-facing docs live in `README.md`; this file is the engineering contract.
 
 ```bash
 cargo build --release
-cargo test --bin tokenix          # 467 unit + golden tests
-cargo test --tests                # + 40 end-to-end tests (one Windows-only) against the real binary
+cargo test --bin tokenix          # 455 unit + golden tests
+cargo test --tests                # + 37 end-to-end tests (one Windows-only) against the real binary
 cargo fmt --check                 # CI runs fmt FIRST — run it before pushing
 cargo clippy --all-targets --locked -- -D warnings
 ./scripts/verify.sh [--models]    # every CI gate locally, in CI order
@@ -22,7 +22,7 @@ build → the three homologation scripts, under a throwaway `TOKENIX_HOME`.
 
 End-to-end tests live in `tests/`: `workflow_e2e.rs` (index → stats → symbol
 graph → read/outline → Read/Grep hook → pack), `safety_e2e.rs` (exit code kept,
-trust gate incl. revocation on edit, memory refusing credentials, inline
+trust gate incl. revocation on edit, inline
 freshness), `hook_e2e.rs` (hook JSON contract per agent) and `mcp_proxy_e2e.rs`.
 `tests/common::Sandbox` gives every test its own git repo and `TOKENIX_HOME`;
 new e2e tests must use it (or set `TOKENIX_HOME`), never the developer's home.
@@ -49,11 +49,10 @@ so resolution never silently raises it.
 | `chunker.rs` | Symbol-aware chunking, `count_tokens`, outline generation, `enforce_token_cap` |
 | `indexer.rs` | Walks + indexes files. `filter_entry` (dirs) vs `should_index` (files) are separate on purpose |
 | `store.rs` | SQLite access, `index_staleness`, graph tables, hook log, `global_dir()`, `find_project_root` |
-| `graph.rs` | Symbol graph, PageRank, Tarjan SCC cycles, import graph, repo hotspots |
+| `graph.rs` | Symbol graph, PageRank, Tarjan SCC cycles (a section of `graph`), import graph, repo hotspots, and the shared output formats: `Format` + `render_relations` / `render_imports` (text · json · mermaid · dot · html) |
 | `freshness.rs` | Inline pre-command refresh of dirty files (inline path), fails open |
-| `modules.rs` | Louvain community detection over `graph_edges` — `tokenix modules` |
+| `modules.rs` | Louvain community detection over `graph_edges` — `tokenix modules`; `detect_module_map` also returns the calls between modules (Mermaid/DOT) |
 | `blast.rs` | Diff → changed symbols → reverse call graph (`tokenix blast`) |
-| `snapshot.rs` | `export-index` / `import-index` — gzipped `VACUUM INTO` copy for teams; import caps decompressed size (2 GiB), holds the index lock and runs `integrity_check` before the swap |
 | `hook.rs` | `PreToolUse` handler — Grep `head_limit` cap and Bash/PowerShell filter rewrite; `Read` is never intercepted |
 | `compress.rs` | Generic output compression, base64 redaction, token ceiling, EOL preservation; `run_hook_post` also redacts known secrets on every PostToolUse tool result via `secrets_scan::redact_known_secrets`, then emits `hookSpecificOutput.updatedToolOutput` for Claude Code/Codex |
 | `filters.rs` | `FilterDef` schema, filter resolution, `apply_filter_with_exit` |
@@ -63,7 +62,7 @@ so resolution never silently raises it.
 | `recall.rs` | Stash/retrieve of clipped output, identical-output dedup |
 | `gain.rs` | Savings analytics, `MODELS` pricing table |
 | `usage.rs` | Spend + cost from agent transcripts (`message.usage`, incl. cache fields) |
-| `mcp.rs` / `mcp_proxy.rs` | MCP server (one tool set, `tool_list()`; graph tools return locations, never code) / stdio passthrough that compresses results |
+| `mcp.rs` / `mcp_proxy.rs` | MCP server: six tools (`symbols`, `graph`, `blast`, `modules`, `deps`, `tokenmap`), `tool_list()`; they return locations or diagrams, never code, and none reads files, runs commands or keeps notes / stdio passthrough that compresses results |
 | `mcp_audit.rs` | `prompt-audit` / `session-audit`, `context_weight()` |
 | `secrets_scan.rs` / `egress_scan.rs` | Transcript forensics — credentials and outbound destinations |
 | `discover.rs` | Replays current filters over historical agent output |
@@ -71,13 +70,12 @@ so resolution never silently raises it.
 | `conversation_audit.rs` | `conversation-audit` + `redact_credentials()` — the single credential masker every persisted view goes through |
 | `recordings.rs` | `filter record` sessions — captures command output for filter authoring; redacted and self-gitignored, because captures land in the working tree and `filter generate` uploads them to an AI CLI |
 | `cmd_filter.rs` (spawning) | Programs (`claude`, `gh`, `git`, sample commands) resolve only through `resolve_in_path`: absolute PATH entries, never the cwd — `cmd`/`where` search the cwd first on Windows, so a cloned repo shipping `claude.cmd` would run (CWE-427). Children get `NoDefaultCurrentDirectoryInExePath=1` |
-| `memory.rs` | Cross-session notes read back with `memory list` / the MCP memory tools (no command injects them anymore); refuses text that trips a keyword *or* a bundled secret rule (`secrets_scan::redact_known_secrets`) |
 | `benchmark.rs` | Token-reduction benchmark (`tokenix benchmark`): Read outlines, symbol workflows, command filters |
 | `doctor.rs` | Install diagnosis — filter inventory and config issues, recording state |
 | `artifacts.rs` | Reads build artifacts referenced by agent output |
 | `docshot.rs` | `#[cfg(test)]` only — renders README screenshots as SVG, never ships in the binary |
-| `tui.rs` | Ratatui shell — the only human interface. 17 tabs in four sections (`Cmd::SECTIONS`: Overview · Code · Savings · Health; `1`–`4` jump, `?` help overlay, `y` copies a report). Code/Health report tabs (Modules, Blast, Pack, Memory) self-exec the binary through `argv`/`dyn_argv`, so they can never drift from the CLI |
-| `tui/explorer.rs` | Symbols tab — reads only `graph_nodes`/`graph_edges` (ranked list, callers/callees by `chunk_id`, source from disk). No content search, per the rule below |
+| `tui.rs` | Ratatui shell — the only human interface. 16 tabs in four sections (`Cmd::SECTIONS`: Overview · Code · Savings · Health; `1`–`4` jump, `?` help overlay, `y` copies a report). Report tabs (Modules, Blast, Pack, …) self-exec the binary through `argv`/`dyn_argv`, so they can never drift from the CLI |
+| `tui/explorer.rs` | Symbols tab — reads only `graph_nodes`/`graph_edges` (ranked list, callers/callees by `chunk_id`, source from disk); `m`/`d` copy the impact graph as Mermaid/DOT, `h` opens it as HTML. No content search, per the rule below |
 | `self_update.rs` | Self-update from GitHub releases: SHA-256 validation, atomic binary replacement, background auto-update and update caching |
 
 The interactive CLI startup triggers the background update check before the bare
@@ -104,7 +102,6 @@ meta(key PK, value)                          -- 'indexed_at', git fingerprint
 
 `meta` holds `indexed_at` plus a Git fingerprint (worktree root + branch + HEAD);
 a different fingerprint counts as stale so branch switches never reuse context.
-`snapshot_version` / `snapshot_created_at` are stamped by `tokenix export-index`.
 
 Indexes built before embeddings were removed still carry `embeddings` and
 `embedding_cache` tables (and `ne:`-prefixed hashes from `--no-embed` runs).

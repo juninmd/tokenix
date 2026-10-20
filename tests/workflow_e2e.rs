@@ -123,3 +123,93 @@ fn pack_stays_within_its_token_budget() {
     assert!(tokens > 0 && tokens <= 300, "budget exceeded: {tokens}");
     assert!(!pack["files"].as_array().expect("files").is_empty());
 }
+
+/// Every graph command can draw itself, so the answer can go straight into a PR
+/// description, a doc or a Graphviz render.
+#[test]
+fn graph_commands_export_mermaid_dot_and_html() {
+    let sb = Sandbox::indexed("export");
+
+    let mermaid = sb
+        .tokenix(&["callers", "apply_tax", "--format", "mermaid"])
+        .stdout;
+    assert!(mermaid.starts_with("```mermaid"), "{mermaid}");
+    assert!(mermaid.contains("invoice_total"), "{mermaid}");
+
+    let dot = sb.tokenix(&["callees", "main", "--format", "dot"]).stdout;
+    assert!(dot.starts_with("digraph tokenix"), "{dot}");
+    assert!(dot.contains("invoice_total"), "{dot}");
+
+    let out = sb.path("impact.html");
+    let run = sb.tokenix(&[
+        "impact",
+        "apply_tax",
+        "--format",
+        "html",
+        "--output",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let html = std::fs::read_to_string(&out).expect("html written");
+    assert!(
+        html.contains("<html") && html.contains("apply_tax"),
+        "{html}"
+    );
+
+    let deps = sb
+        .tokenix(&["deps", "src/main.rs", "--format", "mermaid"])
+        .stdout;
+    assert!(
+        deps.starts_with("```mermaid") || deps.starts_with("No imports"),
+        "{deps}"
+    );
+
+    // A typo is an error, never a silent text answer.
+    let typo = sb.tokenix(&["callers", "apply_tax", "--format", "mermiad"]);
+    assert_ne!(typo.code, 0);
+    assert!(typo.stderr.contains("mermiad"), "{}", typo.stderr);
+    // html is a relation-graph format only.
+    let blast = sb.tokenix(&["blast", "--format", "html"]);
+    assert_ne!(blast.code, 0);
+}
+
+/// The MCP server answers the same questions with the same formats.
+#[test]
+fn mcp_graph_tool_answers_with_locations_and_diagrams() {
+    let sb = Sandbox::indexed("mcp-graph");
+    let call = |name: &str, arguments: serde_json::Value| -> String {
+        let req = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}
+        });
+        let run = sb.tokenix_with_stdin(&["mcp"], &format!("{req}\n"));
+        let reply: serde_json::Value =
+            serde_json::from_str(run.stdout.lines().next().expect("reply")).expect("json");
+        reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no text in {reply}"))
+            .to_string()
+    };
+
+    let callers = call(
+        "tokenix_graph",
+        json!({"symbol": "apply_tax", "direction": "callers"}),
+    );
+    assert!(callers.contains("invoice_total"), "{callers}");
+    assert!(
+        !callers.contains("items.iter()"),
+        "locations, never code: {callers}"
+    );
+
+    let mermaid = call(
+        "tokenix_graph",
+        json!({"symbol": "apply_tax", "direction": "callers", "format": "mermaid"}),
+    );
+    assert!(mermaid.starts_with("```mermaid"), "{mermaid}");
+
+    let symbols = call("tokenix_symbols", json!({"query": "apply_tax"}));
+    assert!(symbols.contains("src/billing.rs:5-7"), "{symbols}");
+
+    let map = call("tokenix_tokenmap", json!({"top": 3}));
+    assert!(map.contains("src/billing.rs"), "{map}");
+}

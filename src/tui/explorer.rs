@@ -16,12 +16,15 @@ use ratatui::widgets::{Block, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use super::{copy_to_clipboard, list_widget, trunc};
+use crate::graph::{self, Format};
 use crate::store::{self, GraphNode};
 
 /// Rows fetched per query; the list is a window onto the ranked graph.
 const MAX_NODES: usize = 300;
 /// Callers / callees shown per symbol.
 const MAX_RELATED: usize = 40;
+/// Hops of the impact graph that `m` / `d` / `h` export.
+const IMPACT_DEPTH: usize = 2;
 /// Source lines kept for the preview pane.
 const MAX_SNIPPET: usize = 80;
 
@@ -214,6 +217,11 @@ impl Explorer {
             KeyCode::Backspace => self.back(),
             KeyCode::Char('c') => self.copy_location(),
             KeyCode::Char('y') => self.copy_source(),
+            KeyCode::Char('m') => self.copy_graph(Format::Mermaid),
+            KeyCode::Char('d') => self.copy_graph(Format::Dot),
+            KeyCode::Char('h') => {
+                self.export_html(true);
+            }
             _ => {}
         }
     }
@@ -300,11 +308,63 @@ impl Explorer {
         });
     }
 
+    /// The impact graph of the selected symbol in `format`, as the CLI's
+    /// `impact --format` would print it.
+    fn impact_graph(&self, format: Format) -> Option<String> {
+        let node = self.current()?;
+        let conn = store::open_db(&self.repo_root, false).ok()??;
+        let relations = store::graph_impact(&conn, &node.name, IMPACT_DEPTH, MAX_NODES).ok()?;
+        let title = format!("Impact graph for `{}`", node.name);
+        graph::render_relations(&relations, &title, format).ok()
+    }
+
+    /// Put a mermaid/dot diagram of the selected symbol on the clipboard, ready
+    /// for a PR description or a doc.
+    fn copy_graph(&mut self, format: Format) {
+        self.msg = Some(match self.impact_graph(format) {
+            Some(text) => match copy_to_clipboard(&text) {
+                Ok(()) => format!(
+                    "copied {} diagram ({} lines)",
+                    format.extension(),
+                    text.lines().count()
+                ),
+                Err(e) => format!("copy failed: {e}"),
+            },
+            None => "nothing selected".to_string(),
+        });
+    }
+
+    /// Write the selected symbol's interactive HTML graph to the temp dir and
+    /// (when `open`) hand it to the system viewer.
+    fn export_html(&mut self, open: bool) -> Option<PathBuf> {
+        let Some(html) = self.impact_graph(Format::Html) else {
+            self.msg = Some("nothing selected".to_string());
+            return None;
+        };
+        let name = self.current().map_or("symbol", |n| n.name.as_str());
+        let slug: String = name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let path = std::env::temp_dir().join(format!("tokenix-impact-{slug}.html"));
+        if let Err(e) = std::fs::write(&path, html) {
+            self.msg = Some(format!("write failed: {e}"));
+            return None;
+        }
+        let opened = open && open_in_viewer(&path);
+        self.msg = Some(format!(
+            "{} {}",
+            if opened { "opened" } else { "wrote" },
+            path.display()
+        ));
+        Some(path)
+    }
+
     pub fn footer(&self) -> String {
         if self.searching {
             return format!("/{}_   Enter: apply · Esc: clear", self.query);
         }
-        "←→: tab · ↑↓: move · /: filter · t: kind · Tab: callers/callees · Enter: open · ⌫: back · c: copy loc · y: copy src · q".to_string()
+        "←→: tab · ↑↓: move · /: filter · t: kind · Tab: relations · Enter: open · ⌫: back · c: loc · y: src · m/d: mermaid/dot · h: html · q".to_string()
     }
 
     pub fn status(&self) -> Option<&str> {
@@ -458,6 +518,26 @@ impl Explorer {
     }
 }
 
+/// Open `path` with the platform's viewer. Fire and forget: no viewer is not an
+/// error, the caller still reports where the file is.
+fn open_in_viewer(path: &std::path::Path) -> bool {
+    use std::process::{Command, Stdio};
+    let (program, args): (&str, Vec<&std::ffi::OsStr>) = if cfg!(target_os = "macos") {
+        ("open", vec![path.as_os_str()])
+    } else if cfg!(target_os = "windows") {
+        ("explorer", vec![path.as_os_str()])
+    } else {
+        ("xdg-open", vec![path.as_os_str()])
+    };
+    Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
 /// `cur + delta` clamped to `0..len` (an empty list stays at 0).
 fn moved(cur: usize, delta: isize, len: usize) -> usize {
     if len == 0 {
@@ -542,6 +622,31 @@ mod tests {
         // Backspace returns to where the jump started.
         e.key(KeyCode::Backspace);
         assert_eq!(e.current().unwrap().name, "helper");
+    }
+
+    #[test]
+    fn exports_the_selected_symbols_impact_graph_in_every_format() {
+        let mut e = Explorer::new(fixture("export"));
+        e.reload();
+        select(&mut e, "helper");
+
+        let mermaid = e.impact_graph(Format::Mermaid).expect("mermaid");
+        assert!(mermaid.starts_with("```mermaid"), "{mermaid}");
+        assert!(
+            mermaid.contains("helper") && mermaid.contains("leaf"),
+            "{mermaid}"
+        );
+        let dot = e.impact_graph(Format::Dot).expect("dot");
+        assert!(dot.starts_with("digraph tokenix"), "{dot}");
+
+        let path = e.export_html(false).expect("html path");
+        let html = std::fs::read_to_string(&path).unwrap();
+        assert!(html.contains("<html") && html.contains("helper"), "{html}");
+        assert!(
+            e.status().unwrap().starts_with("wrote "),
+            "{:?}",
+            e.status()
+        );
     }
 
     #[test]

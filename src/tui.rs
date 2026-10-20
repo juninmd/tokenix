@@ -49,7 +49,6 @@ pub enum Cmd {
     Discover,
     Doctor,
     Audit,
-    Memory,
     Secrets,
     Egress,
 }
@@ -57,7 +56,7 @@ pub enum Cmd {
 impl Cmd {
     /// Tab order. Tabs are grouped by purpose (see `SECTIONS`) and the groups
     /// are contiguous, so ← / → walks them in order.
-    const ALL: [Cmd; 17] = [
+    const ALL: [Cmd; 16] = [
         Cmd::Stats,
         Cmd::Symbols,
         Cmd::Graph,
@@ -72,7 +71,6 @@ impl Cmd {
         Cmd::Discover,
         Cmd::Doctor,
         Cmd::Audit,
-        Cmd::Memory,
         Cmd::Secrets,
         Cmd::Egress,
     ];
@@ -86,7 +84,7 @@ impl Cmd {
             Cmd::Stats => 0,
             Cmd::Symbols | Cmd::Graph | Cmd::Modules | Cmd::Blast | Cmd::Pack | Cmd::Tokenmap => 1,
             Cmd::Gain | Cmd::Usage | Cmd::Filters | Cmd::Studio | Cmd::Discover => 2,
-            Cmd::Doctor | Cmd::Audit | Cmd::Memory | Cmd::Secrets | Cmd::Egress => 3,
+            Cmd::Doctor | Cmd::Audit | Cmd::Secrets | Cmd::Egress => 3,
         }
     }
 
@@ -101,7 +99,6 @@ impl Cmd {
             Cmd::Modules => "Modules",
             Cmd::Blast => "Blast",
             Cmd::Pack => "Pack",
-            Cmd::Memory => "Memory",
             Cmd::Filters => "Filters",
             Cmd::Studio => "Studio",
             Cmd::Gain => "Gain",
@@ -124,7 +121,6 @@ impl Cmd {
             Cmd::Discover => Some(&["discover"]),
             Cmd::Audit => Some(&["prompt-audit"]),
             Cmd::Modules => Some(&["modules"]),
-            Cmd::Memory => Some(&["memory", "list"]),
             _ => None,
         }
     }
@@ -1816,6 +1812,7 @@ impl Shell {
                 "  /  filter by name or path     t  cycle kind (function, struct, …)",
                 "  Tab  switch list ↔ callers/callees     Enter  open the highlighted relation",
                 "  ⌫  back to the previous symbol     c  copy path:line     y  copy source",
+                "  m  copy a mermaid diagram     d  copy graphviz dot     h  open the HTML graph",
             ],
             Cmd::Blast => &[
                 "  s  diff base (HEAD · HEAD~1 · origin/main)     d  caller hops (1-4)",
@@ -3820,7 +3817,6 @@ mod tests {
             ]
         );
         assert_eq!(Cmd::Modules.argv().unwrap(), ["modules"]);
-        assert_eq!(Cmd::Memory.argv().unwrap(), ["memory", "list"]);
     }
 
     #[test]

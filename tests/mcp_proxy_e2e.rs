@@ -100,9 +100,10 @@ fn proxy_exits_when_the_child_exits() {
     }
 }
 
-/// There is one MCP tool set and no `--profile` flag to pick another.
+/// There is one MCP tool set, and it only answers structure questions: it has no
+/// tool that reads files, runs commands or keeps notes, and no profile flag.
 #[test]
-fn mcp_serves_every_tool_and_has_no_profile_flag() {
+fn mcp_serves_only_the_structure_tools_and_has_no_profile_flag() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_tokenix"))
         .arg("mcp")
         .stdin(Stdio::piped())
@@ -128,18 +129,17 @@ fn mcp_serves_every_tool_and_has_no_profile_flag() {
         .iter()
         .filter_map(|t| t["name"].as_str())
         .collect();
-    for want in [
-        "tokenix_symbols",
-        "tokenix_impact",
-        "tokenix_blast",
-        "tokenix_modules",
-        "tokenix_flow",
-        "tokenix_deps",
-        "tokenix_tokenmap",
-    ] {
-        assert!(names.contains(&want), "{want} missing: {names:?}");
-    }
-    assert!(!names.contains(&"tokenix_call"), "{names:?}");
+    assert_eq!(
+        names,
+        [
+            "tokenix_symbols",
+            "tokenix_graph",
+            "tokenix_blast",
+            "tokenix_modules",
+            "tokenix_deps",
+            "tokenix_tokenmap"
+        ]
+    );
     let _ = child.kill();
     let _ = child.wait();
 

@@ -41,6 +41,25 @@ pub struct Module {
     pub key_symbols: Vec<String>,
     /// Files the module spans, most members first.
     pub files: Vec<String>,
+    /// Louvain community id, to join `links` back to a module.
+    #[serde(skip)]
+    community: usize,
+}
+
+/// Calls that cross from one module into another: indices into
+/// `ModuleMap::modules`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModuleLink {
+    pub from: usize,
+    pub to: usize,
+    pub edges: usize,
+}
+
+/// The modules plus how they depend on each other.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModuleMap {
+    pub modules: Vec<Module>,
+    pub links: Vec<ModuleLink>,
 }
 
 /// Strip the `:line` suffix `store::GraphEdgeRow` carries on each endpoint.
@@ -206,8 +225,16 @@ fn label_for(files: &[(&str, usize)], dirs: &[(&str, usize)], members: usize) ->
 
 /// Group the symbol graph into functional modules, largest first.
 pub fn detect_modules(edges: &[store::GraphEdgeRow], max_modules: usize) -> Vec<Module> {
+    detect_module_map(edges, max_modules).modules
+}
+
+/// `detect_modules` plus the directed call counts between the modules kept.
+pub fn detect_module_map(edges: &[store::GraphEdgeRow], max_modules: usize) -> ModuleMap {
     if edges.is_empty() || max_modules == 0 {
-        return Vec::new();
+        return ModuleMap {
+            modules: Vec::new(),
+            links: Vec::new(),
+        };
     }
 
     // Stable node numbering: sort the raw chunk ids so the whole pipeline is
@@ -262,6 +289,7 @@ pub fn detect_modules(edges: &[store::GraphEdgeRow], max_modules: usize) -> Vec<
     // match what `tokenix graph` reports elsewhere.
     let mut internal: HashMap<usize, usize> = HashMap::new();
     let mut external: HashMap<usize, usize> = HashMap::new();
+    let mut cross: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     for (cid, _, _, eid, _, _) in edges {
         let a = membership[index[cid]];
         let b = membership[index[eid]];
@@ -270,6 +298,7 @@ pub fn detect_modules(edges: &[store::GraphEdgeRow], max_modules: usize) -> Vec<
         } else {
             *external.entry(a).or_default() += 1;
             *external.entry(b).or_default() += 1;
+            *cross.entry((a, b)).or_default() += 1;
         }
     }
 
@@ -329,6 +358,7 @@ pub fn detect_modules(edges: &[store::GraphEdgeRow], max_modules: usize) -> Vec<
                     .take(5)
                     .map(|(f, _)| (*f).to_string())
                     .collect(),
+                community: comm,
             }
         })
         .collect();
@@ -339,7 +369,71 @@ pub fn detect_modules(edges: &[store::GraphEdgeRow], max_modules: usize) -> Vec<
             .then_with(|| a.label.cmp(&b.label))
     });
     modules.truncate(max_modules);
-    modules
+
+    let position: HashMap<usize, usize> = modules
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.community, i))
+        .collect();
+    let mut links: Vec<ModuleLink> = cross
+        .into_iter()
+        .filter_map(|((a, b), edges)| {
+            Some(ModuleLink {
+                from: *position.get(&a)?,
+                to: *position.get(&b)?,
+                edges,
+            })
+        })
+        .collect();
+    links.sort_by(|a, b| {
+        b.edges
+            .cmp(&a.edges)
+            .then(a.from.cmp(&b.from))
+            .then(a.to.cmp(&b.to))
+    });
+    ModuleMap { modules, links }
+}
+
+fn module_caption(m: &Module) -> String {
+    format!(
+        "{} ({} symbols, {:.0}% cohesion)",
+        m.label.replace('"', "'"),
+        m.symbols,
+        m.cohesion * 100.0
+    )
+}
+
+/// The module map as a Mermaid flowchart: one box per module, one arrow per
+/// pair of modules that call into each other, labelled with the call count.
+pub fn format_modules_mermaid(map: &ModuleMap) -> String {
+    if map.modules.is_empty() {
+        return "No modules found.".to_string();
+    }
+    let mut out = String::from("```mermaid\ngraph LR\n");
+    for (i, m) in map.modules.iter().enumerate() {
+        out.push_str(&format!("    M{i}[\"{}\"]\n", module_caption(m)));
+    }
+    for l in &map.links {
+        out.push_str(&format!("    M{} -->|\"{}\"| M{}\n", l.from, l.edges, l.to));
+    }
+    out.push_str("```\n");
+    out
+}
+
+/// The module map as Graphviz DOT.
+pub fn format_modules_dot(map: &ModuleMap) -> String {
+    let mut out = String::from("digraph modules {\n  rankdir=LR;\n  node [shape=box];\n");
+    for (i, m) in map.modules.iter().enumerate() {
+        out.push_str(&format!("  M{i} [label={:?}];\n", module_caption(m)));
+    }
+    for l in &map.links {
+        out.push_str(&format!(
+            "  M{} -> M{} [label=\"{}\"];\n",
+            l.from, l.to, l.edges
+        ));
+    }
+    out.push_str("}\n");
+    out
 }
 
 pub fn format_modules(modules: &[Module]) -> String {
@@ -379,6 +473,27 @@ mod tests {
             bn.to_string(),
             format!("{bp}:1"),
         )
+    }
+
+    #[test]
+    fn module_map_links_the_two_clusters_through_their_bridge() {
+        let map = detect_module_map(&two_cluster_graph(), 8);
+        assert_eq!(map.modules.len(), 2);
+        assert_eq!(map.links.len(), 1, "{:?}", map.links);
+        assert_eq!(map.links[0].edges, 1);
+        let from = &map.modules[map.links[0].from];
+        let to = &map.modules[map.links[0].to];
+        assert!(from.label.contains("auth"), "{}", from.label);
+        assert!(to.label.contains("billing"), "{}", to.label);
+
+        let mermaid = format_modules_mermaid(&map);
+        assert!(mermaid.starts_with("```mermaid\ngraph LR"), "{mermaid}");
+        assert!(mermaid.contains("-->|\"1\"|"), "{mermaid}");
+        let dot = format_modules_dot(&map);
+        assert!(
+            dot.contains("digraph modules") && dot.contains("[label=\"1\"]"),
+            "{dot}"
+        );
     }
 
     /// Two cliques joined by a single edge must come back as two modules.

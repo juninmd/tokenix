@@ -34,20 +34,22 @@ For every other client, add the entry to its MCP config by hand.
 | Tool | What it answers |
 |---|---|
 | `tokenix_symbols` | Where a symbol is defined (`path:line`, never code) |
-| `tokenix_callers` · `tokenix_callees` | Who calls a symbol, and what it calls |
-| `tokenix_impact` · `tokenix_flow` | The graph around a symbol, and the forward call flow from an entry point |
+| `tokenix_graph` | Around one symbol: `direction` = `callers`, `callees`, `impact` (both ways, `depth` hops) or `flow` (forward from an entry point) |
 | `tokenix_blast` | Symbols that depend on the working-tree diff since a git ref |
-| `tokenix_modules` | Groups of symbols that mostly call each other |
+| `tokenix_modules` | Groups of symbols that mostly call each other, and how the groups depend on one another |
 | `tokenix_deps` | File imports, or (`reverse`) which files import a file |
 | `tokenix_tokenmap` | The directories and files holding the most tokens |
-| `tokenix_read` | One file from disk: whole, one `symbol`, or a `lines` range. Over 1000 lines it returns an outline, which omits usages and tests |
-| `tokenix_memory_add` · `_list` · `_remove` · `_edit` | Durable preferences |
-| `tokenix_run` · `tokenix_gain` | A command with compressed output, and measured savings |
 
-The graph tools return **locations and relations, not code**, and do not search
-file contents: read the file for what it says and use the agent's own grep for
-text. Every tool schema costs prompt tokens each turn;
-`tokenix prompt-audit --profile-impact` prints the footprint of this set.
+Graph tools take `format`: `text` (default), `mermaid`, `dot` or `json` (`blast`:
+`text`, `mermaid`, `json`). Ask for `mermaid` when the answer is going into a PR
+description or a doc.
+
+They return **locations and relations, not code**, and do not search file
+contents: the agent reads files with its own Read and searches them with its own
+grep. There is no tool that reads files, runs commands or stores notes, because
+the agent already has those and `tokenix hook` compresses what its Bash returns.
+Every tool schema costs prompt tokens each turn; `tokenix prompt-audit
+--profile-impact` prints the footprint of this set.
 
 Each `tools/call` runs behind a panic guard, so one bad request cannot take the
 server down. The index is refreshed for edited files before graph and read tools

@@ -21,14 +21,12 @@ mod indexer;
 mod mcp;
 mod mcp_audit;
 mod mcp_proxy;
-mod memory;
 mod modules;
 mod pack;
 mod recall;
 mod recordings;
 mod secrets_scan;
 mod self_update;
-mod snapshot;
 mod store;
 mod transcripts;
 mod tui;
@@ -241,6 +239,19 @@ impl EgressGroupBy {
     }
 }
 
+/// `--format` / `--output`, shared by every command that can draw a graph.
+#[derive(clap::Args, Clone)]
+struct RenderArgs {
+    #[arg(
+        long,
+        default_value = "text",
+        help = "Output format: text | json | mermaid | dot | html (which ones depend on the command)"
+    )]
+    format: String,
+    #[arg(short, long, help = "Write the output to this file instead of stdout")]
+    output: Option<String>,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Index a repository (chunks and symbol graph)
@@ -283,11 +294,6 @@ enum Commands {
         )]
         no_low_priority: bool,
     },
-    /// Store or list user preference memory
-    Memory {
-        #[command(subcommand)]
-        action: MemoryAction,
-    },
     /// Smart file reader - shows outline by default for large files
     Read {
         file: String,
@@ -326,8 +332,10 @@ enum Commands {
         symbol: String,
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        #[arg(long, help = "Shorthand for --format json")]
         json: bool,
+        #[command(flatten)]
+        render: RenderArgs,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -336,8 +344,10 @@ enum Commands {
         symbol: String,
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        #[arg(long, help = "Shorthand for --format json")]
         json: bool,
+        #[command(flatten)]
+        render: RenderArgs,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -348,18 +358,8 @@ enum Commands {
         depth: usize,
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
-        #[arg(
-            long,
-            help = "Output format: text | html | mermaid | json",
-            default_value = "text"
-        )]
-        format: String,
-        #[arg(
-            short,
-            long,
-            help = "Write html/mermaid output to this file instead of stdout"
-        )]
-        output: Option<String>,
+        #[command(flatten)]
+        render: RenderArgs,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -370,8 +370,10 @@ enum Commands {
         reverse: bool,
         #[arg(long, help = "Follow resolved imports transitively")]
         transitive: bool,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        #[arg(long, help = "Shorthand for --format json")]
         json: bool,
+        #[command(flatten)]
+        render: RenderArgs,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -382,47 +384,17 @@ enum Commands {
         depth: usize,
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
-        #[arg(long, help = "Output format: text | mermaid", default_value = "text")]
-        format: String,
+        #[command(flatten)]
+        render: RenderArgs,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
     /// Repo-wide symbol-graph overview: hotspots, bottlenecks, blast radius
     Graph {
-        #[arg(
-            long,
-            help = "Output format: text | dot | json",
-            default_value = "text"
-        )]
-        format: String,
+        #[command(flatten)]
+        render: RenderArgs,
         #[arg(long, default_value_t = 30, help = "How many top symbols to show")]
         top: usize,
-        #[arg(short, long, help = "Write output to a file instead of stdout")]
-        output: Option<String>,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Write this repo's index to a shareable snapshot teammates can import
-    ExportIndex {
-        #[arg(
-            short,
-            long,
-            help = "Snapshot file to write (default: .tokenix/index.db.gz)"
-        )]
-        output: Option<PathBuf>,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Bootstrap this repo's index from a snapshot instead of indexing from zero
-    ImportIndex {
-        #[arg(
-            short,
-            long,
-            help = "Snapshot file to read (default: .tokenix/index.db.gz)"
-        )]
-        input: Option<PathBuf>,
-        #[arg(long, help = "Replace the local index even if it is newer")]
-        force: bool,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -438,8 +410,10 @@ enum Commands {
         depth: usize,
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        #[arg(long, help = "Shorthand for --format json")]
         json: bool,
+        #[command(flatten)]
+        render: RenderArgs,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -447,18 +421,10 @@ enum Commands {
     Modules {
         #[arg(long, default_value_t = 12, help = "How many modules to show")]
         top: usize,
-        #[arg(long, help = "Emit machine-readable JSON instead of text")]
+        #[arg(long, help = "Shorthand for --format json")]
         json: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Detect circular dependencies in the symbol graph
-    Cycles {
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Rebuild only the symbol graph from existing indexed chunks
-    RebuildGraph {
+        #[command(flatten)]
+        render: RenderArgs,
         #[arg(short, long, default_value = ".")]
         path: PathBuf,
     },
@@ -791,50 +757,6 @@ enum ArtifactsAction {
 }
 
 #[derive(Subcommand)]
-enum MemoryAction {
-    /// Add a preference to global or project memory
-    Add {
-        text: String,
-        #[arg(long, help = "Save under ~/.tokenix/memory/preferences.md")]
-        global: bool,
-        #[arg(long, help = "Save under this project's preference memory")]
-        project: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// List saved preferences
-    List {
-        #[arg(long, help = "Only show global preferences")]
-        global: bool,
-        #[arg(long, help = "Only show project preferences")]
-        project: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Remove saved preferences matching text
-    Remove {
-        query: String,
-        #[arg(long, help = "Remove from global preferences")]
-        global: bool,
-        #[arg(long, help = "Remove from project preferences")]
-        project: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-    /// Replace saved preferences matching text
-    Edit {
-        query: String,
-        replacement: String,
-        #[arg(long, help = "Edit global preferences")]
-        global: bool,
-        #[arg(long, help = "Edit project preferences")]
-        project: bool,
-        #[arg(short, long, default_value = ".")]
-        path: PathBuf,
-    },
-}
-
-#[derive(Subcommand)]
 enum FilterAction {
     /// List top Bash commands by tokens wasted (no custom filter yet)
     List {
@@ -908,14 +830,9 @@ fn tui_target(command: &Commands) -> Option<(bool, tui::Entry)> {
             !format.eq_ignore_ascii_case("text") || elsewhere(path),
             tui::Entry::tab(tui::Cmd::Tokenmap),
         ),
-        Commands::Graph {
-            format,
-            output,
-            top,
-            path,
-        } => (
-            !format.eq_ignore_ascii_case("text")
-                || output.is_some()
+        Commands::Graph { render, top, path } => (
+            !render.format.eq_ignore_ascii_case("text")
+                || render.output.is_some()
                 || *top != 30
                 || elsewhere(path),
             tui::Entry::tab(tui::Cmd::Graph),
@@ -1186,7 +1103,6 @@ fn main() -> Result<()> {
             }
             cmd_index(&path, force, if_stale)
         }
-        Commands::Memory { action } => cmd_memory(action),
         Commands::Read {
             file,
             symbol,
@@ -1213,56 +1129,53 @@ fn main() -> Result<()> {
             symbol,
             limit,
             json,
+            render,
             path,
-        } => cmd_graph_relations(&symbol, limit, json, &path, true),
+        } => cmd_graph_relations(&symbol, limit, json, &render, &path, true),
         Commands::Callees {
             symbol,
             limit,
             json,
+            render,
             path,
-        } => cmd_graph_relations(&symbol, limit, json, &path, false),
+        } => cmd_graph_relations(&symbol, limit, json, &render, &path, false),
         Commands::Impact {
             symbol,
             depth,
             limit,
-            format,
-            output,
+            render,
             path,
-        } => cmd_impact(&symbol, depth, limit, &format, output.as_deref(), &path),
+        } => cmd_impact(&symbol, depth, limit, &render, &path),
         Commands::Flow {
             symbol,
             depth,
             limit,
-            format,
+            render,
             path,
-        } => cmd_flow(&symbol, depth, limit, &format, &path),
+        } => cmd_flow(&symbol, depth, limit, &render, &path),
         Commands::Deps {
             file,
             reverse,
             transitive,
             json,
+            render,
             path,
-        } => cmd_deps(&file, reverse, transitive, json, &path),
-        Commands::Graph {
-            format,
-            top,
-            output,
-            path,
-        } => cmd_graph(&format, top, output.as_deref(), &path),
-        Commands::ExportIndex { output, path } => cmd_export_index(output.as_deref(), &path),
-        Commands::ImportIndex { input, force, path } => {
-            cmd_import_index(input.as_deref(), force, &path)
-        }
+        } => cmd_deps(&file, reverse, transitive, json, &render, &path),
+        Commands::Graph { render, top, path } => cmd_graph(&render, top, &path),
         Commands::Blast {
             since,
             depth,
             limit,
             json,
+            render,
             path,
-        } => cmd_blast(&since, depth, limit, json, &path),
-        Commands::Modules { top, json, path } => cmd_modules(top, json, &path),
-        Commands::Cycles { path } => cmd_cycles(&path),
-        Commands::RebuildGraph { path } => cmd_rebuild_graph(&path),
+        } => cmd_blast(&since, depth, limit, json, &render, &path),
+        Commands::Modules {
+            top,
+            json,
+            render,
+            path,
+        } => cmd_modules(top, json, &render, &path),
         Commands::Gain {
             path,
             history,
@@ -1801,96 +1714,6 @@ fn cmd_artifacts_show(path: &Path, name: &str) -> Result<()> {
     crate::artifacts::show_artifact(&repo_root, name)
 }
 
-fn cmd_memory(action: MemoryAction) -> Result<()> {
-    match action {
-        MemoryAction::Add {
-            text,
-            global,
-            project,
-            path,
-        } => {
-            if global && project {
-                anyhow::bail!("Use --global OR --project, not both");
-            }
-            let repo_root = find_repo_root(&path);
-            let mut saved = Vec::new();
-            if global {
-                saved.push(memory::add_preference(
-                    &repo_root,
-                    memory::PreferenceScope::Global,
-                    &text,
-                )?);
-            }
-            if project || !global {
-                saved.push(memory::add_preference(
-                    &repo_root,
-                    memory::PreferenceScope::Project,
-                    &text,
-                )?);
-            }
-            for path in saved {
-                println!("saved {}", path.display());
-            }
-            Ok(())
-        }
-        MemoryAction::List {
-            global,
-            project,
-            path,
-        } => {
-            let repo_root = find_repo_root(&path);
-            let include_global = global || !project;
-            let include_project = project || !global;
-            println!(
-                "{}",
-                memory::list_preferences(&repo_root, include_global, include_project)?
-            );
-            Ok(())
-        }
-        MemoryAction::Remove {
-            query,
-            global,
-            project,
-            path,
-        } => {
-            let repo_root = find_repo_root(&path);
-            for scope in selected_memory_scopes(global, project) {
-                let (path, count) = memory::remove_preference(&repo_root, scope, &query)?;
-                println!("removed {} from {}", count, path.display());
-            }
-            Ok(())
-        }
-        MemoryAction::Edit {
-            query,
-            replacement,
-            global,
-            project,
-            path,
-        } => {
-            let repo_root = find_repo_root(&path);
-            for scope in selected_memory_scopes(global, project) {
-                let (path, count) =
-                    memory::edit_preference(&repo_root, scope, &query, &replacement)?;
-                println!("edited {} in {}", count, path.display());
-            }
-            Ok(())
-        }
-    }
-}
-
-fn selected_memory_scopes(global: bool, project: bool) -> Vec<memory::PreferenceScope> {
-    if global && project {
-        vec![
-            memory::PreferenceScope::Global,
-            memory::PreferenceScope::Project,
-        ]
-    } else if global {
-        vec![memory::PreferenceScope::Global]
-    } else {
-        vec![memory::PreferenceScope::Project]
-    }
-}
-
 fn open_existing_index(path: &Path) -> Result<rusqlite::Connection> {
     let repo_root = find_repo_root(path);
     // Answer against the working tree, not against the last index run.
@@ -1922,45 +1745,86 @@ fn cmd_symbols(
     Ok(())
 }
 
+const RELATION_FORMATS: &[graph::Format] = &[
+    graph::Format::Text,
+    graph::Format::Json,
+    graph::Format::Mermaid,
+    graph::Format::Dot,
+    graph::Format::Html,
+];
+
+/// The format a graph command was asked for. `--json` is the old shorthand for
+/// `--format json`; a format the command cannot draw is an error, because an
+/// agent cannot tell a typo from a real answer.
+fn pick_format(
+    render: &RenderArgs,
+    json: bool,
+    allowed: &[graph::Format],
+) -> Result<graph::Format> {
+    let format = if json {
+        graph::Format::Json
+    } else {
+        graph::Format::parse(&render.format)?
+    };
+    if !allowed.contains(&format) {
+        let names: Vec<&str> = allowed
+            .iter()
+            .map(|f| match f {
+                graph::Format::Text => "text",
+                graph::Format::Json => "json",
+                graph::Format::Mermaid => "mermaid",
+                graph::Format::Dot => "dot",
+                graph::Format::Html => "html",
+            })
+            .collect();
+        anyhow::bail!(
+            "--format {:?} is not available here: expected one of {}",
+            render.format,
+            names.join(" | ")
+        );
+    }
+    Ok(format)
+}
+
+/// Print `body`, or write it to `--output` and say so.
+fn emit(body: &str, render: &RenderArgs, what: &str) -> Result<()> {
+    match render.output.as_deref() {
+        Some(dest) => {
+            std::fs::write(dest, body)?;
+            println!("{} {what} written to {dest}", "ok".green());
+        }
+        None => println!("{body}"),
+    }
+    Ok(())
+}
+
 fn cmd_graph_relations(
     symbol: &str,
     limit: usize,
     json: bool,
+    render: &RenderArgs,
     path: &Path,
     callers: bool,
 ) -> Result<()> {
     if limit == 0 {
         anyhow::bail!("limit must be >= 1");
     }
+    let format = pick_format(render, json, RELATION_FORMATS)?;
     let conn = open_existing_index(path)?;
     let relations = if callers {
         store::graph_callers(&conn, symbol, limit)?
     } else {
         store::graph_callees(&conn, symbol, limit)?
     };
-    if json {
-        println!("{}", serde_json::to_string_pretty(&relations)?);
-        return Ok(());
-    }
     let title = if callers {
         format!("Callers of `{symbol}`")
     } else {
         format!("Callees of `{symbol}`")
     };
-    println!("{}", graph::format_relations(&relations, &title));
-    Ok(())
-}
-
-/// Reject an unknown `--format` instead of silently falling through to the
-/// text branch and exiting 0. An agent cannot tell a typo from a real answer,
-/// and `cmd_graph` even reported `graph <typo> written to <file>`.
-fn validate_format(format_str: &str, allowed: &[&str]) -> Result<()> {
-    if allowed.iter().any(|a| format_str.eq_ignore_ascii_case(a)) {
-        return Ok(());
-    }
-    anyhow::bail!(
-        "unknown --format {format_str:?}: expected one of {}",
-        allowed.join(" | ")
+    emit(
+        &graph::render_relations(&relations, &title, format)?,
+        render,
+        &format!("{} graph", render.format),
     )
 }
 
@@ -1968,209 +1832,146 @@ fn cmd_impact(
     symbol: &str,
     depth: usize,
     limit: usize,
-    format_str: &str,
-    output: Option<&str>,
+    render: &RenderArgs,
     path: &Path,
 ) -> Result<()> {
-    validate_format(format_str, &["text", "html", "mermaid", "json"])?;
+    let format = pick_format(render, false, RELATION_FORMATS)?;
     let conn = open_existing_index(path)?;
     let relations = store::graph_impact(&conn, symbol, depth, limit)?;
     let title = format!("Impact graph for `{symbol}`");
-    // One policy for both formats: write only when `--output` is given, else
-    // print. Previously `html` always created `impact.html` (a file the user
-    // never asked for) while `mermaid` compared against that literal default and
-    // printed even when `--output impact.html` was passed explicitly.
-    if format_str.eq_ignore_ascii_case("json") {
-        println!("{}", serde_json::to_string_pretty(&relations)?);
-    } else if format_str.eq_ignore_ascii_case("html") {
-        let html = graph::export_relations_to_html(&relations, &title);
-        match output {
-            Some(dest) => {
-                std::fs::write(dest, html)?;
-                println!("{} HTML graph exported to {}", "ok".green(), dest);
-            }
-            None => println!("{html}"),
-        }
-    } else if format_str.eq_ignore_ascii_case("mermaid") {
-        let mermaid = graph::format_relations_mermaid(&relations, &title);
-        match output {
-            Some(dest) => {
-                std::fs::write(dest, &mermaid)?;
-                println!("{} Mermaid diagram exported to {}", "ok".green(), dest);
-            }
-            None => println!("{mermaid}"),
-        }
-    } else {
-        println!(
-            "{}",
-            graph::format_relations(&relations, &format!("Impact graph for `{symbol}`"))
-        );
-    }
-    Ok(())
+    emit(
+        &graph::render_relations(&relations, &title, format)?,
+        render,
+        &format!("{} graph", render.format),
+    )
 }
 
-fn cmd_flow(symbol: &str, depth: usize, limit: usize, format_str: &str, path: &Path) -> Result<()> {
-    validate_format(format_str, &["text", "mermaid"])?;
+fn cmd_flow(
+    symbol: &str,
+    depth: usize,
+    limit: usize,
+    render: &RenderArgs,
+    path: &Path,
+) -> Result<()> {
+    let format = pick_format(render, false, RELATION_FORMATS)?;
     let conn = open_existing_index(path)?;
     let relations = store::graph_flow(&conn, symbol, depth, limit)?;
-    if format_str.eq_ignore_ascii_case("mermaid") {
-        println!(
-            "{}",
-            graph::format_relations_mermaid(&relations, &format!("Call flow from `{symbol}`"))
-        );
-    } else {
-        println!(
-            "{}",
-            graph::format_relations(&relations, &format!("Call flow from `{symbol}`"))
-        );
-    }
-    Ok(())
+    let title = format!("Call flow from `{symbol}`");
+    emit(
+        &graph::render_relations(&relations, &title, format)?,
+        render,
+        &format!("{} graph", render.format),
+    )
 }
 
-fn cmd_export_index(output: Option<&Path>, path: &Path) -> Result<()> {
-    let repo_root = find_repo_root(path);
-    let report = snapshot::export(&repo_root, output)?;
-    println!(
-        "{} snapshot written to {}",
-        "ok".green(),
-        report.output.display()
-    );
-    println!(
-        "  {} files, {} chunks — {}",
-        format_num(report.files),
-        format_num(report.chunks),
-        ui::format_bytes(report.bytes)
-    );
-    if let Some(head) = report.head {
-        println!("  indexed at {head}");
+fn cmd_graph(render: &RenderArgs, top: usize, path: &Path) -> Result<()> {
+    if top == 0 {
+        anyhow::bail!("--top must be >= 1");
     }
-    if report.redacted > 0 {
-        println!(
-            "  {} masked known secrets in {} chunk(s) before writing — your local index \
-             still holds the plaintext; fix the source and re-run `tokenix index`",
-            "warning:".yellow(),
-            format_num(report.redacted as i64)
-        );
-    }
-    println!("  Commit it, and teammates run: tokenix import-index");
-    Ok(())
+    let format = pick_format(
+        render,
+        false,
+        &[
+            graph::Format::Text,
+            graph::Format::Json,
+            graph::Format::Dot,
+            graph::Format::Mermaid,
+        ],
+    )?;
+    let conn = open_existing_index(path)?;
+    let edges = store::load_all_graph_edges(&conn)?;
+    let body = match format {
+        graph::Format::Json => serde_json::to_string_pretty(&graph::repo_hotspots(&edges, top))?,
+        graph::Format::Dot => graph::format_edges_dot(&edges, top),
+        graph::Format::Mermaid => graph::format_edges_mermaid(&edges, top),
+        _ => graph::format_repo_report(&edges, top),
+    };
+    emit(&body, render, &format!("graph {}", render.format))
 }
 
-fn cmd_import_index(input: Option<&Path>, force: bool, path: &Path) -> Result<()> {
-    let repo_root = find_repo_root(path);
-    let report = snapshot::import(&repo_root, input, force)?;
-    println!(
-        "{} imported {} → {}",
-        "ok".green(),
-        report.source.display(),
-        report.target.display()
-    );
-    println!(
-        "  {} files, {} chunks",
-        format_num(report.files),
-        format_num(report.chunks),
-    );
-    if let Some(version) = report.created_by {
-        println!("  written by tokenix {version}");
-    }
-    if report.replaced_newer {
-        println!(
-            "  {} a newer local index was replaced (--force)",
-            "warning:".yellow()
-        );
-    }
-    if let Some(backup) = report.backup {
-        println!("  previous index kept at {}", backup.display());
-    }
-    println!("  Catch up to your checkout with: tokenix index");
-    Ok(())
-}
-
-fn cmd_blast(since: &str, depth: usize, limit: usize, json: bool, path: &Path) -> Result<()> {
+fn cmd_blast(
+    since: &str,
+    depth: usize,
+    limit: usize,
+    json: bool,
+    render: &RenderArgs,
+    path: &Path,
+) -> Result<()> {
     if limit == 0 {
         anyhow::bail!("--limit must be >= 1");
     }
+    let format = pick_format(
+        render,
+        json,
+        &[
+            graph::Format::Text,
+            graph::Format::Json,
+            graph::Format::Mermaid,
+        ],
+    )?;
     let repo_root = find_repo_root(path);
     let conn = open_existing_index(path)?;
     let report = blast::analyze(&conn, &repo_root, since, depth, limit)?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        return Ok(());
-    }
-    println!("{}", blast::format_report(&report));
-    Ok(())
-}
-
-fn cmd_modules(top: usize, json: bool, path: &Path) -> Result<()> {
-    if top == 0 {
-        anyhow::bail!("--top must be >= 1");
-    }
-    let conn = open_existing_index(path)?;
-    let edges = store::load_all_graph_edges(&conn)?;
-    let found = modules::detect_modules(&edges, top);
-    if json {
-        println!("{}", serde_json::to_string_pretty(&found)?);
-        return Ok(());
-    }
-    if found.is_empty() {
-        println!("No modules found. Run `tokenix index` first, or the graph is too small.");
-        return Ok(());
-    }
-    println!(
-        "# Modules — {} group(s) over {} edges{}",
-        found.len(),
-        edges.len(),
-        modules::format_modules(&found)
-    );
-    Ok(())
-}
-
-fn cmd_cycles(path: &Path) -> Result<()> {
-    let conn = open_existing_index(path)?;
-    let edges = store::load_all_graph_edges(&conn)?;
-    let cycles = graph::detect_cycles(&edges);
-    println!("{}", graph::format_cycles(&cycles));
-    Ok(())
-}
-
-fn cmd_graph(format_str: &str, top: usize, output: Option<&str>, path: &Path) -> Result<()> {
-    if top == 0 {
-        anyhow::bail!("--top must be >= 1");
-    }
-    validate_format(format_str, &["text", "json", "dot"])?;
-    let conn = open_existing_index(path)?;
-    let edges = store::load_all_graph_edges(&conn)?;
-    let body = if format_str.eq_ignore_ascii_case("json") {
-        serde_json::to_string_pretty(&graph::repo_hotspots(&edges, top))?
-    } else if format_str.eq_ignore_ascii_case("dot") {
-        graph::format_edges_dot(&edges, top)
-    } else {
-        graph::format_repo_report(&edges, top)
+    let body = match format {
+        graph::Format::Json => serde_json::to_string_pretty(&report)?,
+        graph::Format::Mermaid => blast::format_report_mermaid(&report),
+        _ => blast::format_report(&report),
     };
-    if let Some(file) = output {
-        std::fs::write(file, &body)?;
-        println!("{} graph {} written to {}", "ok".green(), format_str, file);
-    } else {
-        println!("{body}");
+    emit(&body, render, &format!("blast {}", render.format))
+}
+
+fn cmd_modules(top: usize, json: bool, render: &RenderArgs, path: &Path) -> Result<()> {
+    if top == 0 {
+        anyhow::bail!("--top must be >= 1");
     }
-    Ok(())
-}
-
-fn cmd_rebuild_graph(path: &Path) -> Result<()> {
-    let repo_root = find_repo_root(path);
+    let format = pick_format(
+        render,
+        json,
+        &[
+            graph::Format::Text,
+            graph::Format::Json,
+            graph::Format::Mermaid,
+            graph::Format::Dot,
+        ],
+    )?;
     let conn = open_existing_index(path)?;
-    // Idempotent: brings pre-upgrade DBs up to date (e.g. graph_imports table).
-    store::init_schema(&conn, 768)?;
-    graph::rebuild_symbol_graph(&conn)?;
-    let imports = graph::rebuild_import_graph(&conn, &repo_root)?;
-    println!(
-        "{}",
-        format!("Symbol graph rebuilt; import graph: {imports} edge(s)").green()
-    );
-    Ok(())
+    let edges = store::load_all_graph_edges(&conn)?;
+    let map = modules::detect_module_map(&edges, top);
+    let body = match format {
+        graph::Format::Json => serde_json::to_string_pretty(&map)?,
+        graph::Format::Mermaid => modules::format_modules_mermaid(&map),
+        graph::Format::Dot => modules::format_modules_dot(&map),
+        _ if map.modules.is_empty() => {
+            "No modules found. Run `tokenix index` first, or the graph is too small.".to_string()
+        }
+        _ => format!(
+            "# Modules — {} group(s) over {} edges{}",
+            map.modules.len(),
+            edges.len(),
+            modules::format_modules(&map.modules)
+        ),
+    };
+    emit(&body, render, &format!("modules {}", render.format))
 }
 
-fn cmd_deps(file: &str, reverse: bool, transitive: bool, json: bool, path: &Path) -> Result<()> {
+fn cmd_deps(
+    file: &str,
+    reverse: bool,
+    transitive: bool,
+    json: bool,
+    render: &RenderArgs,
+    path: &Path,
+) -> Result<()> {
+    let format = pick_format(
+        render,
+        json,
+        &[
+            graph::Format::Text,
+            graph::Format::Json,
+            graph::Format::Mermaid,
+            graph::Format::Dot,
+        ],
+    )?;
     let conn = open_existing_index(path)?;
     let mut edges = store::file_imports(&conn, file, reverse)?;
 
@@ -2210,17 +2011,13 @@ fn cmd_deps(file: &str, reverse: bool, transitive: bool, json: bool, path: &Path
         });
     }
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&edges)?);
-        return Ok(());
-    }
     let title = if reverse {
         format!("Files importing `{file}`")
     } else {
         format!("Imports of `{file}`")
     };
-    println!("{}", graph::format_imports(&edges, &title, reverse));
-    Ok(())
+    let body = graph::render_imports(&edges, &title, reverse, format)?;
+    emit(&body, render, &format!("imports {}", render.format))
 }
 
 fn cmd_read(
@@ -4475,7 +4272,6 @@ fn help_catalog() -> String {
             "Forward execution flow from an entry point",
         ),
         ("pack", "", "Bundle focused context for hookless tools"),
-        ("memory", "", "Store/list agent preference memory"),
         ("deps", "<file>", "File-level import dependencies"),
         ("graph", "", "Symbol-graph overview and hotspots"),
         (
@@ -4532,8 +4328,6 @@ fn help_catalog() -> String {
             "Audit external DNS/IP targets in agent conversations",
         ),
         ("artifacts", "", "Manage non-code context artifacts"),
-        ("cycles", "", "Detect circular dependencies"),
-        ("rebuild-graph", "", "Rebuild the symbol graph from chunks"),
         ("usage", "", "Absolute token spend from agent transcripts"),
         ("discover", "", "Find commands worth filtering in this repo"),
         (
@@ -4660,13 +4454,25 @@ mod tests {
 
     #[test]
     fn unknown_format_is_an_error_not_a_silent_text_fallback() {
-        assert!(validate_format("mermaid", &["text", "mermaid"]).is_ok());
-        assert!(validate_format("MERMAID", &["text", "mermaid"]).is_ok());
-        let err = validate_format("mermiad", &["text", "html", "mermaid", "json"])
+        let render = |f: &str| RenderArgs {
+            format: f.to_string(),
+            output: None,
+        };
+        assert_eq!(
+            pick_format(&render("MERMAID"), false, RELATION_FORMATS).unwrap(),
+            graph::Format::Mermaid
+        );
+        // `--json` is the old shorthand and wins over the default text format.
+        assert_eq!(
+            pick_format(&render("text"), true, RELATION_FORMATS).unwrap(),
+            graph::Format::Json
+        );
+        let typo = pick_format(&render("mermiad"), false, RELATION_FORMATS)
             .expect_err("a typo must not fall through to the text branch and exit 0");
-        let msg = err.to_string();
-        assert!(msg.contains("mermiad"), "{msg}");
-        assert!(msg.contains("text | html | mermaid | json"), "{msg}");
+        assert!(typo.to_string().contains("mermiad"), "{typo}");
+        // A real format the command cannot draw is refused, listing what works.
+        let html = pick_format(&render("html"), false, &[graph::Format::Text]).unwrap_err();
+        assert!(html.to_string().contains("expected one of text"), "{html}");
     }
 
     #[test]
