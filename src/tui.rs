@@ -191,6 +191,7 @@ struct StudioRow {
 enum SecGroup {
     Rule,
     Agent,
+    Repo,
 }
 
 type SecPayload = (Vec<crate::secrets_scan::ScanFinding>, Vec<(String, usize)>);
@@ -1182,6 +1183,7 @@ impl Shell {
         self.sec_groups = group_indices(findings, |f| match mode {
             SecGroup::Rule => f.rule.clone(),
             SecGroup::Agent => f.agent.clone(),
+            SecGroup::Repo => repo_label(&f.repo),
         });
     }
 
@@ -1223,7 +1225,8 @@ impl Shell {
             KeyCode::Char('s') => {
                 self.sec_gmode = match self.sec_gmode {
                     SecGroup::Rule => SecGroup::Agent,
-                    SecGroup::Agent => SecGroup::Rule,
+                    SecGroup::Agent => SecGroup::Repo,
+                    SecGroup::Repo => SecGroup::Rule,
                 };
                 self.rebuild_sec_groups();
             }
@@ -1828,9 +1831,10 @@ impl Shell {
             }
             Cmd::Gain => &["  c  cost table     a  all projects     r  recompute"],
             Cmd::Usage => &["  s  daily · model · blocks · project · session     a  all projects"],
-            Cmd::Secrets => {
-                &["  s group · g scope · v reveal · c copy · x redact (twice, writes [REDACTED])"]
-            }
+            Cmd::Secrets => &[
+                "  s group (rule · agent · repo) · g this repo ↔ all repos · v reveal · c copy",
+                "  x redact (twice, writes [REDACTED])",
+            ],
             Cmd::Egress => &["  s group · g scope · r rescan"],
             _ => &["  ↑ ↓ scroll · r re-run the command"],
         };
@@ -2779,9 +2783,22 @@ impl Shell {
         let kind = match self.sec_gmode {
             SecGroup::Rule => "rule",
             SecGroup::Agent => "agent",
+            SecGroup::Repo => "repo",
         };
+        let (repos, agents) = self.secrets.as_deref().map_or((0, 0), |all| {
+            let distinct = |key: &dyn Fn(&crate::secrets_scan::ScanFinding) -> String| {
+                all.iter()
+                    .map(key)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+            };
+            (
+                distinct(&|f| repo_label(&f.repo)),
+                distinct(&|f| f.agent.clone()),
+            )
+        });
         let title = format!(
-            " {total} secrets · by {kind} · {} ",
+            " {total} secrets · {repos} repo(s) · {agents} agent(s) · by {kind} · {} ",
             self.scope_label(self.sec_global)
         );
         let mut state = ListState::default();
@@ -3484,6 +3501,27 @@ fn slugify(s: &str) -> String {
 }
 
 /// Last two path components, to keep project labels compact.
+/// Display name of the repo a finding was attributed to: the last path
+/// component, the transcript's directory marker, or a placeholder.
+fn repo_label(repo: &Option<String>) -> String {
+    let Some(repo) = repo else {
+        return "(unknown repo)".to_string();
+    };
+    if let Some(slug) = repo.strip_prefix("~slug:") {
+        return slug.to_string();
+    }
+    if let Some(dir) = repo.strip_prefix("~dir:") {
+        return dir.to_string();
+    }
+    let norm = repo.replace('\\', "/");
+    norm.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&norm)
+        .to_string()
+}
+
 fn short_path(p: &str) -> String {
     let path = std::path::Path::new(p);
     let parts: Vec<_> = path.components().collect();
@@ -3783,6 +3821,16 @@ mod tests {
         );
         assert_eq!(Cmd::Modules.argv().unwrap(), ["modules"]);
         assert_eq!(Cmd::Memory.argv().unwrap(), ["memory", "list"]);
+    }
+
+    #[test]
+    fn repo_label_names_the_repo_from_any_attribution_form() {
+        let some = |s: &str| Some(s.to_string());
+        assert_eq!(repo_label(&some("/home/u/work/tokenix/")), "tokenix");
+        assert_eq!(repo_label(&some(r"C:\src\app")), "app");
+        assert_eq!(repo_label(&some("~slug:-home-u-app")), "-home-u-app");
+        assert_eq!(repo_label(&some("~dir:app")), "app");
+        assert_eq!(repo_label(&None), "(unknown repo)");
     }
 
     #[test]

@@ -34,9 +34,9 @@ run `tokenix trust`. OpenCode itself decides what it runs.
 
 ## What it does
 
-OpenCode sees the tokenix MCP tools: smart read,
-symbols, callers/callees, impact, memory and run. The [MCP guide](mcp.md) has the
-full list and the `slim` profile.
+OpenCode sees the tokenix MCP tools: symbols, callers/callees, impact, flow,
+blast, modules, deps, tokenmap, read, memory and run. The [MCP guide](mcp.md) has
+the full list.
 
 A good habit is to tell OpenCode, in your project instructions, to start a task
 with `tokenix_symbols` and to read large files through `tokenix_read`.

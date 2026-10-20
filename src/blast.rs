@@ -54,6 +54,11 @@ pub struct BlastReport {
 type FileRanges = BTreeMap<String, Vec<(usize, usize)>>;
 
 fn git_diff(repo_root: &Path, base: &str) -> Result<String> {
+    // `base` is placed among git's own arguments, and over MCP it is chosen by a
+    // model: `--output=<file>` would make `git diff` write a file.
+    if base.starts_with('-') {
+        anyhow::bail!("invalid ref {base:?}: a git ref cannot start with '-'");
+    }
     let out = Command::new("git")
         .args([
             "diff",
@@ -347,6 +352,14 @@ pub fn format_report(report: &BlastReport) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_ref_that_looks_like_an_option_is_refused() {
+        // `git diff --output=<file>` would write a file named by the caller.
+        let err = git_diff(Path::new("."), "--output=blast-pwned.txt").unwrap_err();
+        assert!(err.to_string().contains("cannot start with '-'"), "{err}");
+        assert!(!Path::new("blast-pwned.txt").exists());
+    }
+
     use super::*;
 
     const DIFF: &str = "diff --git a/src/store.rs b/src/store.rs\n\

@@ -95,125 +95,18 @@ fn find_repo_root(path: &Path) -> PathBuf {
 
 /// Estimated prompt cost of the tool schemas this server advertises.
 pub fn tool_schema_tokens() -> usize {
-    full_tool_estimate()
+    tool_list()
         .iter()
         .map(|tool| crate::chunker::count_tokens(&tool.to_string()))
         .sum()
 }
 
-fn full_tool_estimate() -> Vec<Value> {
-    [
-        (
-            "tokenix_read",
-            "Smart outline, symbol, or line-range file reader",
-        ),
-        ("tokenix_symbols", "Find indexed symbols by name or path"),
-        ("tokenix_callers", "Find symbols that call a target symbol"),
-        ("tokenix_callees", "Find symbols called by a target symbol"),
-        (
-            "tokenix_impact",
-            "Show bidirectional impact graph around a symbol",
-        ),
-        ("tokenix_memory_add", "Save durable preference memory"),
-        ("tokenix_memory_list", "List preference memory"),
-        ("tokenix_memory_remove", "Remove preference memory"),
-        ("tokenix_memory_edit", "Edit preference memory"),
-        ("tokenix_run", "Run shell command with compressed output"),
-        ("tokenix_gain", "Show hook token savings"),
-    ]
-    .into_iter()
-    .map(|(name, description)| {
-        json!({
-            "name": name,
-            "description": description,
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "task": {"type": "string"},
-                    "budget": {"type": "integer"},
-                    "file": {"type": "string"},
-                    "symbol": {"type": "string"},
-                    "limit": {"type": "integer"},
-                    "command": {"type": "string"},
-                    "scope": {"type": "string"},
-                    "history": {"type": "boolean"}
-                }
-            }
-        })
-    })
-    .collect()
-}
-
-pub fn run_mcp_server() -> Result<()> {
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut reader = stdin.lock();
-    let mut writer = stdout.lock();
-    let mut line = String::new();
-
-    while reader.read_line(&mut line)? > 0 {
-        let request_str = line.trim();
-        if request_str.is_empty() {
-            line.clear();
-            continue;
-        }
-
-        let request: Value = match serde_json::from_str(request_str) {
-            Ok(val) => val,
-            Err(_) => {
-                // JSON-RPC 2.0 §5: error response MUST include id; use null when
-                // the request could not be parsed and no id is available.
-                let response = json!({
-                    "jsonrpc": "2.0",
-                    "id": Value::Null,
-                    "error": {
-                        "code": -32700,
-                        "message": "Parse error"
-                    }
-                });
-                let _ = writeln!(writer, "{}", response);
-                let _ = writer.flush();
-                line.clear();
-                continue;
-            }
-        };
-
-        if let Some(method) = request.get("method").and_then(|m| m.as_str()) {
-            let id = request.get("id").cloned();
-            let params = request.get("params").cloned().unwrap_or(Value::Null);
-
-            let response = match method {
-                "initialize" => {
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": {
-                            "protocolVersion": "2024-11-05",
-                            "capabilities": {
-                                "tools": {}
-                            },
-                            "serverInfo": {
-                                "name": "tokenix",
-                                "version": env!("CARGO_PKG_VERSION")
-                            }
-                        }
-                    })
-                }
-                // Silently discard all notification messages (no response required per JSON-RPC)
-                n if n.starts_with("notifications/") => {
-                    line.clear();
-                    continue;
-                }
-                "tools/list" => {
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": {
-                            "tools": [
+/// Every tool this server advertises, in `tools/list` order.
+fn tool_list() -> Vec<Value> {
+    json!([
                                 {
                                     "name": "tokenix_read",
-                                    "description": "Smart outline, symbol, or line-range file reader (token-efficient)",
+                                    "description": "Read one repo file from disk: the whole file, one `symbol`, or a `lines` range. Files over 1000 lines return an outline that omits comments, tests and usages: use `lines` or your native Read before editing or renaming.",
                                     "inputSchema": {
                                         "type": "object",
                                         "properties": {
@@ -228,6 +121,10 @@ pub fn run_mcp_server() -> Result<()> {
                                             "lines": {
                                                 "type": "string",
                                                 "description": "Optional line range, e.g. '1-50'"
+                                            },
+                                            "outline": {
+                                                "type": "boolean",
+                                                "description": "Return the outline even for a short file"
                                             }
                                         },
                                         "required": ["file"]
@@ -235,7 +132,7 @@ pub fn run_mcp_server() -> Result<()> {
                                 },
                                 {
                                     "name": "tokenix_symbols",
-                                    "description": "Find indexed symbols by name or path",
+                                    "description": "Locate symbols by name or path. Returns path:line, never code: Read the file for contents and use your own grep for text.",
                                     "inputSchema": {
                                         "type": "object",
                                         "properties": {
@@ -280,6 +177,63 @@ pub fn run_mcp_server() -> Result<()> {
                                             "limit": {"type": "integer", "description": "Maximum relationships (default 50)", "default": 50}
                                         },
                                         "required": ["symbol"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_flow",
+                                    "description": "Trace the call flow forward from an entry-point symbol",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "symbol": {"type": "string", "description": "Entry-point symbol name"},
+                                            "depth": {"type": "integer", "description": "Call hops to follow (default 3)", "default": 3},
+                                            "limit": {"type": "integer", "description": "Maximum relationships (default 50)", "default": 50}
+                                        },
+                                        "required": ["symbol"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_blast",
+                                    "description": "Symbols that depend on what the working tree changed since a git ref",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "since": {"type": "string", "description": "Git ref to diff against (default HEAD)", "default": "HEAD"},
+                                            "depth": {"type": "integer", "description": "Caller hops to follow (default 2)", "default": 2},
+                                            "limit": {"type": "integer", "description": "Maximum rows (default 50)", "default": 50}
+                                        }
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_modules",
+                                    "description": "Functional modules found in the symbol graph: groups of symbols that mostly call each other",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "top": {"type": "integer", "description": "How many modules (default 12)", "default": 12}
+                                        }
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_deps",
+                                    "description": "File-level imports of a file, or with reverse=true the files that import it",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "file": {"type": "string", "description": "Repo-relative file path"},
+                                            "reverse": {"type": "boolean", "description": "List importers instead of imports", "default": false}
+                                        },
+                                        "required": ["file"]
+                                    }
+                                },
+                                {
+                                    "name": "tokenix_tokenmap",
+                                    "description": "Top-level directories and files holding the most tokens, heaviest first",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "top": {"type": "integer", "description": "Rows per list (default 15)", "default": 15}
+                                        }
                                     }
                                 },
                                 {
@@ -368,7 +322,75 @@ pub fn run_mcp_server() -> Result<()> {
                                         }
                                     }
                                 }
-                            ]
+                            ]).as_array().cloned().unwrap_or_default()
+}
+
+pub fn run_mcp_server() -> Result<()> {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut reader = stdin.lock();
+    let mut writer = stdout.lock();
+    let mut line = String::new();
+
+    while reader.read_line(&mut line)? > 0 {
+        let request_str = line.trim();
+        if request_str.is_empty() {
+            line.clear();
+            continue;
+        }
+
+        let request: Value = match serde_json::from_str(request_str) {
+            Ok(val) => val,
+            Err(_) => {
+                // JSON-RPC 2.0 §5: error response MUST include id; use null when
+                // the request could not be parsed and no id is available.
+                let response = json!({
+                    "jsonrpc": "2.0",
+                    "id": Value::Null,
+                    "error": {
+                        "code": -32700,
+                        "message": "Parse error"
+                    }
+                });
+                let _ = writeln!(writer, "{}", response);
+                let _ = writer.flush();
+                line.clear();
+                continue;
+            }
+        };
+
+        if let Some(method) = request.get("method").and_then(|m| m.as_str()) {
+            let id = request.get("id").cloned();
+            let params = request.get("params").cloned().unwrap_or(Value::Null);
+
+            let response = match method {
+                "initialize" => {
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {
+                                "tools": {}
+                            },
+                            "serverInfo": {
+                                "name": "tokenix",
+                                "version": env!("CARGO_PKG_VERSION")
+                            }
+                        }
+                    })
+                }
+                // Silently discard all notification messages (no response required per JSON-RPC)
+                n if n.starts_with("notifications/") => {
+                    line.clear();
+                    continue;
+                }
+                "tools/list" => {
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "tools": tool_list()
                         }
                     })
                 }
@@ -476,6 +498,11 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
             | "tokenix_callers"
             | "tokenix_callees"
             | "tokenix_impact"
+            | "tokenix_flow"
+            | "tokenix_blast"
+            | "tokenix_modules"
+            | "tokenix_deps"
+            | "tokenix_tokenmap"
     ) {
         let _ = crate::freshness::refresh_before_query(&repo_root);
     }
@@ -553,9 +580,16 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 return Ok(out.trim_end().to_string());
             }
 
-            if file_lines.len() >= 200 {
+            let force_outline = args
+                .get("outline")
+                .and_then(|o| o.as_bool())
+                .unwrap_or(false);
+            if force_outline || file_lines.len() > READ_FULL_MAX_LINES {
                 let mut out = crate::chunker::generate_outline(&content, &rel);
-                out.push_str("\n\nUse 'symbol' or 'lines' arguments to read specific parts.");
+                out.push_str(
+                    "\n\nOutline only: comments, tests and every use of a name are omitted. \
+                     Use 'symbol' or 'lines' to read parts, or your native Read before editing.",
+                );
                 Ok(out)
             } else {
                 Ok(content)
@@ -607,6 +641,69 @@ fn handle_tool_call(name: &str, args: Value) -> Result<String> {
                 &relations,
                 &format!("Impact graph for `{symbol}`"),
             ))
+        }
+        "tokenix_flow" => {
+            let symbol = args
+                .get("symbol")
+                .and_then(|q| q.as_str())
+                .ok_or_else(|| anyhow!("Missing 'symbol' argument"))?;
+            let depth = arg_usize(&args, "depth", 3);
+            let limit = arg_usize(&args, "limit", 50);
+            let conn = open_existing_index(&repo_root)?;
+            let relations = crate::store::graph_flow(&conn, symbol, depth, limit)?;
+            Ok(crate::graph::format_relations(
+                &relations,
+                &format!("Call flow from `{symbol}`"),
+            ))
+        }
+        "tokenix_blast" => {
+            let since = args.get("since").and_then(|s| s.as_str()).unwrap_or("HEAD");
+            let depth = arg_usize(&args, "depth", 2);
+            let limit = arg_usize(&args, "limit", 50);
+            let conn = open_existing_index(&repo_root)?;
+            let report = crate::blast::analyze(&conn, &repo_root, since, depth, limit)?;
+            Ok(crate::blast::format_report(&report))
+        }
+        "tokenix_modules" => {
+            let top = arg_usize(&args, "top", 12);
+            let conn = open_existing_index(&repo_root)?;
+            let edges = crate::store::load_all_graph_edges(&conn)?;
+            let found = crate::modules::detect_modules(&edges, top);
+            if found.is_empty() {
+                return Ok(
+                    "No modules found: the graph is too small or the index is empty.".into(),
+                );
+            }
+            Ok(format!(
+                "# Modules: {} group(s) over {} edges{}",
+                found.len(),
+                edges.len(),
+                crate::modules::format_modules(&found)
+            ))
+        }
+        "tokenix_deps" => {
+            let file = args
+                .get("file")
+                .and_then(|f| f.as_str())
+                .ok_or_else(|| anyhow!("Missing 'file' argument"))?;
+            let reverse = args
+                .get("reverse")
+                .and_then(|r| r.as_bool())
+                .unwrap_or(false);
+            let conn = open_existing_index(&repo_root)?;
+            let edges = crate::store::file_imports(&conn, file, reverse)?;
+            let title = if reverse {
+                format!("Files importing `{file}`")
+            } else {
+                format!("Imports of `{file}`")
+            };
+            Ok(crate::graph::format_imports(&edges, &title, reverse))
+        }
+        "tokenix_tokenmap" => {
+            let top = arg_usize(&args, "top", 15);
+            let conn = open_existing_index(&repo_root)?;
+            let counts = crate::store::get_file_token_counts(&conn)?;
+            Ok(format_tokenmap(&counts, top))
         }
         "tokenix_memory_add" => {
             let text = args
@@ -869,6 +966,44 @@ fn is_tokenix_executable(part: &str) -> bool {
     matches!(name, "tokenix" | "tokenix.exe")
 }
 
+/// Files up to this many lines come back whole from `tokenix_read`.
+const READ_FULL_MAX_LINES: usize = 1000;
+
+fn arg_usize(args: &Value, key: &str, default: usize) -> usize {
+    args.get(key)
+        .and_then(|v| v.as_u64())
+        .map_or(default, |v| (v as usize).max(1))
+}
+
+/// Heaviest top-level directories and files by indexed tokens.
+fn format_tokenmap(counts: &[(String, i64)], top: usize) -> String {
+    if counts.is_empty() {
+        return "No files in the index.".to_string();
+    }
+    let total: i64 = counts.iter().map(|(_, t)| t).sum();
+    let mut dirs: std::collections::BTreeMap<&str, i64> = std::collections::BTreeMap::new();
+    for (path, tokens) in counts {
+        let top_dir = path.split_once('/').map_or("(root files)", |(d, _)| d);
+        *dirs.entry(top_dir).or_default() += tokens;
+    }
+    let mut dirs: Vec<_> = dirs.into_iter().collect();
+    dirs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let mut files: Vec<_> = counts.iter().collect();
+    files.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+    let pct = |t: i64| t as f64 * 100.0 / total.max(1) as f64;
+    let mut out = format!("# Token map: {} tokens in {} files\n", total, counts.len());
+    out.push_str("\n## Directories\n");
+    for (dir, tokens) in dirs.iter().take(top) {
+        out.push_str(&format!("- {dir}: {tokens} ({:.1}%)\n", pct(*tokens)));
+    }
+    out.push_str("\n## Files\n");
+    for (path, tokens) in files.iter().take(top) {
+        out.push_str(&format!("- {path}: {tokens} ({:.1}%)\n", pct(*tokens)));
+    }
+    out
+}
+
 fn open_existing_index(repo_root: &Path) -> Result<rusqlite::Connection> {
     crate::store::open_db(repo_root, false)?
         .ok_or_else(|| anyhow!("Index not found. Please index the workspace first."))
@@ -877,6 +1012,42 @@ fn open_existing_index(repo_root: &Path) -> Result<rusqlite::Connection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tokenmap_ranks_directories_and_files_by_tokens() {
+        let counts = vec![
+            ("src/a.rs".to_string(), 300),
+            ("src/b.rs".to_string(), 100),
+            ("docs/x.md".to_string(), 250),
+            ("README.md".to_string(), 50),
+        ];
+        let out = format_tokenmap(&counts, 2);
+        assert!(out.contains("700 tokens in 4 files"), "{out}");
+        let src = out.find("- src: 400 (57.1%)").expect("src row");
+        let docs = out.find("- docs: 250 (35.7%)").expect("docs row");
+        assert!(src < docs, "heaviest directory first: {out}");
+        assert!(!out.contains("README.md"), "top=2 keeps two files: {out}");
+        assert!(out.contains("- src/a.rs: 300"), "{out}");
+    }
+
+    #[test]
+    fn tool_list_has_the_structure_tools_and_counts_its_own_weight() {
+        let names: Vec<String> = tool_list()
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_string))
+            .collect();
+        for want in [
+            "tokenix_symbols",
+            "tokenix_flow",
+            "tokenix_blast",
+            "tokenix_modules",
+            "tokenix_deps",
+            "tokenix_tokenmap",
+        ] {
+            assert!(names.iter().any(|n| n == want), "{want} missing: {names:?}");
+        }
+        assert!(tool_schema_tokens() > 500);
+    }
 
     #[test]
     fn read_capped_redacted_masks_keys_and_enforces_cap() {

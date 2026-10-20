@@ -100,12 +100,11 @@ fn proxy_exits_when_the_child_exits() {
     }
 }
 
-/// There is one MCP profile. Configs written when `--profile slim` existed must
-/// keep starting, and must now get the real tools instead of a two-tool facade.
+/// There is one MCP tool set and no `--profile` flag to pick another.
 #[test]
-fn legacy_profile_flag_still_starts_and_serves_every_tool() {
+fn mcp_serves_every_tool_and_has_no_profile_flag() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_tokenix"))
-        .args(["mcp", "--profile", "slim"])
+        .arg("mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -129,9 +128,24 @@ fn legacy_profile_flag_still_starts_and_serves_every_tool() {
         .iter()
         .filter_map(|t| t["name"].as_str())
         .collect();
-    assert!(names.contains(&"tokenix_symbols"), "{names:?}");
-    assert!(names.contains(&"tokenix_impact"), "{names:?}");
+    for want in [
+        "tokenix_symbols",
+        "tokenix_impact",
+        "tokenix_blast",
+        "tokenix_modules",
+        "tokenix_flow",
+        "tokenix_deps",
+        "tokenix_tokenmap",
+    ] {
+        assert!(names.contains(&want), "{want} missing: {names:?}");
+    }
     assert!(!names.contains(&"tokenix_call"), "{names:?}");
     let _ = child.kill();
     let _ = child.wait();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["mcp", "--profile", "slim"])
+        .output()
+        .expect("run mcp --profile");
+    assert!(!out.status.success(), "--profile must be rejected");
 }

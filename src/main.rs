@@ -767,12 +767,7 @@ enum Commands {
     /// PostToolUse hook handler for output compression (not for direct use)
     HookPost,
     /// Run as a Model Context Protocol (MCP) server over stdin/stdout
-    Mcp {
-        /// Accepted and ignored: there is one profile now. Kept so existing
-        /// client configs that still pass `--profile slim|full` keep starting.
-        #[arg(long, hide = true, value_parser = ["slim", "full"])]
-        profile: Option<String>,
-    },
+    Mcp,
     /// Generate agent ignore files (.claudeignore, .geminiignore, etc.) from .gitignore
     GenerateIgnores {
         #[arg(short, long, default_value = ".")]
@@ -1103,7 +1098,7 @@ fn should_check_update_on_start(command: Option<&Commands>) -> bool {
                 | Commands::Hook
                 | Commands::HookAntigravity
                 | Commands::HookPost
-                | Commands::Mcp { .. }
+                | Commands::Mcp
                 | Commands::McpProxy { .. }
                 | Commands::Run { .. }
                 | Commands::Pack { .. }
@@ -1544,7 +1539,7 @@ fn main() -> Result<()> {
             }
             std::process::exit(0);
         }
-        Commands::Mcp { profile: _ } => {
+        Commands::Mcp => {
             #[allow(unused_unsafe)]
             unsafe {
                 std::env::set_var("RAYON_NUM_THREADS", "1");

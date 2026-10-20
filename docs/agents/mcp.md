@@ -31,13 +31,22 @@ For every other client, add the entry to its MCP config by hand.
 
 ## Tools
 
-`tokenix_read`, `tokenix_symbols`, `tokenix_callers`, `tokenix_callees`,
-`tokenix_impact`, `tokenix_memory_add`, `tokenix_memory_list`,
-`tokenix_memory_remove`, `tokenix_memory_edit`, `tokenix_run`, `tokenix_gain`.
+| Tool | What it answers |
+|---|---|
+| `tokenix_symbols` | Where a symbol is defined (`path:line`, never code) |
+| `tokenix_callers` · `tokenix_callees` | Who calls a symbol, and what it calls |
+| `tokenix_impact` · `tokenix_flow` | The graph around a symbol, and the forward call flow from an entry point |
+| `tokenix_blast` | Symbols that depend on the working-tree diff since a git ref |
+| `tokenix_modules` | Groups of symbols that mostly call each other |
+| `tokenix_deps` | File imports, or (`reverse`) which files import a file |
+| `tokenix_tokenmap` | The directories and files holding the most tokens |
+| `tokenix_read` | One file from disk: whole, one `symbol`, or a `lines` range. Over 1000 lines it returns an outline, which omits usages and tests |
+| `tokenix_memory_add` · `_list` · `_remove` · `_edit` | Durable preferences |
+| `tokenix_run` · `tokenix_gain` | A command with compressed output, and measured savings |
 
-There is a single tool set. The old `--profile slim|full` flag is still accepted
-and ignored, so a client config written for it keeps starting; it now gets these
-tools. Every tool schema costs prompt tokens each turn;
+The graph tools return **locations and relations, not code**, and do not search
+file contents: read the file for what it says and use the agent's own grep for
+text. Every tool schema costs prompt tokens each turn;
 `tokenix prompt-audit --profile-impact` prints the footprint of this set.
 
 Each `tools/call` runs behind a panic guard, so one bad request cannot take the
