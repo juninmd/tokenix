@@ -3824,6 +3824,10 @@ mod tests {
             (Cmd::Doctor, "doctor"),
             (Cmd::Tokenmap, "tokenmap"),
             (Cmd::Graph, "graph"),
+            (Cmd::Symbols, "symbols"),
+            (Cmd::Modules, "modules"),
+            (Cmd::Blast, "blast"),
+            (Cmd::Pack, "pack"),
         ];
 
         // Report tabs self-exec. Under `cargo test` the current exe is the test
@@ -3852,6 +3856,22 @@ mod tests {
                 global: false,
                 gain_cost: false,
             });
+
+            // Show the new tabs doing something, not their first frame.
+            match tab {
+                Cmd::Symbols => {
+                    shell.explorer.ensure_loaded();
+                    shell.explorer.key(KeyCode::Char('/'));
+                    for c in "run_hook".chars() {
+                        shell.explorer.key_search(KeyCode::Char(c));
+                    }
+                    shell.explorer.key_search(KeyCode::Enter);
+                    shell.explorer.key(KeyCode::Tab);
+                }
+                // Diff the last commit so the report is not empty on a clean tree.
+                Cmd::Blast => shell.blast_ref = 1,
+                _ => {}
+            }
 
             // Doctor, Graph and Tokenmap load on a background thread, so a frame
             // drawn immediately captures the spinner. Pump until the loaders go

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1008 612" width="1008" height="612" font-family="ui-monospace,'SF Mono','Cascadia Mono',Consolas,'DejaVu Sans Mono',monospace" font-size="14">
+<rect width="100%" height="100%" rx="6" fill="#0d1117"/>
+<text xml:space="preserve" x="0.00" y="13.60" fill="#e6edf3">┌ tokenix  1·Overview </text>
+<text xml:space="preserve" x="184.80" y="13.60" fill="#39c5cf" font-weight="bold"> 2·Code </text>
+<text xml:space="preserve" x="252.00" y="13.60" fill="#e6edf3"> 3·Savings  4·Health ──────────────────────────────────────────────────────────── ? help ┐</text>
+<text xml:space="preserve" x="0.00" y="31.60" fill="#e6edf3">│ Symbols │ Graph │ </text>
+<text xml:space="preserve" x="168.00" y="31.60" fill="#39c5cf" font-weight="bold">Modules</text>
+<text xml:space="preserve" x="226.80" y="31.60" fill="#e6edf3"> │ Blast │ Pack │ Tokenmap                                                                  │</text>
+<text xml:space="preserve" x="0.00" y="49.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
+<text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│# Modules — 12 group(s) over 13287 edges                                                                              │</text>
+<text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│## Modules (symbols that mostly talk to each other)                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│- chunker.rs + graph.rs + store.rs +27 — 375 symbols, cohesion 48% (1095 internal / 1209 crossing)                    │</text>
+<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">│    key: path, filter, as_str, start, chunk_file, get_effective_command                                               │</text>
+<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">│    files: src/chunker.rs, src/graph.rs, src/store.rs, src/main.rs, src/memory.rs                                     │</text>
+<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│- src/tui.rs — 345 symbols, cohesion 69% (2544 internal / 1161 crossing)                                              │</text>
+<text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">│    key: lines, Commands, Shell, main, new_shell, render_docs_svg                                                     │</text>
+<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│    files: src/tui.rs, src/tui/explorer.rs, src/filters.rs, src/compress.rs, src/main.rs                              │</text>
+<text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">│- src/filters.rs — 230 symbols, cohesion 62% (788 internal / 484 crossing)                                            │</text>
+<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">│    key: count_tokens, FilterDef, apply_filter, base_filter, find_filter, push_finding                                │</text>
+<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">│    files: src/filters.rs, src/conversation_audit.rs, src/cmd_filter.rs, src/filters/blocks.rs, src/filters/regex_lint│</text>
+<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│- mcp_audit.rs + docshot.rs + mod.rs +24 — 177 symbols, cohesion 59% (1220 internal / 849 crossing)                   │</text>
+<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│    key: Agent, run, status, Status, main, tokenix                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">│    files: src/mcp_audit.rs, src/docshot.rs, tests/common/mod.rs, src/secrets_scan.rs, src/discover.rs                │</text>
+<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│- recordings.rs + secrets_scan.rs + cmd_filter.rs +20 — 152 symbols, cohesion 41% (430 internal / 620 crossing)       │</text>
+<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│    key: Dir, Root, capture, scan, find_project_root, economy                                                         │</text>
+<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│    files: src/recordings.rs, src/secrets_scan.rs, src/cmd_filter.rs, src/egress_scan.rs, src/filters.rs              │</text>
+<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│- benchmark/samples/ — 127 symbols, cohesion 71% (484 internal / 201 crossing)                                        │</text>
+<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│    key: all, User, Role, UserService, update, Page                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│    files: benchmark/samples/user_service.rs, benchmark/samples/auth_middleware.py, benchmark/samples/database_client.│</text>
+<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│- hook.rs + gain.rs + hook_e2e.rs +10 — 127 symbols, cohesion 59% (590 internal / 403 crossing)                       │</text>
+<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│    key: command, Tool, log_hook_event, run_hook, graph_search_and_relations_dedupe_duplicate_visible_symbols, HookEve│</text>
+<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│    files: src/hook.rs, src/gain.rs, tests/hook_e2e.rs, src/store.rs, src/cmd_filter.rs                               │</text>
+<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│- egress_scan.rs + secrets_scan.rs + api_handler.go +11 — 124 symbols, cohesion 56% (557 internal / 442 crossing)     │</text>
+<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│    key: Rule, scan_content, scan, cmp, context_weight, global_dir                                                    │</text>
+<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│    files: src/egress_scan.rs, src/secrets_scan.rs, benchmark/samples/api_handler.go, src/store.rs, src/graph.rs      │</text>
+<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│- main.rs + filters.rs + mcp.rs +13 — 123 symbols, cohesion 44% (383 internal / 479 crossing)                         │</text>
+<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│    key: Entry, parse, main, build_filter_prompt, tui_target, Commands                                                │</text>
+<text xml:space="preserve" x="0.00" y="589.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓/PgUp/PgDn: scroll · r: refresh · y: copy · ?: help · q                                                     </text>
+</svg>

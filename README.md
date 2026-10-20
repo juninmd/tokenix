@@ -311,6 +311,10 @@ open a UI.
 <td><img src=".github/prints/filters.png" alt="Filters tab" /></td>
 <td><img src=".github/prints/secrets.png" alt="Secrets tab" /></td>
 </tr>
+<tr>
+<td><img src=".github/prints/symbols.png" alt="Symbols tab" /></td>
+<td><img src=".github/prints/pack.png" alt="Pack tab" /></td>
+</tr>
 </table>
 
 ---
