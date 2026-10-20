@@ -368,6 +368,7 @@ fn chunk_only(
     }
 }
 
+#[cfg_attr(not(feature = "forensics"), allow(dead_code))]
 pub fn index_repo<F>(
     repo_root: &Path,
     force: bool,

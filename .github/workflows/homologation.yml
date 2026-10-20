@@ -52,7 +52,7 @@ jobs:
           restore-keys: linux-cargo-homologation-
 
       - name: Build release
-        run: cargo build --release --locked
+        run: cargo build --release --locked --features full
 
       - name: Locate binary
         id: bin
@@ -145,7 +145,7 @@ jobs:
           restore-keys: linux-arm-
 
       - name: Build release (native aarch64)
-        run: cargo build --release --locked
+        run: cargo build --release --locked --features full
 
       - name: Verify ELF header and architecture
         run: |

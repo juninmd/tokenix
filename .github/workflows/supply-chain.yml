@@ -86,7 +86,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
       - name: Build release binary
-        run: cargo build --release --locked
+        run: cargo build --release --locked --features full
       # Run the install commands against a throwaway HOME so the runner is not
       # polluted. Everything install touches is local; if any command ever makes
       # an external HTTPS call it surfaces in the egress audit above. The

@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "authoring")]
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +43,7 @@ pub fn active_session(repo_root: &Path) -> Option<Session> {
     serde_json::from_str(&raw).ok()
 }
 
+#[cfg(feature = "authoring")]
 /// Begin a session. A named `command` is validated up front because it later
 /// becomes a directory name; `None` records every command.
 pub fn start(repo_root: &Path, command: Option<String>) -> Result<Session> {
@@ -63,6 +65,7 @@ pub fn start(repo_root: &Path, command: Option<String>) -> Result<Session> {
     Ok(session)
 }
 
+#[cfg(feature = "authoring")]
 pub fn stop(repo_root: &Path) -> Result<()> {
     let p = session_path(repo_root);
     if p.exists() {
@@ -122,7 +125,7 @@ pub fn capture(repo_root: &Path, command: &str, stdout: &str, stderr: &str) {
     // PATH. Redact before either happens: `aws sts get-session-token` under a
     // recording session used to write its session token straight into the repo.
     let body = crate::secrets_scan::redact_known_secrets(&body).0;
-    let body = crate::conversation_audit::redact_credentials(&body);
+    let body = crate::redact::redact_credentials(&body);
     let body = truncate_bytes(&body, MAX_BYTES_PER_CAPTURE);
 
     let dir = recordings_dir(repo_root).join(&base);
@@ -214,6 +217,7 @@ pub fn summary(repo_root: &Path) -> Vec<(String, usize, u64)> {
     out
 }
 
+#[cfg(feature = "authoring")]
 /// Per-command token-economy preview for the `record` visualization.
 /// Reconstructs the raw command output (dropping the capture scaffold: the
 /// `$ cmd` echo, the `--- stderr ---` marker, and any truncation note), then
@@ -229,6 +233,7 @@ pub struct Economy {
     pub matched: bool,
 }
 
+#[cfg(feature = "authoring")]
 impl Economy {
     pub fn saved_pct(&self) -> f64 {
         if self.raw_tokens == 0 {
@@ -239,6 +244,7 @@ impl Economy {
     }
 }
 
+#[cfg(feature = "authoring")]
 /// Strip the capture scaffold from a recorded sample, returning
 /// `(representative_command, raw_output)`. The first `$ ` line is the real
 /// invocation used to resolve a filter; the rest is the untouched output.
@@ -264,6 +270,7 @@ fn unscaffold(sample: &str) -> (Option<String>, String) {
     (command, raw)
 }
 
+#[cfg(feature = "authoring")]
 pub fn economy(repo_root: &Path) -> Vec<Economy> {
     let bundled = crate::filters::load_bundled_filters();
     let mut out: Vec<Economy> = summary(repo_root)
@@ -353,6 +360,7 @@ mod tests {
     use super::*;
 
     // Distinct dir per test name so the parallel test runner can't cross-clobber.
+    #[cfg(feature = "authoring")]
     fn tmp(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!("tokenix-rec-{}-{}", std::process::id(), name));
@@ -361,6 +369,7 @@ mod tests {
         p
     }
 
+    #[cfg(feature = "authoring")]
     #[test]
     fn start_capture_read_stop_roundtrip() {
         let root = tmp("roundtrip");
@@ -391,6 +400,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(feature = "authoring")]
     #[test]
     fn economy_preview_reports_filter_savings() {
         let root = tmp("economy");
@@ -426,6 +436,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(feature = "authoring")]
     #[test]
     fn empty_output_is_not_captured() {
         let root = tmp("empty");
@@ -435,6 +446,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(feature = "authoring")]
     #[test]
     fn targeted_session_ignores_other_commands() {
         let root = tmp("targeted");
@@ -457,6 +469,7 @@ mod tests {
         assert!(sanitize_base("").is_none());
     }
 
+    #[cfg(feature = "authoring")]
     #[test]
     fn start_rejects_unsafe_target() {
         let root = tmp("unsafe-target");

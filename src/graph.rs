@@ -385,21 +385,6 @@ fn detect_cycles_inner(edges: &[store::GraphEdgeRow]) -> Vec<Vec<String>> {
 }
 
 /// Format detected cycles for CLI output.
-pub fn format_cycles(cycles: &[Vec<String>]) -> String {
-    if cycles.is_empty() {
-        return "No circular dependencies found.".to_string();
-    }
-    let mut out = format!("## Circular Dependencies ({} cycles)\n", cycles.len());
-    for (i, cycle) in cycles.iter().enumerate() {
-        out.push_str(&format!("{}. {}", i + 1, cycle.join(" → ")));
-        if let Some(first) = cycle.first() {
-            out.push_str(&format!(" → {}", first));
-        }
-        out.push('\n');
-    }
-    out
-}
-
 fn resolve_reference_targets<'a>(
     by_name: &'a HashMap<String, Vec<SymbolTarget>>,
     reference: &str,
@@ -671,6 +656,39 @@ pub fn format_repo_report(edges: &[store::GraphEdgeRow], top: usize) -> String {
         &crate::modules::detect_modules(edges, MODULES_IN_REPORT),
     ));
 
+    let cycles = detect_cycles(edges);
+    if !cycles.is_empty() {
+        out.push('\n');
+        out.push_str(&format_cycles_brief(&cycles));
+    }
+
+    out
+}
+
+/// Cycles shown in the repo report; the rest are only counted.
+const CYCLES_IN_REPORT: usize = 5;
+/// Names shown per cycle. A strongly connected component can hold hundreds of
+/// symbols, and a line that long is noise.
+const NAMES_PER_CYCLE: usize = 8;
+
+/// The circular-dependency section of the repo report, bounded in length.
+pub fn format_cycles_brief(cycles: &[Vec<String>]) -> String {
+    let mut out = format!("## Circular dependencies ({} found)\n", cycles.len());
+    for (i, cycle) in cycles.iter().take(CYCLES_IN_REPORT).enumerate() {
+        let shown: Vec<&str> = cycle
+            .iter()
+            .take(NAMES_PER_CYCLE)
+            .map(String::as_str)
+            .collect();
+        out.push_str(&format!("{}. {}", i + 1, shown.join(" → ")));
+        if cycle.len() > NAMES_PER_CYCLE {
+            out.push_str(&format!(" … +{} more", cycle.len() - NAMES_PER_CYCLE));
+        }
+        out.push('\n');
+    }
+    if cycles.len() > CYCLES_IN_REPORT {
+        out.push_str(&format!("… and {} more\n", cycles.len() - CYCLES_IN_REPORT));
+    }
     out
 }
 
@@ -695,6 +713,182 @@ pub fn format_edges_dot(edges: &[store::GraphEdgeRow], top: usize) -> String {
     }
     out.push_str("}\n");
     out
+}
+
+/// The most-connected subgraph as a Mermaid flowchart, mirroring
+/// `format_edges_dot`.
+pub fn format_edges_mermaid(edges: &[store::GraphEdgeRow], top: usize) -> String {
+    let spots = repo_hotspots(edges, top);
+    let keep: HashSet<&str> = spots.iter().take(top).map(|h| h.name.as_str()).collect();
+    let mut ids: HashMap<&str, usize> = HashMap::new();
+    let mut out = String::from("```mermaid\ngraph LR\n");
+    let mut seen = HashSet::new();
+    for (_, cname, _, _, ename, _) in edges {
+        if !(keep.contains(cname.as_str()) && keep.contains(ename.as_str())) {
+            continue;
+        }
+        for name in [cname.as_str(), ename.as_str()] {
+            let next = ids.len();
+            if let std::collections::hash_map::Entry::Vacant(v) = ids.entry(name) {
+                v.insert(next);
+                out.push_str(&format!("    S{next}[\"{}\"]\n", name.replace('"', "'")));
+            }
+        }
+        let line = format!(
+            "    S{} --> S{}\n",
+            ids[cname.as_str()],
+            ids[ename.as_str()]
+        );
+        if seen.insert(line.clone()) {
+            out.push_str(&line);
+        }
+    }
+    out.push_str("```\n");
+    out
+}
+
+/// Output formats shared by every command and tool that draws a graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    Text,
+    Json,
+    Mermaid,
+    Dot,
+    Html,
+}
+
+impl Format {
+    /// For error messages and help text.
+    pub const NAMES: &'static str = "text | json | mermaid | dot | html";
+
+    pub fn parse(s: &str) -> Result<Format> {
+        match s.to_ascii_lowercase().as_str() {
+            "text" => Ok(Format::Text),
+            "json" => Ok(Format::Json),
+            "mermaid" => Ok(Format::Mermaid),
+            "dot" => Ok(Format::Dot),
+            "html" => Ok(Format::Html),
+            other => anyhow::bail!("unknown format {other:?}: expected one of {}", Self::NAMES),
+        }
+    }
+
+    /// File extension for `--output` / exports.
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+    pub fn extension(self) -> &'static str {
+        match self {
+            Format::Text => "txt",
+            Format::Json => "json",
+            Format::Mermaid => "mmd",
+            Format::Dot => "dot",
+            Format::Html => "html",
+        }
+    }
+}
+
+/// Render relations in any of the shared formats.
+pub fn render_relations(
+    relations: &[GraphRelation],
+    title: &str,
+    format: Format,
+) -> Result<String> {
+    Ok(match format {
+        Format::Text => format_relations(relations, title),
+        Format::Json => serde_json::to_string_pretty(relations)?,
+        Format::Mermaid => format_relations_mermaid(relations, title),
+        Format::Dot => format_relations_dot(relations, title),
+        Format::Html => export_relations_to_html(relations, title),
+    })
+}
+
+/// Graph relations as Graphviz DOT.
+pub fn format_relations_dot(relations: &[GraphRelation], title: &str) -> String {
+    let mut out =
+        format!("digraph tokenix {{\n  label={title:?};\n  rankdir=LR;\n  node [shape=box];\n");
+    let mut seen = HashSet::new();
+    for rel in relations {
+        for node in [&rel.from, &rel.to] {
+            if seen.insert(node.chunk_id) {
+                out.push_str(&format!(
+                    "  N{} [label={:?}];\n",
+                    node.chunk_id,
+                    format!("{}\n{}:{}", node.name, node.path, node.start_line)
+                ));
+            }
+        }
+        out.push_str(&format!(
+            "  N{} -> N{} [label={:?}];\n",
+            rel.from.chunk_id, rel.to.chunk_id, rel.reference
+        ));
+    }
+    out.push_str("}\n");
+    out
+}
+
+/// File imports as a Mermaid flowchart; external packages are rounded boxes.
+pub fn format_imports_mermaid(edges: &[store::ImportEdge], title: &str) -> String {
+    if edges.is_empty() {
+        return format!("No imports found for: {title}");
+    }
+    let mut ids: HashMap<String, usize> = HashMap::new();
+    let mut out = String::from("```mermaid\ngraph LR\n");
+    let mut node = |out: &mut String, name: &str, external: bool| -> usize {
+        if let Some(i) = ids.get(name) {
+            return *i;
+        }
+        let i = ids.len();
+        ids.insert(name.to_string(), i);
+        let label = name.replace('"', "'");
+        if external {
+            out.push_str(&format!("    F{i}([\"{label}\"])\n"));
+        } else {
+            out.push_str(&format!("    F{i}[\"{label}\"]\n"));
+        }
+        i
+    };
+    let mut seen = HashSet::new();
+    for e in edges {
+        let from = node(&mut out, &e.source_path, false);
+        let to = match &e.resolved_path {
+            Some(r) => node(&mut out, r, false),
+            None => node(&mut out, &e.target, true),
+        };
+        if seen.insert((from, to)) {
+            out.push_str(&format!("    F{from} --> F{to}\n"));
+        }
+    }
+    out.push_str(&format!("    %% {title}\n```\n"));
+    out
+}
+
+/// File imports as Graphviz DOT.
+pub fn format_imports_dot(edges: &[store::ImportEdge], title: &str) -> String {
+    let mut out =
+        format!("digraph imports {{\n  label={title:?};\n  rankdir=LR;\n  node [shape=box];\n");
+    let mut seen = HashSet::new();
+    for e in edges {
+        let to = e.resolved_path.as_deref().unwrap_or(&e.target);
+        if seen.insert((e.source_path.clone(), to.to_string())) {
+            out.push_str(&format!("  {:?} -> {:?};\n", e.source_path, to));
+        }
+    }
+    out.push_str("}\n");
+    out
+}
+
+/// Render file imports in any shared format. `html` has no import renderer and
+/// falls back to the Mermaid text.
+pub fn render_imports(
+    edges: &[store::ImportEdge],
+    title: &str,
+    reverse: bool,
+    format: Format,
+) -> Result<String> {
+    Ok(match format {
+        Format::Text => format_imports(edges, title, reverse),
+        Format::Json => serde_json::to_string_pretty(edges)?,
+        Format::Mermaid | Format::Html => format_imports_mermaid(edges, title),
+        Format::Dot => format_imports_dot(edges, title),
+    })
 }
 
 /// Format graph relations as a Mermaid flowchart diagram.

@@ -20,8 +20,6 @@ fn proxy_wrapping_own_server() -> std::process::Child {
             "--",
             env!("CARGO_BIN_EXE_tokenix"),
             "mcp",
-            "--profile",
-            "slim",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -100,4 +98,54 @@ fn proxy_exits_when_the_child_exits() {
             None => std::thread::sleep(Duration::from_millis(100)),
         }
     }
+}
+
+/// There is one MCP tool set, and it only answers structure questions: it has no
+/// tool that reads files, runs commands or keeps notes, and no profile flag.
+#[test]
+fn mcp_serves_only_the_structure_tools_and_has_no_profile_flag() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn mcp");
+    writeln!(
+        child.stdin.as_mut().expect("stdin"),
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list"}}"#
+    )
+    .unwrap();
+    let stdout = child.stdout.take().expect("stdout");
+    let line = BufReader::new(stdout)
+        .lines()
+        .next()
+        .expect("tools line")
+        .expect("io");
+    let list: serde_json::Value = serde_json::from_str(&line).expect("tools json");
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "tokenix_symbols",
+            "tokenix_graph",
+            "tokenix_blast",
+            "tokenix_modules",
+            "tokenix_deps",
+            "tokenix_tokenmap"
+        ]
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["mcp", "--profile", "slim"])
+        .output()
+        .expect("run mcp --profile");
+    assert!(!out.status.success(), "--profile must be rejected");
 }

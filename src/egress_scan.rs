@@ -572,6 +572,7 @@ fn group_findings(
 }
 
 /// Scan every agent's conversations and return findings plus per-agent file counts.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn scan_findings() -> (Vec<EgressFinding>, Vec<(String, usize)>) {
     let Some(home) = dirs::home_dir() else {
         return (Vec::new(), Vec::new());

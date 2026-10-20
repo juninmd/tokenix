@@ -54,6 +54,11 @@ pub struct BlastReport {
 type FileRanges = BTreeMap<String, Vec<(usize, usize)>>;
 
 fn git_diff(repo_root: &Path, base: &str) -> Result<String> {
+    // `base` is placed among git's own arguments, and over MCP it is chosen by a
+    // model: `--output=<file>` would make `git diff` write a file.
+    if base.starts_with('-') {
+        anyhow::bail!("invalid ref {base:?}: a git ref cannot start with '-'");
+    }
     let out = Command::new("git")
         .args([
             "diff",
@@ -289,6 +294,59 @@ pub fn analyze(
     })
 }
 
+/// The blast radius as a Mermaid flowchart of hop layers: what changed, then
+/// the callers one hop out, two hops out and so on. Meant for a PR description.
+pub fn format_report_mermaid(report: &BlastReport) -> String {
+    if report.changed_files.is_empty() {
+        return format!("No changes against {}.", report.base);
+    }
+    const NAMES_PER_LAYER: usize = 6;
+    let names = |it: Vec<&str>| -> String {
+        let total = it.len();
+        let mut shown: Vec<String> = it
+            .iter()
+            .take(NAMES_PER_LAYER)
+            .map(|n| n.replace('"', "'"))
+            .collect();
+        if total > NAMES_PER_LAYER {
+            shown.push(format!("+{} more", total - NAMES_PER_LAYER));
+        }
+        shown.join("<br/>")
+    };
+    let mut out = String::from("```mermaid\ngraph LR\n");
+    let changed: Vec<&str> = report
+        .changed_symbols
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    out.push_str(&format!(
+        "    L0[\"Changed vs {} ({})<br/>{}\"]\n",
+        report.base.replace('"', "'"),
+        changed.len(),
+        names(changed)
+    ));
+    let mut previous = 0usize;
+    for hop in 1..=report.depth {
+        let layer: Vec<&str> = report
+            .impacted
+            .iter()
+            .filter(|s| s.distance == hop)
+            .map(|s| s.name.as_str())
+            .collect();
+        if layer.is_empty() {
+            break;
+        }
+        out.push_str(&format!(
+            "    L{hop}[\"{hop} hop(s) out ({})<br/>{}\"]\n    L{previous} --> L{hop}\n",
+            layer.len(),
+            names(layer)
+        ));
+        previous = hop;
+    }
+    out.push_str("```\n");
+    out
+}
+
 pub fn format_report(report: &BlastReport) -> String {
     if report.changed_files.is_empty() {
         return format!("No changes against {}.", report.base);
@@ -347,6 +405,58 @@ pub fn format_report(report: &BlastReport) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mermaid_report_layers_changed_and_impacted_symbols() {
+        let report = BlastReport {
+            base: "HEAD".into(),
+            changed_files: vec!["src/a.rs".into()],
+            files_without_symbols: vec![],
+            changed_symbols: vec![ChangedSymbol {
+                name: "parse".into(),
+                path: "src/a.rs".into(),
+                kind: "function".into(),
+                start_line: 1,
+                end_line: 9,
+            }],
+            impacted: vec![
+                ImpactedSymbol {
+                    name: "load".into(),
+                    path: "src/b.rs:3".into(),
+                    distance: 1,
+                    in_degree: 2,
+                },
+                ImpactedSymbol {
+                    name: "main".into(),
+                    path: "src/main.rs:1".into(),
+                    distance: 2,
+                    in_degree: 0,
+                },
+            ],
+            impacted_files: vec![],
+            depth: 2,
+            truncated: false,
+        };
+        let out = format_report_mermaid(&report);
+        assert!(out.starts_with("```mermaid\ngraph LR"), "{out}");
+        assert!(
+            out.contains("L0[\"Changed vs HEAD (1)<br/>parse\"]"),
+            "{out}"
+        );
+        assert!(
+            out.contains("L0 --> L1") && out.contains("L1 --> L2"),
+            "{out}"
+        );
+        assert!(out.contains("load") && out.contains("main"), "{out}");
+    }
+
+    #[test]
+    fn a_ref_that_looks_like_an_option_is_refused() {
+        // `git diff --output=<file>` would write a file named by the caller.
+        let err = git_diff(Path::new("."), "--output=blast-pwned.txt").unwrap_err();
+        assert!(err.to_string().contains("cannot start with '-'"), "{err}");
+        assert!(!Path::new("blast-pwned.txt").exists());
+    }
+
     use super::*;
 
     const DIFF: &str = "diff --git a/src/store.rs b/src/store.rs\n\

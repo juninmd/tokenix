@@ -102,7 +102,7 @@ fi
 # Verify every expected subcommand appears in help
 EXPECTED_CMDS=(index pack symbols callers callees impact
   read stats gain benchmark doctor install-hook remove-hook
-  filter memory hook hook-post mcp rebuild-graph)
+  filter hook hook-post mcp blast modules)
 
 HELP_OUT=$("$TOKENIX" --help 2>&1)
 for cmd in "${EXPECTED_CMDS[@]}"; do
@@ -211,33 +211,6 @@ if echo "$CALLEES_OUT" | grep -qi "panic"; then
   fail "callees panicked"
 else
   pass "callees exits without panic"
-fi
-
-# ---------------------------------------------------------------------------
-# 5. memory subcommand
-# ---------------------------------------------------------------------------
-section "memory subcommand"
-
-MEM_DIR="$TMPDIR_ROOT/memdemo"
-mkdir -p "$MEM_DIR"
-
-if "$TOKENIX" memory add "prefer short answers" --project --path "$MEM_DIR" &>/dev/null; then
-  pass "memory add exits 0"
-else
-  fail "memory add failed"
-fi
-
-MEM_LIST=$("$TOKENIX" memory list --project --path "$MEM_DIR" 2>&1)
-if echo "$MEM_LIST" | grep -q "short answers"; then
-  pass "memory list returns added preference"
-else
-  fail "memory list missing added preference: $MEM_LIST"
-fi
-
-if "$TOKENIX" memory remove "short answers" --project --path "$MEM_DIR" &>/dev/null; then
-  pass "memory remove exits 0"
-else
-  fail "memory remove failed"
 fi
 
 # ---------------------------------------------------------------------------

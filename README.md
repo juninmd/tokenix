@@ -117,15 +117,29 @@ Each release also publishes `sha256sums.txt` and SLSA build-provenance attestati
 [SECURITY.md](SECURITY.md) explains how to verify a download.
 
 ```bash
-cargo install tokenix --locked                     # from crates.io
+cargo install tokenix --locked                     # from crates.io: the lean core
+cargo install tokenix --locked --features full     # everything the release binaries have
 git clone https://github.com/juninmd/tokenix && cd tokenix
-cargo install --path . --locked                    # from source
+cargo install --path . --locked --features full    # from source
 ```
 
-Use `--locked`. It builds against the committed `Cargo.lock`. Without it, `cargo
-install` re-resolves dependencies and can pull an incompatible `ureq` into the
-`ort-sys` build script. Building from source needs a recent stable
+Use `--locked`. It builds against the committed `Cargo.lock`; without it, `cargo
+install` re-resolves dependencies. Building from source needs a recent stable
 [Rust](https://www.rust-lang.org/tools/install) toolchain (MSRV 1.90).
+
+**Lean core or full build.** The default build is what an agent needs: the hook,
+the MCP server, the index, the symbol graph (`symbols`, `callers`, `callees`,
+`impact`, `flow`, `blast`, `modules`, `deps`, `graph`, `tokenmap`, `pack`), the
+output filters, `scan-secrets` and `install-hook --tool claude-code`. Release
+binaries are built with `--features full`. Cargo features add the rest:
+
+| Feature | Adds |
+|---|---|
+| `tui` | The terminal dashboard (bare `tokenix`). Implies `forensics` and `authoring` |
+| `forensics` | `usage`, `discover`, `conversation-audit`, `prompt-audit`, `session-audit`, `egress-audit`, `benchmark` |
+| `authoring` | `filter generate` and `filter record` |
+| `agents-extra` | `install-hook` / `remove-hook` for Copilot, Codex, OpenCode, Antigravity and `mcp` |
+| `full` | All of the above |
 
 > [!TIP]
 > **For AI agents installing tokenix:** Use the prebuilt binary, not `cargo install`. It needs no toolchain and no compile step. Fetch the version-less URL and **never hard-code a version**. Detect the platform, download the matching asset, mark it executable, then run `tokenix doctor`.
@@ -206,9 +220,10 @@ $ tokenix blast            # vs HEAD; use --since origin/main for a branch
 - **Branch switches are detected.** The index records the branch and `HEAD`. When
   they change, the hook passes calls through until you re-index, so it never
   answers from the wrong branch.
-- **Share one index with the team.** `tokenix export-index` writes
-  `.tokenix/index.db.gz` with known secrets masked. Teammates run
-  `tokenix import-index` instead of indexing from zero.
+- **Draw it.** Every graph command takes `--format mermaid|dot|json` (and
+  `html` for call graphs), so an answer can go straight into a PR description,
+  a doc or a Graphviz render: `tokenix blast --format mermaid`,
+  `tokenix modules --format mermaid`, `tokenix impact SYMBOL --format html -o impact.html`.
 
 ### 5. When you need the raw output
 
@@ -261,7 +276,7 @@ format.
 | **GitHub Copilot** | `tokenix install-hook --tool copilot` | `PreToolUse` + `PostToolUse` hooks; `--local` commits them to `.github/` | [docs/agents/copilot.md](docs/agents/copilot.md) |
 | **Antigravity** | `tokenix install-hook --tool antigravity` | Native plugin | [docs/agents/antigravity.md](docs/agents/antigravity.md) |
 | **OpenCode** | `tokenix install-hook --tool opencode` | MCP server only | [docs/agents/opencode.md](docs/agents/opencode.md) |
-| **Any MCP client** | `tokenix mcp` | MCP server over stdio | [docs/agents/mcp.md](docs/agents/mcp.md) |
+| **Any MCP client** | `tokenix mcp` | MCP server with six structure tools: `tokenix_symbols`, `tokenix_graph` (callers · callees · impact · flow), `tokenix_blast`, `tokenix_modules`, `tokenix_deps`, `tokenix_tokenmap`. They return locations and diagrams, never code, and never search contents |
 
 `tokenix install-hook --tool all` wires every agent except OpenCode. OpenCode's
 registration lives in the repository, so you have to ask for it explicitly.
@@ -271,8 +286,10 @@ registration lives in the repository, so you have to ask for it explicitly.
 
 ## 🖥 Dashboard
 
-Run bare `tokenix` for a terminal dashboard with twelve tabs and no flags. `←`/`→`
-switch tabs, `↑`/`↓` move, `q` quits.
+Run bare `tokenix` (a build with the `tui` feature, which the release binaries have) for a terminal dashboard with sixteen tabs and no flags,
+grouped in four sections: **1·Overview**, **2·Code**, **3·Savings**, **4·Health**.
+`1`–`4` jump to a section, `←`/`→` walk the tabs, `↑`/`↓` move, `?` lists the keys
+of the current tab, `y` copies a report tab's text to the clipboard, `q` quits.
 
 On a terminal, a report command opens its own tab: `tokenix doctor` lands on
 Doctor, `tokenix scan-secrets` on Secrets. Piping, `--json`, `--statusline`,
@@ -282,7 +299,11 @@ open a UI.
 
 | Tab | What it shows |
 |---|---|
-| **Stats** | Version, per-agent hook status, index summary, one-key actions: index repo · install hooks · install binary on PATH |
+| **Stats** | Version, a “next steps” list (not indexed, stale index, agents without a hook, `tokenix` off PATH), per-agent hook status, index summary, one-key actions: index repo · install hooks · install binary on PATH |
+| **Symbols** | Browse the symbol graph: symbols ranked by PageRank, `/` filters by name or path, `t` cycles the kind. The right side shows callers, callees and the source; `Tab` + `Enter` jump into a relation, `⌫` walks back, `c` copies `path:line`, `y` copies the source, `m` / `d` copy the impact graph as Mermaid / DOT, `h` opens it as an HTML page |
+| **Modules** | Functional modules discovered from the symbol graph (`tokenix modules`) |
+| **Blast** | Symbols that depend on your uncommitted diff (`tokenix blast`). `s` picks the base (HEAD · HEAD~1 · origin/main), `d` the caller hops |
+| **Pack** | The budgeted repo map (`tokenix pack`), ready to paste: `b` budget · `p` profile · `c` changed files only · `y` copy |
 | **Gain** | Tokens removed with a reduction bar, split by source and by command. `c` adds a ≈USD table at list input rates · `a` all projects · `r` refresh |
 | **Usage** | Absolute token spend and ≈USD cost from agent transcripts. `s` cycles daily · model · 5-hour blocks · project · session |
 | **Filters** | All 534 bundled filters by tool, with a live input → output preview and a per-filter token gauge |
@@ -303,6 +324,10 @@ open a UI.
 <tr>
 <td><img src=".github/prints/filters.png" alt="Filters tab" /></td>
 <td><img src=".github/prints/secrets.png" alt="Secrets tab" /></td>
+</tr>
+<tr>
+<td><img src=".github/prints/symbols.png" alt="Symbols tab" /></td>
+<td><img src=".github/prints/pack.png" alt="Pack tab" /></td>
 </tr>
 </table>
 
@@ -368,16 +393,15 @@ has the full evidence review.
 |---|---|
 | `tokenix read FILE` | Smart reader: outline for large files, full text for small ones (`--symbol`, `--lines`, `--mode full\|outline\|signatures\|diff\|density:X`) |
 | `tokenix symbols QUERY` | Find indexed symbols by name or path (`--kind` filters by symbol type) |
-| `tokenix callers SYMBOL` | Symbols that call or reference a symbol |
+| `tokenix callers SYMBOL` | Symbols that call or reference a symbol (`--format text\|json\|mermaid\|dot\|html`) |
 | `tokenix callees SYMBOL` | Symbols a symbol calls or references |
-| `tokenix deps FILE` | File-level import dependencies (`--reverse`, `--transitive`, `--json`) |
-| `tokenix impact SYMBOL` | Bidirectional impact graph (`--format html\|mermaid`) |
-| `tokenix flow SYMBOL` | Forward call-flow trace (`--depth`, `--format text\|mermaid`) |
-| `tokenix graph` | Repo-wide symbol-graph overview: god nodes, bottlenecks, blast-radius leaders, modules (`--format text\|dot\|json`, `--top N`) |
-| `tokenix modules` | Functional modules found by community detection over the symbol graph (`--top`, `--json`) |
+| `tokenix deps FILE` | File-level import dependencies (`--reverse`, `--transitive`, `--format text\|json\|mermaid\|dot`) |
+| `tokenix impact SYMBOL` | Bidirectional impact graph (`--format text\|json\|mermaid\|dot\|html`) |
+| `tokenix flow SYMBOL` | Forward call-flow trace (`--depth`, `--format text\|json\|mermaid\|dot\|html`) |
+| `tokenix graph` | Repo-wide symbol-graph overview: god nodes, bottlenecks, blast-radius leaders, modules (`--format text\|json\|dot\|mermaid`, `--top N`; includes circular dependencies) |
+| `tokenix modules` | Functional modules found by community detection over the symbol graph (`--top`, `--format text\|json\|mermaid\|dot`) |
 | `tokenix blast` | Blast radius of the current diff: changed symbols and everything that calls them (`--since REF`, `--depth`, `--json`) |
 | `tokenix pack` | Budgeted repo pack for tools without hooks (`--mode/--profile`, `--changed`, `--token-map`) |
-| `tokenix memory add\|list\|remove\|edit` | Save preferences (`--global` / `--project`); nothing injects them automatically, so read them with `memory list` or the MCP memory tools. Text that looks like a credential is refused |
 | `tokenix retrieve KEY` | Print the exact original output behind a `[tokenix: ...]` marker |
 
 ### 🧑 Commands you run
@@ -386,7 +410,6 @@ has the full evidence review.
 |---|---|
 | `tokenix` (no args) | Open the [dashboard](#-dashboard); piped or non-TTY falls back to help |
 | `tokenix index [PATH]` | Index the repo at PATH (default `.`) |
-| `tokenix export-index` / `import-index` | Write or load a shareable, secret-masked snapshot (`.tokenix/index.db.gz`) |
 | `tokenix install-hook` / `remove-hook` | Install or remove agent hooks and instructions (default `--tool all`) |
 | `tokenix install-binary` | Copy the running executable to a per-user bin dir and put it on PATH |
 | `tokenix update` | Check for, install, or toggle automatic updates from GitHub releases (`--check`, `--auto`, `--enable-auto`, `--disable-auto`) |
@@ -406,8 +429,6 @@ has the full evidence review.
 | `tokenix scan-secrets` | Scan agent transcripts for exposed credentials, attributed to repo + branch (`--group`, `--reveal`, `--json`) |
 | `tokenix egress-audit` | Scan agent transcripts for external DNS/IP destinations, checked against local reputation lists |
 | `tokenix artifacts list\|show` | Context artifacts from `.tokenix/artifacts.json` |
-| `tokenix cycles` | Detect circular dependencies (Tarjan's SCC) |
-| `tokenix rebuild-graph` | Rebuild graph tables from existing chunks from the stored chunks |
 | `tokenix generate-ignores` | Write `.gitignore` entries for tokenix artifacts |
 
 When you open `tokenix` in a terminal, it checks GitHub releases in the background
@@ -426,7 +447,7 @@ Checks are skipped in CI, piped commands, hooks, and agent-facing commands. Set
 | `tokenix hook` | `PreToolUse` handler: caps unbounded Grep output and filters noisy commands (never touches `Read`) |
 | `tokenix hook-post` | `PostToolUse` handler: redacts secrets and compresses tool output (agents whose install wires it, see the [agent guides](#-agent-guides)) |
 | `tokenix run "CMD"` | Run a command and compress its output (`--shell`, `--path/-p`, `--raw`) |
-| `tokenix mcp` | MCP server exposing context, read/search, graph and gain tools (`--profile slim\|full`) |
+| `tokenix mcp` | MCP server with six structure tools: `tokenix_symbols`, `tokenix_graph` (callers · callees · impact · flow), `tokenix_blast`, `tokenix_modules`, `tokenix_deps`, `tokenix_tokenmap`. They return locations and diagrams, never code, and never search contents |
 | `tokenix mcp-proxy -- CMD` | Wrap another stdio MCP server and compress only its `tools/call` text results |
 
 <details>
@@ -461,22 +482,22 @@ default).
 
 **`tokenix deps`:** `--reverse`, `--transitive`, `--json`, `--path/-p`
 
-**`tokenix impact`:** `--depth/-d` (2), `--limit/-l` (50),
-`--format <text|html|mermaid|json>`, `--output/-o`, `--path/-p`
+**Graph output:** `callers`, `callees`, `impact`, `flow`, `deps`, `graph`, `blast`
+and `modules` share `--format` and `--output/-o` (write to a file). `text` is the
+default, `--json` is the old shorthand for `--format json`, and a format a command
+cannot draw is an error listing the ones it can. `mermaid` prints a fenced block
+ready for Markdown; `dot` is Graphviz; `html` is a standalone page for call
+graphs. `modules --format mermaid` draws the modules with the number of calls
+between them, and `blast --format mermaid` draws the hop layers of a diff.
 
-**`tokenix flow`:** `--depth/-d` (3), `--limit/-l` (50), `--format <text|mermaid>`
+**`tokenix impact`:** `--depth/-d` (2), `--limit/-l` (50), `--path/-p`
+
+**`tokenix flow`:** `--depth/-d` (3), `--limit/-l` (50)
 
 **`tokenix blast`:** `--since REF` (default `HEAD`, e.g. `origin/main`),
-`--depth/-d` (2), `--limit/-l` (50), `--json`, `--path/-p`
+`--depth/-d` (2), `--limit/-l` (50), `--path/-p`
 
-**`tokenix modules`:** `--top` (12), `--json`, `--path/-p`
-
-**`tokenix export-index` / `import-index`:** `--output/-o` and `--input/-i` (default
-`.tokenix/index.db.gz`), `--force` on import to replace a newer local index. The
-snapshot is a compacted copy of the index (legacy embedding tables are dropped).
-Import refuses anything that is not a tokenix index, keeps the previous DB as
-`*.pre-import.bak`, and keeps the snapshot's git fingerprint so `tokenix index`
-only has to catch up on the diff.
+**`tokenix modules`:** `--top` (12), `--path/-p`
 
 **`tokenix pack`:** `--mode/--profile <plan|debug|audit|security|review>`,
 `--budget N` (8000), `--format <markdown|xml|json>`, `--changed`, `--since REF`,
@@ -614,8 +635,7 @@ truncated.
   the secret scanner or make `prompt-audit` spawn a server of its choosing.
   User-scoped configs (`~/.claude.json`, `~/.codex/`) are yours and are not gated.
 - **Credentials are masked before anything is saved.** The hook log, the failure
-  tee, recordings and index snapshots go through one redactor, memory refuses
-  notes that look like a credential, and `~/.tokenix` is owner-only (`0600`). The recall stash is the deliberate exception:
+  tee and recordings go through one redactor, and `~/.tokenix` is owner-only (`0600`). The recall stash is the deliberate exception:
   `tokenix retrieve` must return the exact original bytes, so it relies on file
   permissions alone.
 - **Secrets are not indexed.** `.env`, `.pem`, keystores and similar files are

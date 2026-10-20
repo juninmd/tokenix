@@ -1,8 +1,9 @@
 //! Unified interactive shell for tokenix's human commands, opened by a bare
 //! `tokenix` (or `tokenix filter`) in a TTY. One persistent window with a command
 //! tab bar on top — move between tabs with ← / → (or Tab) and never re-type a
-//! command. It opens on the Stats dashboard (wordmark, version, hook status, index
-//! summary). Report commands (Doctor, Gain, Tokenmap) self-execute the binary and
+//! command; `1`–`4` jump between the Overview · Code · Savings · Health sections
+//! and `?` lists the keys of the current tab. It opens on the Stats dashboard
+//! (wordmark, version, next steps, hook status, index summary). Report commands (Doctor, Gain, Tokenmap) self-execute the binary and
 //! show their output in a scrollable pane; Index runs in the foreground with live
 //! progress and returns here; Filters is a three-pane browser (groups · filters ·
 //! live input→output preview) so nothing needs a deeper drill level.
@@ -24,43 +25,66 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::filters::{self, ActiveFilter};
 
-/// Set to `1` by any tokenix process that must print instead of opening the
-/// shell: the TUI's own self-exec captures, and the user's `--no-tui` escape.
-pub const NO_TUI_ENV: &str = "TOKENIX_NO_TUI";
+mod explorer;
+
+use crate::NO_TUI_ENV;
 
 /// A tab of the shell. Also the target a direct command redirects to, so
 /// `tokenix doctor` and the Doctor tab are one interface, not two.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Cmd {
     Stats,
-    Filters,
-    Studio,
+    Symbols,
+    Graph,
+    Modules,
+    Blast,
+    Pack,
+    Tokenmap,
     Gain,
     Usage,
-    Doctor,
-    Tokenmap,
-    Graph,
+    Filters,
+    Studio,
     Discover,
+    Doctor,
     Audit,
     Secrets,
     Egress,
 }
 
 impl Cmd {
-    const ALL: [Cmd; 12] = [
+    /// Tab order. Tabs are grouped by purpose (see `SECTIONS`) and the groups
+    /// are contiguous, so ← / → walks them in order.
+    const ALL: [Cmd; 16] = [
         Cmd::Stats,
-        Cmd::Filters,
-        Cmd::Studio,
+        Cmd::Symbols,
+        Cmd::Graph,
+        Cmd::Modules,
+        Cmd::Blast,
+        Cmd::Pack,
+        Cmd::Tokenmap,
         Cmd::Gain,
         Cmd::Usage,
-        Cmd::Doctor,
-        Cmd::Tokenmap,
-        Cmd::Graph,
+        Cmd::Filters,
+        Cmd::Studio,
         Cmd::Discover,
+        Cmd::Doctor,
         Cmd::Audit,
         Cmd::Secrets,
         Cmd::Egress,
     ];
+
+    /// Section titles, in the order of `ALL`; `1`–`4` jump to a section.
+    const SECTIONS: [&'static str; 4] = ["Overview", "Code", "Savings", "Health"];
+
+    /// Index into `SECTIONS`.
+    fn section(self) -> usize {
+        match self {
+            Cmd::Stats => 0,
+            Cmd::Symbols | Cmd::Graph | Cmd::Modules | Cmd::Blast | Cmd::Pack | Cmd::Tokenmap => 1,
+            Cmd::Gain | Cmd::Usage | Cmd::Filters | Cmd::Studio | Cmd::Discover => 2,
+            Cmd::Doctor | Cmd::Audit | Cmd::Secrets | Cmd::Egress => 3,
+        }
+    }
 
     fn index(self) -> usize {
         Cmd::ALL.iter().position(|&c| c == self).unwrap_or(0)
@@ -69,6 +93,10 @@ impl Cmd {
     fn title(self) -> &'static str {
         match self {
             Cmd::Stats => "Stats",
+            Cmd::Symbols => "Symbols",
+            Cmd::Modules => "Modules",
+            Cmd::Blast => "Blast",
+            Cmd::Pack => "Pack",
             Cmd::Filters => "Filters",
             Cmd::Studio => "Studio",
             Cmd::Gain => "Gain",
@@ -90,10 +118,17 @@ impl Cmd {
             Cmd::Tokenmap => Some(&["tokenmap"]),
             Cmd::Discover => Some(&["discover"]),
             Cmd::Audit => Some(&["prompt-audit"]),
+            Cmd::Modules => Some(&["modules"]),
             _ => None,
         }
     }
 }
+
+/// Refs the Blast tab diffs against (`s` cycles).
+const BLAST_REFS: [&str; 3] = ["HEAD", "HEAD~1", "origin/main"];
+/// Token budgets and profiles the Pack tab cycles (`b` / `p`).
+const PACK_BUDGETS: [usize; 5] = [2_000, 4_000, 8_000, 16_000, 32_000];
+const PACK_PROFILES: [&str; 5] = ["plan", "debug", "review", "audit", "security"];
 
 /// A named bucket of filters (a tool prefix, or a source).
 struct Group {
@@ -150,6 +185,7 @@ struct StudioRow {
 enum SecGroup {
     Rule,
     Agent,
+    Repo,
 }
 
 type SecPayload = (Vec<crate::secrets_scan::ScanFinding>, Vec<(String, usize)>);
@@ -252,6 +288,20 @@ struct Shell {
     /// self-execute the binary; doing it on a worker thread keeps the UI live and
     /// lets the shared spinner animate instead of freezing the whole shell.
     report_rx: Option<(usize, Receiver<String>)>,
+    // Code tabs ------------------------------------------------------------
+    explorer: explorer::Explorer,
+    /// Blast: index into `BLAST_REFS`, and the caller hops to follow.
+    blast_ref: usize,
+    blast_depth: usize,
+    /// Pack: index into `PACK_BUDGETS` / `PACK_PROFILES`, and `--changed`.
+    pack_budget: usize,
+    pack_profile: usize,
+    pack_changed: bool,
+    /// Why the index needs a refresh (`None` = fresh, or not indexed at all).
+    index_stale: Option<String>,
+    help: bool,
+    /// One-line result of the last copy / action on a report tab.
+    report_msg: Option<String>,
     scroll: u16,
     /// Max scroll offset for the pane drawn last frame (content rows − inner
     /// height). Set during render, read by the key handlers to bound `scroll`
@@ -391,7 +441,7 @@ fn new_shell(entry: Entry) -> Shell {
         egr_g: 0,
         egr_sel_group: 0,
         egr_i: 0,
-        repo_root: proj_root,
+        repo_root: proj_root.clone(),
         studio_pane: StudioPane::Recordings,
         studio_rec_sel: 0,
         studio_cache: std::cell::RefCell::new(None),
@@ -401,6 +451,15 @@ fn new_shell(entry: Entry) -> Shell {
         request_generate: None,
         reports: HashMap::new(),
         report_rx: None,
+        explorer: explorer::Explorer::new(proj_root.clone()),
+        blast_ref: 0,
+        blast_depth: 2,
+        pack_budget: 2,
+        pack_profile: 0,
+        pack_changed: false,
+        index_stale: read_index_staleness(&proj_root),
+        help: false,
+        report_msg: None,
         scroll: 0,
         max_scroll: Cell::new(0),
         request_index: false,
@@ -415,6 +474,9 @@ impl Shell {
     /// renderer pumps until this goes quiet so it captures content instead of a
     /// loading frame.
     fn pump(&mut self) -> bool {
+        if self.cmd == Cmd::Symbols {
+            self.explorer.ensure_loaded();
+        }
         self.ensure_report();
         self.ensure_gain();
         self.ensure_secrets();
@@ -486,6 +548,18 @@ impl Shell {
                 continue;
             }
 
+            // The help overlay swallows the key that closes it.
+            if self.help {
+                self.help = false;
+                continue;
+            }
+
+            // Symbols filter capture owns all keys while active.
+            if self.cmd == Cmd::Symbols && self.explorer.searching {
+                self.explorer.key_search(key.code);
+                continue;
+            }
+
             // Search capture (Filters tab) owns all keys while active.
             if self.searching {
                 match key.code {
@@ -509,6 +583,8 @@ impl Shell {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                 KeyCode::Left => self.switch_tab(-1),
                 KeyCode::Right => self.switch_tab(1),
+                KeyCode::Char('?') => self.help = true,
+                KeyCode::Char(d @ '1'..='4') => self.jump_section(d as usize - '1' as usize),
                 // Tab toggles the two-pane Filters/Secrets focus; elsewhere it
                 // advances tabs.
                 KeyCode::Tab | KeyCode::BackTab if self.cmd == Cmd::Filters => self.toggle_pane(),
@@ -517,6 +593,9 @@ impl Shell {
                 }
                 KeyCode::Tab | KeyCode::BackTab if self.cmd == Cmd::Egress => {
                     self.egr_pane = other_pane(self.egr_pane)
+                }
+                KeyCode::Tab | KeyCode::BackTab if self.cmd == Cmd::Symbols => {
+                    self.explorer.key(key.code)
                 }
                 KeyCode::Tab | KeyCode::BackTab if self.cmd == Cmd::Studio => {
                     self.studio_pane = match self.studio_pane {
@@ -531,6 +610,9 @@ impl Shell {
                     Cmd::Stats => self.key_stats(key.code),
                     Cmd::Filters => self.key_filters(key.code),
                     Cmd::Studio => self.key_studio(key.code),
+                    Cmd::Symbols => self.explorer.key(key.code),
+                    Cmd::Blast => self.key_blast(key.code),
+                    Cmd::Pack => self.key_pack(key.code),
                     Cmd::Gain => self.key_gain(key.code),
                     Cmd::Usage => self.key_usage(key.code),
                     Cmd::Graph => self.key_graph(key.code),
@@ -548,6 +630,10 @@ impl Shell {
                 run_index_foreground();
                 *terminal = ratatui::init();
                 self.index_stats = read_index_stats();
+                self.index_stale = read_index_staleness(&self.repo_root);
+                self.explorer.reload();
+                // Code reports were computed against the old index.
+                self.reports.clear();
                 self.stats_msg = Some("Index updated.".to_string());
             }
 
@@ -572,11 +658,23 @@ impl Shell {
     fn switch_tab(&mut self, dir: i32) {
         let cur = self.cmd.index() as i32;
         let next = (cur + dir).rem_euclid(Cmd::ALL.len() as i32) as usize;
-        self.cmd = Cmd::ALL[next];
+        self.go_to(Cmd::ALL[next]);
+    }
+
+    fn go_to(&mut self, cmd: Cmd) {
+        self.cmd = cmd;
         self.scroll = 0;
         self.searching = false;
         self.search.clear();
+        self.report_msg = None;
         self.disarm();
+    }
+
+    /// Jump to the first tab of a section (`1`–`4`).
+    fn jump_section(&mut self, section: usize) {
+        if let Some(&first) = Cmd::ALL.iter().find(|c| c.section() == section) {
+            self.go_to(first);
+        }
     }
 
     /// Re-read the filter set from disk after the shell itself changed it
@@ -600,6 +698,11 @@ impl Shell {
     /// files, deleting a saved filter, installing hooks). Leaving one armed
     /// while the user is on another tab turns the *first* keypress after they
     /// come back into the destructive one, with no visible prompt on screen.
+    /// True on the tabs that render a captured command (`argv`/`dyn_argv`).
+    fn argv_tab(&self) -> bool {
+        self.cmd.argv().is_some() || self.dyn_argv().is_some()
+    }
+
     fn disarm(&mut self) {
         self.stats_confirm = false;
         self.sec_confirm = false;
@@ -666,6 +769,26 @@ impl Shell {
                 "--top".to_string(),
                 "30".to_string(),
             ]),
+            Cmd::Blast => Some(vec![
+                "blast".to_string(),
+                "--since".to_string(),
+                BLAST_REFS[self.blast_ref % BLAST_REFS.len()].to_string(),
+                "--depth".to_string(),
+                self.blast_depth.to_string(),
+            ]),
+            Cmd::Pack => {
+                let mut v = vec![
+                    "pack".to_string(),
+                    "--budget".to_string(),
+                    PACK_BUDGETS[self.pack_budget % PACK_BUDGETS.len()].to_string(),
+                    "--profile".to_string(),
+                    PACK_PROFILES[self.pack_profile % PACK_PROFILES.len()].to_string(),
+                ];
+                if self.pack_changed {
+                    v.push("--changed".to_string());
+                }
+                Some(v)
+            }
             _ => None,
         }
     }
@@ -688,6 +811,45 @@ impl Shell {
             }
             _ => self.key_scroll(code),
         }
+    }
+
+    fn key_blast(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('s') => {
+                self.blast_ref = (self.blast_ref + 1) % BLAST_REFS.len();
+                self.reload_report();
+            }
+            KeyCode::Char('d') => {
+                self.blast_depth = self.blast_depth % 4 + 1;
+                self.reload_report();
+            }
+            _ => self.key_scroll(code),
+        }
+    }
+
+    fn key_pack(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('b') => {
+                self.pack_budget = (self.pack_budget + 1) % PACK_BUDGETS.len();
+                self.reload_report();
+            }
+            KeyCode::Char('p') => {
+                self.pack_profile = (self.pack_profile + 1) % PACK_PROFILES.len();
+                self.reload_report();
+            }
+            KeyCode::Char('c') => {
+                self.pack_changed = !self.pack_changed;
+                self.reload_report();
+            }
+            _ => self.key_scroll(code),
+        }
+    }
+
+    /// A report option changed: refetch from the top.
+    fn reload_report(&mut self) {
+        self.refresh_report();
+        self.scroll = 0;
+        self.report_msg = None;
     }
 
     fn key_graph(&mut self, code: KeyCode) {
@@ -1015,6 +1177,7 @@ impl Shell {
         self.sec_groups = group_indices(findings, |f| match mode {
             SecGroup::Rule => f.rule.clone(),
             SecGroup::Agent => f.agent.clone(),
+            SecGroup::Repo => repo_label(&f.repo),
         });
     }
 
@@ -1056,7 +1219,8 @@ impl Shell {
             KeyCode::Char('s') => {
                 self.sec_gmode = match self.sec_gmode {
                     SecGroup::Rule => SecGroup::Agent,
-                    SecGroup::Agent => SecGroup::Rule,
+                    SecGroup::Agent => SecGroup::Repo,
+                    SecGroup::Repo => SecGroup::Rule,
                 };
                 self.rebuild_sec_groups();
             }
@@ -1439,9 +1603,21 @@ impl Shell {
             KeyCode::Char('r') => {
                 self.refresh_report();
             }
+            KeyCode::Char('y') => self.copy_report(),
             _ => {}
         }
         self.scroll = self.scroll.min(self.max_scroll.get());
+    }
+
+    /// Copy the current report tab's text, e.g. a `pack` to paste into a chat.
+    fn copy_report(&mut self) {
+        self.report_msg = Some(match self.reports.get(&self.cmd.index()) {
+            Some(body) => match copy_to_clipboard(body) {
+                Ok(()) => format!("copied {} lines", body.lines().count()),
+                Err(e) => format!("copy failed: {e}"),
+            },
+            None => "nothing to copy yet".to_string(),
+        });
     }
 
     // ── Stats dashboard (index + install actions) ────────────────────────
@@ -1487,6 +1663,33 @@ impl Shell {
             _ => self.stats_confirm = false,
         }
         self.scroll = self.scroll.min(self.max_scroll.get());
+    }
+
+    /// What is missing for the best results, most important first.
+    fn next_steps(&self) -> Vec<String> {
+        let mut steps = Vec::new();
+        match (&self.index_stats, &self.index_stale) {
+            (None, _) => steps.push(
+                "Index this repo (action below) — unlocks Symbols, Graph, Blast and Pack"
+                    .to_string(),
+            ),
+            (Some(_), Some(reason)) => steps.push(format!(
+                "Index is stale ({reason}) — reindex so symbols match the working tree"
+            )),
+            _ => {}
+        }
+        let missing = self.agents.iter().filter(|a| !a.installed).count();
+        if missing > 0 {
+            steps.push(format!(
+                "{missing} agent(s) have no hook — “Install hooks” keeps their output short"
+            ));
+        }
+        if let Some(dir) = crate::global_bin_dir() {
+            if !crate::dir_on_path(&dir) {
+                steps.push("`tokenix` is not on PATH — “Install binary” fixes that".to_string());
+            }
+        }
+        steps
     }
 
     fn run_install(&mut self) {
@@ -1542,22 +1745,113 @@ impl Shell {
             Cmd::Stats => self.draw_stats(f, rows[1]),
             Cmd::Filters => self.draw_filters(f, rows[1]),
             Cmd::Studio => self.draw_studio(f, rows[1]),
+            Cmd::Symbols => self.explorer.draw(f, rows[1]),
             Cmd::Gain => self.draw_gain(f, rows[1]),
             Cmd::Secrets => self.draw_secrets(f, rows[1]),
             Cmd::Egress => self.draw_egress(f, rows[1]),
             _ => self.draw_report(f, rows[1]),
         }
         self.draw_footer(f, rows[2]);
+        if self.help {
+            self.draw_help(f, f.area());
+        }
     }
 
+    /// Section names in the border title (the active one lit), and only the
+    /// active section's tabs inside — seventeen tabs never fit one row.
     fn draw_tabs(&self, f: &mut Frame, area: Rect) {
-        let titles = Cmd::ALL.map(|c| c.title());
-        let tabs = Tabs::new(titles)
-            .select(self.cmd.index())
-            .block(Block::bordered().title(" tokenix "))
+        let active = self.cmd.section();
+        let mut title = vec![Span::raw(" tokenix ")];
+        for (i, name) in Cmd::SECTIONS.iter().enumerate() {
+            let style = if i == active {
+                Style::default().cyan().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().dim()
+            };
+            title.push(Span::styled(format!(" {}·{name} ", i + 1), style));
+        }
+        let visible: Vec<Cmd> = Cmd::ALL
+            .iter()
+            .copied()
+            .filter(|c| c.section() == active)
+            .collect();
+        let selected = visible.iter().position(|&c| c == self.cmd).unwrap_or(0);
+        let tabs = Tabs::new(visible.iter().map(|c| c.title()))
+            .select(selected)
+            .block(
+                Block::bordered()
+                    .title(Line::from(title))
+                    .title(Line::from(" ? help ").right_aligned()),
+            )
             .highlight_style(Style::default().add_modifier(Modifier::BOLD).cyan())
             .divider("│");
         f.render_widget(tabs, area);
+    }
+
+    fn draw_help(&self, f: &mut Frame, area: Rect) {
+        use ratatui::widgets::Clear;
+        let mut lines = vec![
+            Line::from("Navigation".bold()),
+            Line::from("  ← →  Tab  previous / next tab"),
+            Line::from("  1-4        jump to Overview · Code · Savings · Health"),
+            Line::from("  ↑ ↓  j k   move / scroll      PgUp PgDn  page      g End  top / bottom"),
+            Line::from("  r          refresh the current tab"),
+            Line::from("  y          copy a report tab's text to the clipboard"),
+            Line::from("  q  Esc     quit"),
+            Line::from(""),
+            Line::from(format!("{} tab", self.cmd.title()).bold()),
+        ];
+        let tab_help: &[&str] = match self.cmd {
+            Cmd::Stats => &[
+                "  ↑ ↓ pick an action · Enter runs it (installs ask for a second Enter)",
+                "  The “next steps” list says what is missing for the best results.",
+            ],
+            Cmd::Symbols => &[
+                "  /  filter by name or path     t  cycle kind (function, struct, …)",
+                "  Tab  switch list ↔ callers/callees     Enter  open the highlighted relation",
+                "  ⌫  back to the previous symbol     c  copy path:line     y  copy source",
+                "  m  copy a mermaid diagram     d  copy graphviz dot     h  open the HTML graph",
+            ],
+            Cmd::Blast => &[
+                "  s  diff base (HEAD · HEAD~1 · origin/main)     d  caller hops (1-4)",
+                "  Shows which symbols depend on the lines you changed.",
+            ],
+            Cmd::Pack => &[
+                "  b  token budget     p  profile (plan · debug · review · audit · security)",
+                "  c  only changed files     y  copy the whole pack to paste into a chat",
+            ],
+            Cmd::Filters => &["  Tab  switch pane     /  search     s  group by tool / source"],
+            Cmd::Studio => {
+                &["  r  record     s  stop     g  generate a filter     x  delete (twice)"]
+            }
+            Cmd::Gain => &["  c  cost table     a  all projects     r  recompute"],
+            Cmd::Usage => &["  s  daily · model · blocks · project · session     a  all projects"],
+            Cmd::Secrets => &[
+                "  s group (rule · agent · repo) · g this repo ↔ all repos · v reveal · c copy",
+                "  x redact (twice, writes [REDACTED])",
+            ],
+            Cmd::Egress => &["  s group · g scope · r rescan"],
+            _ => &["  ↑ ↓ scroll · r re-run the command"],
+        };
+        lines.extend(tab_help.iter().map(|l| Line::from(l.to_string())));
+        lines.push(Line::from(""));
+        lines.push(Line::from("any key closes".dim()));
+
+        let w = area.width.min(96);
+        let h = (lines.len() as u16 + 2).min(area.height);
+        let rect = Rect {
+            x: area.x + (area.width - w) / 2,
+            y: area.y + (area.height - h) / 2,
+            width: w,
+            height: h,
+        };
+        f.render_widget(Clear, rect);
+        f.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(Block::bordered().title(" help ").cyan()),
+            rect,
+        );
     }
 
     fn draw_stats(&self, f: &mut Frame, area: Rect) {
@@ -1577,6 +1871,22 @@ impl Shell {
             "version   {}",
             env!("CARGO_PKG_VERSION")
         )));
+        lines.push(Line::from(""));
+
+        lines.push(Line::from("next steps".bold()));
+        let steps = self.next_steps();
+        if steps.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  ✓ set up — press 2 for Code: browse Symbols, check Blast, copy a Pack",
+                Style::default().green(),
+            )));
+        }
+        for step in steps {
+            lines.push(Line::from(vec![
+                Span::styled("  ▸ ", Style::default().yellow()),
+                Span::raw(step),
+            ]));
+        }
         lines.push(Line::from(""));
 
         lines.push(Line::from("hooks".bold()));
@@ -2468,9 +2778,22 @@ impl Shell {
         let kind = match self.sec_gmode {
             SecGroup::Rule => "rule",
             SecGroup::Agent => "agent",
+            SecGroup::Repo => "repo",
         };
+        let (repos, agents) = self.secrets.as_deref().map_or((0, 0), |all| {
+            let distinct = |key: &dyn Fn(&crate::secrets_scan::ScanFinding) -> String| {
+                all.iter()
+                    .map(key)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+            };
+            (
+                distinct(&|f| repo_label(&f.repo)),
+                distinct(&|f| f.agent.clone()),
+            )
+        });
         let title = format!(
-            " {total} secrets · by {kind} · {} ",
+            " {total} secrets · {repos} repo(s) · {agents} agent(s) · by {kind} · {} ",
             self.scope_label(self.sec_global)
         );
         let mut state = ListState::default();
@@ -2859,8 +3182,12 @@ impl Shell {
             return;
         };
         let scroll = self.scroll_for(body.lines().count(), area);
+        let title = match &self.report_msg {
+            Some(m) => format!(" {title} · {m} "),
+            None => format!(" {title} "),
+        };
         let p = Paragraph::new(body.clone())
-            .block(Block::bordered().title(format!(" {title} ")))
+            .block(Block::bordered().title(title))
             .scroll((scroll, 0));
         f.render_widget(p, area);
     }
@@ -2870,6 +3197,24 @@ impl Shell {
             format!("/{}_   Enter: apply · Esc: clear", self.search)
         } else {
             match self.cmd {
+                Cmd::Symbols => match self.explorer.status() {
+                    Some(m) => m.to_string(),
+                    None => self.explorer.footer(),
+                },
+                Cmd::Blast => format!(
+                    "←→: tab · ↑↓: scroll · s: base ({}) · d: hops ({}) · y: copy · ?: help · q",
+                    BLAST_REFS[self.blast_ref % BLAST_REFS.len()],
+                    self.blast_depth
+                ),
+                Cmd::Pack => format!(
+                    "←→: tab · ↑↓: scroll · b: budget ({}) · p: profile ({}) · c: changed ({}) · y: copy · q",
+                    PACK_BUDGETS[self.pack_budget % PACK_BUDGETS.len()],
+                    PACK_PROFILES[self.pack_profile % PACK_PROFILES.len()],
+                    if self.pack_changed { "on" } else { "off" }
+                ),
+                _ if self.report_msg.is_some() && self.argv_tab() => {
+                    self.report_msg.clone().unwrap_or_default()
+                }
                 Cmd::Filters => {
                     "←→: tab · Tab: pane · ↑↓: move · /: search · s: tool/source · q: quit"
                         .to_string()
@@ -2925,7 +3270,8 @@ impl Shell {
                 Cmd::Stats => {
                     "←→: tab · ↑↓: action · PgUp/PgDn: scroll · Enter: run · q: quit".to_string()
                 }
-                _ => "←→: tab · ↑↓/PgUp/PgDn: scroll · r: refresh · q: quit".to_string(),
+                _ => "←→: tab · ↑↓/PgUp/PgDn: scroll · r: refresh · y: copy · ?: help · q"
+                    .to_string(),
             }
         };
         f.render_widget(Paragraph::new(hint.dim()), area);
@@ -3150,6 +3496,27 @@ fn slugify(s: &str) -> String {
 }
 
 /// Last two path components, to keep project labels compact.
+/// Display name of the repo a finding was attributed to: the last path
+/// component, the transcript's directory marker, or a placeholder.
+fn repo_label(repo: &Option<String>) -> String {
+    let Some(repo) = repo else {
+        return "(unknown repo)".to_string();
+    };
+    if let Some(slug) = repo.strip_prefix("~slug:") {
+        return slug.to_string();
+    }
+    if let Some(dir) = repo.strip_prefix("~dir:") {
+        return dir.to_string();
+    }
+    let norm = repo.replace('\\', "/");
+    norm.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&norm)
+        .to_string()
+}
+
 fn short_path(p: &str) -> String {
     let path = std::path::Path::new(p);
     let parts: Vec<_> = path.components().collect();
@@ -3219,6 +3586,13 @@ fn run_index_foreground() {
     let _ = std::io::stdout().flush();
     let mut line = String::new();
     let _ = std::io::stdin().read_line(&mut line);
+}
+
+/// Why the index of `root` would be re-read before use; `None` when fresh or absent.
+fn read_index_staleness(root: &std::path::Path) -> Option<String> {
+    crate::store::open_db(root, false).ok()??;
+    let st = crate::store::index_staleness(root);
+    st.stale.then_some(st.reason)
 }
 
 fn read_index_stats() -> Option<(i64, i64, i64)> {
@@ -3392,6 +3766,68 @@ mod tests {
     }
 
     #[test]
+    fn sections_are_contiguous_and_numbered_keys_land_on_their_first_tab() {
+        let sections: Vec<usize> = Cmd::ALL.iter().map(|c| c.section()).collect();
+        assert!(sections.windows(2).all(|w| w[0] <= w[1]), "{sections:?}");
+        assert_eq!(*sections.last().unwrap(), Cmd::SECTIONS.len() - 1);
+        let mut s = new_shell(Entry::default());
+        s.jump_section(1);
+        assert!(s.cmd == Cmd::Symbols);
+        s.jump_section(3);
+        assert!(s.cmd == Cmd::Doctor);
+        // Walking right from the last tab wraps to the first.
+        s.go_to(Cmd::Egress);
+        s.switch_tab(1);
+        assert!(s.cmd == Cmd::Stats);
+    }
+
+    #[test]
+    fn code_report_tabs_build_their_argv_from_state() {
+        let mut s = new_shell(Entry::tab(Cmd::Blast));
+        assert_eq!(
+            s.dyn_argv().unwrap(),
+            vec!["blast", "--since", "HEAD", "--depth", "2"]
+        );
+        s.key_blast(KeyCode::Char('s'));
+        s.key_blast(KeyCode::Char('d'));
+        assert_eq!(
+            s.dyn_argv().unwrap(),
+            vec!["blast", "--since", "HEAD~1", "--depth", "3"]
+        );
+
+        s.go_to(Cmd::Pack);
+        assert_eq!(
+            s.dyn_argv().unwrap(),
+            vec!["pack", "--budget", "8000", "--profile", "plan"]
+        );
+        s.key_pack(KeyCode::Char('b'));
+        s.key_pack(KeyCode::Char('p'));
+        s.key_pack(KeyCode::Char('c'));
+        assert_eq!(
+            s.dyn_argv().unwrap(),
+            vec![
+                "pack",
+                "--budget",
+                "16000",
+                "--profile",
+                "debug",
+                "--changed"
+            ]
+        );
+        assert_eq!(Cmd::Modules.argv().unwrap(), ["modules"]);
+    }
+
+    #[test]
+    fn repo_label_names_the_repo_from_any_attribution_form() {
+        let some = |s: &str| Some(s.to_string());
+        assert_eq!(repo_label(&some("/home/u/work/tokenix/")), "tokenix");
+        assert_eq!(repo_label(&some(r"C:\src\app")), "app");
+        assert_eq!(repo_label(&some("~slug:-home-u-app")), "-home-u-app");
+        assert_eq!(repo_label(&some("~dir:app")), "app");
+        assert_eq!(repo_label(&None), "(unknown repo)");
+    }
+
+    #[test]
     fn switching_tabs_disarms_destructive_confirmations() {
         // Regression: an armed confirmation used to survive a tab switch, so
         // the first `x` after coming back wrote `[REDACTED]` across transcript
@@ -3430,6 +3866,10 @@ mod tests {
             (Cmd::Doctor, "doctor"),
             (Cmd::Tokenmap, "tokenmap"),
             (Cmd::Graph, "graph"),
+            (Cmd::Symbols, "symbols"),
+            (Cmd::Modules, "modules"),
+            (Cmd::Blast, "blast"),
+            (Cmd::Pack, "pack"),
         ];
 
         // Report tabs self-exec. Under `cargo test` the current exe is the test
@@ -3458,6 +3898,22 @@ mod tests {
                 global: false,
                 gain_cost: false,
             });
+
+            // Show the new tabs doing something, not their first frame.
+            match tab {
+                Cmd::Symbols => {
+                    shell.explorer.ensure_loaded();
+                    shell.explorer.key(KeyCode::Char('/'));
+                    for c in "run_hook".chars() {
+                        shell.explorer.key_search(KeyCode::Char(c));
+                    }
+                    shell.explorer.key_search(KeyCode::Enter);
+                    shell.explorer.key(KeyCode::Tab);
+                }
+                // Diff the last commit so the report is not empty on a clean tree.
+                Cmd::Blast => shell.blast_ref = 1,
+                _ => {}
+            }
 
             // Doctor, Graph and Tokenmap load on a background thread, so a frame
             // drawn immediately captures the spinner. Pump until the loaders go

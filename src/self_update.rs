@@ -14,6 +14,8 @@ const CACHE_TTL_SECS: u64 = 86400; // 24 hours
 const MAX_CHECKSUM_BYTES: u64 = 64 * 1024;
 /// Hard ceiling on a release binary, applied on top of the declared asset size.
 const MAX_BINARY_BYTES: u64 = 512 * 1024 * 1024;
+/// The release JSON lists a handful of assets; a megabyte is far beyond that.
+const MAX_RELEASE_JSON_BYTES: u64 = 1024 * 1024;
 
 /// Read at most `cap` bytes as UTF-8 text; a longer body is an error, not a truncation.
 fn read_text_capped<R: Read>(reader: R, cap: u64) -> Result<String> {
@@ -178,50 +180,71 @@ pub fn get_target_asset_name() -> Result<&'static str> {
     }
 }
 
-fn create_client_with_timeout(timeout: Duration) -> Result<reqwest::blocking::Client> {
-    Ok(reqwest::blocking::Client::builder()
+/// One HTTP agent. `ureq` is a small blocking client: no async runtime, no HTTP/2
+/// stack. TLS roots come from the operating system, so a corporate proxy's CA
+/// that the machine already trusts keeps working.
+fn build_agent(timeout: Duration, follow_redirects: bool) -> ureq::Agent {
+    use ureq::tls::{RootCerts, TlsConfig};
+    let mut config = ureq::Agent::config_builder()
         .user_agent(USER_AGENT)
-        .timeout(timeout)
-        .build()?)
+        .timeout_global(Some(timeout))
+        // Status codes are checked by the callers, with their own messages.
+        .http_status_as_error(false)
+        .tls_config(
+            TlsConfig::builder()
+                .root_certs(RootCerts::PlatformVerifier)
+                .build(),
+        );
+    if !follow_redirects {
+        config = config.max_redirects(0).max_redirects_will_error(false);
+    }
+    config.build().into()
 }
 
-fn create_client() -> Result<reqwest::blocking::Client> {
+fn create_client_with_timeout(timeout: Duration) -> Result<ureq::Agent> {
+    Ok(build_agent(timeout, true))
+}
+
+fn create_client() -> Result<ureq::Agent> {
     create_client_with_timeout(Duration::from_secs(45))
 }
 
-fn create_api_client_with_timeout(timeout: Duration) -> Result<reqwest::blocking::Client> {
-    Ok(reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(timeout)
-        // An API redirect must never carry an optional GitHub token to a
-        // different origin. Release asset downloads use the separate client.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?)
+fn create_api_client_with_timeout(timeout: Duration) -> Result<ureq::Agent> {
+    // An API redirect must never carry an optional GitHub token to a different
+    // origin. Release asset downloads use the separate, redirect-following agent.
+    Ok(build_agent(timeout, false))
 }
 
+/// The only request that may carry a GitHub token.
 fn github_api_request(
-    client: &reqwest::blocking::Client,
+    client: &ureq::Agent,
     url: &str,
     token: Option<&str>,
-) -> reqwest::blocking::RequestBuilder {
+) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
     let request = client
         .get(url)
-        .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json");
-    match token
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| reqwest::header::HeaderValue::from_str(&format!("Bearer {value}")).ok())
-    {
-        Some(mut value) => {
-            value.set_sensitive(true);
-            request.header(reqwest::header::AUTHORIZATION, value)
-        }
+        .header("Accept", "application/vnd.github.v3+json");
+    match token.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => request.header("Authorization", format!("Bearer {value}")),
         None => request,
     }
 }
 
+/// Fail on a non-2xx response, keeping the status and a bounded body excerpt.
+fn require_success(
+    mut res: ureq::http::Response<ureq::Body>,
+    what: &str,
+) -> Result<ureq::http::Response<ureq::Body>> {
+    if res.status().is_success() {
+        return Ok(res);
+    }
+    let status = res.status();
+    let body = read_text_capped(res.body_mut().as_reader(), 4 * 1024).unwrap_or_default();
+    anyhow::bail!("{what}: HTTP {status} {body}")
+}
+
 pub fn fetch_release(
-    client: &reqwest::blocking::Client,
+    client: &ureq::Agent,
     specific_version: Option<&str>,
 ) -> Result<GithubRelease> {
     let url = match specific_version {
@@ -240,23 +263,18 @@ pub fn fetch_release(
         .or_else(|_| std::env::var("GH_TOKEN"))
         .ok();
     let res = github_api_request(client, &url, token.as_deref())
-        .send()
+        .call()
         .with_context(|| format!("Failed to connect to GitHub releases at {url}"))?;
 
-    if !res.status().is_success() {
-        if res.status() == reqwest::StatusCode::NOT_FOUND {
-            anyhow::bail!("Release not found at {url}");
-        }
-        anyhow::bail!(
-            "GitHub API error (HTTP {}): {}",
-            res.status(),
-            res.text().unwrap_or_default()
-        );
+    if res.status() == ureq::http::StatusCode::NOT_FOUND {
+        anyhow::bail!("Release not found at {url}");
     }
+    let mut res = require_success(res, "GitHub API error")?;
 
-    let release: GithubRelease = res
-        .json()
-        .with_context(|| "Failed to parse GitHub release JSON")?;
+    let body = read_text_capped(res.body_mut().as_reader(), MAX_RELEASE_JSON_BYTES)
+        .with_context(|| "Failed to read GitHub release JSON")?;
+    let release: GithubRelease =
+        serde_json::from_str(&body).with_context(|| "Failed to parse GitHub release JSON")?;
     Ok(release)
 }
 
@@ -281,20 +299,24 @@ pub fn parse_sha256sums(content: &str, target_asset: &str) -> Option<String> {
 fn verified_release_asset_url(
     release: &GithubRelease,
     asset: &ReleaseAsset,
-) -> Result<reqwest::Url> {
-    let url = reqwest::Url::parse(&asset.browser_download_url)?;
+) -> Result<ureq::http::Uri> {
+    let url: ureq::http::Uri = asset
+        .browser_download_url
+        .parse()
+        .with_context(|| format!("Unparseable asset URL for {}", asset.name))?;
     let expected_path = format!(
         "/{GITHUB_REPO}/releases/download/{}/{}",
         release.tag_name, asset.name
     );
-    if url.scheme() != "https"
-        || url.host_str() != Some("github.com")
+    let authority = url.authority().map(|a| a.as_str()).unwrap_or_default();
+    if url.scheme_str() != Some("https")
+        || url.host() != Some("github.com")
         || url.port().is_some()
-        || !url.username().is_empty()
-        || url.password().is_some()
+        // `user:pass@host`: the userinfo is part of the authority.
+        || authority.contains('@')
         || url.path() != expected_path
         || url.query().is_some()
-        || url.fragment().is_some()
+        || asset.browser_download_url.contains('#')
     {
         anyhow::bail!("Unexpected GitHub release asset URL for {}", asset.name);
     }
@@ -684,7 +706,7 @@ fn replace_executable(temp_path: &Path, target_path: &Path) -> Result<()> {
 }
 
 fn download_and_install_release(
-    client: &reqwest::blocking::Client,
+    client: &ureq::Agent,
     release: &GithubRelease,
     target_path: &Path,
     quiet: bool,
@@ -714,13 +736,15 @@ fn download_and_install_release(
     if !quiet {
         println!("Fetching sha256sums.txt...");
     }
-    let checksums_raw = read_text_capped(
+    let mut checksums_response = require_success(
         client
             .get(checksum_url)
-            .send()
-            .with_context(|| "Failed to download sha256sums.txt")?
-            .error_for_status()
-            .with_context(|| "GitHub returned an error for sha256sums.txt")?,
+            .call()
+            .with_context(|| "Failed to download sha256sums.txt")?,
+        "GitHub returned an error for sha256sums.txt",
+    )?;
+    let checksums_raw = read_text_capped(
+        checksums_response.body_mut().as_reader(),
         MAX_CHECKSUM_BYTES,
     )
     .with_context(|| "Failed to read sha256sums.txt content")?;
@@ -743,7 +767,7 @@ fn download_and_install_release(
         );
     }
 
-    let mut response = client.get(binary_url).send().with_context(|| {
+    let mut response = client.get(binary_url).call().with_context(|| {
         format!(
             "Failed to download asset from {}",
             binary_asset.browser_download_url
@@ -762,14 +786,15 @@ fn download_and_install_release(
     })?;
 
     let cap = binary_asset.size.min(MAX_BINARY_BYTES);
-    let calculated_hash = match copy_hashed_capped(&mut response, &mut temp_file, cap) {
-        Ok(h) => h,
-        Err(e) => {
-            drop(temp_file);
-            let _ = std::fs::remove_file(&temp_file_path);
-            return Err(e);
-        }
-    };
+    let calculated_hash =
+        match copy_hashed_capped(response.body_mut().as_reader(), &mut temp_file, cap) {
+            Ok(h) => h,
+            Err(e) => {
+                drop(temp_file);
+                let _ = std::fs::remove_file(&temp_file_path);
+                return Err(e);
+            }
+        };
     drop(temp_file);
     if calculated_hash != expected_hash {
         let _ = std::fs::remove_file(&temp_file_path);
@@ -1072,28 +1097,83 @@ bc0f1a0cb0050f79d6cbc336521d759aaf080fa8095ea2a32e49425d6ce7ddde *tokenix-window
         assert_eq!(parse_sha256sums(sample, "non-existent"), None);
     }
 
+    /// A one-shot HTTP server on localhost. Returns its URL and a channel that
+    /// yields the raw request it received, or `None` if nothing connected.
+    fn serve_once(response: String) -> (String, std::sync::mpsc::Receiver<Option<String>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let mut buf = [0u8; 4096];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let _ = stream.write_all(response.as_bytes());
+                        let _ = tx.send(Some(String::from_utf8_lossy(&buf[..n]).into_owned()));
+                        return;
+                    }
+                    Err(_) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => {
+                        let _ = tx.send(None);
+                        return;
+                    }
+                }
+            }
+        });
+        (url, rx)
+    }
+
+    const OK_EMPTY: &str = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+
     #[test]
     fn github_token_is_only_attached_to_the_api_request() {
-        let api_client = create_api_client_with_timeout(Duration::from_secs(1)).unwrap();
-        let asset_client = create_client_with_timeout(Duration::from_secs(1)).unwrap();
-        let api_request = github_api_request(
-            &api_client,
-            "https://api.github.com/repos/juninmd/tokenix/releases/latest",
-            Some("test-token"),
-        )
-        .build()
-        .unwrap();
-        assert_eq!(
-            api_request.headers()[reqwest::header::AUTHORIZATION],
-            "Bearer test-token"
-        );
-        let asset_request = asset_client
-            .get("https://github.com/juninmd/tokenix/releases/download/v1.0.0/tokenix.exe")
-            .build()
+        let api_client = create_api_client_with_timeout(Duration::from_secs(5)).unwrap();
+        let asset_client = create_client_with_timeout(Duration::from_secs(5)).unwrap();
+
+        let (api_url, api_seen) = serve_once(OK_EMPTY.to_string());
+        github_api_request(&api_client, &api_url, Some("test-token"))
+            .call()
             .unwrap();
-        assert!(!asset_request
-            .headers()
-            .contains_key(reqwest::header::AUTHORIZATION));
+        let api_request = api_seen
+            .recv()
+            .unwrap()
+            .expect("api request")
+            .to_lowercase();
+        assert!(
+            api_request.contains("authorization: bearer test-token"),
+            "{api_request}"
+        );
+
+        let (asset_url, asset_seen) = serve_once(OK_EMPTY.to_string());
+        asset_client.get(asset_url.as_str()).call().unwrap();
+        let asset_request = asset_seen
+            .recv()
+            .unwrap()
+            .expect("asset request")
+            .to_lowercase();
+        assert!(!asset_request.contains("authorization"), "{asset_request}");
+    }
+
+    #[test]
+    fn the_api_client_never_follows_a_redirect_with_its_token() {
+        let (elsewhere, elsewhere_seen) = serve_once(OK_EMPTY.to_string());
+        let (api_url, _) = serve_once(format!(
+            "HTTP/1.1 302 Found\r\nLocation: {elsewhere}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ));
+        let api_client = create_api_client_with_timeout(Duration::from_secs(5)).unwrap();
+        // Either an error or the bare 302 is fine; reaching the other origin is not.
+        let _ = github_api_request(&api_client, &api_url, Some("test-token")).call();
+        assert!(
+            elsewhere_seen.recv().unwrap().is_none(),
+            "the redirect target was contacted"
+        );
     }
 
     #[test]

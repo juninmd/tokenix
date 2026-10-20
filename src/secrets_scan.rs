@@ -727,6 +727,7 @@ fn group_by(
 /// `redacted` form shown by default. All-owned, so it is `Send` and can cross a
 /// worker-thread boundary.
 #[derive(Clone)]
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub struct ScanFinding {
     pub agent: String,
     pub rule: String,
@@ -745,6 +746,7 @@ pub struct ScanFinding {
 /// Scan every agent's conversations and return redacted findings plus the
 /// per-agent count of files scanned. Reads SQLite DBs and JSON logs, so it can
 /// take a moment — run it off the UI thread.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn scan_findings() -> (Vec<ScanFinding>, Vec<(String, usize)>) {
     let Some(home) = dirs::home_dir() else {
         return (Vec::new(), Vec::new());
@@ -840,6 +842,7 @@ fn replace_at_boundaries(content: &str, needle: &str) -> String {
     out
 }
 
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn redact_in_files(secret: &str, paths: &[PathBuf]) -> (usize, usize) {
     let mut edited = 0;
     let mut skipped = 0;

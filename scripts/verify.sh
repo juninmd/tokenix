@@ -15,13 +15,15 @@ trap 'rm -rf "$TOKENIX_HOME"' EXIT
 step() { printf '\n==> %s\n' "$*"; }
 
 step "fmt";    cargo fmt --all -- --check
-step "clippy"; cargo clippy --all-targets --locked --quiet -- -D warnings
+step "clippy (lean)"; cargo clippy --all-targets --locked --quiet -- -D warnings
+step "clippy (full)"; cargo clippy --all-targets --all-features --locked --quiet -- -D warnings
 # fuzz/ includes src/chunker.rs with its own lockfile; cflite_pr.yml builds it.
 step "fuzz targets"; cargo check --locked --quiet --manifest-path fuzz/Cargo.toml --bins
-step "test";   cargo test --locked --quiet
+step "test (lean)"; cargo test --locked --quiet
+step "test (full)"; cargo test --all-features --locked --quiet
 
 step "release build"
-cargo build --release --locked --quiet
+cargo build --release --all-features --locked --quiet
 bin="$PWD/target/release/tokenix"
 [[ -x "$bin" ]] || bin="$bin.exe"
 

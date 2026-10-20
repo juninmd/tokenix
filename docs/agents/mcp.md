@@ -4,8 +4,7 @@ Any client that speaks the Model Context Protocol over stdio can use tokenix:
 Claude Desktop, Cursor, Zed, OpenCode, Antigravity and others.
 
 ```bash
-tokenix mcp                   # full profile (default)
-tokenix mcp --profile slim    # three tools, smaller prompt footprint
+tokenix mcp
 ```
 
 ## Register it in your client
@@ -16,7 +15,7 @@ if `tokenix` is not on the client's PATH:
 ```json
 {
   "mcpServers": {
-    "tokenix": { "command": "tokenix", "args": ["mcp", "--profile", "slim"] }
+    "tokenix": { "command": "tokenix", "args": ["mcp"] }
   }
 }
 ```
@@ -32,14 +31,25 @@ For every other client, add the entry to its MCP config by hand.
 
 ## Tools
 
-| Profile | Tools |
+| Tool | What it answers |
 |---|---|
-| **full** | `tokenix_read`, `tokenix_symbols`, `tokenix_callers`, `tokenix_callees`, `tokenix_impact`, `tokenix_memory_add`, `tokenix_memory_list`, `tokenix_memory_remove`, `tokenix_memory_edit`, `tokenix_run`, `tokenix_gain` |
-| **slim** | `tokenix_search_tools`, `tokenix_call` (`tokenix_call` reaches any full-profile tool by name) |
+| `tokenix_symbols` | Where a symbol is defined (`path:line`, never code) |
+| `tokenix_graph` | Around one symbol: `direction` = `callers`, `callees`, `impact` (both ways, `depth` hops) or `flow` (forward from an entry point) |
+| `tokenix_blast` | Symbols that depend on the working-tree diff since a git ref |
+| `tokenix_modules` | Groups of symbols that mostly call each other, and how the groups depend on one another |
+| `tokenix_deps` | File imports, or (`reverse`) which files import a file |
+| `tokenix_tokenmap` | The directories and files holding the most tokens |
 
-Every tool schema costs prompt tokens on every turn. Use `slim` when the client
-loads all MCP schemas up front, and `full` when it defers them.
-`tokenix prompt-audit --profile-impact` measures the difference for your agents.
+Graph tools take `format`: `text` (default), `mermaid`, `dot` or `json` (`blast`:
+`text`, `mermaid`, `json`). Ask for `mermaid` when the answer is going into a PR
+description or a doc.
+
+They return **locations and relations, not code**, and do not search file
+contents: the agent reads files with its own Read and searches them with its own
+grep. There is no tool that reads files, runs commands or stores notes, because
+the agent already has those and `tokenix hook` compresses what its Bash returns.
+Every tool schema costs prompt tokens each turn; `tokenix prompt-audit
+--profile-impact` prints the footprint of this set.
 
 Each `tools/call` runs behind a panic guard, so one bad request cannot take the
 server down. The index is refreshed for edited files before graph and read tools

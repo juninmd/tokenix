@@ -1,5 +1,7 @@
 # tokenix with OpenCode
 
+> `tokenix install-hook --tool opencode` is part of the `agents-extra` build feature. Release binaries include it; with `cargo install` add `--features agents-extra` (or `--features full`).
+
 OpenCode uses tokenix as an **MCP server**. No hook is installed, so nothing is
 intercepted automatically. OpenCode gets tokenix tools and calls them when it
 decides to.
@@ -34,9 +36,8 @@ run `tokenix trust`. OpenCode itself decides what it runs.
 
 ## What it does
 
-OpenCode sees the tokenix MCP tools: smart read,
-symbols, callers/callees, impact, memory and run. The [MCP guide](mcp.md) has the
-full list and the `slim` profile.
+OpenCode sees the tokenix MCP tools: symbols, graph (callers, callees, impact,
+flow), blast, modules, deps and tokenmap. The [MCP guide](mcp.md) has the full list.
 
 A good habit is to tell OpenCode, in your project instructions, to start a task
 with `tokenix_symbols` and to read large files through `tokenix_read`.
