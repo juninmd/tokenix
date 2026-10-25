@@ -23,8 +23,6 @@ jobs:
         with:
           fetch-depth: 0 # Full history for reliable Gitleaks incremental scans
           persist-credentials: false
-      # Pinned to a commit SHA of juninmd/base-actions@main: an external action on a
-      # mutable branch is a direct code-execution path into this pipeline.
-      - uses: juninmd/base-actions/validate-pr@2edcc396f63bd14b5e8c32dc9ddec68ca492cd8a # main
+      - uses: juninmd/base-actions/validate-pr@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

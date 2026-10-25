@@ -11,7 +11,5 @@ permissions:
   pull-requests: read
 jobs:
   gitleaks:
-    # Pinned to a commit SHA of juninmd/base-actions@main — a reusable workflow on
-    # a mutable branch runs with this repo's token and is the top supply-chain risk.
-    uses: juninmd/base-actions/.github/workflows/reusable-security-scan.yml@2edcc396f63bd14b5e8c32dc9ddec68ca492cd8a # main
+    uses: juninmd/base-actions/.github/workflows/reusable-security-scan.yml@main
     secrets: inherit
