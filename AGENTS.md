@@ -1,7 +1,10 @@
 # AGENTS.md — tokenix
 
 Rust CLI that gives AI coding agents compact repository context: a local
-SQLite index (chunks + tree-sitter symbol graph; no embeddings, no model, no text search), deterministic output filters,
+SQLite index (chunks + tree-sitter symbol graph; no embeddings, no model, no text search).
+The index exists only to serve structural answers grep cannot give — symbol
+locations, callers/callees, blast radius, modules, outlines, `pack` — never to
+answer in place of the agent's own search or reads. Plus deterministic output filters,
 and `PreToolUse` hooks for Claude Code / Copilot / Codex / Antigravity (OpenCode
 is MCP-only: no hook wiring is installed for it).
 User-facing docs live in `README.md`; this file is the engineering contract.

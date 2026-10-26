@@ -9,12 +9,12 @@ edition = "2021"
 # (tree-sitter 0.27), so this costs nothing and makes the assumption fail
 # at build time instead of at exploit time.
 rust-version = "1.90"
-description = "Symbol graphs, lexical code search, secrets scanning, output filters, and CLI hooks that save 60-90% LLM tokens"
+description = "Local symbol graph, secrets scanning, output filters, and CLI hooks that save 60-90% LLM tokens"
 license = "MIT"
 repository = "https://github.com/juninmd/tokenix"
 homepage = "https://github.com/juninmd/tokenix"
 readme = "README.md"
-keywords = ["llm", "code-search", "symbol-graph", "cli"]
+keywords = ["llm", "symbol-graph", "tokens", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 exclude = ["/tokenix-logo.png", "/assets/screenshots", "/benchmark", "/.github"]
 
@@ -75,9 +75,6 @@ tree-sitter-cpp = "0.23"
 # Release downloads for `tokenix update`. Blocking and small: no async runtime or
 # HTTP/2 stack, and TLS roots come from the OS trust store.
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
-# Shareable index snapshots. rust_backend keeps this to miniz_oxide (pure Rust,
-# already in the tree via reqwest) instead of pulling a C zlib.
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
