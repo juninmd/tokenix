@@ -262,7 +262,12 @@ fn print_command_compression(rows: &[CmdRow]) {
 }
 
 fn print_internal_graph_stats(repo_root: &Path) -> Result<()> {
-    let conn = crate::store::open_db(repo_root, false)?.unwrap();
+    let Some(conn) = crate::store::open_db(repo_root, false)? else {
+        println!("{}", "6. Internal Symbol Graph".bold());
+        println!("  No index found; run `tokenix index .` or pass --refresh-index.");
+        println!();
+        return Ok(());
+    };
     let node_count: i64 = conn.query_row("SELECT COUNT(*) FROM graph_nodes", [], |r| r.get(0))?;
     let edge_count: i64 = conn.query_row("SELECT COUNT(*) FROM graph_edges", [], |r| r.get(0))?;
 
