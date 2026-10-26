@@ -45,7 +45,7 @@
 
 | ⚡ Local Code Index | 🌲 Tree-sitter Symbol Graph | ✂️ Deterministic Output Filters |
 |:---|:---|:---|
-| A SQLite index of every file, chunked by symbol. No model to download, no background process, zero external services. | Deep AST symbol parsing with PageRank importance, bidirectional caller/callee tracing, and diff blast-radius impact analysis. | 534 bundled filters stripping noisy build/test logs without masking real errors or exit codes. |
+| A SQLite index of every file, chunked by symbol. It is not a search engine: it only feeds the symbol graph, outlines and `pack` (who calls what, where a symbol lives). No model, no background process, zero external services. | Deep AST symbol parsing with PageRank importance, bidirectional caller/callee tracing, and diff blast-radius impact analysis. | 534 bundled filters stripping noisy build/test logs without masking real errors or exit codes. |
 
 | 🛡️ Zero-Trust Security | 📉 Measured Token Savings | 🔌 Universal Agent Compatibility |
 |:---|:---|:---|
@@ -215,7 +215,7 @@ $ tokenix blast            # vs HEAD; use --since origin/main for a branch
 
 - **Edits are picked up on their own.** Before answering, every index command
   re-chunks the files you changed since the last index. That takes milliseconds
-  so a function you just wrote is searchable right away. Run `tokenix index`
+  so a function you just wrote shows up in `symbols`/`callers` right away. Run `tokenix index`
   now and then (or `tokenix index --if-stale` in a script) for larger changes.
 - **Branch switches are detected.** The index records the branch and `HEAD`. When
   they change, the hook passes calls through until you re-index, so it never
@@ -612,7 +612,10 @@ truncated.
 ```
 
 - **Storage:** one SQLite DB per project under `~/.tokenix/`: chunks and the
-  symbol graph. There is no search engine, no embeddings, no model and no
+  symbol graph. **What the local index is for:** answering structural questions an
+  agent cannot get from grep (where a symbol is defined, who calls it, what a diff
+  breaks, how modules depend on each other) and building outlines and `pack` maps
+  within a token budget. It never replaces the agent's own search or reads. There is no search engine, no embeddings, no model and no
   background daemon: the agent's own grep stays the way to find text. Indexes
   built by older versions drop their vector and full-text tables on the next
   `tokenix index`.
