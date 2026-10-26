@@ -45,7 +45,7 @@
 
 | ⚡ Local Code Index | 🌲 Tree-sitter Symbol Graph | ✂️ Deterministic Output Filters |
 |:---|:---|:---|
-| A SQLite index of every file, chunked by symbol. No model to download, no background process, zero external services. | Deep AST symbol parsing with PageRank importance, bidirectional caller/callee tracing, and diff blast-radius impact analysis. | 528+ bundled filters stripping noisy build/test logs without masking real errors or exit codes. |
+| A SQLite index of every file, chunked by symbol. No model to download, no background process, zero external services. | Deep AST symbol parsing with PageRank importance, bidirectional caller/callee tracing, and diff blast-radius impact analysis. | 534 bundled filters stripping noisy build/test logs without masking real errors or exit codes. |
 
 | 🛡️ Zero-Trust Security | 📉 Measured Token Savings | 🔌 Universal Agent Compatibility |
 |:---|:---|:---|

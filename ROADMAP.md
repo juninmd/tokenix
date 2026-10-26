@@ -1,6 +1,10 @@
 # Tokenix Optimization Roadmap
 
-**Goal**: Reduce token waste in Claude Code workflows through intelligent symbol indexing and semantic search.
+**Goal**: Reduce token waste in Claude Code workflows through a local symbol index, output filters and hooks.
+
+> **Historical document.** Embeddings, semantic/text search (`tokenix query`), the
+> daemon and team index snapshots (`export-index` / `import-index`) mentioned below
+> were removed in 1.0 (lean agent core). The current contract is in `AGENTS.md`.
 
 ## Next Up (P2 — deferred from the 2026-06 optimization pass)
 
