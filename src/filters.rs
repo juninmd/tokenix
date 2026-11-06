@@ -1760,7 +1760,8 @@ pub fn get_effective_command(cmd: &str) -> String {
             continue;
         }
 
-        let tokens = tokenize_command(&current);
+        let segments = split_on_operators(cmd);
+        let tokens = tokenize_command(&segments.join(" "));
         if tokens.is_empty() {
             break;
         }
