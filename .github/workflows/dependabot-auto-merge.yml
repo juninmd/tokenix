@@ -1,0 +1,16 @@
+name: Dependabot Auto-Merge
+
+# PRs do dependabot[bot] viram auto-merge quando TODOS os checks passam.
+# pull_request_target: o token em pull_request chega read-only para PRs de
+# dependabot[bot]; o reusable nao faz checkout de codigo, so metadados.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    uses: juninmd/base-actions/.github/workflows/reusable-dependabot-auto-merge.yml@main
