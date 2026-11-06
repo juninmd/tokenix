@@ -1,0 +1,16 @@
+{
+  "issue": 73,
+  "slug": "73-posttooluse-redact",
+  "stage": "implement",
+  "artifacts": [
+    ".workflow/73-posttooluse-redact/research.md",
+    ".workflow/73-posttooluse-redact/prototype.md",
+    ".workflow/73-posttooluse-redact/plan.md",
+    ".workflow/73-posttooluse-redact/progress.md"
+  ],
+  "awaiting": "iterate",
+  "supersedes": "72-holdout-mode",
+  "selected_variant": "B",
+  "branch": "feat/posttooluse-redact",
+  "pr": "https://github.com/juninmd/tokenix/pull/74"
+}

@@ -1,0 +1,7 @@
+{
+  "issue": 72,
+  "slug": "72-holdout-mode",
+  "stage": "prototype",
+  "artifacts": [".workflow/72-holdout-mode/research.md", ".workflow/72-holdout-mode/prototype.md"],
+  "awaiting": "prototype-selection"
+}
