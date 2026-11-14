@@ -383,25 +383,6 @@ has the full evidence review.
 
 ---
 
-## 🆚 How tokenix compares
-
-Most token-saving tools solve one slice of the problem — shell compression **or** sandboxing **or** a code graph. **tokenix** combines deterministic shell filtering, reversible surgical recovery, tree-sitter structural graphs, credential redaction, and honest telemetry in a single native binary with zero daemon or LLM dependency:
-
-| Capability | **tokenix** | **RTK** (`rtk-ai/rtk`) | **context-mode** | **Headroom** | **CodeGraph / GitNexus** |
-|---|---|---|---|---|---|
-| **Deterministic CLI filters (no LLM)** | **534 rules / 1,167 golden tests** | ~100 rules | Via sandbox scripts | Proxy/heuristic | — |
-| **Preserves prompt cache prefix** | **Yes (write-time only)** | Yes | Partial (MCP sandbox) | Breaks prefix if rewriting history | N/A |
-| **Fail-open exit code + panic guard** | **Strict (`exit 0`, exact child exit code)** | Proxy exit propagation | Subprocess sandbox | HTTP proxy latency | MCP only |
-| **Bare `\r` redraw collapse + middle error guard** | **Yes** (never drops middle errors) | Tail/strip rules | Manual query | Token pruning | — |
-| **Reversible recovery + surgical slices** | **`tokenix retrieve <key> --lines --grep`** | Recall tee on failure | SQLite/FTS query | Store | — |
-| **AST symbol graph + blast + Louvain modules** | **Built-in (7 grammars + PageRank)** | — | — | — | Graph only |
-| **Safe with `Read` & agent native `Grep`** | **Never overrides `Read`; caps only unbounded `Grep`** | Filters reads/greps | Tool replacement | Filters reads | MCP tools |
-| **OpenCode 2 (`setup` hooks + `mcp.servers`)** | **Native dual V1/V2 TS plugin + MCP** | Hook wrapper | MCP / standalone | Proxy wrapper | MCP only |
-| **Credentials masked + repo SHA-256 trust gate** | **In-flight redactor + `tokenix trust` + `scan-secrets`** | Basic exclude | Session DB | Local proxy | — |
-| **Honest A/B & spend audits** | **`TOKENIX_HOLDOUT` + `gain` + `usage` + `prompt-audit`** | `rtk gain` | Token counter | Savings dashboard | — |
-
----
-
 ## 📖 Command reference
 
 > [!TIP]

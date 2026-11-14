@@ -3523,7 +3523,7 @@ function tx-symbols {{ & "{tokenix_bin}" symbols @args }}
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "agents-extra"))]
 fn codex_hook_ps1(tokenix_bin: &str) -> String {
     format!(
         r#"param(
@@ -3574,7 +3574,7 @@ exit 0
     )
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "agents-extra"))]
 fn install_codex_hooks_json_windows(hooks_path: &Path, hook_ps1_path: &Path) -> Result<()> {
     let mut hooks = load_codex_hooks_json(hooks_path)?;
     let command = format!(
@@ -5178,7 +5178,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(windows)] // codex_hook_ps1 is Windows-only; the test must be too.
+    #[cfg(all(windows, feature = "agents-extra"))] // codex_hook_ps1 is Windows + agents-extra; the test must be too.
     fn codex_wrapper_runs_pre_intercepts() {
         let ps1 = codex_hook_ps1("C:/tokenix/tokenix.exe");
 

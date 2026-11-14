@@ -1229,7 +1229,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&bin);
     }
 
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "authoring"))]
     #[test]
     fn resolve_program_ignores_cwd_shim_on_windows() {
         // Synthetic shim in a dir that is not the process cwd but is on PATH
