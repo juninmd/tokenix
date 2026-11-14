@@ -34,6 +34,17 @@ struct CopilotHookInput {
     tool_args: serde_json::Value,
 }
 
+#[derive(Deserialize, Debug)]
+struct OpenCodeHookInput {
+    tool: String,
+    #[serde(default)]
+    input: Option<serde_json::Value>,
+    #[serde(default)]
+    args: Option<serde_json::Value>,
+    #[serde(default, rename = "sessionID", alias = "session_id")]
+    session_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AntigravityHookInput {
@@ -87,6 +98,22 @@ impl HookInput {
                 let tool_input = normalize_tool_input(&tool_name, input.tool_input);
                 return Some(HookInput {
                     raw_tool_name: input.tool_name,
+                    tool_name,
+                    tool_input,
+                    session_id: input.session_id,
+                });
+            }
+        }
+        if let Ok(input) = serde_json::from_str::<OpenCodeHookInput>(clean) {
+            if !input.tool.is_empty() {
+                let raw_args = input
+                    .input
+                    .or(input.args)
+                    .unwrap_or(serde_json::Value::Null);
+                let tool_name = canonical_tool_name(&input.tool);
+                let tool_input = normalize_tool_input(&tool_name, raw_args);
+                return Some(HookInput {
+                    raw_tool_name: input.tool,
                     tool_name,
                     tool_input,
                     session_id: input.session_id,
@@ -346,6 +373,24 @@ fn try_grep_cap(input: &HookInput, repo_root: &Path, antigravity: bool, raw_stdi
     let Some((updated, reason)) = grep_cap_input(&input.tool_input) else {
         return;
     };
+    if crate::compress::should_holdout(raw_stdin) {
+        let _ = log_hook_event(
+            repo_root,
+            &HookEvent {
+                ts: now_ts(),
+                tool: input.tool_name.clone(),
+                action: "holdout".to_string(),
+                phase: "pre".to_string(),
+                reason: "TOKENIX_HOLDOUT".to_string(),
+                saved_tokens: 0,
+                actual_tokens: 0,
+                original_estimate: 0,
+                input_preview: raw_stdin.chars().take(200).collect(),
+                command: String::new(),
+            },
+        );
+        pass_through(antigravity);
+    }
     let out = input_rewrite_output(input, updated, &reason, antigravity);
     let _ = log_hook_event(
         repo_root,
@@ -580,6 +625,25 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
             pass_through(antigravity);
         }
 
+        if crate::compress::should_holdout(command) {
+            let _ = log_hook_event(
+                &repo_root,
+                &HookEvent {
+                    ts: now_ts(),
+                    tool: "Bash".to_string(),
+                    action: "holdout".to_string(),
+                    phase: "pre".to_string(),
+                    reason: "TOKENIX_HOLDOUT".to_string(),
+                    saved_tokens: 0,
+                    actual_tokens: 0,
+                    original_estimate: 0,
+                    input_preview: command.chars().take(200).collect(),
+                    command: command.to_string(),
+                },
+            );
+            pass_through(antigravity);
+        }
+
         // Recording session active: route every in-scope command through
         // `tokenix run` so its raw output is captured to .tokenix/recordings.
         // PreToolUse is the only path that sees command output under Claude Code,
@@ -744,6 +808,25 @@ pub fn run_hook(antigravity: bool) -> Result<()> {
                     action: "bypassed".to_string(),
                     phase: "pre".to_string(),
                     reason: "TOKENIX_DISABLED".to_string(),
+                    saved_tokens: 0,
+                    actual_tokens: 0,
+                    original_estimate: 0,
+                    input_preview: command.chars().take(200).collect(),
+                    command: command.to_string(),
+                },
+            );
+            pass_through(antigravity);
+        }
+
+        if crate::compress::should_holdout(command) {
+            let _ = log_hook_event(
+                &repo_root,
+                &HookEvent {
+                    ts: now_ts(),
+                    tool: "PowerShell".to_string(),
+                    action: "holdout".to_string(),
+                    phase: "pre".to_string(),
+                    reason: "TOKENIX_HOLDOUT".to_string(),
                     saved_tokens: 0,
                     actual_tokens: 0,
                     original_estimate: 0,
@@ -1223,5 +1306,25 @@ mod tests {
             "git status --short"
         );
         assert_eq!(out["overwrite"]["args"]["Cwd"], ".");
+    }
+
+    #[test]
+    fn opencode_v2_bash_payload_normalizes_cleanly() {
+        let raw = r#"{"tool":"bash","input":{"command":"cargo test"},"sessionID":"oc_ses_1"}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "bash");
+        assert!(is_bash_tool(&input.tool_name));
+        assert_eq!(input.tool_input["command"], "cargo test");
+        assert_eq!(input.session_id, "oc_ses_1");
+    }
+
+    #[test]
+    fn opencode_grep_payload_normalizes_and_caps_content() {
+        let raw = r#"{"tool":"grep","args":{"query":"fn main","output_mode":"content"}}"#;
+        let input = HookInput::from_stdin(raw).unwrap();
+        assert_eq!(input.tool_name, "Grep");
+        assert_eq!(input.tool_input["pattern"], "fn main");
+        let (updated, _) = grep_cap_input(&input.tool_input).expect("content grep capped");
+        assert_eq!(updated["head_limit"], DEFAULT_GREP_HEAD_LIMIT);
     }
 }

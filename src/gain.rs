@@ -200,6 +200,7 @@ pub struct GainStats {
     pub total_calls: usize,
     pub intercepted: usize,
     pub passed: usize,
+    pub holdout: usize,
     pub tokens_saved: i64,
     pub tokens_used: i64,
     pub tokens_original: i64,
@@ -216,6 +217,22 @@ pub struct GainStats {
     /// Per-session hook-call shape: sessions, mean/max calls per session, and
     /// within-session re-requests of the same tool+subject.
     pub sessions: SessionStats,
+}
+
+/// PreToolUse emits a zero-token `"rewrote command to tokenix run"` /
+/// `"recording capture"` handoff marker before `tokenix run` logs the actual
+/// `ToolOutputCompressed` measurement for the same invocation. Counting both
+/// events doubles `by_command` call counts (halving `avg/call`), inflates
+/// `intercepted`, and triggers false within-session `re_requests`.
+fn is_rewrite_handoff(e: &HookEvent) -> bool {
+    e.phase == "pre"
+        && e.action == "intercepted"
+        && e.saved_tokens == 0
+        && e.original_estimate == 0
+        && e.actual_tokens == 0
+        && !e.command.is_empty()
+        && (e.reason.starts_with("rewrote command to tokenix run")
+            || e.reason == "recording capture")
 }
 
 /// Hook calls per session and within-session re-requests — the measurable share
@@ -239,7 +256,7 @@ pub struct SessionStats {
 const SESSION_GAP_SECS: f64 = 30.0 * 60.0;
 
 pub fn session_stats(events: &[HookEvent]) -> SessionStats {
-    let mut sorted: Vec<&HookEvent> = events.iter().collect();
+    let mut sorted: Vec<&HookEvent> = events.iter().filter(|e| !is_rewrite_handoff(e)).collect();
     sorted.sort_by(|a, b| a.ts.total_cmp(&b.ts));
     let mut stats = SessionStats::default();
     let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
@@ -309,13 +326,20 @@ pub(crate) fn command_label(cmd: &str) -> String {
 }
 
 fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
-    let intercepted_events: Vec<_> = events
+    let sessions = session_stats(&events);
+    let effective: Vec<HookEvent> = events
+        .into_iter()
+        .filter(|e| !is_rewrite_handoff(e))
+        .collect();
+
+    let intercepted_events: Vec<_> = effective
         .iter()
         .filter(|e| e.action == "intercepted")
         .collect();
-    let passed_events: Vec<_> = events.iter().filter(|e| e.action == "pass").collect();
+    let passed_events: Vec<_> = effective.iter().filter(|e| e.action == "pass").collect();
+    let holdout = effective.iter().filter(|e| e.action == "holdout").count();
 
-    let bypassed = events.iter().filter(|e| e.action == "bypassed").count();
+    let bypassed = effective.iter().filter(|e| e.action == "bypassed").count();
     let tokens_saved: i64 = intercepted_events.iter().map(|e| e.saved_tokens).sum();
 
     // Rate over every run that was actually measured, not only the ones that
@@ -399,9 +423,10 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         .count();
 
     GainStats {
-        total_calls: events.len(),
+        total_calls: effective.len(),
         intercepted: intercepted_events.len(),
         passed: passed_events.len(),
+        holdout,
         tokens_saved,
         tokens_used,
         tokens_original,
@@ -412,7 +437,7 @@ fn stats_from_events(events: Vec<HookEvent>) -> GainStats {
         by_command,
         indexed_queries,
         bypassed,
-        sessions: session_stats(&events),
+        sessions,
     }
 }
 
@@ -434,8 +459,11 @@ pub fn compute_global_gain() -> GlobalGainStats {
             .filter(|e| e.action == "intercepted")
             .map(|e| e.saved_tokens)
             .sum();
-        let total = events.len();
-        let intercepted = events.iter().filter(|e| e.action == "intercepted").count();
+        let total = events.iter().filter(|e| !is_rewrite_handoff(e)).count();
+        let intercepted = events
+            .iter()
+            .filter(|e| !is_rewrite_handoff(e) && e.action == "intercepted")
+            .count();
         if total > 0 {
             projects.push((entry.label.clone(), saved, total, intercepted));
         }
@@ -785,5 +813,64 @@ mod tests {
         let stats = compute_gain(&temp_dir);
         assert_eq!(stats.pct_saved, 0.0);
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn rewrite_handoff_is_not_double_counted_in_commands_or_sessions() {
+        let handoff = HookEvent {
+            ts: 10.0,
+            tool: "Bash".to_string(),
+            action: "intercepted".to_string(),
+            phase: "pre".to_string(),
+            reason: "rewrote command to tokenix run".to_string(),
+            saved_tokens: 0,
+            actual_tokens: 0,
+            original_estimate: 0,
+            input_preview: String::new(),
+            command: "cargo test --all".to_string(),
+        };
+        let measured = HookEvent {
+            ts: 11.0,
+            tool: "Bash".to_string(),
+            action: "intercepted".to_string(),
+            phase: "ToolOutputCompressed".to_string(),
+            reason: "compressed".to_string(),
+            saved_tokens: 900,
+            actual_tokens: 100,
+            original_estimate: 1000,
+            input_preview: String::new(),
+            command: "cargo test --all".to_string(),
+        };
+        let holdout_ev = HookEvent {
+            ts: 20.0,
+            tool: "Bash".to_string(),
+            action: "holdout".to_string(),
+            phase: "pre".to_string(),
+            reason: "TOKENIX_HOLDOUT".to_string(),
+            saved_tokens: 0,
+            actual_tokens: 0,
+            original_estimate: 0,
+            input_preview: String::new(),
+            command: "cargo check".to_string(),
+        };
+
+        let stats = stats_from_events(vec![handoff, measured, holdout_ev]);
+        assert_eq!(stats.total_calls, 2, "handoff excluded from total calls");
+        assert_eq!(
+            stats.intercepted, 1,
+            "only measured event counts as intercepted"
+        );
+        assert_eq!(stats.holdout, 1);
+        assert_eq!(
+            stats.sessions.re_requests, 0,
+            "handoff must not create false re-request"
+        );
+        let cargo = stats
+            .by_command
+            .iter()
+            .find(|(c, _, _)| c == "cargo test")
+            .expect("cargo test bucket");
+        assert_eq!(cargo.1, 1, "handoff must not halve avg/call in by_command");
+        assert_eq!(cargo.2, 900);
     }
 }

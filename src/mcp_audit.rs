@@ -324,7 +324,7 @@ fn parse_json_server(
 
 fn read_json(path: &Path) -> Option<Value> {
     let raw = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
+    crate::parse_jsonc(&raw).ok()
 }
 
 fn discover_claude(cwd: &Path) -> Vec<ServerSpec> {
@@ -462,78 +462,118 @@ fn discover_antigravity() -> Vec<ServerSpec> {
 }
 
 fn discover_opencode(cwd: &Path) -> Vec<ServerSpec> {
+    let mut candidates: Vec<(std::path::PathBuf, bool)> = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        let global_dir = crate::opencode_global_dir_with(
+            std::env::var_os("XDG_CONFIG_HOME")
+                .as_deref()
+                .map(Path::new),
+            &home,
+        );
+        candidates.push((global_dir.join("opencode.json"), false));
+        candidates.push((global_dir.join("opencode.jsonc"), false));
+    }
     let repo_root = crate::find_repo_root(cwd);
-    let path = repo_root.join("opencode.json");
-    let Some(v) = read_json(&path) else {
-        return Vec::new();
-    };
-    let Some(map) = v.get("mcp").and_then(Value::as_object) else {
-        return Vec::new();
-    };
-    opencode_specs_from_map(map)
-}
+    candidates.push((repo_root.join("opencode.json"), true));
+    candidates.push((repo_root.join("opencode.jsonc"), true));
 
-fn opencode_specs_from_map(map: &serde_json::Map<String, Value>) -> Vec<ServerSpec> {
-    let mut out = Vec::new();
-    for (name, entry) in map {
-        match entry.get("type").and_then(Value::as_str) {
-            Some("remote") => {
-                if let Some(url) = entry.get("url").and_then(Value::as_str) {
-                    out.push(ServerSpec {
-                        agent: Agent::OpenCode,
-                        name: name.clone(),
-                        transport: Transport::Http {
-                            url: url.to_string(),
-                        },
-                        // Sole caller is `discover_opencode`, which reads the
-                        // repo's own `opencode.json`.
-                        repo_local: true,
-                    });
-                }
+    let mut by_name: HashMap<String, ServerSpec> = HashMap::new();
+    for (path, repo_local) in candidates {
+        let Some(v) = read_json(&path) else {
+            continue;
+        };
+        if let Some(mcp) = v.get("mcp").and_then(Value::as_object) {
+            for spec in opencode_specs_from_mcp(mcp, repo_local) {
+                by_name.insert(spec.name.clone(), spec);
             }
-            Some("local") => {
-                let Some(command) = entry
-                    .get("command")
-                    .and_then(Value::as_array)
-                    .and_then(|arr| arr.first())
-                    .and_then(Value::as_str)
-                else {
-                    continue;
-                };
-                let args = entry
-                    .get("command")
-                    .and_then(Value::as_array)
-                    .map(|arr| {
-                        arr.iter()
-                            .skip(1)
-                            .filter_map(|x| x.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let env = entry
-                    .get("environment")
-                    .and_then(Value::as_object)
-                    .map(|o| {
-                        o.iter()
-                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                out.push(ServerSpec {
-                    agent: Agent::OpenCode,
-                    name: name.clone(),
-                    transport: Transport::Stdio {
-                        command: command.to_string(),
-                        args,
-                        env,
-                    },
-                    repo_local: true,
-                });
-            }
-            _ => {}
         }
     }
-    out
+    by_name.into_values().collect()
+}
+
+fn opencode_specs_from_mcp(
+    mcp: &serde_json::Map<String, Value>,
+    repo_local: bool,
+) -> Vec<ServerSpec> {
+    let mut by_name: HashMap<String, ServerSpec> = HashMap::new();
+    // V1 flat layout (`mcp.<name>`) — ignore the V2 `servers` container here.
+    for (name, entry) in mcp {
+        if name == "servers" {
+            continue;
+        }
+        if let Some(spec) = opencode_entry_to_spec(name, entry, repo_local) {
+            by_name.insert(spec.name.clone(), spec);
+        }
+    }
+    // V2 layout (`mcp.servers.<name>`) takes precedence over legacy entries.
+    if let Some(servers) = mcp.get("servers").and_then(Value::as_object) {
+        for (name, entry) in servers {
+            if let Some(spec) = opencode_entry_to_spec(name, entry, repo_local) {
+                by_name.insert(spec.name.clone(), spec);
+            } else {
+                by_name.remove(name);
+            }
+        }
+    }
+    by_name.into_values().collect()
+}
+
+fn opencode_entry_to_spec(name: &str, entry: &Value, repo_local: bool) -> Option<ServerSpec> {
+    if entry.get("disabled").and_then(Value::as_bool) == Some(true)
+        || entry.get("enabled").and_then(Value::as_bool) == Some(false)
+    {
+        return None;
+    }
+    match entry.get("type").and_then(Value::as_str) {
+        Some("remote") => {
+            let url = entry.get("url").and_then(Value::as_str)?;
+            Some(ServerSpec {
+                agent: Agent::OpenCode,
+                name: name.to_string(),
+                transport: Transport::Http {
+                    url: url.to_string(),
+                },
+                repo_local,
+            })
+        }
+        Some("local") => {
+            let command = entry
+                .get("command")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(Value::as_str)?;
+            let args = entry
+                .get("command")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .skip(1)
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let env = entry
+                .get("environment")
+                .and_then(Value::as_object)
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(ServerSpec {
+                agent: Agent::OpenCode,
+                name: name.to_string(),
+                transport: Transport::Stdio {
+                    command: command.to_string(),
+                    args,
+                    env,
+                },
+                repo_local,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Copilot config discovery is best-effort across the known VS Code / CLI
@@ -1304,17 +1344,34 @@ TOKEN = "abc"
     }
 
     #[test]
-    fn parses_opencode_local_mcp() {
+    fn parses_opencode_v1_and_v2_mcp_respecting_disabled() {
         let val = json!({
             "tokenix": {
                 "type": "local",
-                "command": ["tokenix", "mcp"],
-                "environment": {"TOKENIX_PROFILE": "slim"}
+                "command": ["legacy-tokenix", "mcp"]
+            },
+            "muted": {
+                "type": "local",
+                "command": ["npx", "muted"],
+                "disabled": true
+            },
+            "servers": {
+                "tokenix": {
+                    "type": "local",
+                    "command": ["tokenix", "mcp"],
+                    "environment": {"TOKENIX_PROFILE": "slim"}
+                },
+                "off": {
+                    "type": "remote",
+                    "url": "https://example.com/off",
+                    "enabled": false
+                }
             }
         });
-        let specs = opencode_specs_from_map(val.as_object().unwrap());
+        let specs = opencode_specs_from_mcp(val.as_object().unwrap(), true);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].name, "tokenix");
+        assert!(specs[0].repo_local);
         match &specs[0].transport {
             Transport::Stdio { command, args, env } => {
                 assert_eq!(command, "tokenix");

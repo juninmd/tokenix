@@ -538,7 +538,7 @@ enum Commands {
         tool: Tool,
         #[arg(
             long = "local",
-            help = "Install workspace-local config where supported (Claude Code, Copilot, Antigravity)"
+            help = "Install workspace-local config where supported (Claude Code, Copilot, OpenCode, Antigravity)"
         )]
         local: bool,
     },
@@ -651,6 +651,18 @@ enum Commands {
     Retrieve {
         /// Stash key from a tokenix marker
         key: String,
+        /// Extract a 1-based line or range (e.g. `42`, `10-40`, `50-`, `-20`)
+        #[arg(long)]
+        lines: Option<String>,
+        /// Print only the first N matching lines
+        #[arg(long)]
+        head: Option<usize>,
+        /// Print only the last N matching lines
+        #[arg(long)]
+        tail: Option<usize>,
+        /// Keep only lines matching a regex (smart-case: case-insensitive if lowercase)
+        #[arg(long)]
+        grep: Option<String>,
     },
     #[cfg(feature = "forensics")]
     /// Audit MCP/tool "weight" of the effective system prompt across AI agents
@@ -1363,9 +1375,26 @@ fn main() -> Result<()> {
             let code = mcp_proxy::run_proxy(&label, &command)?;
             std::process::exit(code);
         }
-        Commands::Retrieve { key } => match recall::retrieve(&key) {
+        Commands::Retrieve {
+            key,
+            lines,
+            head,
+            tail,
+            grep,
+        } => match recall::retrieve(&key) {
             Some(content) => {
-                print!("{content}");
+                if lines.is_none() && head.is_none() && tail.is_none() && grep.is_none() {
+                    print!("{content}");
+                } else {
+                    let sliced = recall::slice_output(
+                        &content,
+                        lines.as_deref(),
+                        head,
+                        tail,
+                        grep.as_deref(),
+                    )?;
+                    print!("{sliced}");
+                }
                 Ok(())
             }
             None => {
@@ -2472,6 +2501,15 @@ fn cmd_gain(path: &Path, history: bool, cost_estimate: bool, economics: bool) ->
         "Reduction",
         format!("{:.1}%  {}", stats.pct_saved, bar).green().bold()
     );
+    if stats.holdout > 0 {
+        println!(
+            "  {:<26} {:>14}    {:<22} {:>8}",
+            "",
+            "",
+            "Holdout (control)",
+            format_num(stats.holdout as i64).dimmed()
+        );
+    }
     print_session_stats(&stats.sessions);
 
     // ── index capability ──────────────────────────────────────────────────────
@@ -2754,6 +2792,15 @@ fn cmd_gain_global(history: bool, cost_estimate: bool, economics: bool) -> Resul
         "Reduction",
         format!("{:.1}%  {}", stats.pct_saved, bar).green().bold()
     );
+    if stats.holdout > 0 {
+        println!(
+            "  {:<26} {:>14}    {:<22} {:>8}",
+            "",
+            "",
+            "Holdout (control)",
+            format_num(stats.holdout as i64).dimmed()
+        );
+    }
     print_session_stats(&stats.sessions);
 
     // ── cost estimate ─────────────────────────────────────────────────────────
@@ -3073,7 +3120,7 @@ fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
         #[cfg(feature = "agents-extra")]
         Tool::Mcp => install_mcp_server()?,
         #[cfg(feature = "agents-extra")]
-        Tool::OpenCode => install_opencode()?,
+        Tool::OpenCode => install_opencode(local)?,
         #[cfg(feature = "agents-extra")]
         Tool::Antigravity => install_antigravity(local)?,
         Tool::All => {
@@ -3085,7 +3132,7 @@ fn cmd_install_hook(tool: Tool, local: bool) -> Result<()> {
             #[cfg(feature = "agents-extra")]
             install_mcp_server()?;
             #[cfg(feature = "agents-extra")]
-            install_opencode()?;
+            install_opencode(local)?;
             #[cfg(feature = "agents-extra")]
             install_antigravity(local)?;
         }
@@ -3597,7 +3644,7 @@ fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
         #[cfg(feature = "agents-extra")]
         Tool::Mcp => remove_mcp_server()?,
         #[cfg(feature = "agents-extra")]
-        Tool::OpenCode => remove_opencode()?,
+        Tool::OpenCode => remove_opencode(local)?,
         #[cfg(feature = "agents-extra")]
         Tool::Antigravity => remove_antigravity(local)?,
         Tool::All => {
@@ -3609,7 +3656,7 @@ fn cmd_remove_hook(tool: Tool, local: bool) -> Result<()> {
             #[cfg(feature = "agents-extra")]
             remove_mcp_server()?;
             #[cfg(feature = "agents-extra")]
-            remove_opencode()?;
+            remove_opencode(local)?;
             #[cfg(feature = "agents-extra")]
             remove_antigravity(local)?;
         }
@@ -3725,11 +3772,170 @@ fn mcp_config_path() -> Result<PathBuf> {
         .join("mcp_config.json"))
 }
 
+#[cfg_attr(
+    not(any(feature = "agents-extra", feature = "forensics")),
+    allow(dead_code)
+)]
+fn strip_jsonc(raw: &str) -> String {
+    let trimmed = raw.trim_start_matches('\u{feff}');
+    let mut no_comments = String::with_capacity(trimmed.len());
+    let mut chars = trimmed.chars().peekable();
+    let mut in_string = false;
+    let mut escape = false;
+
+    while let Some(c) = chars.next() {
+        if in_string {
+            no_comments.push(c);
+            if escape {
+                escape = false;
+            } else if c == '\\' {
+                escape = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_string = true;
+            no_comments.push(c);
+            continue;
+        }
+        if c == '/' {
+            match chars.peek() {
+                Some('/') => {
+                    chars.next();
+                    for next in chars.by_ref() {
+                        if next == '\n' {
+                            no_comments.push('\n');
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                Some('*') => {
+                    chars.next();
+                    while let Some(next) = chars.next() {
+                        if next == '\n' {
+                            no_comments.push('\n');
+                        } else if next == '*' && chars.peek() == Some(&'/') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        no_comments.push(c);
+    }
+
+    let mut out = String::with_capacity(no_comments.len());
+    let mut it = no_comments.chars().peekable();
+    in_string = false;
+    escape = false;
+    while let Some(c) = it.next() {
+        if in_string {
+            out.push(c);
+            if escape {
+                escape = false;
+            } else if c == '\\' {
+                escape = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_string = true;
+            out.push(c);
+            continue;
+        }
+        if c == ',' {
+            let mut look = it.clone();
+            let mut trailing = false;
+            while let Some(&next) = look.peek() {
+                if next.is_ascii_whitespace() {
+                    look.next();
+                } else {
+                    trailing = matches!(next, '}' | ']');
+                    break;
+                }
+            }
+            if trailing {
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[cfg_attr(
+    not(any(feature = "agents-extra", feature = "forensics")),
+    allow(dead_code)
+)]
+pub(crate) fn parse_jsonc(raw: &str) -> Result<serde_json::Value> {
+    let cleaned = strip_jsonc(raw);
+    Ok(serde_json::from_str(&cleaned)?)
+}
+
+#[cfg_attr(
+    not(any(feature = "agents-extra", feature = "forensics", feature = "tui")),
+    allow(dead_code)
+)]
+pub(crate) fn opencode_global_dir_with(xdg_config_home: Option<&Path>, home: &Path) -> PathBuf {
+    if let Some(xdg) = xdg_config_home {
+        if !xdg.as_os_str().is_empty() && xdg.is_absolute() {
+            return xdg.join("opencode");
+        }
+    }
+    home.join(".config").join("opencode")
+}
+
 #[cfg(feature = "agents-extra")]
-fn opencode_config_path() -> Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
-    let repo_root = store::find_project_root(&cwd);
-    Ok(repo_root.join("opencode.json"))
+fn opencode_global_dir() -> Result<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+    Ok(opencode_global_dir_with(xdg.as_deref(), &home))
+}
+
+#[cfg(feature = "agents-extra")]
+fn opencode_config_path_in(base: &Path) -> PathBuf {
+    let json = base.join("opencode.json");
+    let jsonc = base.join("opencode.jsonc");
+    if jsonc.exists() && !json.exists() {
+        jsonc
+    } else {
+        json
+    }
+}
+
+#[cfg(feature = "agents-extra")]
+fn opencode_plugin_path_in(base: &Path, local: bool) -> PathBuf {
+    if local {
+        base.join(".opencode").join("plugins").join("tokenix.ts")
+    } else {
+        base.join("plugins").join("tokenix.ts")
+    }
+}
+
+#[cfg(feature = "agents-extra")]
+fn load_agent_config_jsonc(path: &Path) -> Result<serde_json::Value> {
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let raw = std::fs::read_to_string(path)?;
+    if strip_jsonc(&raw).trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    parse_jsonc(&raw).map_err(|e| {
+        anyhow::anyhow!(
+            "{} is not valid JSON/JSONC ({e}) — refusing to overwrite it. \
+             Fix or move the file, then re-run.",
+            path.display()
+        )
+    })
 }
 
 #[cfg(feature = "agents-extra")]
@@ -3745,7 +3951,17 @@ fn upsert_opencode_mcp(config: &mut serde_json::Value, tokenix_bin: &str) {
     if !config.get("mcp").is_some_and(serde_json::Value::is_object) {
         config["mcp"] = serde_json::json!({});
     }
-    config["mcp"]["tokenix"] = opencode_mcp_entry(tokenix_bin);
+    if let Some(mcp) = config.get_mut("mcp").and_then(|v| v.as_object_mut()) {
+        // Migrate legacy OpenCode 1 `mcp.tokenix` into OpenCode 2 `mcp.servers.tokenix`.
+        mcp.remove("tokenix");
+    }
+    if !config["mcp"]
+        .get("servers")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        config["mcp"]["servers"] = serde_json::json!({});
+    }
+    config["mcp"]["servers"]["tokenix"] = opencode_mcp_entry(tokenix_bin);
 }
 
 #[cfg(feature = "agents-extra")]
@@ -3753,9 +3969,16 @@ fn remove_opencode_mcp(config: &mut serde_json::Value) -> bool {
     let Some(mcp) = config.get_mut("mcp").and_then(|v| v.as_object_mut()) else {
         return false;
     };
-    let removed = mcp.remove("tokenix").is_some();
-    let empty = mcp.is_empty();
-    if empty {
+    let mut removed = mcp.remove("tokenix").is_some();
+    if let Some(servers) = mcp.get_mut("servers").and_then(|v| v.as_object_mut()) {
+        if servers.remove("tokenix").is_some() {
+            removed = true;
+        }
+        if servers.is_empty() {
+            mcp.remove("servers");
+        }
+    }
+    if mcp.is_empty() {
         if let Some(root) = config.as_object_mut() {
             root.remove("mcp");
         }
@@ -3764,51 +3987,289 @@ fn remove_opencode_mcp(config: &mut serde_json::Value) -> bool {
 }
 
 #[cfg(feature = "agents-extra")]
-fn install_opencode() -> Result<()> {
-    let config_path = opencode_config_path()?;
+fn opencode_plugin_source(tokenix_bin: &str) -> String {
+    let quoted_bin = serde_json::to_string(tokenix_bin).unwrap_or_else(|_| "\"tokenix\"".into());
+    format!(
+        r#"// Installed by `tokenix install-hook --tool opencode`
+// Supports OpenCode 2 (`setup` hooks) and OpenCode 1 (`server` hooks).
+// Fails open on any error so the OpenCode session is never blocked.
+import {{ execFile }} from "node:child_process";
+
+const EMBEDDED_BIN = {quoted_bin};
+const CMD_KEYS = ["command", "cmd", "commandLine", "CommandLine", "command_line"] as const;
+const SHELL_TOOLS = new Set([
+  "bash",
+  "shell",
+  "run_command",
+  "run_in_terminal",
+  "terminal",
+  "execute_command",
+]);
+const GREP_TOOLS = new Set(["grep", "grep_search", "search"]);
+
+function normalizeTool(name: unknown): string {{
+  return String(name ?? "").trim().toLowerCase();
+}}
+
+function isShellTool(name: unknown): boolean {{
+  return SHELL_TOOLS.has(normalizeTool(name));
+}}
+
+function isGrepTool(name: unknown): boolean {{
+  return GREP_TOOLS.has(normalizeTool(name));
+}}
+
+function isTargetTool(name: unknown): boolean {{
+  return isShellTool(name) || isGrepTool(name);
+}}
+
+function extractCommand(obj: unknown): string | null {{
+  if (!obj || typeof obj !== "object") return null;
+  const rec = obj as Record<string, unknown>;
+  for (const key of CMD_KEYS) {{
+    if (typeof rec[key] === "string") return rec[key] as string;
+  }}
+  return null;
+}}
+
+function alreadyWrapped(cmd: string): boolean {{
+  const trimmed = cmd.trimStart();
+  return (
+    /(^|[\s;|&])(?:['"]?[^\s'"]*tokenix(?:\.exe)?['"]?\s+run(?:\s|$))/.test(trimmed) ||
+    trimmed.startsWith("TOKENIX_DISABLED=1")
+  );
+}}
+
+function applyUpdatedInput(toolName: unknown, target: Record<string, unknown>, updated: Record<string, unknown>): void {{
+  if (isShellTool(toolName)) {{
+    const nextCmd = extractCommand(updated);
+    if (typeof nextCmd !== "string" || nextCmd.length === 0) return;
+    for (const key of CMD_KEYS) {{
+      if (typeof target[key] === "string") {{
+        target[key] = nextCmd;
+        return;
+      }}
+    }}
+    target.command = nextCmd;
+    return;
+  }}
+  if (isGrepTool(toolName) && typeof updated.head_limit === "number") {{
+    target.head_limit = updated.head_limit;
+  }}
+}}
+
+function execHook(bin: string, body: string): Promise<Record<string, unknown> | null> {{
+  return new Promise((resolve) => {{
+    try {{
+      const child = execFile(
+        bin,
+        ["hook"],
+        {{ timeout: 4000, maxBuffer: 1024 * 1024, windowsHide: true }},
+        (err, stdout) => {{
+          if (err && (err as NodeJS.ErrnoException).code === "ENOENT" && bin !== "tokenix") {{
+            execHook("tokenix", body).then(resolve, () => resolve(null));
+            return;
+          }}
+          if (err || !stdout || !stdout.trim()) {{
+            resolve(null);
+            return;
+          }}
+          try {{
+            const parsed = JSON.parse(stdout.trim()) as Record<string, any>;
+            const updated = parsed?.hookSpecificOutput?.updatedInput ?? parsed?.updatedInput ?? null;
+            resolve(updated && typeof updated === "object" ? (updated as Record<string, unknown>) : null);
+          }} catch {{
+            resolve(null);
+          }}
+        }},
+      );
+      child.stdin?.on("error", () => {{}});
+      child.stdin?.end(body);
+    }} catch {{
+      resolve(null);
+    }}
+  }});
+}}
+
+async function runTokenixHook(payload: unknown): Promise<Record<string, unknown> | null> {{
+  if (process.env.TOKENIX_DISABLED === "1" || process.env.TOKENIX_RAW === "1") {{
+    return null;
+  }}
+  return execHook(EMBEDDED_BIN || "tokenix", JSON.stringify(payload));
+}}
+
+export default {{
+  id: "tokenix",
+  async setup(ctx: any) {{
+    const tracked = new WeakSet<object>();
+    if (ctx?.shell && typeof ctx.shell.hook === "function") {{
+      ctx.shell.hook("create.before", async (event: any) => {{
+        try {{
+          if (!event || typeof event.command !== "string") return;
+          if (alreadyWrapped(event.command)) return;
+          const updated = await runTokenixHook({{
+            tool: "bash",
+            input: {{ command: event.command }},
+            sessionID: event.sessionID ?? event.sessionId ?? "",
+          }});
+          const nextCmd = extractCommand(updated);
+          if (typeof nextCmd === "string" && nextCmd.length > 0) {{
+            event.command = nextCmd;
+            tracked.add(event);
+          }}
+        }} catch {{
+          // fail open
+        }}
+      }});
+    }}
+    if (ctx?.tool && typeof ctx.tool.hook === "function") {{
+      ctx.tool.hook("execute.before", async (event: any) => {{
+        try {{
+          if (!event || tracked.has(event)) return;
+          const toolName = String(event.tool ?? event.toolName ?? event.name ?? "");
+          if (!isTargetTool(toolName)) return;
+          const target = event.input ?? event.args;
+          if (!target || typeof target !== "object") return;
+          if (isShellTool(toolName)) {{
+            const cur = extractCommand(target);
+            if (typeof cur !== "string" || alreadyWrapped(cur)) return;
+          }}
+          const updated = await runTokenixHook({{
+            tool: toolName,
+            input: target,
+            sessionID: event.sessionID ?? event.sessionId ?? "",
+          }});
+          if (!updated) return;
+          applyUpdatedInput(toolName, target as Record<string, unknown>, updated);
+        }} catch {{
+          // fail open
+        }}
+      }});
+    }}
+  }},
+  async server(_ctx: any) {{
+    return {{
+      "tool.execute.before": async (input: any, output: any) => {{
+        try {{
+          const toolName = String(input?.tool ?? "");
+          if (!isTargetTool(toolName)) return;
+          const target = output?.args;
+          if (!target || typeof target !== "object") return;
+          if (isShellTool(toolName)) {{
+            const cur = extractCommand(target);
+            if (typeof cur !== "string" || alreadyWrapped(cur)) return;
+          }}
+          const updated = await runTokenixHook({{
+            tool: toolName,
+            args: target,
+            sessionID: input?.sessionID ?? input?.sessionId ?? "",
+          }});
+          if (!updated) return;
+          applyUpdatedInput(toolName, target as Record<string, unknown>, updated);
+        }} catch {{
+          // fail open
+        }}
+      }},
+    }};
+  }},
+}};
+"#
+    )
+}
+
+#[cfg(feature = "agents-extra")]
+fn install_opencode(local: bool) -> Result<()> {
+    let base_dir = if local {
+        let cwd = std::env::current_dir()?;
+        store::find_project_root(&cwd)
+    } else {
+        opencode_global_dir()?
+    };
+    let config_path = opencode_config_path_in(&base_dir);
+    let plugin_path = opencode_plugin_path_in(&base_dir, local);
+
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut config: serde_json::Value = if config_path.exists() {
-        let raw = std::fs::read_to_string(&config_path)?;
-        serde_json::from_str(&raw)
-            .map_err(|e| anyhow::anyhow!("Failed to parse existing opencode.json: {e}"))?
+    if let Some(parent) = plugin_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let tokenix_bin = tokenix_bin_path()?;
+    let mcp_bin = if local {
+        "tokenix"
     } else {
-        serde_json::json!({})
+        tokenix_bin.as_str()
     };
-    upsert_opencode_mcp(&mut config, "tokenix");
+
+    let mut config = load_agent_config_jsonc(&config_path)?;
+    upsert_opencode_mcp(&mut config, mcp_bin);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+
+    std::fs::write(&plugin_path, opencode_plugin_source(&tokenix_bin))?;
+
+    println!(
+        "{} OpenCode plugin installed  ->  {}",
+        "ok".green(),
+        plugin_path.display()
+    );
     println!(
         "{} OpenCode MCP registered    ->  {}",
         "ok".green(),
         config_path.display()
     );
-    println!("  MCP:         tokenix mcp (native `opencode.json` registration)");
-    println!(
-        "  Note: OpenCode support is MCP-only; no experimental.hook or PreToolUse/PostToolUse wiring is installed."
-    );
-    println!(
-        "  Note: the generated config uses `tokenix` from PATH. Run `tokenix install-binary` first if needed."
-    );
+    println!("  Plugin:      V2 `setup` (shell.create.before + tool.execute.before) + V1 `server` fallback");
+    println!("  MCP:         mcp.servers.tokenix (`{mcp_bin} mcp`)");
+    if local {
+        println!(
+            "  Note: local repo MCP uses `tokenix` from PATH; run `tokenix install-binary` and `tokenix trust` if needed."
+        );
+    }
     Ok(())
 }
 
 #[cfg(feature = "agents-extra")]
-fn remove_opencode() -> Result<()> {
-    let config_path = opencode_config_path()?;
-    if !config_path.exists() {
-        println!("{} OpenCode config not found.", "~".yellow());
-        return Ok(());
+fn remove_opencode(local: bool) -> Result<()> {
+    let base_dir = if local {
+        let cwd = std::env::current_dir()?;
+        store::find_project_root(&cwd)
+    } else {
+        opencode_global_dir()?
+    };
+
+    let mut found_any = false;
+    for candidate in [
+        base_dir.join("opencode.json"),
+        base_dir.join("opencode.jsonc"),
+    ] {
+        if !candidate.exists() {
+            continue;
+        }
+        let mut config = load_agent_config_jsonc(&candidate)?;
+        if remove_opencode_mcp(&mut config) {
+            std::fs::write(&candidate, serde_json::to_string_pretty(&config)?)?;
+            println!(
+                "{} OpenCode MCP removed from {}",
+                "ok".green(),
+                candidate.display()
+            );
+            found_any = true;
+        }
     }
-    let raw = std::fs::read_to_string(&config_path)?;
-    let mut config: serde_json::Value = serde_json::from_str(&raw)?;
-    if remove_opencode_mcp(&mut config) {
-        std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+
+    let plugin_path = opencode_plugin_path_in(&base_dir, local);
+    if plugin_path.exists() {
+        std::fs::remove_file(&plugin_path)?;
         println!(
-            "{} OpenCode MCP removed from {}",
+            "{} OpenCode plugin removed    <-  {}",
             "ok".green(),
-            config_path.display()
+            plugin_path.display()
         );
+        found_any = true;
+    }
+
+    if !found_any {
+        println!("{} OpenCode tokenix config/plugin not found.", "~".yellow());
     }
     Ok(())
 }
@@ -4904,10 +5365,57 @@ mod tests {
 
     #[cfg(feature = "agents-extra")]
     #[test]
-    fn upsert_opencode_mcp_preserves_foreign_keys() {
+    fn opencode_global_and_local_paths_resolve_cleanly() {
+        let home = Path::new("/home/tester");
+        let repo = Path::new("/work/repo");
+        assert_eq!(
+            opencode_global_dir_with(None, home),
+            home.join(".config/opencode")
+        );
+        assert_eq!(
+            opencode_global_dir_with(Some(Path::new("/xdg/cfg")), home),
+            PathBuf::from("/xdg/cfg/opencode")
+        );
+        // Relative XDG_CONFIG_HOME is ignored per XDG spec.
+        assert_eq!(
+            opencode_global_dir_with(Some(Path::new("relative/cfg")), home),
+            home.join(".config/opencode")
+        );
+        assert_eq!(
+            opencode_plugin_path_in(home, false),
+            home.join("plugins/tokenix.ts")
+        );
+        assert_eq!(
+            opencode_plugin_path_in(repo, true),
+            repo.join(".opencode/plugins/tokenix.ts")
+        );
+    }
+
+    #[cfg(feature = "agents-extra")]
+    #[test]
+    fn parse_jsonc_handles_comments_trailing_commas_and_urls_in_strings() {
+        let raw = r#"{
+            // top comment
+            "url": "https://example.com/a/*b*/",
+            /* multi
+               line */
+            "arr": [1, 2,],
+        }"#;
+        let parsed = parse_jsonc(raw).expect("valid JSONC");
+        assert_eq!(parsed["url"], "https://example.com/a/*b*/");
+        assert_eq!(parsed["arr"], serde_json::json!([1, 2]));
+    }
+
+    #[cfg(feature = "agents-extra")]
+    #[test]
+    fn upsert_opencode_mcp_uses_v2_servers_and_migrates_legacy_entry() {
         let mut config = serde_json::json!({
             "model": "openai/gpt-5.4",
             "mcp": {
+                "tokenix": {
+                    "type": "local",
+                    "command": ["legacy-tokenix", "mcp"]
+                },
                 "docs": {
                     "type": "local",
                     "command": ["uvx", "mcp-docs"]
@@ -4916,21 +5424,21 @@ mod tests {
             "permission": {"bash": "allow"}
         });
 
-        upsert_opencode_mcp(&mut config, "tokenix");
+        upsert_opencode_mcp(&mut config, "/usr/local/bin/tokenix");
 
         assert_eq!(config["model"], "openai/gpt-5.4");
         assert_eq!(config["permission"]["bash"], "allow");
         assert_eq!(config["mcp"]["docs"]["command"][0], "uvx");
-        assert_eq!(config["mcp"]["tokenix"]["type"], "local");
-        assert_eq!(config["mcp"]["tokenix"]["command"][0], "tokenix");
-        assert_eq!(config["mcp"]["tokenix"]["command"][1], "mcp");
         assert!(
-            config
-                .get("experimental")
-                .and_then(|v| v.get("hook"))
-                .is_none(),
-            "OpenCode native install must not create experimental hooks"
+            config["mcp"].get("tokenix").is_none(),
+            "legacy mcp.tokenix must be migrated into mcp.servers.tokenix"
         );
+        assert_eq!(config["mcp"]["servers"]["tokenix"]["type"], "local");
+        assert_eq!(
+            config["mcp"]["servers"]["tokenix"]["command"][0],
+            "/usr/local/bin/tokenix"
+        );
+        assert_eq!(config["mcp"]["servers"]["tokenix"]["command"][1], "mcp");
     }
 
     #[cfg(feature = "agents-extra")]
@@ -4942,9 +5450,15 @@ mod tests {
                     "type": "local",
                     "command": ["tokenix", "mcp"]
                 },
-                "docs": {
-                    "type": "remote",
-                    "url": "https://example.com/mcp"
+                "servers": {
+                    "tokenix": {
+                        "type": "local",
+                        "command": ["tokenix", "mcp"]
+                    },
+                    "docs": {
+                        "type": "remote",
+                        "url": "https://example.com/mcp"
+                    }
                 }
             }
         });
@@ -4953,17 +5467,23 @@ mod tests {
 
         assert!(removed);
         assert!(config["mcp"].get("tokenix").is_none());
-        assert_eq!(config["mcp"]["docs"]["url"], "https://example.com/mcp");
+        assert!(config["mcp"]["servers"].get("tokenix").is_none());
+        assert_eq!(
+            config["mcp"]["servers"]["docs"]["url"],
+            "https://example.com/mcp"
+        );
     }
 
     #[cfg(feature = "agents-extra")]
     #[test]
-    fn remove_opencode_mcp_drops_empty_mcp_container() {
+    fn remove_opencode_mcp_drops_empty_containers() {
         let mut config = serde_json::json!({
             "mcp": {
-                "tokenix": {
-                    "type": "local",
-                    "command": ["tokenix", "mcp"]
+                "servers": {
+                    "tokenix": {
+                        "type": "local",
+                        "command": ["tokenix", "mcp"]
+                    }
                 }
             },
             "model": "openai/gpt-5.4"
@@ -4974,6 +5494,18 @@ mod tests {
         assert!(removed);
         assert!(config.get("mcp").is_none());
         assert_eq!(config["model"], "openai/gpt-5.4");
+    }
+
+    #[cfg(feature = "agents-extra")]
+    #[test]
+    fn opencode_plugin_source_supports_v2_setup_and_v1_server() {
+        let src = opencode_plugin_source("/opt/bin/tokenix");
+        assert!(src.contains("async setup(ctx"));
+        assert!(src.contains("create.before"));
+        assert!(src.contains("execute.before"));
+        assert!(src.contains("async server("));
+        assert!(src.contains("tool.execute.before"));
+        assert!(src.contains("/opt/bin/tokenix"));
     }
 
     #[test]

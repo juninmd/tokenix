@@ -535,3 +535,190 @@ fn compound_command_ending_in_rg_does_not_eat_earlier_code_segment() {
         "the rg segment's own matches must still be present: {final_text}"
     );
 }
+
+#[test]
+fn opencode_v2_bash_hook_rewrites_and_grep_caps() {
+    let bash_payload =
+        r#"{"tool":"bash","input":{"command":"terraform plan -out tf.plan"},"sessionID":"oc_e2e"}"#;
+    let (stdout, code) = run_hook(bash_payload);
+    assert_eq!(code, 0);
+    let cmd = updated_command(&stdout).expect("OpenCode V2 bash command must rewrite");
+    assert!(
+        cmd.contains(" run ") && cmd.contains("terraform plan -out tf.plan"),
+        "unexpected rewrite: {cmd}"
+    );
+
+    let grep_payload = r#"{"tool":"grep","args":{"query":"fn main","output_mode":"content"},"sessionID":"oc_e2e"}"#;
+    let (gout, gcode) = run_hook(grep_payload);
+    assert_eq!(gcode, 0);
+    let v: serde_json::Value =
+        serde_json::from_str(gout.trim()).expect("expected capped grep JSON");
+    assert!(
+        v["hookSpecificOutput"]["updatedInput"]["head_limit"].is_number(),
+        "OpenCode grep must receive head_limit: {gout}"
+    );
+}
+
+#[test]
+fn retrieve_supports_lines_and_grep_surgically() {
+    let dir = std::env::temp_dir().join(format!("tokenix-retrieve-slice-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp cwd");
+    let home = std::env::temp_dir().join(format!("tokenix-retrieve-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("temp home");
+
+    // Emit >120 verbose lines (~6 KB) so tokenix compresses, drops bytes, and
+    // advertises a recovery key with the `--lines` / `--grep` hint.
+    let cmd = if cfg!(windows) {
+        "for /L %i in (1,1,130) do @if %i==42 (echo RETRIEVE_NEEDLE_42 something important) else (echo line-%i padding-content-to-exceed-threshold-for-stash-and-drop)"
+    } else {
+        "i=1; while [ $i -le 130 ]; do if [ $i -eq 42 ]; then echo 'RETRIEVE_NEEDLE_42 something important'; else echo \"line-$i padding-content-to-exceed-threshold-for-stash-and-drop\"; fi; i=$((i+1)); done"
+    };
+
+    let out = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["run", cmd])
+        .current_dir(&dir)
+        .env("TOKENIX_HOME", &home)
+        .output()
+        .expect("tokenix run");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let key = text
+        .split("tokenix retrieve ")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_alphanumeric()).next())
+        .unwrap_or_else(|| panic!("expected retrieve key in output: {text}"))
+        .to_string();
+
+    let grepped = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["retrieve", &key, "--grep", "RETRIEVE_NEEDLE"])
+        .current_dir(&dir)
+        .env("TOKENIX_HOME", &home)
+        .output()
+        .expect("tokenix retrieve --grep");
+    let g_text = String::from_utf8_lossy(&grepped.stdout);
+    assert!(
+        grepped.status.success() && g_text.contains("42:RETRIEVE_NEEDLE_42"),
+        "expected line-numbered needle match, got: {g_text}"
+    );
+    assert!(
+        !g_text.contains("line-10 "),
+        "surgical grep must not dump unrelated lines: {g_text}"
+    );
+
+    let ranged = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["retrieve", &key, "--lines", "41-43"])
+        .current_dir(&dir)
+        .env("TOKENIX_HOME", &home)
+        .output()
+        .expect("tokenix retrieve --lines");
+    let r_text = String::from_utf8_lossy(&ranged.stdout);
+    assert!(ranged.status.success());
+    assert!(r_text.contains("41:line-41"));
+    assert!(r_text.contains("42:RETRIEVE_NEEDLE_42"));
+    assert!(r_text.contains("43:line-43"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(feature = "agents-extra")]
+#[test]
+fn install_and_remove_opencode_v2_global_and_local_roundtrip() {
+    let base = std::env::temp_dir().join(format!("tokenix-opencode-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let repo = base.join("repo");
+    let home = base.join("userhome");
+    let xdg = base.join("xdg");
+    let tokenix_home = base.join("tokenix_home");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&tokenix_home).unwrap();
+    std::fs::write(repo.join("Cargo.toml"), "[package]\nname=\"demo\"\n").unwrap();
+
+    // Existing JSONC with comments, trailing commas, legacy mcp.tokenix, and a foreign server.
+    std::fs::write(
+        repo.join("opencode.jsonc"),
+        "{\n  // user comment\n  \"mcp\": {\n    \"tokenix\": { \"type\": \"local\", \"command\": [\"old\", \"mcp\"] },\n    \"servers\": {\n      \"docs\": { \"type\": \"remote\", \"url\": \"https://example.com/mcp\" },\n    },\n  },\n}\n",
+    )
+    .unwrap();
+
+    let inst_local = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["install-hook", "--tool", "opencode", "--local"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("TOKENIX_HOME", &tokenix_home)
+        .output()
+        .expect("install opencode local");
+    assert!(
+        inst_local.status.success(),
+        "local install failed: {}",
+        String::from_utf8_lossy(&inst_local.stderr)
+    );
+    assert!(repo.join(".opencode/plugins/tokenix.ts").is_file());
+    let local_cfg: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.join("opencode.jsonc")).unwrap())
+            .expect("valid JSON written to opencode.jsonc");
+    assert!(local_cfg["mcp"].get("tokenix").is_none());
+    assert_eq!(local_cfg["mcp"]["servers"]["tokenix"]["type"], "local");
+    assert_eq!(
+        local_cfg["mcp"]["servers"]["docs"]["url"],
+        "https://example.com/mcp"
+    );
+
+    let inst_global = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["install-hook", "--tool", "opencode"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("TOKENIX_HOME", &tokenix_home)
+        .output()
+        .expect("install opencode global");
+    assert!(
+        inst_global.status.success(),
+        "global install failed: {}",
+        String::from_utf8_lossy(&inst_global.stderr)
+    );
+    let global_plugin = xdg.join("opencode/plugins/tokenix.ts");
+    let global_cfg_path = xdg.join("opencode/opencode.json");
+    assert!(global_plugin.is_file());
+    assert!(global_cfg_path.is_file());
+
+    let rem_local = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["remove-hook", "--tool", "opencode", "--local"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("TOKENIX_HOME", &tokenix_home)
+        .output()
+        .expect("remove opencode local");
+    assert!(rem_local.status.success());
+    assert!(!repo.join(".opencode/plugins/tokenix.ts").exists());
+    let cleaned: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.join("opencode.jsonc")).unwrap())
+            .unwrap();
+    assert!(cleaned["mcp"]["servers"].get("tokenix").is_none());
+    assert_eq!(
+        cleaned["mcp"]["servers"]["docs"]["url"],
+        "https://example.com/mcp"
+    );
+
+    let rem_global = Command::new(env!("CARGO_BIN_EXE_tokenix"))
+        .args(["remove-hook", "--tool", "opencode"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("TOKENIX_HOME", &tokenix_home)
+        .output()
+        .expect("remove opencode global");
+    assert!(rem_global.status.success());
+    assert!(!global_plugin.exists());
+
+    let _ = std::fs::remove_dir_all(&base);
+}

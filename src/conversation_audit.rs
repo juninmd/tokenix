@@ -71,7 +71,7 @@ impl Scenario {
     fn recommendation(self) -> &'static str {
         match self {
             Scenario::FullRead => {
-                "Use tokenix read/query first; then symbol or offset/limit reads."
+                "Use tokenix symbols/read first; then symbol or offset/limit reads."
             }
             Scenario::LargeCommandOutput => {
                 "Route command through tokenix run and add/adjust an output filter."

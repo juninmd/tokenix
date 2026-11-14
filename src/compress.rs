@@ -249,7 +249,7 @@ fn compress_bash_output_for_stream(
         return base;
     }
 
-    truncate_head_tail(&lines, BASH_HEAD_LINES, BASH_TAIL_LINES)
+    truncate_head_tail_preserving_priority(&lines, BASH_HEAD_LINES, BASH_TAIL_LINES)
 }
 
 fn is_path_listing_command(cmd: &str) -> bool {
@@ -583,6 +583,18 @@ fn compress_status_poll(lines: &[&str]) -> String {
     out.join("\n")
 }
 
+fn is_priority_line(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with("error")
+        || t.starts_with("warning")
+        || t.starts_with("FAIL")
+        || t.starts_with("panic")
+        || t.contains("error[")
+        || t.contains("warning[")
+        || t.contains("ERROR")
+        || t.contains("FAILED")
+}
+
 /// Aggressive truncation for very long output - keeps only errors, head, tail
 fn aggressive_truncate(lines: &[&str]) -> String {
     const HEAD_KEEP: usize = 20;
@@ -599,25 +611,16 @@ fn aggressive_truncate(lines: &[&str]) -> String {
     let mut other_tail = Vec::new();
 
     for (i, line) in lines.iter().enumerate() {
-        let t = line.trim();
-        let is_priority = t.starts_with("error")
-            || t.starts_with("warning")
-            || t.starts_with("FAIL")
-            || t.starts_with("panic")
-            || t.contains("error[")
-            || t.contains("warning[")
-            || t.contains("ERROR")
-            || t.contains("FAILED");
-
-        if is_priority && priority.len() < 50 {
-            priority.push(line.to_string());
+        if is_priority_line(line) && priority.len() < 50 {
+            priority.push((*line).to_string());
         } else if i < HEAD_KEEP {
-            other_head.push(line.to_string());
+            other_head.push((*line).to_string());
         } else if i >= lines.len() - TAIL_KEEP {
-            other_tail.push(line.to_string());
+            other_tail.push((*line).to_string());
         }
     }
 
+    let kept = other_head.len() + priority.len() + other_tail.len();
     let mut result = Vec::new();
     result.extend(other_head);
     if !priority.is_empty() {
@@ -626,7 +629,7 @@ fn aggressive_truncate(lines: &[&str]) -> String {
     }
     result.push(format!(
         "[... {} lines omitted ...]",
-        lines.len() - result.len() - other_tail.len()
+        lines.len().saturating_sub(kept)
     ));
     result.extend(other_tail);
     result.join("\n")
@@ -1187,6 +1190,34 @@ fn truncate_head_tail(lines: &[&str], head: usize, tail: usize) -> String {
     )
 }
 
+/// Like `truncate_head_tail`, but never drops failure/diagnostic priority
+/// lines from the omitted middle slice (up to 30 priority lines).
+fn truncate_head_tail_preserving_priority(lines: &[&str], head: usize, tail: usize) -> String {
+    const MAX_MIDDLE_PRIORITY: usize = 30;
+    let total = lines.len();
+    if total <= head + tail {
+        return lines.join("\n");
+    }
+    let middle = &lines[head..total - tail];
+    let priority: Vec<&str> = middle
+        .iter()
+        .copied()
+        .filter(|l| is_priority_line(l))
+        .take(MAX_MIDDLE_PRIORITY)
+        .collect();
+    if priority.is_empty() {
+        return truncate_head_tail(lines, head, tail);
+    }
+    let omitted = middle.len().saturating_sub(priority.len());
+    let mut parts = vec![lines[..head].join("\n"), "[PRIORITY LINES]".to_string()];
+    parts.extend(priority.into_iter().map(str::to_string));
+    if omitted > 0 {
+        parts.push(format!("[... {omitted} lines omitted ...]"));
+    }
+    parts.push(lines[total - tail..].join("\n"));
+    parts.join("\n")
+}
+
 /// Minimum length of an unbroken base64 run before it is treated as an embedded
 /// blob and redacted. Prose, code, hashes, and even minified JS break the base64
 /// alphabet with whitespace or punctuation long before this length, so a run this
@@ -1424,6 +1455,7 @@ fn compress_output_inner(s: &str) -> String {
         return enforce_token_budget(&compacted);
     }
     let s = strip_ansi(s);
+    let s = collapse_cr_redraws(&s);
     let s = strip_git_crlf_warnings(&s);
     let s = remove_emojis(&s);
     let s = collapse_blank_lines(&s);
@@ -1432,6 +1464,39 @@ fn compress_output_inner(s: &str) -> String {
 
     // Additional generic aggressive compression
     enforce_token_budget(&generic_aggressive_compress(&s))
+}
+
+/// Collapse bare `\r` terminal redraws (spinners, `tqdm`, `docker build`,
+/// `cargo` download bars) down to the final visible frame on each line, while
+/// preserving trailing `\r` from `\r\n` CRLF lines (which `restore_eol` handles).
+fn collapse_cr_redraws(s: &str) -> String {
+    if !s.contains('\r') {
+        return s.to_string();
+    }
+    let trailing_nl = s.ends_with('\n');
+    let source = s.strip_suffix('\n').unwrap_or(s);
+    let mut out = String::with_capacity(s.len());
+    for (idx, line) in source.split('\n').enumerate() {
+        if idx > 0 {
+            out.push('\n');
+        }
+        // Strip the `\r` belonging to a `\r\n` line ending before inspecting
+        // bare carriage-return redraws inside the line itself.
+        let body = line.strip_suffix('\r').unwrap_or(line);
+        if body.contains('\r') {
+            let final_frame = body
+                .rsplit('\r')
+                .find(|seg| !seg.trim().is_empty())
+                .unwrap_or("");
+            out.push_str(final_frame);
+        } else {
+            out.push_str(body);
+        }
+    }
+    if trailing_nl {
+        out.push('\n');
+    }
+    out
 }
 
 fn strip_git_crlf_warnings(s: &str) -> String {
@@ -1496,6 +1561,29 @@ mod eol_tests {
         let once = restore_eol("a\nb\n".to_string(), "\r\n");
         assert_eq!(once, "a\r\nb\r\n");
         assert_eq!(restore_eol(once.clone(), "\r\n"), once);
+    }
+
+    #[test]
+    fn cr_redraws_collapse_to_final_frame() {
+        let raw = "Downloading 10%\rDownloading 50%\rDownloading 100%\ndone\n";
+        let out = compress_output(raw);
+        assert_eq!(out, "Downloading 100%\ndone\n");
+        // Trailing \r without newline also collapses to final frame.
+        let spin = "step 1\rstep 2\rfinished\r";
+        assert_eq!(collapse_cr_redraws(spin), "finished");
+        // CRLF line endings stay intact.
+        let crlf = "line 1\r\nloading 10%\rloading 100%\r\n";
+        assert_eq!(compress_output(crlf), "line 1\r\nloading 100%\r\n");
+    }
+
+    #[test]
+    fn middle_range_truncation_keeps_priority_errors() {
+        let mut lines: Vec<String> = (1..=140).map(|i| format!("ok line {i}")).collect();
+        lines[70] = "ERROR: database connection refused".to_string();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let out = truncate_head_tail_preserving_priority(&refs, 40, 15);
+        assert!(out.contains("ERROR: database connection refused"), "{out}");
+        assert!(out.contains("[... 84 lines omitted ...]"), "{out}");
     }
 }
 
@@ -2174,9 +2262,9 @@ fn extract_response_text(response: &serde_json::Value) -> Option<String> {
 /// Output dialect for a PostToolUse hook, selected by which agent invoked it.
 #[derive(Debug, PartialEq)]
 enum PostDialect {
-    /// Claude Code / Codex: PostToolUse cannot replace or shorten a tool result,
-    /// so compression here is a no-op — exit 0 silently without logging savings.
-    ClaudeNoop,
+    /// Claude Code / Codex: emit `hookSpecificOutput.updatedToolOutput` JSON
+    /// (honored on v2.1.121+, ignored on older installs).
+    ClaudeJson,
     /// GitHub Copilot CLI: print `{"modifiedResult":{...}}` JSON on stdout, exit 0.
     CopilotJson,
 }
@@ -2261,7 +2349,7 @@ fn parse_post_input(v: &serde_json::Value) -> Option<PostHookInput> {
         tool_name: normalize_post_tool(raw_name),
         command,
         text: extract_response_text(&v["tool_response"])?,
-        dialect: PostDialect::ClaudeNoop,
+        dialect: PostDialect::ClaudeJson,
     })
 }
 
@@ -2294,7 +2382,7 @@ pub fn run_hook_post() -> Result<()> {
         compress_bash_output(&input.command, &redacted)
     } else if is_shell {
         compress_output(&redacted)
-    } else if input.dialect == PostDialect::ClaudeNoop {
+    } else if input.dialect == PostDialect::ClaudeJson {
         // Non-shell, Claude/Codex dialect: no command-oriented compression
         // heuristics apply — redaction above is the whole job.
         redacted
@@ -2350,7 +2438,7 @@ pub fn run_hook_post() -> Result<()> {
     }
 
     match input.dialect {
-        PostDialect::ClaudeNoop => {
+        PostDialect::ClaudeJson => {
             // As of Claude Code v2.1.121+, updatedToolOutput is honored for
             // all tools. Fail open on older installs: the field is simply
             // ignored and the original tool result stands — never a
@@ -2535,9 +2623,85 @@ pub fn run_command_raw(command_str: &str, shell: &str, cwd: Option<&Path>) -> Re
     Ok(status.code().unwrap_or(0))
 }
 
+fn holdout_rate_from_str(raw: &str) -> f64 {
+    let t = raw.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("false") || t.eq_ignore_ascii_case("no") {
+        return 0.0;
+    }
+    if t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("yes") {
+        return 1.0;
+    }
+    match t.parse::<f64>() {
+        Ok(v) if v.is_finite() => v.clamp(0.0, 1.0),
+        _ => 0.0,
+    }
+}
+
+fn should_holdout_with(rate: f64, seed: u64, subject: &str) -> bool {
+    if rate <= 0.0 {
+        return false;
+    }
+    if rate >= 1.0 {
+        return true;
+    }
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325 ^ seed;
+    for b in subject.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    let threshold = (rate * 10_000.0).round() as u64;
+    (hash % 10_000) < threshold
+}
+
+/// Optional randomized holdout sampling (`TOKENIX_HOLDOUT=0.1` skips
+/// compression for 10% of invocations) so paired A/B evaluations can measure
+/// deltas against an uncompressed control group.
+pub(crate) fn should_holdout(subject: &str) -> bool {
+    let Ok(raw) = std::env::var("TOKENIX_HOLDOUT") else {
+        return false;
+    };
+    let rate = holdout_rate_from_str(&raw);
+    if rate <= 0.0 {
+        return false;
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let seed = nanos ^ ((std::process::id() as u64) << 16);
+    should_holdout_with(rate, seed, subject)
+}
+
 pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Path>) -> Result<i32> {
     let is_powershell = matches!(shell, "pwsh" | "powershell");
+    let holdout = should_holdout(command_str);
     let output = build_shell_command(command_str, shell, cwd).output()?;
+
+    if holdout {
+        use std::io::Write;
+        let _ = std::io::stdout().write_all(&output.stdout);
+        let _ = std::io::stderr().write_all(&output.stderr);
+        let stdout_raw = String::from_utf8_lossy(&output.stdout);
+        let stderr_raw = String::from_utf8_lossy(&output.stderr);
+        let raw_tokens = (count_tokens(&stdout_raw) + count_tokens(&stderr_raw)) as i64;
+        let repo_root = find_repo_root();
+        let _ = log_hook_event(
+            &repo_root,
+            &HookEvent {
+                ts: now_ts(),
+                tool: if is_powershell { "PowerShell" } else { "Bash" }.to_string(),
+                action: "holdout".to_string(),
+                phase: "ToolOutputCompressed".to_string(),
+                reason: "TOKENIX_HOLDOUT".to_string(),
+                saved_tokens: 0,
+                actual_tokens: raw_tokens,
+                original_estimate: raw_tokens,
+                input_preview: command_str.chars().take(200).collect(),
+                command: command_str.to_string(),
+            },
+        );
+        return Ok(output.status.code().unwrap_or(0));
+    }
 
     let stdout_raw = String::from_utf8_lossy(&output.stdout);
     let stderr_raw = String::from_utf8_lossy(&output.stderr);
@@ -2614,7 +2778,7 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
                         stdout_compressed.push('\n');
                     }
                     stdout_compressed.push_str(&format!(
-                        "[tokenix: {dropped} bytes not shown — `tokenix retrieve {key}` returns the full output]\n"
+                        "[tokenix: {dropped} bytes not shown — `tokenix retrieve {key}` returns the full output; pass `--lines N-M` or `--grep PAT` to slice]\n"
                     ));
                 }
             }
@@ -3478,7 +3642,7 @@ daily job failed validation
         assert_eq!(input.tool_name, "Bash");
         assert_eq!(input.command, "git status");
         assert_eq!(input.text, "On branch main\n");
-        assert_eq!(input.dialect, PostDialect::ClaudeNoop);
+        assert_eq!(input.dialect, PostDialect::ClaudeJson);
     }
 
     #[test]
@@ -3500,7 +3664,7 @@ daily job failed validation
         assert_eq!(input.command, "npm install");
         assert!(input.text.contains("added 120 packages"));
         assert!(input.text.contains("npm warn deprecated foo"));
-        assert_eq!(input.dialect, PostDialect::ClaudeNoop);
+        assert_eq!(input.dialect, PostDialect::ClaudeJson);
     }
 
     #[test]
@@ -3563,6 +3727,31 @@ daily job failed validation
         assert_eq!(input.tool_name, "Bash");
         assert_eq!(input.command, "git diff");
         assert_eq!(input.text, "diff output");
-        assert_eq!(input.dialect, PostDialect::ClaudeNoop);
+        assert_eq!(input.dialect, PostDialect::ClaudeJson);
+    }
+
+    #[test]
+    fn holdout_rate_parses_booleans_and_clamped_fractions() {
+        assert_eq!(holdout_rate_from_str(""), 0.0);
+        assert_eq!(holdout_rate_from_str("0"), 0.0);
+        assert_eq!(holdout_rate_from_str("false"), 0.0);
+        assert_eq!(holdout_rate_from_str("1"), 1.0);
+        assert_eq!(holdout_rate_from_str("true"), 1.0);
+        assert_eq!(holdout_rate_from_str("2.5"), 1.0);
+        assert_eq!(holdout_rate_from_str("-0.5"), 0.0);
+        assert!((holdout_rate_from_str("0.15") - 0.15).abs() < 1e-9);
+    }
+
+    #[test]
+    fn holdout_sampling_respects_bounds() {
+        assert!(!should_holdout_with(0.0, 42, "cargo test"));
+        assert!(should_holdout_with(1.0, 42, "cargo test"));
+        let hits = (0..1000)
+            .filter(|i| should_holdout_with(0.20, *i, "cargo test"))
+            .count();
+        assert!(
+            (140..=260).contains(&hits),
+            "expected ~200 hits, got {hits}"
+        );
     }
 }

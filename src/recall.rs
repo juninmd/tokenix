@@ -151,6 +151,117 @@ pub fn retrieve(key: &str) -> Option<String> {
     std::fs::read_to_string(blob_dir()?.join(format!("{key}.txt"))).ok()
 }
 
+fn parse_line_range(spec: &str, total: usize) -> anyhow::Result<(usize, usize)> {
+    let s = spec.trim();
+    if s.is_empty() {
+        anyhow::bail!("empty --lines specification");
+    }
+    if let Some((a, b)) = s.split_once('-') {
+        let start = if a.trim().is_empty() {
+            1usize
+        } else {
+            a.trim()
+                .parse::<usize>()
+                .map_err(|_| anyhow::anyhow!("invalid --lines start in `{spec}`"))?
+        };
+        let end = if b.trim().is_empty() {
+            total.max(1)
+        } else {
+            b.trim()
+                .parse::<usize>()
+                .map_err(|_| anyhow::anyhow!("invalid --lines end in `{spec}`"))?
+        };
+        if start == 0 || end < start {
+            anyhow::bail!("invalid --lines range `{spec}` (expected 1-based start <= end)");
+        }
+        return Ok((start, end));
+    }
+    let line = s
+        .parse::<usize>()
+        .map_err(|_| anyhow::anyhow!("invalid --lines value `{spec}` (expected N or A-B)"))?;
+    if line == 0 {
+        anyhow::bail!("invalid --lines value `{spec}` (1-based line numbers start at 1)");
+    }
+    Ok((line, line))
+}
+
+/// Extract a surgical window from a stashed blob without forcing the caller to
+/// pull the whole uncompressed output back into context.
+pub fn slice_output(
+    content: &str,
+    lines: Option<&str>,
+    head: Option<usize>,
+    tail: Option<usize>,
+    grep: Option<&str>,
+) -> anyhow::Result<String> {
+    if lines.is_none() && head.is_none() && tail.is_none() && grep.is_none() {
+        return Ok(content.to_string());
+    }
+
+    let numbered: Vec<(usize, &str)> = content
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i + 1, l))
+        .collect();
+    let total = numbered.len();
+
+    let mut selected: Vec<(usize, &str)> = if let Some(spec) = lines {
+        let (start, end) = parse_line_range(spec, total)?;
+        numbered
+            .into_iter()
+            .filter(|(n, _)| *n >= start && *n <= end)
+            .collect()
+    } else {
+        numbered
+    };
+
+    if let Some(pat) = grep {
+        let case_insensitive = !pat.chars().any(char::is_uppercase);
+        let re = regex::RegexBuilder::new(pat)
+            .case_insensitive(case_insensitive)
+            .build()
+            .map_err(|e| anyhow::anyhow!("invalid --grep pattern `{pat}`: {e}"))?;
+        selected.retain(|(_, l)| re.is_match(l));
+    }
+
+    let show_line_numbers = lines.is_some() || grep.is_some();
+    let fmt_line = |(n, l): &(usize, &str)| -> String {
+        if show_line_numbers {
+            format!("{n}:{l}")
+        } else {
+            (*l).to_string()
+        }
+    };
+
+    let out_lines: Vec<String> = match (head, tail) {
+        (Some(h), Some(t)) => {
+            if h + t >= selected.len() {
+                selected.iter().map(fmt_line).collect()
+            } else {
+                let mut rows: Vec<String> = selected[..h].iter().map(fmt_line).collect();
+                let omitted = selected.len() - h - t;
+                rows.push(format!("[... {omitted} lines omitted ...]"));
+                rows.extend(selected[selected.len() - t..].iter().map(fmt_line));
+                rows
+            }
+        }
+        (Some(h), None) => selected.iter().take(h).map(fmt_line).collect(),
+        (None, Some(t)) => {
+            let skip = selected.len().saturating_sub(t);
+            selected.iter().skip(skip).map(fmt_line).collect()
+        }
+        (None, None) => selected.iter().map(fmt_line).collect(),
+    };
+
+    if out_lines.is_empty() {
+        return Ok(String::new());
+    }
+    let eol = crate::compress::dominant_eol(content);
+    let mut joined = out_lines.join(eol);
+    joined.push_str(eol);
+    Ok(joined)
+}
+
 fn prune_blobs(dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -457,5 +568,31 @@ mod tests {
             reusable(&entry, "/repo-a", &digest("echo command-a-payload"), 5.0),
             "the same command must still dedupe against its own earlier run"
         );
+    }
+
+    #[test]
+    fn slice_output_extracts_line_range_and_grep_surgically() {
+        let sample = "1: alpha\n2: beta\n3: ERROR boom\n4: gamma\n5: error second\n6: omega\n";
+        let range = slice_output(sample, Some("2-4"), None, None, None).unwrap();
+        assert_eq!(range, "2:2: beta\n3:3: ERROR boom\n4:4: gamma\n");
+
+        let matched = slice_output(sample, None, None, None, Some("error")).unwrap();
+        assert_eq!(matched, "3:3: ERROR boom\n5:5: error second\n");
+
+        // Case-sensitive when uppercase is present (smart-case).
+        let exact_upper = slice_output(sample, None, None, None, Some("ERROR")).unwrap();
+        assert_eq!(exact_upper, "3:3: ERROR boom\n");
+
+        let bounded = slice_output(sample, None, Some(1), Some(1), None).unwrap();
+        assert_eq!(bounded, "1: alpha\n[... 4 lines omitted ...]\n6: omega\n");
+    }
+
+    #[test]
+    fn slice_output_preserves_crlf_and_rejects_bad_ranges() {
+        let crlf = "a\r\nb\r\nc\r\n";
+        let out = slice_output(crlf, Some("1-2"), None, None, None).unwrap();
+        assert_eq!(out, "1:a\r\n2:b\r\n");
+        assert!(slice_output(crlf, Some("0-2"), None, None, None).is_err());
+        assert!(slice_output(crlf, Some("4-2"), None, None, None).is_err());
     }
 }
