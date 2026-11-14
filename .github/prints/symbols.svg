@@ -7,18 +7,18 @@
 <text xml:space="preserve" x="16.80" y="31.60" fill="#39c5cf" font-weight="bold">Symbols</text>
 <text xml:space="preserve" x="75.60" y="31.60" fill="#e6edf3"> │ Graph │ Modules │ Blast │ Pack │ Tokenmap                                                                  │</text>
 <text xml:space="preserve" x="0.00" y="49.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
-<text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ symbols · 18 · all · “run_hook” ─────────────┐┌ relations ───────────────────────────────────────────────────────────┐</text>
+<text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ symbols · 19 · all · “run_hook” ─────────────┐┌ relations ───────────────────────────────────────────────────────────┐</text>
 <text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│▸ run_hook                   function         ││</text>
 <text xml:space="preserve" x="411.60" y="85.60" fill="#39c5cf" font-weight="bold">run_hook</text>
 <text xml:space="preserve" x="478.80" y="85.60" fill="#e6edf3">  function                                                    │</text>
-<text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│  run_hook                   function         ││src/hook.rs:542-577                                                   │</text>
-<text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│  run_hook                   function         ││19 caller(s) · 12 callee(s)                                           │</text>
+<text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│  run_hook                   function         ││src/hook.rs:587-622                                                   │</text>
+<text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│  run_hook                   function         ││20 caller(s) · 12 callee(s)                                           │</text>
 <text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">│  run_hook                   function         ││</text>
 <text xml:space="preserve" x="411.60" y="139.60" fill="#3fb950">← </text>
-<text xml:space="preserve" x="428.40" y="139.60" fill="#e6edf3">run_hook  src/hook.rs:502                                           │</text>
+<text xml:space="preserve" x="428.40" y="139.60" fill="#e6edf3">run_hook  src/hook.rs:547                                           │</text>
 <text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">│  run_hook                   function         ││</text>
 <text xml:space="preserve" x="411.60" y="157.60" fill="#3fb950">← </text>
-<text xml:space="preserve" x="428.40" y="157.60" fill="#e6edf3">main  src/main.rs:1513  via hook::run_hook                          │</text>
+<text xml:space="preserve" x="428.40" y="157.60" fill="#e6edf3">main  src/main.rs:1478  via hook::run_hook                          │</text>
 <text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│  run_hook                   function         ││</text>
 <text xml:space="preserve" x="411.60" y="175.60" fill="#3fb950">← </text>
 <text xml:space="preserve" x="428.40" y="175.60" fill="#e6edf3">graph_search_and_relations_dedupe_duplicate_visible_symbols  src/sto│</text>
@@ -40,22 +40,22 @@
 <text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│  run_hook                   function         ││</text>
 <text xml:space="preserve" x="411.60" y="283.60" fill="#3fb950">← </text>
 <text xml:space="preserve" x="428.40" y="283.60" fill="#e6edf3">recursive_tokenix_command_passes_through  tests/hook_e2e.rs:133  via│</text>
-<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│  run_hook_post              function         │└──────────────────────────────────────────────────────────────────────┘</text>
+<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│  run_hook                   function         │└──────────────────────────────────────────────────────────────────────┘</text>
 <text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">│  run_hook_post              function         │┌ source · src/hook.rs ────────────────────────────────────────────────┐</text>
-<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│  run_hook_post              function         ││  542             .as_str()                                           │</text>
-<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│  run_hook_post              function         ││  543             .or_else(|| input.tool_input[&quot;CommandLine&quot;].as_str()│</text>
-<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│  run_hook_post              function         ││  544             .or_else(|| input.tool_input[&quot;commandLine&quot;].as_str()│</text>
-<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│  run_hook_post              function         ││  545             .or_else(|| input.tool_input[&quot;command_line&quot;].as_str(│</text>
-<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│                                              ││  546             .unwrap_or(&quot;&quot;)                                      │</text>
-<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│                                              ││  547             .trim();                                            │</text>
-<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│                                              ││  548                                                                 │</text>
-<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│                                              ││  549         if command.is_empty() {                                 │</text>
-<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│                                              ││  550             pass_through(antigravity);                          │</text>
-<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│                                              ││  551         }                                                       │</text>
-<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│                                              ││  552                                                                 │</text>
-<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│                                              ││  553         // Avoid infinite recursion: do not rewrite a command th│</text>
-<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│                                              ││  554         // tokenix invocation. Matched structurally — a substrin│</text>
-<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│                                              ││  555         // skipped `grep -r tokenix .` and `cat tokenix.toml`, s│</text>
+<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│  run_hook_post              function         ││  587             .as_str()                                           │</text>
+<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│  run_hook_post              function         ││  588             .or_else(|| input.tool_input[&quot;CommandLine&quot;].as_str()│</text>
+<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│  run_hook_post              function         ││  589             .or_else(|| input.tool_input[&quot;commandLine&quot;].as_str()│</text>
+<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│  run_hook_post              function         ││  590             .or_else(|| input.tool_input[&quot;command_line&quot;].as_str(│</text>
+<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│  run_hook_post              function         ││  591             .unwrap_or(&quot;&quot;)                                      │</text>
+<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│                                              ││  592             .trim();                                            │</text>
+<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│                                              ││  593                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│                                              ││  594         if command.is_empty() {                                 │</text>
+<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│                                              ││  595             pass_through(antigravity);                          │</text>
+<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│                                              ││  596         }                                                       │</text>
+<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│                                              ││  597                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│                                              ││  598         // Avoid infinite recursion: do not rewrite a command th│</text>
+<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│                                              ││  599         // tokenix invocation. Matched structurally — a substrin│</text>
+<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│                                              ││  600         // skipped `grep -r tokenix .` and `cat tokenix.toml`, s│</text>
 <text xml:space="preserve" x="0.00" y="589.60" fill="#e6edf3">└──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘</text>
-<text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓: move · /: filter · t: kind · Tab: callers/callees · Enter: open · ⌫: back · c: copy loc · y: copy src · q </text>
+<text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓: move · /: filter · t: kind · Tab: relations · Enter: open · ⌫: back · c: loc · y: src · m/d: mermaid/dot ·</text>
 </svg>

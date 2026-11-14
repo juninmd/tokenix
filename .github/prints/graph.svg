@@ -8,34 +8,34 @@
 <text xml:space="preserve" x="142.80" y="31.60" fill="#e6edf3"> │ Modules │ Blast │ Pack │ Tokenmap                                                                  │</text>
 <text xml:space="preserve" x="0.00" y="49.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
 <text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ graph ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
-<text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│# Repo graph — 2407 symbols, 13287 edges                                                                              │</text>
+<text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│# Repo graph — 2412 symbols, 13910 edges                                                                              │</text>
 <text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│                                                                                                                      │</text>
 <text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│## God nodes (most connected)                                                                                         │</text>
-<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">│- path (↑399 ↓0)  tests/common/mod.rs:59                                                                              │</text>
-<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">│- lines (↑203 ↓0)  src/filters/blocks.rs:81                                                                           │</text>
-<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│- trim (↑155 ↓0)  src/conversation_audit.rs:878                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">│- path (↑385 ↓0)  tests/common/mod.rs:59                                                                              │</text>
+<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">│- lines (↑210 ↓0)  src/filters/blocks.rs:81                                                                           │</text>
+<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│- trim (↑162 ↓0)  src/conversation_audit.rs:841                                                                       │</text>
 <text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">│- filter (↑147 ↓4)  src/filters/regex_lint.rs:89                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│- Commands (↑13 ↓120)  src/main.rs:600                                                                                │</text>
-<text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">│- command (↑130 ↓0)  tests/common/mod.rs:69                                                                           │</text>
-<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">│- Shell (↑11 ↓116)  src/tui.rs:474                                                                                    │</text>
-<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">│- as_str (↑125 ↓0)  src/main.rs:169                                                                                   │</text>
-<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│- as_str (↑125 ↓0)  src/main.rs:218                                                                                   │</text>
-<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│- main (↑6 ↓112)  src/main.rs:1364                                                                                    │</text>
-<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">│- main (↑6 ↓112)  src/main.rs:1392                                                                                    │</text>
-<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│- new_shell (↑6 ↓110)  src/tui.rs:382                                                                                 │</text>
-<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│- Commands (↑13 ↓100)  src/main.rs:642                                                                                │</text>
-<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│- render_docs_svg (↑1 ↓111)  src/tui.rs:3855                                                                          │</text>
-<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│- run_command_and_compress (↑1 ↓108)  src/compress.rs:2541                                                            │</text>
-<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│- run_entry (↑2 ↓101)  src/tui.rs:366                                                                                 │</text>
-<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│- run_command_raw (↑2 ↓100)  src/compress.rs:2530                                                                     │</text>
-<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│- Cmd (↑98 ↓3)  src/tui.rs:57                                                                                         │</text>
-<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│- build_shell_command (↑2 ↓99)  src/compress.rs:2482                                                                  │</text>
-<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│- Cmd (↑99 ↓0)  src/tui.rs:102                                                                                        │</text>
-<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│- Cmd (↑99 ↓0)  src/tui.rs:37                                                                                         │</text>
-<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│- render_docs_svg (↑1 ↓98)  src/tui.rs:3886                                                                           │</text>
-<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│- Dir (↑93 ↓0)  src/tui/explorer.rs:35                                                                                │</text>
-<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│- key (↑69 ↓9)  src/tui/explorer.rs:192                                                                               │</text>
-<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│- Agent (↑75 ↓0)  src/conversation_audit.rs:19                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│- Cmd (↑144 ↓3)  src/tui.rs:54                                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">│- Cmd (↑145 ↓0)  src/tui.rs:35                                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">│- Cmd (↑145 ↓0)  src/tui.rs:99                                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">│- as_str (↑138 ↓0)  src/main.rs:182                                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│- as_str (↑138 ↓0)  src/main.rs:232                                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│- command (↑133 ↓3)  tests/common/mod.rs:69                                                                           │</text>
+<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">│- Commands (↑13 ↓122)  src/main.rs:592                                                                                │</text>
+<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│- main (↑6 ↓128)  src/main.rs:1327                                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│- Shell (↑12 ↓118)  src/tui.rs:469                                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│- main (↑6 ↓113)  src/main.rs:1355                                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│- new_shell (↑6 ↓113)  src/tui.rs:377                                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│- run_command_and_compress (↑1 ↓115)  src/compress.rs:2675                                                            │</text>
+<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│- render_docs_svg (↑1 ↓114)  src/tui.rs:3934                                                                          │</text>
+<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│- Commands (↑13 ↓99)  src/main.rs:630                                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│- opencode_plugin_source (↑3 ↓104)  src/main.rs:4071                                                                  │</text>
+<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│- run_command_raw (↑3 ↓102)  src/compress.rs:2615                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│- run_entry (↑2 ↓103)  src/tui.rs:361                                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│- build_shell_command (↑2 ↓101)  src/compress.rs:2567                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│- render_docs_svg (↑1 ↓100)  src/tui.rs:3965                                                                          │</text>
+<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│- Dir (↑88 ↓0)  src/tui/explorer.rs:38                                                                                │</text>
+<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│- key (↑75 ↓11)  src/tui/explorer.rs:195                                                                              │</text>
 <text xml:space="preserve" x="0.00" y="589.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
 <text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓: scroll · r: refresh · q: quit                                                                             </text>
 </svg>

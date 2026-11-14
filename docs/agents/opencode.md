@@ -1,64 +1,74 @@
-# tokenix with OpenCode
+# tokenix with OpenCode (V1 & OpenCode 2)
 
 > `tokenix install-hook --tool opencode` is part of the `agents-extra` build feature. Release binaries include it; with `cargo install` add `--features agents-extra` (or `--features full`).
 
-OpenCode uses tokenix as an **MCP server**. No hook is installed, so nothing is
-intercepted automatically. OpenCode gets tokenix tools and calls them when it
-decides to.
+OpenCode gets **both** automatic command/grep interception via a zero-dependency TypeScript plugin (`plugins/tokenix.ts`) **and** the structural MCP server (`mcp.servers.tokenix`). Both **OpenCode 2** (`setup` hooks + `mcp.servers`) and **OpenCode 1** (`server` hooks + legacy `mcp.*` migration) are supported.
 
 ## Install
 
 ```bash
 tokenix index .                        # once per repository
-tokenix install-binary                 # opencode.json calls plain `tokenix`, so it must be on PATH
-tokenix install-hook --tool opencode   # run in the repository root
+tokenix install-hook --tool opencode   # global: $XDG_CONFIG_HOME/opencode (or ~/.config/opencode)
 ```
 
-`--tool all` skips OpenCode on purpose: the registration lives in the repository,
-so you add it only where you want it.
+Or keep the setup inside a single repository instead of your user config:
+
+```bash
+tokenix install-binary                 # local opencode.json calls plain `tokenix`
+tokenix install-hook --tool opencode --local
+tokenix trust                          # allows `prompt-audit` / `session-audit` to inspect repo config
+```
+
+`--tool all` includes OpenCode in the selected scope (`global` by default, or `--local` when passed).
 
 ## What gets written
 
-An `mcp.tokenix` entry in `opencode.json` at the repository root. Other MCP servers
-in the file are kept:
+1. **Hook plugin** (`~/.config/opencode/plugins/tokenix.ts` globally, or `.opencode/plugins/tokenix.ts` with `--local`):
+   - **OpenCode 2 (`setup`)**: wires `shell.hook("create.before")` (CLI 2.x shell commands) and `tool.hook("execute.before")` (Desktop / tool calls for shell & grep), skipping duplicate rewrites and failing open on any error or timeout.
+   - **OpenCode 1 (`server`)**: wires `"tool.execute.before"` as a fallback for 1.x runtimes.
+   - Zero external npm packages (`node:child_process` only); respects `TOKENIX_DISABLED=1` and `TOKENIX_RAW=1`.
+
+2. **MCP server** (`mcp.servers.tokenix` in `opencode.json` or existing `opencode.jsonc`, preserving comments, trailing commas, and foreign servers; legacy `mcp.tokenix` is migrated automatically):
 
 ```json
 {
   "mcp": {
-    "tokenix": { "type": "local", "command": ["tokenix", "mcp"] }
+    "servers": {
+      "tokenix": {
+        "type": "local",
+        "command": ["tokenix", "mcp"]
+      }
+    }
   }
 }
 ```
 
-A repository's `opencode.json` is a *repo-controlled input*: tokenix's own audits
-(`prompt-audit`, `session-audit`) will not spawn the servers it declares until you
-run `tokenix trust`. OpenCode itself decides what it runs.
+A repository's `opencode.json` / `opencode.jsonc` is a *repo-controlled input*: `prompt-audit` and `session-audit` will not spawn the servers it declares until you run `tokenix trust`. OpenCode itself decides what it runs.
 
 ## What it does
 
-OpenCode sees the tokenix MCP tools: symbols, graph (callers, callees, impact,
-flow), blast, modules, deps and tokenmap. The [MCP guide](mcp.md) has the full list.
+- **Automatic shell & grep savings:** filtered commands (`cargo test`, `git status`, `pytest`, `terraform`, …) are rewritten to `tokenix run` (keeping exit codes and error lines) and unbounded content `grep` calls get `head_limit` injected automatically. Clipped output stays recoverable via `tokenix retrieve <key> --lines N-M --grep PAT`. `Read` is never intercepted.
+- **MCP structure tools:** OpenCode sees tokenix's six MCP tools — `tokenix_symbols`, `tokenix_graph` (callers · callees · impact · flow), `tokenix_blast`, `tokenix_modules`, `tokenix_deps`, and `tokenix_tokenmap`. The [MCP guide](mcp.md) has the full list.
 
-A good habit is to tell OpenCode, in your project instructions, to start a task
-with `tokenix_symbols` and to read large files through `tokenix_read`.
+A good habit is to tell OpenCode in your project's `AGENTS.md` to start structural exploration with `tokenix_symbols` / `tokenix_graph`, and use `tokenix read <file> --symbol <name>` via Bash when only one symbol body is needed.
 
 ## Check that it works
 
-In OpenCode, ask it to "list the tokenix MCP tools", or check its MCP status view.
-From a terminal:
-
 ```bash
-tokenix mcp --help
-tokenix                      # dashboard → Stats tab shows OpenCode (local)
+echo '{"tool":"bash","input":{"command":"terraform plan"}}' | tokenix hook
+tokenix doctor
+tokenix prompt-audit --agent opencode
+tokenix                      # dashboard → Stats tab shows OpenCode (global / local)
 ```
 
 ## Remove
 
 ```bash
-tokenix remove-hook --tool opencode
+tokenix remove-hook --tool opencode           # removes global plugin + mcp.servers.tokenix
+tokenix remove-hook --tool opencode --local   # removes repo-local .opencode/plugins/tokenix.ts + opencode.json entry
 ```
 
-Only `mcp.tokenix` is deleted. The `mcp` object is removed only if nothing else is
-left in it.
+Only `tokenix.ts`, `mcp.servers.tokenix`, and any legacy `mcp.tokenix` entry are deleted; `servers` and `mcp` objects are dropped only when empty, leaving other MCP servers and settings untouched.
 
 [← Back to the README](../../README.md#-agent-guides)
+

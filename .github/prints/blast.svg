@@ -8,34 +8,34 @@
 <text xml:space="preserve" x="294.00" y="31.60" fill="#e6edf3"> │ Pack │ Tokenmap                                                                  │</text>
 <text xml:space="preserve" x="0.00" y="49.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
 <text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ blast ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
-<text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│# Blast radius vs HEAD~1 — 10 changed file(s), 106 changed symbol(s)                                                  │</text>
+<text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│# Blast radius vs HEAD~1 — 29 changed file(s), 105 changed symbol(s)                                                  │</text>
 <text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│                                                                                                                      │</text>
 <text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│## Changed symbols                                                                                                    │</text>
-<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">│- graph_node_kinds (function)  src/store.rs:674                                                                       │</text>
-<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">│- relations_for_node (function)  src/store.rs:845                                                                     │</text>
-<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│- Cmd (enum)  src/tui.rs:37                                                                                           │</text>
-<text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">│- Cmd (impl)  src/tui.rs:57                                                                                           │</text>
-<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│- section (function)  src/tui.rs:84                                                                                   │</text>
-<text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">│- title (function)  src/tui.rs:97                                                                                     │</text>
-<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">│- Cmd (impl)  src/tui.rs:102                                                                                          │</text>
-<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">│- argv (function)  src/tui.rs:120                                                                                     │</text>
-<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│- Shell (struct)  src/tui.rs:278                                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│- Shell (struct)  src/tui.rs:303                                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">│- new_shell (function)  src/tui.rs:422                                                                                │</text>
-<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│- Shell (impl)  src/tui.rs:474                                                                                        │</text>
-<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│- pump (function)  src/tui.rs:481                                                                                     │</text>
-<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│- event_loop (function)  src/tui.rs:531                                                                               │</text>
-<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│- Shell (impl)  src/tui.rs:549                                                                                        │</text>
-<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│- event_loop (function)  src/tui.rs:570                                                                               │</text>
-<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│- Shell (impl)  src/tui.rs:589                                                                                        │</text>
-<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│- event_loop (function)  src/tui.rs:600                                                                               │</text>
-<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│- Shell (impl)  src/tui.rs:612                                                                                        │</text>
-<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│- event_loop (function)  src/tui.rs:624                                                                               │</text>
-<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│- Shell (impl)  src/tui.rs:638                                                                                        │</text>
-<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│- switch_tab (function)  src/tui.rs:663                                                                               │</text>
-<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│- go_to (function)  src/tui.rs:669                                                                                    │</text>
-<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│- Shell (impl)  src/tui.rs:669                                                                                        │</text>
-<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│- jump_section (function)  src/tui.rs:679                                                                             │</text>
+<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">│- sample_git_status (function)  src/benchmark.rs:144                                                                  │</text>
+<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">│- sample_git_log (function)  src/benchmark.rs:155                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│- sample_cargo_check (function)  src/benchmark.rs:175                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">│- sample_file_listing (function)  src/benchmark.rs:219                                                                │</text>
+<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│- print_internal_graph_stats (function)  src/benchmark.rs:264                                                         │</text>
+<text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">│- measure_targeted_workflows (function)  src/benchmark.rs:336                                                         │</text>
+<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">│- cmd_trust (function)  src/cmd_filter.rs:1140                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">│- compress_bash_output_for_stream (function)  src/compress.rs:221                                                     │</text>
+<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│- is_priority_line (function)  src/compress.rs:586                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│- aggressive_truncate (function)  src/compress.rs:599                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">│- truncate_head_tail_preserving_priority (function)  src/compress.rs:1195                                             │</text>
+<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│- compress_output_inner (function)  src/compress.rs:1445                                                              │</text>
+<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│- collapse_cr_redraws (function)  src/compress.rs:1472                                                                │</text>
+<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│- cr_redraws_collapse_to_final_frame (function)  src/compress.rs:1567                                                 │</text>
+<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│- middle_range_truncation_keeps_priority_errors (function)  src/compress.rs:1580                                      │</text>
+<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│- PostDialect (enum)  src/compress.rs:2264                                                                            │</text>
+<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│- parse_post_input (function)  src/compress.rs:2320                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│- run_hook_post (function)  src/compress.rs:2356                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│- run_hook_post (function)  src/compress.rs:2385                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│- run_hook_post (function)  src/compress.rs:2424                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│- holdout_rate_from_str (function)  src/compress.rs:2626                                                              │</text>
+<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│- should_holdout_with (function)  src/compress.rs:2640                                                                │</text>
+<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│- should_holdout (function)  src/compress.rs:2659                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│- run_command_and_compress (function)  src/compress.rs:2675                                                           │</text>
+<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│- run_command_and_compress (function)  src/compress.rs:2703                                                           │</text>
 <text xml:space="preserve" x="0.00" y="589.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
 <text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓: scroll · s: base (HEAD~1) · d: hops (2) · y: copy · ?: help · q                                           </text>
 </svg>

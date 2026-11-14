@@ -5,16 +5,16 @@ SQLite index (chunks + tree-sitter symbol graph; no embeddings, no model, no tex
 The index exists only to serve structural answers grep cannot give — symbol
 locations, callers/callees, blast radius, modules, outlines, `pack` — never to
 answer in place of the agent's own search or reads. Plus deterministic output filters,
-and `PreToolUse` hooks for Claude Code / Copilot / Codex / Antigravity (OpenCode
-is MCP-only: no hook wiring is installed for it).
+and `PreToolUse` hooks for Claude Code / Copilot / Codex / Antigravity / OpenCode
+(OpenCode gets a dual V2 `setup` + V1 `server` TS plugin plus V2 `mcp.servers` registration, globally or `--local`).
 User-facing docs live in `README.md`; this file is the engineering contract.
 
 ## Build & test
 
 ```bash
 cargo build --release --features full
-cargo test --all-features --bin tokenix   # 456 unit + golden tests (368 lean)
-cargo test --all-features --tests         # + 37 end-to-end tests (one Windows-only) against the real binary
+cargo test --all-features --bin tokenix   # 456+ unit + golden tests (368 lean)
+cargo test --all-features --tests         # + 40 end-to-end tests (one Windows-only) against the real binary
 cargo fmt --check                         # CI runs fmt FIRST — run it before pushing
 cargo clippy --all-targets --locked -- -D warnings                  # lean
 cargo clippy --all-targets --all-features --locked -- -D warnings   # full
@@ -70,14 +70,14 @@ so resolution never silently raises it.
 | `freshness.rs` | Inline pre-command refresh of dirty files (inline path), fails open |
 | `modules.rs` | Louvain community detection over `graph_edges` — `tokenix modules`; `detect_module_map` also returns the calls between modules (Mermaid/DOT) |
 | `blast.rs` | Diff → changed symbols → reverse call graph (`tokenix blast`) |
-| `hook.rs` | `PreToolUse` handler — Grep `head_limit` cap and Bash/PowerShell filter rewrite; `Read` is never intercepted |
-| `compress.rs` | Generic output compression, base64 redaction, token ceiling, EOL preservation; `run_hook_post` also redacts known secrets on every PostToolUse tool result via `secrets_scan::redact_known_secrets`, then emits `hookSpecificOutput.updatedToolOutput` for Claude Code/Codex |
+| `hook.rs` | `PreToolUse` handler — Grep `head_limit` cap and Bash/PowerShell filter rewrite (incl. OpenCode V1/V2 payloads); `Read` is never intercepted |
+| `compress.rs` | Generic output compression, bare `\r` redraw collapse, priority-preserving head/tail cuts, base64 redaction, token ceiling, `TOKENIX_HOLDOUT` control sampling, EOL preservation; `run_hook_post` redacts known secrets via `secrets_scan::redact_known_secrets` |
 | `filters.rs` | `FilterDef` schema, filter resolution, `apply_filter_with_exit` |
 | `filters/trust.rs` | Trust gate for repo-controlled inputs: `repo_input_hashes`, `repo_inputs_trusted`, `set_repo_inputs_trust` |
 | `cmd_filter.rs` | `filter list/active/generate/verify` + recording |
 | `pack.rs` | `tokenix pack` — budgeted repo map, `order_by_priority` (reason → PageRank → path) |
-| `recall.rs` | Stash/retrieve of clipped output, identical-output dedup |
-| `gain.rs` | Savings analytics, `MODELS` pricing table |
+| `recall.rs` | Stash/retrieve of clipped output (plus surgical `slice_output` for `--lines`/`--head`/`--tail`/`--grep`), identical-output dedup |
+| `gain.rs` | Savings analytics (deduplicating pre-phase rewrite handoffs and tracking `holdout`), `MODELS` pricing table |
 | `usage.rs` (forensics) | Spend + cost from agent transcripts (`message.usage`, incl. cache fields) |
 | `mcp.rs` / `mcp_proxy.rs` | MCP server: six tools (`symbols`, `graph`, `blast`, `modules`, `deps`, `tokenmap`), `tool_list()`; they return locations or diagrams, never code, and none reads files, runs commands or keeps notes / stdio passthrough that compresses results |
 | `mcp_audit.rs` (forensics) | `prompt-audit` / `session-audit`, `context_weight()` |
@@ -291,9 +291,11 @@ cannot go down. Never reintroduce a `if saved > 0` guard around `log_hook_event`
 sessionizes the hook log by time gaps (no session id is stored) and reports
 sessions, mean calls/session, and within-session re-requests of the same
 tool+subject — the measurable share of the "+13.8% turns" mechanism by which
-compression savings invert (arXiv 2607.12161). These are diagnostics: without a
-holdout control group no causal Δturns claim is possible, so `SessionStats` must
-stay descriptive and never feed a headline number.
+compression savings invert (arXiv 2607.12161). Set `TOKENIX_HOLDOUT=0.1` to run
+a deterministic/sampled control group (`action="holdout"`, `GainStats.holdout`) so
+A/B comparisons can measure true turn/cost impact; pre-phase `"rewrote command to
+tokenix run"` / `"recording capture"` handoffs are excluded by `is_rewrite_handoff`
+so `by_command`, `intercepted`, and `re_requests` are never double-counted.
 
 **`tokenix run --raw` / `TOKENIX_RAW=1`** — byte-exact passthrough, no
 compression/dedup/stash, via `compress::run_command_raw` (`Stdio::inherit`,
@@ -361,7 +363,7 @@ Repo-controlled inputs are trust-gated (`tokenix trust`, SHA-256 in
 `~/.tokenix/trusted_filters.json`) and skipped until approved. The gate covers
 everything a clone can put in the tree that tokenix acts on:
 `.tokenix/{filters,secret-rules,egress-rules}/*.toml`, `.mcp.json`,
-`opencode.json`, `.vscode/mcp.json` — see `filters::repo_input_hashes`, which is
+`opencode.json`, `opencode.jsonc`, `.vscode/mcp.json` — see `filters::repo_input_hashes`, which is
 the single list the gate is defined by. `mcp_audit` introspects a server by
 *spawning* it, so a repo-declared server reports
 `unknown (declared by this repo — not spawned)` until trusted; user-scoped
@@ -405,14 +407,15 @@ ours.
 ## Recall
 
 Clipped output is stashed so nothing is unrecoverable: `tokenix retrieve <key>`
-prints the exact original body a compressed run saved. Keys are validated and come
+prints the exact original body a compressed run saved (or surgical slices via
+`--lines A-B`, `--head N`, `--tail N`, and smart-case `--grep PAT`). Keys are validated and come
 from a `[tokenix: ...]` marker in the compressed output. Re-read suppression uses
 **exact hashes only** — fuzzy/similarity dedup is refused on purpose, because
 hiding *altered* output makes the agent act on a reality that no longer exists.
 
 The key is advertised on the **first** clipped run, not only on a later dedup hit:
 a successful command that dropped ≥ `RECOVERY_HINT_MIN_DROPPED_BYTES` (500) gets
-`[tokenix: N bytes not shown — tokenix retrieve <key> ...]` appended. Before that,
+`[tokenix: N bytes not shown — tokenix retrieve <key> ... (--lines N-M / --grep PAT)]` appended. Before that,
 the raw blob was stashed and the key thrown away, so the single output most worth
 recovering — a big first result the caps just trimmed — had no way back except
 re-running the command. Failures take the tee path instead.
