@@ -5366,28 +5366,41 @@ mod tests {
     #[cfg(feature = "agents-extra")]
     #[test]
     fn opencode_global_and_local_paths_resolve_cleanly() {
-        let home = Path::new("/home/tester");
-        let repo = Path::new("/work/repo");
+        let home = if cfg!(windows) {
+            Path::new(r"C:\Users\tester")
+        } else {
+            Path::new("/home/tester")
+        };
+        let repo = if cfg!(windows) {
+            Path::new(r"C:\work\repo")
+        } else {
+            Path::new("/work/repo")
+        };
+        let xdg_abs = if cfg!(windows) {
+            Path::new(r"C:\xdg\cfg")
+        } else {
+            Path::new("/xdg/cfg")
+        };
         assert_eq!(
             opencode_global_dir_with(None, home),
-            home.join(".config/opencode")
+            home.join(".config").join("opencode")
         );
         assert_eq!(
-            opencode_global_dir_with(Some(Path::new("/xdg/cfg")), home),
-            PathBuf::from("/xdg/cfg/opencode")
+            opencode_global_dir_with(Some(xdg_abs), home),
+            xdg_abs.join("opencode")
         );
         // Relative XDG_CONFIG_HOME is ignored per XDG spec.
         assert_eq!(
             opencode_global_dir_with(Some(Path::new("relative/cfg")), home),
-            home.join(".config/opencode")
+            home.join(".config").join("opencode")
         );
         assert_eq!(
             opencode_plugin_path_in(home, false),
-            home.join("plugins/tokenix.ts")
+            home.join("plugins").join("tokenix.ts")
         );
         assert_eq!(
             opencode_plugin_path_in(repo, true),
-            repo.join(".opencode/plugins/tokenix.ts")
+            repo.join(".opencode").join("plugins").join("tokenix.ts")
         );
     }
 
