@@ -16,12 +16,15 @@ mod docshot;
 mod doctor;
 #[cfg(feature = "forensics")]
 mod egress_scan;
+#[cfg(feature = "forensics")]
+mod envfacts;
 mod filters;
 mod freshness;
 mod gain;
 mod graph;
 mod hook;
 mod indexer;
+mod loopguard;
 mod mcp;
 #[cfg(feature = "forensics")]
 mod mcp_audit;
@@ -691,6 +694,33 @@ enum Commands {
         /// Check prompt-cache hygiene inputs such as MCP churn and hook/index freshness
         #[arg(long)]
         cache_hygiene: bool,
+    },
+    #[cfg(feature = "forensics")]
+    /// Environment facts sessions in this repository keep rediscovering by
+    /// failing at them (`pytest` missing, `python -m pytest` works). Report
+    /// only: prints lines for AGENTS.md / CLAUDE.md, injects nothing
+    Facts {
+        /// Repository to report on
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Which agent's transcript history to scan
+        #[arg(long, value_enum, default_value = "all")]
+        agent: ConversationAgent,
+        /// Sessions a failure must recur in before it is reported as a fact
+        #[arg(long, default_value_t = 3)]
+        min_sessions: usize,
+        /// Only scan transcripts modified in the last N days (0 = no limit)
+        #[arg(long, default_value_t = 30)]
+        since_days: u64,
+        /// Read every project's transcripts, not only this repository's
+        #[arg(long)]
+        all_projects: bool,
+        /// Print only the Markdown lines, ready to paste into an instructions file
+        #[arg(long, conflicts_with = "json")]
+        md: bool,
+        /// Emit machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
     },
     #[cfg(feature = "forensics")]
     /// Scan agent transcripts for missed savings: replay the current filters
@@ -1425,6 +1455,24 @@ fn main() -> Result<()> {
             json,
             cache_hygiene,
         } => cmd_session_audit(&path, json, cache_hygiene),
+        #[cfg(feature = "forensics")]
+        Commands::Facts {
+            path,
+            agent,
+            min_sessions,
+            since_days,
+            all_projects,
+            md,
+            json,
+        } => envfacts::run(envfacts::Options {
+            agent: agent.to_audit_agent(),
+            path,
+            min_sessions,
+            since_days,
+            all_projects,
+            json,
+            markdown: md,
+        }),
         #[cfg(feature = "forensics")]
         Commands::Discover {
             agent,

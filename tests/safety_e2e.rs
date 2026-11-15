@@ -18,6 +18,60 @@ fn run_keeps_the_exit_code_and_the_failure_output() {
     assert!(ok.stdout.contains("all-good"));
 }
 
+/// The loop note is additive: the third identical failure still carries its
+/// full output and exit code, plus one line saying it is a repeat.
+#[test]
+fn the_third_identical_failure_gets_a_loop_note_and_keeps_its_output() {
+    let sb = Sandbox::new("loop");
+    let cmd = "echo same-failure && exit 4";
+    for attempt in 1..=2 {
+        let run = sb.tokenix(&["run", cmd]);
+        assert_eq!(run.code, 4);
+        assert!(
+            !run.stderr.contains("[tokenix: this command has failed"),
+            "attempt {attempt} is not a loop yet: {}",
+            run.stderr
+        );
+    }
+    let third = sb.tokenix(&["run", cmd]);
+    assert_eq!(third.code, 4, "the note must not change the exit code");
+    assert!(third.stdout.contains("same-failure"), "{}", third.stdout);
+    assert!(
+        third
+            .stderr
+            .contains("[tokenix: this command has failed 3 times"),
+        "{}",
+        third.stderr
+    );
+
+    // A different command with the same output is not part of that streak.
+    let other = sb.tokenix(&["run", "echo same-failure && exit 5"]);
+    assert!(!other.stderr.contains("[tokenix: this command has failed"));
+
+    // A silent non-zero exit is an answer (`grep -q`), not a failure loop.
+    for _ in 0..3 {
+        let silent = sb.tokenix(&["run", "exit 1"]);
+        assert_eq!(silent.code, 1);
+        assert!(!silent.stderr.contains("[tokenix: this command has failed"));
+    }
+
+    // Nothing persisted names the command or its output.
+    let state = std::fs::read_to_string(sb.home.join("loop_guard.json")).unwrap();
+    assert!(!state.contains("same-failure"), "{state}");
+}
+
+#[test]
+fn the_loop_note_can_be_turned_off() {
+    let sb = Sandbox::new("loop-off");
+    let env = [("TOKENIX_LOOP_GUARD", "0")];
+    for _ in 0..3 {
+        let run = sb.tokenix_with_env(&["run", "echo same-failure && exit 4"], &env);
+        assert_eq!(run.code, 4);
+        assert!(!run.stderr.contains("[tokenix: this command has failed"));
+    }
+    assert!(!sb.home.join("loop_guard.json").exists());
+}
+
 /// Claude Code's Bash tool is Git Bash on Windows; a rewritten command must keep
 /// bash semantics instead of being re-run under `cmd /C`.
 #[cfg(windows)]

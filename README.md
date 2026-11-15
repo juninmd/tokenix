@@ -136,7 +136,7 @@ binaries are built with `--features full`. Cargo features add the rest:
 | Feature | Adds |
 |---|---|
 | `tui` | The terminal dashboard (bare `tokenix`). Implies `forensics` and `authoring` |
-| `forensics` | `usage`, `discover`, `conversation-audit`, `prompt-audit`, `session-audit`, `egress-audit`, `benchmark` |
+| `forensics` | `usage`, `discover`, `facts`, `conversation-audit`, `prompt-audit`, `session-audit`, `egress-audit`, `benchmark` |
 | `authoring` | `filter generate` and `filter record` |
 | `agents-extra` | `install-hook` / `remove-hook` for Copilot, Codex, OpenCode, Antigravity and `mcp` |
 | `full` | All of the above |
@@ -232,6 +232,10 @@ $ tokenix blast            # vs HEAD; use --since origin/main for a branch
   need (`--lines 10-40`, `--head 30`, `--tail 30`, `--grep error`).
 - A failed run tees its full output, with credentials masked, to `~/.tokenix/tee/`,
   and prints the path.
+- A command that fails three times with the same output gets one extra stderr line
+  saying so (`[tokenix: this command has failed 3 times in 2m with the same output …]`).
+  The failure text is still printed in full; the line only states what already
+  happened. Turn it off with `TOKENIX_LOOP_GUARD=0`.
 - `tokenix run --raw "cmd"` (or `TOKENIX_RAW=1`) passes output through byte for byte.
   Use it when a script parses the output.
 - `TOKENIX_DISABLED=1 <cmd>` bypasses the hook for one command.
@@ -378,6 +382,10 @@ has the full evidence review.
   next release.
 - **Your mileage depends on your codebase and your agent.** `tokenix gain` shows
   what happened on your machine.
+- **The loop note and `tokenix facts` are not measured here.** Both adapt
+  mechanisms from TokenEconomizer ([arXiv:2610.22732](https://arxiv.org/abs/2610.22732)),
+  which reports cost reductions for its own, model-assisted versions. tokenix ships
+  only the rule-based share and has not run an A/B on it, so no saving is claimed.
 
 </details>
 
@@ -417,8 +425,9 @@ has the full evidence review.
 | `tokenix doctor` | Diagnose the install: filter inventory, filter config and recording state |
 | `tokenix gain` | Tokens removed, split by source (command filters vs Grep cap), holdout control counts, and session shape. Dollar estimates only with `--cost-estimate` / `--economics` |
 | `tokenix discover` | Replay current filters over past agent output: recoverable savings plus uncovered commands (`--agent`, `--top`, `--json`) |
+| `tokenix facts [PATH]` | Environment facts this repo's sessions keep rediscovering by failing at them (`pytest` not on PATH, `python -m pytest` works). Needs the failure in 3 sessions; retires when the bare tool works again. Report only: `--md` prints lines to paste into `AGENTS.md` / `CLAUDE.md` (`--min-sessions`, `--since-days`, `--agent`, `--all-projects`, `--json`) |
 | `tokenix trust` / `untrust` | Approve (SHA-256 pinned) or revoke this repo's executable inputs (`--status`) |
-| `tokenix usage` | Absolute token spend and ≈USD from agent transcripts (`daily\|weekly\|monthly\|session\|model\|project\|blocks`, `--all-projects`, `--statusline`, `--json`) |
+| `tokenix usage` | Absolute token spend and ≈USD from agent transcripts (`daily\|weekly\|monthly\|session\|model\|project\|blocks`, `--all-projects`, `--statusline`, `--json`). Cache writes are priced by lifetime: 1.25x input for the 5-minute cache, 2x for the 1-hour one |
 | `tokenix stats` | Index statistics (files, chunks, tokens, age) |
 | `tokenix tokenmap` | Directory tree weighted by token count, heaviest paths first (`--format html`) |
 | `tokenix benchmark` | Reproducible token-reduction benchmark, vanilla vs tokenix (`--json`) |
@@ -473,6 +482,7 @@ prints plain text instead of opening the dashboard.
 | `TOKENIX_DEDUP=0` · `TOKENIX_DEDUP_MIN_TOKENS` · `TOKENIX_DEDUP_TTL` | Cross-call dedup of identical output (defaults: on, 200 tokens, 3600 s; scoped to the project) |
 | `TOKENIX_READ_DEDUP=0` · `TOKENIX_READ_DEDUP_TTL` · `TOKENIX_READ_DEDUP_MIN_TOKENS` | Re-read suppression (defaults: on, 900 s, 1500 tokens; scoped to the agent session) |
 | `TOKENIX_TEE=0` | Do not tee failed-command output to `~/.tokenix/tee/` |
+| `TOKENIX_LOOP_GUARD=0` · `TOKENIX_LOOP_THRESHOLD` · `TOKENIX_LOOP_TTL` | Failure-loop note on `tokenix run` (defaults: on, 3 identical failures, 1800 s; scoped to the project and the command) |
 | `TOKENIX_AUTO_UPDATE=1\|0\|notify` | Control auto-update behavior (`1`/`install` auto-updates in background; `0` disables checks) |
 | `TOKENIX_NO_UPDATE=1` | Disable all update checks and auto-updates |
 

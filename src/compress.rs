@@ -2785,6 +2785,30 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
         }
     }
 
+    // Failure-loop note: the same command failing the same way again. Additive
+    // only — the failure text above is already complete — and a success ends
+    // the streak. See `loopguard` for why this may ignore timings while the
+    // dedup above must stay byte-exact.
+    let exit_code = output.status.code().unwrap_or(0);
+    let mut loop_noted = false;
+    if output.status.success() {
+        crate::loopguard::on_success(&project, command_str);
+    } else if let Some(note) = crate::loopguard::on_failure(
+        &project,
+        command_str,
+        &stdout_raw,
+        &stderr_raw,
+        exit_code,
+        now_ts(),
+    ) {
+        if !stderr_compressed.is_empty() && !stderr_compressed.ends_with('\n') {
+            stderr_compressed.push('\n');
+        }
+        stderr_compressed.push_str(&note);
+        stderr_compressed.push('\n');
+        loop_noted = true;
+    }
+
     // Print to standard streams
     print!("{}", stdout_compressed);
     eprint!("{}", stderr_compressed);
@@ -2809,6 +2833,13 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
     } else {
         ("pass", "no reduction available")
     };
+    // The note rides on this run's own event rather than a second one, so
+    // `gain`'s call counts and re-request detection see one run, not two.
+    let reason = if loop_noted {
+        format!("{reason}; loop note")
+    } else {
+        reason.to_string()
+    };
     let _ = log_hook_event(
         &repo_root,
         &HookEvent {
@@ -2816,7 +2847,7 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
             tool: if is_powershell { "PowerShell" } else { "Bash" }.to_string(),
             action: action.to_string(),
             phase: "ToolOutputCompressed".to_string(),
-            reason: reason.to_string(),
+            reason,
             saved_tokens: saved,
             actual_tokens,
             original_estimate: original_tokens,
@@ -2825,7 +2856,7 @@ pub fn run_command_and_compress(command_str: &str, shell: &str, cwd: Option<&Pat
         },
     );
 
-    Ok(output.status.code().unwrap_or(0))
+    Ok(exit_code)
 }
 
 #[cfg(test)]

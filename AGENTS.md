@@ -13,8 +13,8 @@ User-facing docs live in `README.md`; this file is the engineering contract.
 
 ```bash
 cargo build --release --features full
-cargo test --all-features --bin tokenix   # 456+ unit + golden tests (368 lean)
-cargo test --all-features --tests         # + 40 end-to-end tests (one Windows-only) against the real binary
+cargo test --all-features --bin tokenix   # 492 unit + golden tests (386 lean)
+cargo test --all-features --tests         # + 43 end-to-end tests (one Windows-only, one Unix-only) against the real binary
 cargo fmt --check                         # CI runs fmt FIRST — run it before pushing
 cargo clippy --all-targets --locked -- -D warnings                  # lean
 cargo clippy --all-targets --all-features --locked -- -D warnings   # full
@@ -23,7 +23,7 @@ cargo clippy --all-targets --all-features --locked -- -D warnings   # full
 
 **Cargo features.** The default build is the lean agent core (hook, MCP, index,
 symbol graph, filters, `scan-secrets`, the Claude Code installer). `tui` (the
-dashboard; implies `forensics` + `authoring`), `forensics` (usage/discover/
+dashboard; implies `forensics` + `authoring`), `forensics` (usage/discover/facts/
 conversation-audit/prompt-audit/session-audit/egress-audit/benchmark),
 `authoring` (`filter generate` / `filter record`) and `agents-extra` (installers
 for Copilot, Codex, OpenCode, Antigravity) are opt-in; `full` is what release
@@ -77,8 +77,10 @@ so resolution never silently raises it.
 | `cmd_filter.rs` | `filter list/active/generate/verify` + recording |
 | `pack.rs` | `tokenix pack` — budgeted repo map, `order_by_priority` (reason → PageRank → path) |
 | `recall.rs` | Stash/retrieve of clipped output (plus surgical `slice_output` for `--lines`/`--head`/`--tail`/`--grep`), identical-output dedup |
+| `loopguard.rs` | Failure-loop note on `tokenix run`: same command + same failure output N times → one added stderr line. Digest-only state in `loop_guard.json` |
 | `gain.rs` | Savings analytics (deduplicating pre-phase rewrite handoffs and tracking `holdout`), `MODELS` pricing table |
-| `usage.rs` (forensics) | Spend + cost from agent transcripts (`message.usage`, incl. cache fields) |
+| `usage.rs` (forensics) | Spend + cost from agent transcripts (`message.usage`, incl. cache fields and the 1-hour cache-write split, billed 2x input) |
+| `envfacts.rs` (forensics) | `tokenix facts` — recurring "command not found" + the runner form that worked, from transcripts. Report only |
 | `mcp.rs` / `mcp_proxy.rs` | MCP server: six tools (`symbols`, `graph`, `blast`, `modules`, `deps`, `tokenmap`), `tool_list()`; they return locations or diagrams, never code, and none reads files, runs commands or keeps notes / stdio passthrough that compresses results |
 | `mcp_audit.rs` (forensics) | `prompt-audit` / `session-audit`, `context_weight()` |
 | `secrets_scan.rs` / `egress_scan.rs` (forensics) | Transcript forensics (`secrets_scan` is core: the hook redacts with it) — credentials and outbound destinations |
@@ -439,6 +441,54 @@ reason: `read_marker` claims the file "is already in this conversation", and
 was being handed that claim — and denied the content — for bytes it never saw.
 Agents that send no session id compare equal to each other, so their behavior is
 unchanged.
+
+## Loop note
+
+`loopguard.rs` adds one stderr line when the **same command**, in the **same
+project**, fails with the **same output** `TOKENIX_LOOP_THRESHOLD` times (default
+3, then every 3rd repeat) inside `TOKENIX_LOOP_TTL` (1800 s). It is the
+rule-based share of TokenEconomizer's failure-loop guard (arXiv 2610.22732);
+their judge model and their turn-level redirect are not here.
+
+- **Additive only.** The failure text is printed in full first, so "never mask a
+  failure" holds. That is also why the signature may drop timings, dates and
+  addresses while `recall`'s dedup stays byte-exact: this one replaces nothing.
+- **Counts stay in the signature.** "3 failed" → "2 failed" is progress and must
+  read as a different failure; a different failure restarts the streak and a
+  success clears it.
+- **A silent non-zero exit is not tracked.** `grep -q`, `git diff --exit-code`
+  and `test -f` answer with an exit code; with no failure text there is nothing
+  to be stuck on.
+- **The note states only what happened** — no advice, never "stop". A test pins
+  the wording against the words TokenEconomizer's lint refuses.
+- **Digests only on disk.** No command line or output is persisted, so there is
+  nothing for `redact` to mask.
+- The note rides on the run's own hook-log event (`reason` gains `; loop note`).
+  A second event would inflate `gain`'s call counts and re-request detection.
+- A `TOKENIX_HOLDOUT` run returns before the guard, so the control arm carries
+  no note — that is the arm to measure it against.
+- Not A/B-measured in tokenix yet: claim no saving for it.
+
+## Environment facts
+
+`tokenix facts` (forensics) reads the transcripts `discover` replays and reports
+tools a repository's sessions keep failing to find, with the runner form that
+worked (`pytest` → `python -m pytest`). Evidence rule: the failure in
+`--min-sessions` sessions (default 3); a later session where the bare tool works
+retires the fact.
+
+- **Report only — never inject.** A fact is derived from command output, which is
+  attacker-reachable text. The command prints lines for a person to paste into
+  `AGENTS.md` / `CLAUDE.md`; do not wire it to `SessionStart`.
+- **Nothing free-form is rendered.** A claim interpolates a tool name
+  (`[A-Za-z0-9._+-]`, ≤40 chars) and a form built from the fixed `RUNNERS` list
+  or a repo-relative path. Absolute paths outside the repo are dropped (they
+  name one machine, often a home directory).
+- **A tool counts only when the command tried to run it.** `make` printing
+  `protoc: not found` is not a fact about `make`; `grep pytest` and
+  `pip install pytest` are not ways to run pytest.
+- A transcript that names no `cwd` cannot be attributed and is left out unless
+  `--all-projects`.
 
 ## One interface
 

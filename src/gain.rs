@@ -122,6 +122,12 @@ pub fn price_for(model: &str) -> Option<&'static ModelPrice> {
 }
 
 /// Absolute USD cost of a single usage record, per token category.
+///
+/// `cache_write_1h` is the share of `cache_write` that went to the 1-hour cache.
+/// A cache write is billed by its lifetime — 1.25x input for the 5-minute cache
+/// (the table's `cache_write_per_1m`), 2x input for the 1-hour one — and Claude
+/// Code writes most of a session to the 1-hour cache, so pricing every write at
+/// the 5-minute rate understated the largest write-side line of a real bill.
 #[cfg_attr(not(feature = "forensics"), allow(dead_code))]
 pub fn usage_cost(
     price: &ModelPrice,
@@ -129,13 +135,23 @@ pub fn usage_cost(
     output: u64,
     cache_read: u64,
     cache_write: u64,
+    cache_write_1h: u64,
 ) -> f64 {
+    let write_1h = cache_write_1h.min(cache_write);
+    let write_5m = cache_write - write_1h;
     (input as f64 * price.input_per_1m
         + output as f64 * price.output_per_1m
         + cache_read as f64 * price.cache_read_per_1m
-        + cache_write as f64 * price.cache_write_per_1m)
+        + write_5m as f64 * price.cache_write_per_1m
+        + write_1h as f64 * price.input_per_1m * CACHE_WRITE_1H_MULTIPLIER)
         / 1_000_000.0
 }
+
+/// 1-hour cache writes cost twice the base input rate. Only Anthropic usage
+/// records carry the 1-hour split, so the multiplier never reaches another
+/// provider's rows.
+#[cfg_attr(not(feature = "forensics"), allow(dead_code))]
+pub const CACHE_WRITE_1H_MULTIPLIER: f64 = 2.0;
 
 pub struct CostRow {
     pub model: &'static str,
@@ -768,10 +784,13 @@ mod tests {
     fn usage_cost_sums_all_token_categories() {
         let p = price_for("claude-sonnet-4-6").unwrap();
         // 1M each of input/output/cache_read/cache_write at 3/15/0.30/3.75 per 1M.
-        let cost = usage_cost(p, 1_000_000, 1_000_000, 1_000_000, 1_000_000);
+        let cost = usage_cost(p, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 0);
         assert!((cost - (3.0 + 15.0 + 0.30 + 3.75)).abs() < 1e-9);
+        // The 1-hour share of the same writes is billed at 2x input ($6/M).
+        let hour = usage_cost(p, 0, 0, 0, 1_000_000, 1_000_000);
+        assert!((hour - 6.0).abs() < 1e-9);
         // Zero usage costs nothing.
-        assert_eq!(usage_cost(p, 0, 0, 0, 0), 0.0);
+        assert_eq!(usage_cost(p, 0, 0, 0, 0, 0), 0.0);
     }
 
     #[test]
