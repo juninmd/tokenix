@@ -149,7 +149,7 @@ fn sample_git_status(repo_root: &Path) -> String {
         .ok()
         .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
         .filter(|out| !out.trim().is_empty())
-        .unwrap_or_else(|| " M src/query.rs\n M src/benchmark.rs\n?? notes.txt\n".to_string())
+        .unwrap_or_else(|| " M src/graph.rs\n M src/benchmark.rs\n?? notes.txt\n".to_string())
 }
 
 fn sample_git_log(repo_root: &Path) -> String {
@@ -162,7 +162,7 @@ fn sample_git_log(repo_root: &Path) -> String {
         .filter(|out| !out.trim().is_empty())
         .unwrap_or_else(|| {
             [
-                "2f9d8a1 improve semantic ranking",
+                "2f9d8a1 improve symbol graph ranking",
                 "8a73c55 add symbol graph traversal",
                 "19db3de lower cpu indexing",
                 "cd01b91 add codex memory hook",
@@ -176,15 +176,15 @@ fn sample_cargo_check() -> String {
     [
         "    Checking tokenix v0.1.0 (/path/to/tokenix)",
         "warning: unused variable: `candidate`",
-        "   --> src/query.rs:214:9",
+        "   --> src/graph.rs:214:9",
         "    |",
         "214 |     let candidate = score_path(path);",
         "    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_candidate`",
-        "error[E0425]: cannot find value `MAX_INDEX_AGE_SECS` in this scope",
+        "error[E0425]: cannot find value `GIT_FINGERPRINT` in this scope",
         "   --> src/hook.rs:88:42",
         "    |",
-        "88  |     if index_staleness(repo_root, MAX_INDEX_AGE_SECS).stale {",
-        "    |                                          ^^^^^^^^^^^^^^^^^^ not found in this scope",
+        "88  |     if index_staleness(repo_root).stale {",
+        "    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope",
         "error: could not compile `tokenix` due to 1 previous error; 1 warning emitted",
     ]
     .join("\n")
@@ -229,7 +229,7 @@ fn sample_file_listing(repo_root: &Path) -> String {
     if out.trim().is_empty() {
         [
             "src/main.rs",
-            "src/query.rs",
+            "src/graph.rs",
             "src/hook.rs",
             "src/chunker.rs",
             "src/compress.rs",
@@ -275,7 +275,7 @@ fn print_internal_graph_stats(repo_root: &Path) -> Result<()> {
     println!("  Nodes (symbols): {}", format_num(node_count).green());
     println!("  Edges (relations): {}", format_num(edge_count).green());
     println!(
-        "  - tokenix uses this graph to boost RAG results by resolving callee/caller proximity."
+        "  - tokenix uses this graph to resolve symbol callers, callees, blast radius, and module boundaries."
     );
     println!();
     Ok(())
@@ -346,9 +346,9 @@ fn measure_targeted_workflows(repo_root: &Path) -> Result<Vec<WorkflowRow>> {
             symbol: "chunk_rust",
         },
         WorkflowCase {
-            label: "SQLite vector search",
-            path: "src/store.rs",
-            symbol: "search_similar",
+            label: "Graph hotspots workflow",
+            path: "src/graph.rs",
+            symbol: "repo_hotspots",
         },
         WorkflowCase {
             label: "Rust service workflow",

@@ -3691,7 +3691,44 @@ fn detect_agents() -> Vec<AgentStatus> {
             ],
         ),
         status("Codex", &[(home.join(".codex/hooks.json"), "global")]),
-        status("OpenCode", &[(repo.join("opencode.json"), "local")]),
+        status(
+            "OpenCode",
+            &[
+                (
+                    crate::opencode_global_dir_with(
+                        std::env::var_os("XDG_CONFIG_HOME")
+                            .as_deref()
+                            .map(std::path::Path::new),
+                        &home,
+                    )
+                    .join("plugins/tokenix.ts"),
+                    "global",
+                ),
+                (
+                    crate::opencode_global_dir_with(
+                        std::env::var_os("XDG_CONFIG_HOME")
+                            .as_deref()
+                            .map(std::path::Path::new),
+                        &home,
+                    )
+                    .join("opencode.json"),
+                    "global",
+                ),
+                (
+                    crate::opencode_global_dir_with(
+                        std::env::var_os("XDG_CONFIG_HOME")
+                            .as_deref()
+                            .map(std::path::Path::new),
+                        &home,
+                    )
+                    .join("opencode.jsonc"),
+                    "global",
+                ),
+                (repo.join(".opencode/plugins/tokenix.ts"), "local"),
+                (repo.join("opencode.json"), "local"),
+                (repo.join("opencode.jsonc"), "local"),
+            ],
+        ),
         status(
             "Antigravity",
             &[

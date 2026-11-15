@@ -5,7 +5,7 @@
 <text xml:space="preserve" x="428.40" y="13.60" fill="#e6edf3">──────────────────────────────────────────────────────────── ? help ┐</text>
 <text xml:space="preserve" x="0.00" y="31.60" fill="#e6edf3">│ </text>
 <text xml:space="preserve" x="16.80" y="31.60" fill="#39c5cf" font-weight="bold">Doctor</text>
-<text xml:space="preserve" x="67.20" y="31.60" fill="#e6edf3"> │ Audit │ Memory │ Secrets │ Egress                                                                           │</text>
+<text xml:space="preserve" x="67.20" y="31.60" fill="#e6edf3"> │ Audit │ Secrets │ Egress                                                                                    │</text>
 <text xml:space="preserve" x="0.00" y="49.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
 <text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ doctor ──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
 <text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│                                                                                                                      │</text>
@@ -13,7 +13,7 @@
 <text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│  environment diagnostics                                                                                             │</text>
 <text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">│                                                                                                                      │</text>
 <text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">│Build                                                                                                                 │</text>
-<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│  version:               0.67.2                                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">│  version:               1.1.0                                                                                        │</text>
 <text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">│                                                                                                                      │</text>
 <text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│Filters                                                                                                               │</text>
 <text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">│  bundled:               534 filters · 1167 embedded golden cases                                                     │</text>

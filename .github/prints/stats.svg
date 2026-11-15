@@ -27,7 +27,7 @@
 <text xml:space="preserve" x="8.40" y="175.60" fill="#d29922"> ($)  minimize LLM context, keep the signal</text>
 <text xml:space="preserve" x="369.60" y="175.60" fill="#e6edf3">                                                                           │</text>
 <text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">│                                                                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│version   0.67.2                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">│version   1.1.0                                                                                                       │</text>
 <text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">│                                                                                                                      │</text>
 <text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">│</text>
 <text xml:space="preserve" x="8.40" y="247.60" fill="#e6edf3" font-weight="bold">next steps</text>
@@ -35,41 +35,43 @@
 <text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">│</text>
 <text xml:space="preserve" x="8.40" y="265.60" fill="#d29922">  ▸ </text>
 <text xml:space="preserve" x="42.00" y="265.60" fill="#e6edf3">5 agent(s) have no hook — “Install hooks” keeps their output short                                                │</text>
-<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│                                                                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│</text>
-<text xml:space="preserve" x="8.40" y="301.60" fill="#e6edf3" font-weight="bold">hooks</text>
-<text xml:space="preserve" x="50.40" y="301.60" fill="#e6edf3">                                                                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="283.60" fill="#d29922">  ▸ </text>
+<text xml:space="preserve" x="42.00" y="283.60" fill="#e6edf3">`tokenix` is not on PATH — “Install binary” fixes that                                                            │</text>
+<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">│                                                                                                                      │</text>
 <text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">│</text>
-<text xml:space="preserve" x="8.40" y="319.60" fill="#e5534b">  ✗ </text>
-<text xml:space="preserve" x="42.00" y="319.60" fill="#e6edf3">Claude Code  not installed                                                                                        │</text>
+<text xml:space="preserve" x="8.40" y="319.60" fill="#e6edf3" font-weight="bold">hooks</text>
+<text xml:space="preserve" x="50.40" y="319.60" fill="#e6edf3">                                                                                                                 │</text>
 <text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">│</text>
 <text xml:space="preserve" x="8.40" y="337.60" fill="#e5534b">  ✗ </text>
-<text xml:space="preserve" x="42.00" y="337.60" fill="#e6edf3">Copilot      not installed                                                                                        │</text>
+<text xml:space="preserve" x="42.00" y="337.60" fill="#e6edf3">Claude Code  not installed                                                                                        │</text>
 <text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">│</text>
 <text xml:space="preserve" x="8.40" y="355.60" fill="#e5534b">  ✗ </text>
-<text xml:space="preserve" x="42.00" y="355.60" fill="#e6edf3">Codex        not installed                                                                                        │</text>
+<text xml:space="preserve" x="42.00" y="355.60" fill="#e6edf3">Copilot      not installed                                                                                        │</text>
 <text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">│</text>
 <text xml:space="preserve" x="8.40" y="373.60" fill="#e5534b">  ✗ </text>
-<text xml:space="preserve" x="42.00" y="373.60" fill="#e6edf3">OpenCode     not installed                                                                                        │</text>
+<text xml:space="preserve" x="42.00" y="373.60" fill="#e6edf3">Codex        not installed                                                                                        │</text>
 <text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">│</text>
 <text xml:space="preserve" x="8.40" y="391.60" fill="#e5534b">  ✗ </text>
-<text xml:space="preserve" x="42.00" y="391.60" fill="#e6edf3">Antigravity  not installed                                                                                        │</text>
-<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│                                                                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│</text>
-<text xml:space="preserve" x="8.40" y="427.60" fill="#e6edf3" font-weight="bold">index (this repo)</text>
-<text xml:space="preserve" x="151.20" y="427.60" fill="#e6edf3">                                                                                                     │</text>
-<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│  files     606                                                                                                       │</text>
-<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│  chunks    4321                                                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│  tokens    692,426                                                                                                   │</text>
-<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│                                                                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│</text>
-<text xml:space="preserve" x="8.40" y="517.60" fill="#e6edf3" font-weight="bold">actions</text>
-<text xml:space="preserve" x="67.20" y="517.60" fill="#e6edf3">                                                                                                               │</text>
+<text xml:space="preserve" x="42.00" y="391.60" fill="#e6edf3">OpenCode     not installed                                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="409.60" fill="#e5534b">  ✗ </text>
+<text xml:space="preserve" x="42.00" y="409.60" fill="#e6edf3">Antigravity  not installed                                                                                        │</text>
+<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">│                                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="445.60" fill="#e6edf3" font-weight="bold">index (this repo)</text>
+<text xml:space="preserve" x="151.20" y="445.60" fill="#e6edf3">                                                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">│  files     611                                                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">│  chunks    4445                                                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">│  tokens    714,576                                                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">│                                                                                                                      │</text>
 <text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">│</text>
-<text xml:space="preserve" x="8.40" y="535.60" fill="#39c5cf" font-weight="bold">▸ Index repository    </text>
-<text xml:space="preserve" x="193.20" y="535.60" fill="#e6edf3">reindex this repo (606 files)                                                                   │</text>
-<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│  Install hooks (all) wire 5 missing agent(s) · writes config files                                                   │</text>
-<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│  Install binary (PATH)already global · /root/.local/bin                                                              │</text>
+<text xml:space="preserve" x="8.40" y="535.60" fill="#e6edf3" font-weight="bold">actions</text>
+<text xml:space="preserve" x="67.20" y="535.60" fill="#e6edf3">                                                                                                               │</text>
+<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">│</text>
+<text xml:space="preserve" x="8.40" y="553.60" fill="#39c5cf" font-weight="bold">▸ Index repository    </text>
+<text xml:space="preserve" x="193.20" y="553.60" fill="#e6edf3">reindex this repo (611 files)                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">│  Install hooks (all) wire 5 missing agent(s) · writes config files                                                   │</text>
 <text xml:space="preserve" x="0.00" y="589.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
 <text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓: action · PgUp/PgDn: scroll · Enter: run · q: quit                                                         </text>
 </svg>

@@ -22,7 +22,7 @@ pub fn trust_store_path() -> PathBuf {
 /// * `.tokenix/secret-rules/*.toml`, `.tokenix/egress-rules/*.toml` — add
 ///   scanner rules; a `.+` pattern would blank every tool result the
 ///   PostToolUse redactor touches, or bury real egress in noise.
-/// * `.mcp.json`, `opencode.json`, `.vscode/mcp.json` — `prompt-audit` and
+/// * `.mcp.json`, `opencode.json`, `opencode.jsonc`, `.vscode/mcp.json` — `prompt-audit` and
 ///   `session-audit` introspect MCP servers by **spawning** them, so a repo
 ///   that ships one of these picks the command that runs.
 pub fn repo_input_hashes(root: &std::path::Path) -> std::collections::BTreeMap<String, String> {
@@ -49,7 +49,7 @@ pub fn repo_input_hashes(root: &std::path::Path) -> std::collections::BTreeMap<S
         }
     }
 
-    for rel in [".mcp.json", "opencode.json"] {
+    for rel in [".mcp.json", "opencode.json", "opencode.jsonc"] {
         add(rel.to_string(), &root.join(rel));
     }
     add(
@@ -130,6 +130,7 @@ mod tests {
         std::fs::write(dir.join(".tokenix/egress-rules/c.toml"), "x").unwrap();
         std::fs::write(dir.join(".mcp.json"), "{}").unwrap();
         std::fs::write(dir.join("opencode.json"), "{}").unwrap();
+        std::fs::write(dir.join("opencode.jsonc"), "{}").unwrap();
         std::fs::write(dir.join(".vscode/mcp.json"), "{}").unwrap();
 
         let hashes = repo_input_hashes(&dir);
@@ -139,6 +140,7 @@ mod tests {
             ".tokenix/egress-rules/c.toml",
             ".mcp.json",
             "opencode.json",
+            "opencode.jsonc",
             ".vscode/mcp.json",
         ] {
             assert!(

@@ -9,33 +9,33 @@
 <text xml:space="preserve" x="0.00" y="49.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
 <text xml:space="preserve" x="0.00" y="67.60" fill="#e6edf3">┌ tokenmap ────────────────────────────────────────────────────────────────────────────────────────────────────────────┐</text>
 <text xml:space="preserve" x="0.00" y="85.60" fill="#e6edf3">│                                                                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│tokenix (692,426 tokens)                                                                                              │</text>
-<text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│├──  [█████░░░] src (437,744 tokens, 63.2%)                                                                           │</text>
-<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">││   ├──  [█░░░░░░░] tui.rs (68,105 tokens, 9.8%)                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">││   ├──  [█░░░░░░░] filters.rs (59,343 tokens, 8.6%)                                                                  │</text>
-<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">││   ├──  [█░░░░░░░] main.rs (47,684 tokens, 6.9%)                                                                     │</text>
-<text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">││   ├──  [░░░░░░░░] compress.rs (33,858 tokens, 4.9%)                                                                 │</text>
-<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">││   ├──  [░░░░░░░░] graph.rs (18,099 tokens, 2.6%)                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="103.60" fill="#e6edf3">│tokenix (714,576 tokens)                                                                                              │</text>
+<text xml:space="preserve" x="0.00" y="121.60" fill="#e6edf3">│├──  [█████░░░] src (440,559 tokens, 61.7%)                                                                           │</text>
+<text xml:space="preserve" x="0.00" y="139.60" fill="#e6edf3">││   ├──  [█░░░░░░░] tui.rs (69,023 tokens, 9.7%)                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="157.60" fill="#e6edf3">││   ├──  [█░░░░░░░] filters.rs (59,416 tokens, 8.3%)                                                                  │</text>
+<text xml:space="preserve" x="0.00" y="175.60" fill="#e6edf3">││   ├──  [█░░░░░░░] main.rs (51,186 tokens, 7.2%)                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="193.60" fill="#e6edf3">││   ├──  [░░░░░░░░] compress.rs (35,624 tokens, 5.0%)                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="211.60" fill="#e6edf3">││   ├──  [░░░░░░░░] graph.rs (19,951 tokens, 2.8%)                                                                    │</text>
 <text xml:space="preserve" x="0.00" y="229.60" fill="#e6edf3">││   ├──  [░░░░░░░░] chunker.rs (17,510 tokens, 2.5%)                                                                  │</text>
-<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">││   ├──  [░░░░░░░░] store.rs (16,111 tokens, 2.3%)                                                                    │</text>
-<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">││   ├──  [░░░░░░░░] secrets_scan.rs (14,958 tokens, 2.2%)                                                             │</text>
-<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">││   ├──  [░░░░░░░░] mcp_audit.rs (13,427 tokens, 1.9%)                                                                │</text>
-<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">││   ├──  [░░░░░░░░] hook.rs (12,636 tokens, 1.8%)                                                                     │</text>
-<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">││   ├──  [░░░░░░░░] cmd_filter.rs (12,237 tokens, 1.8%)                                                               │</text>
-<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">││   ├──  [░░░░░░░░] mcp.rs (11,906 tokens, 1.7%)                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">││   ├──  [░░░░░░░░] self_update.rs (10,448 tokens, 1.5%)                                                              │</text>
-<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">││   ├──  [░░░░░░░░] conversation_audit.rs (10,306 tokens, 1.5%)                                                       │</text>
-<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">││   ├──  [░░░░░░░░] tui (8,894 tokens, 1.3%)                                                                          │</text>
-<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">││   │   └──  [░░░░░░░░] explorer.rs (8,894 tokens, 1.3%)                                                              │</text>
-<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">││   ├──  [░░░░░░░░] egress_scan.rs (8,671 tokens, 1.3%)                                                               │</text>
-<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">││   ├──  [░░░░░░░░] gain.rs (7,257 tokens, 1.0%)                                                                      │</text>
-<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">││   ├──  [░░░░░░░░] usage.rs (6,589 tokens, 1.0%)                                                                     │</text>
-<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">││   ├──  [░░░░░░░░] indexer.rs (6,297 tokens, 0.9%)                                                                   │</text>
-<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">││   ├──  [░░░░░░░░] snapshot.rs (4,939 tokens, 0.7%)                                                                  │</text>
-<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">││   ├──  [░░░░░░░░] modules.rs (4,848 tokens, 0.7%)                                                                   │</text>
-<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">││   ├──  [░░░░░░░░] benchmark.rs (4,780 tokens, 0.7%)                                                                 │</text>
-<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">││   ├──  [░░░░░░░░] discover.rs (4,740 tokens, 0.7%)                                                                  │</text>
-<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">││   ├──  [░░░░░░░░] recall.rs (4,302 tokens, 0.6%)                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="247.60" fill="#e6edf3">││   ├──  [░░░░░░░░] store.rs (16,121 tokens, 2.3%)                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="265.60" fill="#e6edf3">││   ├──  [░░░░░░░░] secrets_scan.rs (14,997 tokens, 2.1%)                                                             │</text>
+<text xml:space="preserve" x="0.00" y="283.60" fill="#e6edf3">││   ├──  [░░░░░░░░] hook.rs (13,875 tokens, 1.9%)                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="301.60" fill="#e6edf3">││   ├──  [░░░░░░░░] mcp_audit.rs (13,572 tokens, 1.9%)                                                                │</text>
+<text xml:space="preserve" x="0.00" y="319.60" fill="#e6edf3">││   ├──  [░░░░░░░░] cmd_filter.rs (12,522 tokens, 1.8%)                                                               │</text>
+<text xml:space="preserve" x="0.00" y="337.60" fill="#e6edf3">││   ├──  [░░░░░░░░] self_update.rs (11,418 tokens, 1.6%)                                                              │</text>
+<text xml:space="preserve" x="0.00" y="355.60" fill="#e6edf3">││   ├──  [░░░░░░░░] tui (10,483 tokens, 1.5%)                                                                         │</text>
+<text xml:space="preserve" x="0.00" y="373.60" fill="#e6edf3">││   │   └──  [░░░░░░░░] explorer.rs (10,483 tokens, 1.5%)                                                             │</text>
+<text xml:space="preserve" x="0.00" y="391.60" fill="#e6edf3">││   ├──  [░░░░░░░░] conversation_audit.rs (9,042 tokens, 1.3%)                                                        │</text>
+<text xml:space="preserve" x="0.00" y="409.60" fill="#e6edf3">││   ├──  [░░░░░░░░] egress_scan.rs (8,684 tokens, 1.2%)                                                               │</text>
+<text xml:space="preserve" x="0.00" y="427.60" fill="#e6edf3">││   ├──  [░░░░░░░░] gain.rs (8,195 tokens, 1.1%)                                                                      │</text>
+<text xml:space="preserve" x="0.00" y="445.60" fill="#e6edf3">││   ├──  [░░░░░░░░] usage.rs (6,589 tokens, 0.9%)                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="463.60" fill="#e6edf3">││   ├──  [░░░░░░░░] indexer.rs (6,312 tokens, 0.9%)                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="481.60" fill="#e6edf3">││   ├──  [░░░░░░░░] modules.rs (5,838 tokens, 0.8%)                                                                   │</text>
+<text xml:space="preserve" x="0.00" y="499.60" fill="#e6edf3">││   ├──  [░░░░░░░░] mcp.rs (5,626 tokens, 0.8%)                                                                       │</text>
+<text xml:space="preserve" x="0.00" y="517.60" fill="#e6edf3">││   ├──  [░░░░░░░░] recall.rs (5,595 tokens, 0.8%)                                                                    │</text>
+<text xml:space="preserve" x="0.00" y="535.60" fill="#e6edf3">││   ├──  [░░░░░░░░] blast.rs (5,041 tokens, 0.7%)                                                                     │</text>
+<text xml:space="preserve" x="0.00" y="553.60" fill="#e6edf3">││   ├──  [░░░░░░░░] benchmark.rs (4,821 tokens, 0.7%)                                                                 │</text>
+<text xml:space="preserve" x="0.00" y="571.60" fill="#e6edf3">││   ├──  [░░░░░░░░] discover.rs (4,740 tokens, 0.7%)                                                                  │</text>
 <text xml:space="preserve" x="0.00" y="589.60" fill="#e6edf3">└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘</text>
 <text xml:space="preserve" x="0.00" y="607.60" fill="#e6edf3">←→: tab · ↑↓/PgUp/PgDn: scroll · r: refresh · y: copy · ?: help · q                                                     </text>
 </svg>

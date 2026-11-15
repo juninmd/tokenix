@@ -1143,7 +1143,7 @@ pub fn cmd_trust(status_only: bool) -> Result<()> {
     let hashes = filters::repo_input_hashes(&root);
     if hashes.is_empty() {
         println!("No repo-controlled tokenix inputs found — nothing to trust.");
-        println!("  (looked for .tokenix/{{filters,secret-rules,egress-rules}}/*.toml, .mcp.json, opencode.json, .vscode/mcp.json)");
+        println!("  (looked for .tokenix/{{filters,secret-rules,egress-rules}}/*.toml, .mcp.json, opencode.json, opencode.jsonc, .vscode/mcp.json)");
         return Ok(());
     }
     let trusted = filters::repo_inputs_trusted(&root);
@@ -1229,7 +1229,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&bin);
     }
 
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "authoring"))]
     #[test]
     fn resolve_program_ignores_cwd_shim_on_windows() {
         // Synthetic shim in a dir that is not the process cwd but is on PATH
