@@ -213,3 +213,66 @@ fn mcp_graph_tool_answers_with_locations_and_diagrams() {
     let map = call("tokenix_tokenmap", json!({"top": 3}));
     assert!(map.contains("src/billing.rs"), "{map}");
 }
+
+/// `tokenix facts` reads real transcripts: a tool missing in three sessions of
+/// this repository, repaired the same way each time, comes out as one line a
+/// person can paste — and another repository's sessions are not evidence.
+///
+/// Unix only: on Windows `dirs::home_dir()` asks the shell API and ignores the
+/// environment, so the transcript root cannot be redirected into the sandbox.
+#[cfg(all(unix, feature = "forensics"))]
+#[test]
+fn facts_reports_a_tool_missing_in_three_sessions_with_its_repair() {
+    let sb = Sandbox::new("facts");
+    let repo = std::fs::canonicalize(&sb.repo).unwrap();
+    let projects = sb.home.join(".claude").join("projects");
+    let session = |dir: &str, name: &str, cwd: &std::path::Path| {
+        let lines = [
+            json!({"cwd": cwd, "message": {"content": [
+                {"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "pytest -q"}}
+            ]}}),
+            json!({"cwd": cwd, "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "a",
+                 "content": "bash: line 1: pytest: command not found\n"}
+            ]}}),
+            json!({"cwd": cwd, "message": {"content": [
+                {"type": "tool_use", "id": "b", "name": "Bash",
+                 "input": {"command": "python -m pytest -q"}}
+            ]}}),
+            json!({"cwd": cwd, "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "b", "content": "4 passed in 0.31s\n"}
+            ]}}),
+        ];
+        let dir = projects.join(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(dir.join(name), body).unwrap();
+    };
+    for name in ["one.jsonl", "two.jsonl", "three.jsonl"] {
+        session("this-repo", name, &repo);
+    }
+    // Same failure, different repository: must not be counted here.
+    let elsewhere = sb.home.join("elsewhere");
+    for name in ["x.jsonl", "y.jsonl", "z.jsonl"] {
+        session("other-repo", name, &elsewhere);
+    }
+
+    let home = sb.home.to_string_lossy().into_owned();
+    let env = [("HOME", home.as_str())];
+    let md = sb.tokenix_with_env(&["facts", "--md"], &env);
+    assert_eq!(md.code, 0, "{}", md.stderr);
+    assert_eq!(
+        md.stdout.trim(),
+        "- `pytest` is not on PATH here; `python -m pytest` works."
+    );
+
+    let run = sb.tokenix_with_env(&["facts", "--json"], &env);
+    let report: serde_json::Value = serde_json::from_str(&run.stdout).expect("json");
+    assert_eq!(report["scanned_sessions"], 3, "{report}");
+    assert_eq!(report["facts"][0]["failed_sessions"], 3, "{report}");
+
+    // Two sessions are evidence, not a fact.
+    std::fs::remove_file(projects.join("this-repo").join("three.jsonl")).unwrap();
+    let two = sb.tokenix_with_env(&["facts", "--md"], &env);
+    assert_eq!(two.stdout.trim(), "", "{}", two.stdout);
+}

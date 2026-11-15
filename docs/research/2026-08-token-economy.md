@@ -870,3 +870,24 @@ one new paper filed as corroboration rather than a new requirement. The
 "homologate against the papers" bar for this pass is: every DONE claim in the
 tree re-verified by symbol, not by re-reading the prior pass's prose — that
 distinction is what this pass adds.
+
+
+## Deep sweep (pass 6) — TokenEconomizer (arXiv 2610.22732) compared, 2026-11-15
+
+Microsoft Research / UC Berkeley's TokenEconomizer cuts cost from the other
+side: it leaves tool output alone and learns across a repository's sessions.
+It reports 18.4–30.9% lower mean *billed* cost on 277 SWE-Bench tasks, costs
+counted with cache pricing and including its own model calls. Three
+mechanisms, and what each means here:
+
+| Mechanism | Theirs | tokenix |
+|---|---|---|
+| Micro-skills | Facts learned from finished sessions (model-free `envfacts` + an LLM proposer), injected at session start | **Adapted, model-free share only**: `tokenix facts` — form repair / absent tool from transcripts, three-session rule, retirement. Report only, never injected (a fact comes from command output; auto-injection would be a prompt-injection path) |
+| Failure-loop guard | Per-turn state + judge model + redirect, at most once per turn | **Adapted, rule-based share only**: `loopguard.rs` — same command, same failure output, N times → one descriptive stderr line. No judge, no turn tracking (the hook has no turn boundary) |
+| Tool pruning | Unused tools removed through the agent's own settings after evidence across sessions | **Not adopted.** tokenix already refuses to touch `tools/list` (see MCP proxy contract); writing deny lists into agent settings is a per-agent installer surface. An evidence report ("unused over N sessions") in `session-audit` is the compatible follow-up |
+| Cost as billed | Cache-read/-write pricing, 1-hour writes at 2x | **Adopted**: `usage` now prices the 1-hour cache-write split at 2x input instead of 1.25x |
+
+Neither adapted mechanism has been A/B-measured in tokenix; their published
+numbers are for the model-assisted originals and do not transfer. Both stay
+out of every `gain` headline until a `TOKENIX_HOLDOUT` run has measured them
+(the holdout arm returns before the loop guard, so it is a clean control).

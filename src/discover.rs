@@ -200,7 +200,7 @@ pub fn run(opts: Options) -> Result<()> {
     Ok(())
 }
 
-fn agent_selected(agent: Agent, key: &str) -> bool {
+pub(crate) fn agent_selected(agent: Agent, key: &str) -> bool {
     match agent {
         Agent::All => true,
         Agent::Claude => key == "claude",
@@ -213,7 +213,10 @@ fn agent_selected(agent: Agent, key: &str) -> bool {
 /// Map tool-call ids to (tool name, shell command). Handles Claude
 /// (`tool_use` + `input.command`), Codex/OpenAI (`function_call` +
 /// JSON-string `arguments.command`, possibly `["bash","-lc",script]`).
-fn collect_calls(value: &Value, tool_map: &mut HashMap<String, (String, Option<String>)>) {
+pub(crate) fn collect_calls(
+    value: &Value,
+    tool_map: &mut HashMap<String, (String, Option<String>)>,
+) {
     if let Value::Object(map) = value {
         let kind = map.get("type").and_then(Value::as_str);
         if kind == Some("function_call") {
@@ -282,7 +285,7 @@ fn command_text(v: &Value) -> Option<String> {
 /// Find tool outputs (`function_call_output.output` / `tool_result.content`)
 /// and hand (tool-call id, full text) to the callback. `content` may be a
 /// plain string or Claude's array of `{type:"text", text}` parts.
-fn visit_outputs(value: &Value, on_output: &mut impl FnMut(&str, String)) {
+pub(crate) fn visit_outputs(value: &Value, on_output: &mut impl FnMut(&str, String)) {
     match value {
         Value::Object(map) => {
             let kind = map.get("type").and_then(Value::as_str);

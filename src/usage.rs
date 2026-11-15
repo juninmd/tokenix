@@ -61,7 +61,11 @@ struct Record {
     input: u64,
     output: u64,
     cache_read: u64,
+    /// Every cache-write token, whatever its lifetime.
     cache_write: u64,
+    /// The part of `cache_write` written to the 1-hour cache (billed at 2x
+    /// input instead of 1.25x). Zero when the record carries no split.
+    cache_write_1h: u64,
     logged_cost: Option<f64>,
 }
 
@@ -79,6 +83,7 @@ impl Record {
                     self.output,
                     self.cache_read,
                     self.cache_write,
+                    self.cache_write_1h,
                 )
             })
             .unwrap_or(0.0);
@@ -251,6 +256,15 @@ fn record_from_value(
     if input + output + cache_read + cache_write == 0 {
         return None;
     }
+    // Claude Code splits the write total by cache lifetime:
+    // `cache_creation: {ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`.
+    // Clamped to the total so a malformed split can never bill more writes
+    // than the record reports.
+    let cache_write_1h = usage
+        .get("cache_creation")
+        .map(|split| u64_at(split, "ephemeral_1h_input_tokens"))
+        .unwrap_or(0)
+        .min(cache_write);
 
     // Dedup replayed lines by (message id, requestId) when both are present.
     let msg_id = message
@@ -304,6 +318,7 @@ fn record_from_value(
         output,
         cache_read,
         cache_write,
+        cache_write_1h,
         logged_cost,
     })
 }
@@ -671,6 +686,7 @@ mod tests {
             output: 0,
             cache_read,
             cache_write: 0,
+            cache_write_1h: 0,
             logged_cost: logged,
         }
     }
@@ -810,5 +826,47 @@ mod tests {
         let r = record_from_value(&v, "f", &mut seen).expect("record");
         assert_eq!((r.cache_read, r.cache_write), (30, 40));
         assert_eq!(r.tokens(), 73);
+    }
+
+    #[test]
+    fn one_hour_cache_writes_are_priced_at_their_own_rate() {
+        let mut seen = HashSet::new();
+        let v = serde_json::json!({
+            "message": {
+                "model": "claude-sonnet-4-6",
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": 1_000_000,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 400_000,
+                        "ephemeral_1h_input_tokens": 600_000
+                    }
+                }
+            }
+        });
+        let r = record_from_value(&v, "f", &mut seen).expect("record");
+        assert_eq!((r.cache_write, r.cache_write_1h), (1_000_000, 600_000));
+        // Sonnet input is $3/M: 0.4M at 1.25x ($1.50) + 0.6M at 2x ($3.60).
+        assert!((r.cost(CostMode::Calculate) - 5.10).abs() < 1e-9);
+        // The split never adds tokens: it is a share of the same total.
+        assert_eq!(r.tokens(), 1_000_000);
+    }
+
+    #[test]
+    fn a_one_hour_split_larger_than_the_total_is_clamped() {
+        let mut seen = HashSet::new();
+        let v = serde_json::json!({
+            "message": {
+                "model": "claude-sonnet-4-6",
+                "usage": {
+                    "input_tokens": 1,
+                    "cache_creation_input_tokens": 10,
+                    "cache_creation": { "ephemeral_1h_input_tokens": 999 }
+                }
+            }
+        });
+        let r = record_from_value(&v, "f", &mut seen).expect("record");
+        assert_eq!(r.cache_write_1h, 10);
     }
 }
