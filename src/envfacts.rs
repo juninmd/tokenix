@@ -315,13 +315,27 @@ fn path_form(head: &str, root: &Path) -> Option<String> {
     static SAFE: OnceLock<Regex> = OnceLock::new();
     let safe = SAFE.get_or_init(|| Regex::new(r"^[A-Za-z0-9._/+-]{1,120}$").expect("path regex"));
     let normalized = head.replace('\\', "/");
-    let relative = if Path::new(head).is_absolute() {
-        let rel = Path::new(head).strip_prefix(root).ok()?;
-        rel.to_string_lossy().replace('\\', "/")
+    let relative = if is_absolute_anywhere(&normalized) {
+        let root = root.to_string_lossy().replace('\\', "/");
+        let rel = normalized.strip_prefix(root.trim_end_matches('/'))?;
+        // `/work/repo-two/bin/x` shares the prefix `/work/repo` without being
+        // inside it: the remainder must start at a separator.
+        rel.strip_prefix('/')?.to_string()
     } else {
         normalized
     };
-    safe.is_match(&relative).then_some(relative)
+    (!relative.is_empty() && safe.is_match(&relative)).then_some(relative)
+}
+
+/// Absolute on *either* platform, whatever this binary was built for. A
+/// transcript records the path as the agent's shell spelled it, and Git Bash on
+/// Windows writes `/home/alice/.local/bin/pytest` — which `Path::is_absolute`
+/// calls relative there (no drive), so it used to be reported as a repo path.
+fn is_absolute_anywhere(normalized: &str) -> bool {
+    let bytes = normalized.as_bytes();
+    normalized.starts_with('/')
+        || normalized.starts_with('~')
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
 }
 
 // ---- folding sessions into facts --------------------------------------------
@@ -650,6 +664,23 @@ mod tests {
             runner_form("/home/alice/.local/bin/pytest -q", "pytest", &root),
             None,
             "another machine's home directory is not a repository fact"
+        );
+        // Same answers for the spellings a Windows transcript carries, on
+        // every platform: absoluteness is read off the text, not `Path`.
+        let win_root = PathBuf::from(r"C:\work\repo");
+        assert_eq!(
+            runner_form(r"C:\work\repo\.venv\Scripts\pytest -q", "pytest", &win_root).as_deref(),
+            Some(".venv/Scripts/pytest")
+        );
+        assert_eq!(
+            runner_form(r"C:\Users\alice\bin\pytest -q", "pytest", &win_root),
+            None
+        );
+        assert_eq!(runner_form("~/bin/pytest -q", "pytest", &root), None);
+        // A sibling directory that merely shares the prefix is not inside.
+        assert_eq!(
+            runner_form("/work/repo-two/bin/pytest -q", "pytest", &root),
+            None
         );
     }
 
