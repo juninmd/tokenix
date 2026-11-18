@@ -1,29 +1,26 @@
 version: 2
 updates:
-  # Rust dependency updates — the core supply-chain channel for this crate.
-  # (npm/pip/docker were removed: no package.json/requirements.txt/Dockerfile exist.)
-  - package-ecosystem: "cargo"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    # cargo only accepts `auto` or `lockfile-only` here. Use `auto`: it bumps the
-    # Cargo.toml requirement AND Cargo.lock together when a version leaves the
-    # current range, keeping manifest + lockfile consistent so `cargo --locked` CI
-    # stays green. `lockfile-only` desyncs them on a major bump (e.g. dirs 5→6 →
-    # lock 6.0.0 but Cargo.toml "5") and breaks every --locked build.
-    versioning-strategy: auto
-    groups:
-      cargo-minor-patch:
-        update-types: ["minor", "patch"]
-
-  # GitHub Actions are pinned to commit SHAs; Dependabot bumps the SHA and keeps
-  # the trailing `# vX` version comment current, so pinning costs no manual upkeep.
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    groups:
-      github-actions:
-        patterns: ["*"]
+- package-ecosystem: cargo
+  directory: /
+  schedule:
+    interval: weekly
+  open-pull-requests-limit: 10
+  versioning-strategy: auto
+  groups:
+    cargo-minor-patch:
+      update-types:
+      - minor
+      - patch
+  cooldown:
+    default-days: 7
+- package-ecosystem: github-actions
+  directory: /
+  schedule:
+    interval: weekly
+  open-pull-requests-limit: 10
+  groups:
+    github-actions:
+      patterns:
+      - '*'
+  cooldown:
+    default-days: 7
