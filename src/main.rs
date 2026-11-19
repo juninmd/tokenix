@@ -1648,11 +1648,7 @@ fn configure_index_limits(profile: CpuProfile, jobs: Option<usize>) {
 
 fn cmd_index(path: &Path, force: bool, if_stale: bool) -> Result<()> {
     if !path.exists() {
-        eprintln!(
-            "{} Path does not exist: {}",
-            "warning:".yellow(),
-            path.display()
-        );
+        anyhow::bail!("path does not exist: {}", path.display());
     }
     let repo_root = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 

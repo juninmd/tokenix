@@ -27,6 +27,14 @@ fn index_then_stats_reports_every_file() {
 }
 
 #[test]
+fn index_rejects_a_missing_path_instead_of_reporting_success() {
+    let sb = Sandbox::new("index-missing");
+    let run = sb.tokenix(&["index", "definitely/not/here"]);
+    assert_ne!(run.code, 0, "{}", run.stdout);
+    assert!(run.stderr.contains("path does not exist"), "{}", run.stderr);
+}
+
+#[test]
 fn symbol_graph_answers_where_and_who_calls() {
     let sb = Sandbox::indexed("graph");
 
