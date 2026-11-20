@@ -6,8 +6,9 @@
 //! by day/week/month/session/model/project, plus rolling 5-hour billing blocks.
 
 use anyhow::Result;
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Timelike};
 use colored::Colorize;
+use jiff::civil::Date;
+use jiff::{SignedDuration, Timestamp, ZonedDateTime};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -54,7 +55,7 @@ pub struct Options {
 
 #[derive(Clone, Debug)]
 struct Record {
-    ts: DateTime<Local>,
+    ts: Timestamp,
     model: String,
     project: String,
     session: String,
@@ -211,7 +212,7 @@ fn collect_records(opts: &Options) -> Result<Vec<Record>> {
     }
 
     records.retain(|r| {
-        let d = r.ts.date_naive();
+        let d = local(r.ts).date();
         since.map(|s| d >= s).unwrap_or(true)
             && until.map(|u| d <= u).unwrap_or(true)
             && scope.as_deref().map(|s| r.project == s).unwrap_or(true)
@@ -283,7 +284,7 @@ fn record_from_value(
         .get("timestamp")
         .and_then(|x| x.as_str())
         .and_then(parse_ts)
-        .unwrap_or_else(Local::now);
+        .unwrap_or_else(Timestamp::now);
 
     let model = message
         .and_then(|m| m.get("model"))
@@ -327,14 +328,17 @@ fn u64_at(v: &Value, key: &str) -> u64 {
     v.get(key).and_then(|x| x.as_u64()).unwrap_or(0)
 }
 
-fn parse_ts(s: &str) -> Option<DateTime<Local>> {
-    DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|dt| dt.with_timezone(&Local))
+fn parse_ts(s: &str) -> Option<Timestamp> {
+    s.parse().ok()
 }
 
-fn parse_date(s: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()
+fn parse_date(s: &str) -> Option<Date> {
+    Date::strptime("%Y-%m-%d", s.trim()).ok()
+}
+
+/// Instant rendered in the machine's timezone, for day/hour bucketing.
+fn local(ts: Timestamp) -> ZonedDateTime {
+    ts.to_zoned_datetime(jiff::tz::TimeZone::system())
 }
 
 fn basename(p: &str) -> String {
@@ -359,12 +363,12 @@ fn current_project(path: &Path) -> String {
 
 fn group_key(r: &Record, group: Group) -> String {
     match group {
-        Group::Daily => r.ts.format("%Y-%m-%d").to_string(),
+        Group::Daily => local(r.ts).strftime("%Y-%m-%d").to_string(),
         Group::Weekly => {
-            let iso = r.ts.iso_week();
+            let iso = local(r.ts).date().iso_week_date();
             format!("{}-W{:02}", iso.year(), iso.week())
         }
-        Group::Monthly => r.ts.format("%Y-%m").to_string(),
+        Group::Monthly => local(r.ts).strftime("%Y-%m").to_string(),
         Group::Session => short(&r.session),
         Group::Model => r.model.clone(),
         Group::Project => r.project.clone(),
@@ -418,27 +422,17 @@ fn totals(records: &[Record], mode: CostMode) -> Row {
 
 /// Linear month-end projection from spend so far this calendar month.
 fn month_forecast(records: &[Record], mode: CostMode) -> f64 {
-    let now = Local::now();
+    let today = ZonedDateTime::now().date();
     let month_cost: f64 = records
         .iter()
-        .filter(|r| r.ts.year() == now.year() && r.ts.month() == now.month())
+        .filter(|r| {
+            let d = local(r.ts).date();
+            d.year() == today.year() && d.month() == today.month()
+        })
         .map(|r| r.cost(mode))
         .sum();
-    let days_in_month = days_in_month(now.year(), now.month());
     // `day()` is 1-based, so no zero guard is needed (the old one was dead code).
-    month_cost / now.day() as f64 * days_in_month as f64
-}
-
-fn days_in_month(year: i32, month: u32) -> u32 {
-    let (ny, nm) = if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    };
-    NaiveDate::from_ymd_opt(ny, nm, 1)
-        .and_then(|first_next| first_next.pred_opt())
-        .map(|d| d.day())
-        .unwrap_or(30)
+    month_cost / today.day() as f64 * today.days_in_month() as f64
 }
 
 // ---------------------------------------------------------------------------
@@ -458,52 +452,48 @@ struct Block {
 
 fn report_blocks(records: &[Record], opts: &Options) -> Result<()> {
     let mut blocks: Vec<Block> = Vec::new();
-    let now = Local::now();
+    let now = Timestamp::now();
     let mut iter = records.iter();
     if let Some(first) = iter.next() {
         let mut start = floor_hour(first.ts);
         let mut tok = 0u64;
         let mut cost = 0.0;
         let mut latest = first.ts;
-        let flush = |start: DateTime<Local>,
-                     latest: DateTime<Local>,
-                     tok: u64,
-                     cost: f64,
-                     now: DateTime<Local>|
-         -> Block {
-            let end = start + Duration::hours(BLOCK_HOURS);
-            let active = now < end && now >= start;
-            let (burn, proj) = if active {
-                let mins = (now - start).num_minutes().max(1) as f64;
-                let burn = tok as f64 / mins;
-                // Extrapolating from a minutes-old sample over a 5-hour block
-                // produces headline numbers dominated by noise (one request at
-                // minute 1 projected 300× its cost). Only project once there is
-                // enough of the block observed for the rate to mean something.
-                const MIN_MINUTES_FOR_PROJECTION: f64 = 15.0;
-                let proj = if mins >= MIN_MINUTES_FOR_PROJECTION {
-                    let remaining = (end - now).num_minutes().max(0) as f64;
-                    Some(cost + (cost / mins) * remaining)
+        let flush =
+            |start: Timestamp, latest: Timestamp, tok: u64, cost: f64, now: Timestamp| -> Block {
+                let end = start + SignedDuration::from_hours(BLOCK_HOURS);
+                let active = now < end && now >= start;
+                let (burn, proj) = if active {
+                    let mins = minutes_between(start, now).max(1) as f64;
+                    let burn = tok as f64 / mins;
+                    // Extrapolating from a minutes-old sample over a 5-hour block
+                    // produces headline numbers dominated by noise (one request at
+                    // minute 1 projected 300× its cost). Only project once there is
+                    // enough of the block observed for the rate to mean something.
+                    const MIN_MINUTES_FOR_PROJECTION: f64 = 15.0;
+                    let proj = if mins >= MIN_MINUTES_FOR_PROJECTION {
+                        let remaining = minutes_between(now, end).max(0) as f64;
+                        Some(cost + (cost / mins) * remaining)
+                    } else {
+                        None
+                    };
+                    (Some(burn), proj)
                 } else {
-                    None
+                    (None, None)
                 };
-                (Some(burn), proj)
-            } else {
-                (None, None)
+                let _ = latest;
+                Block {
+                    start: local(start).strftime("%Y-%m-%d %H:%M").to_string(),
+                    end: local(end).strftime("%H:%M").to_string(),
+                    tokens: tok,
+                    cost_usd: cost,
+                    active,
+                    burn_per_min: burn,
+                    projected_cost_usd: proj,
+                }
             };
-            let _ = latest;
-            Block {
-                start: start.format("%Y-%m-%d %H:%M").to_string(),
-                end: end.format("%H:%M").to_string(),
-                tokens: tok,
-                cost_usd: cost,
-                active,
-                burn_per_min: burn,
-                projected_cost_usd: proj,
-            }
-        };
         for r in std::iter::once(first).chain(iter) {
-            if r.ts >= start + Duration::hours(BLOCK_HOURS) {
+            if r.ts >= start + SignedDuration::from_hours(BLOCK_HOURS) {
                 blocks.push(flush(start, latest, tok, cost, now));
                 start = floor_hour(r.ts);
                 tok = 0;
@@ -553,11 +543,20 @@ fn report_blocks(records: &[Record], opts: &Options) -> Result<()> {
     Ok(())
 }
 
-fn floor_hour(ts: DateTime<Local>) -> DateTime<Local> {
-    ts.with_minute(0)
-        .and_then(|t| t.with_second(0))
-        .and_then(|t| t.with_nanosecond(0))
+fn floor_hour(ts: Timestamp) -> Timestamp {
+    let z = local(ts);
+    z.with()
+        .minute(0)
+        .second(0)
+        .subsec_nanosecond(0)
+        .build()
+        .map(|t| t.timestamp())
         .unwrap_or(ts)
+}
+
+/// Whole minutes from `from` to `to` (truncated toward zero).
+fn minutes_between(from: Timestamp, to: Timestamp) -> i64 {
+    to.duration_since(from).as_secs() / 60
 }
 
 // ---------------------------------------------------------------------------
@@ -612,16 +611,16 @@ fn print_table(rows: &[Row], total: &Row, opts: &Options, records: &[Record]) {
 }
 
 fn print_statusline(records: &[Record], mode: CostMode) {
-    let now = Local::now();
-    let today = now.date_naive();
+    let now = Timestamp::now();
+    let today = local(now).date();
     let mut cost = 0.0;
     let mut tokens = 0u64;
-    for r in records.iter().filter(|r| r.ts.date_naive() == today) {
+    for r in records.iter().filter(|r| local(r.ts).date() == today) {
         cost += r.cost(mode);
         tokens += r.tokens();
     }
     // Active-block burn rate.
-    let win_start = now - Duration::hours(BLOCK_HOURS);
+    let win_start = now - SignedDuration::from_hours(BLOCK_HOURS);
     // Divide by the minutes actually observed, not the full 5-hour window: a
     // session 10 minutes old reported ~1/30th of its real rate, and disagreed
     // with the same number in `report_blocks`.
@@ -631,7 +630,7 @@ fn print_statusline(records: &[Record], mode: CostMode) {
             .filter(|r| r.ts >= win_start)
             .map(|r| r.tokens())
             .sum();
-        let mins = (now - first.ts).num_minutes().max(1) as f64;
+        let mins = minutes_between(first.ts, now).max(1) as f64;
         tok as f64 / mins
     });
     let mut parts = vec![
@@ -678,7 +677,7 @@ mod tests {
 
     fn rec(model: &str, input: u64, cache_read: u64, logged: Option<f64>) -> Record {
         Record {
-            ts: Local::now(),
+            ts: Timestamp::now(),
             model: model.to_string(),
             project: "proj".to_string(),
             session: "sess".to_string(),
@@ -726,28 +725,38 @@ mod tests {
     }
 
     #[test]
-    fn days_in_month_handles_leap_years_and_december() {
-        assert_eq!(days_in_month(2026, 1), 31);
-        assert_eq!(days_in_month(2026, 2), 28);
-        assert_eq!(days_in_month(2024, 2), 29); // leap
-        assert_eq!(days_in_month(2026, 4), 30);
-        assert_eq!(days_in_month(2026, 12), 31); // year rollover path
+    fn forecast_month_length_handles_leap_years_and_december() {
+        assert_eq!(Date::constant(2026, 1, 1).days_in_month(), 31);
+        assert_eq!(Date::constant(2026, 2, 1).days_in_month(), 28);
+        assert_eq!(Date::constant(2024, 2, 1).days_in_month(), 29); // leap
+        assert_eq!(Date::constant(2026, 4, 1).days_in_month(), 30);
+        assert_eq!(Date::constant(2026, 12, 1).days_in_month(), 31); // year rollover path
     }
 
     #[test]
     fn month_forecast_extrapolates_from_days_elapsed() {
         // One record in the current month, priced deterministically.
         let r = rec("claude-sonnet-4-6", 1_000_000, 0, Some(10.0));
-        let now = Local::now();
-        let expected = 10.0 / now.day() as f64 * days_in_month(now.year(), now.month()) as f64;
+        let today = ZonedDateTime::now().date();
+        let expected = 10.0 / today.day() as f64 * today.days_in_month() as f64;
         assert!((month_forecast(&[r], CostMode::Auto) - expected).abs() < 1e-9);
     }
 
     #[test]
     fn month_forecast_ignores_other_months() {
         let mut old = rec("claude-sonnet-4-6", 1_000_000, 0, Some(10.0));
-        old.ts = Local::now() - Duration::days(400);
+        old.ts = Timestamp::now() - SignedDuration::from_hours(24 * 400);
         assert_eq!(month_forecast(&[old], CostMode::Auto), 0.0);
+    }
+
+    #[test]
+    fn parse_helpers_accept_rfc3339_and_iso_dates_only() {
+        assert!(parse_ts("2026-08-01T10:00:00Z").is_some());
+        assert!(parse_ts("2026-08-01T10:00:00-03:00").is_some());
+        assert!(parse_ts("not a time").is_none());
+        assert_eq!(parse_date(" 2026-08-01 ").map(|d| d.day()), Some(1));
+        assert!(parse_date("2026-13-01").is_none());
+        assert!(parse_date("garbage").is_none());
     }
 
     #[test]
@@ -765,15 +774,17 @@ mod tests {
 
     #[test]
     fn floor_hour_drops_minutes_seconds_and_nanos() {
-        let ts = Local::now()
-            .with_minute(43)
+        let ts = local(Timestamp::now())
+            .with()
+            .minute(43)
+            .second(21)
+            .build()
             .unwrap()
-            .with_second(21)
-            .unwrap();
-        let floored = floor_hour(ts);
+            .timestamp();
+        let floored = local(floor_hour(ts));
         assert_eq!(floored.minute(), 0);
         assert_eq!(floored.second(), 0);
-        assert_eq!(floored.hour(), ts.hour());
+        assert_eq!(floored.hour(), local(ts).hour());
     }
 
     #[test]
