@@ -129,15 +129,24 @@ fn save_index(entries: &[RecentOutput]) {
 /// against the stored blob before collapsing anything — redacting here would
 /// break both. Confidentiality is handled with file permissions instead.
 pub fn stash(content: &str) -> Option<String> {
+    stash_in(&blob_dir()?, content)
+}
+
+fn stash_in(dir: &std::path::Path, content: &str) -> Option<String> {
     let key = digest(content);
-    let dir = blob_dir()?;
-    std::fs::create_dir_all(&dir).ok()?;
-    crate::store::restrict_to_owner(&dir);
+    std::fs::create_dir_all(dir).ok()?;
+    crate::store::restrict_to_owner(dir);
     let path = dir.join(format!("{key}.txt"));
-    if !path.exists() {
+    if path.exists() {
+        // Re-stashing just advertised this key again: refresh its age so
+        // `prune_blobs` (oldest mtime first) does not drop a live recovery hint.
+        if let Ok(file) = std::fs::File::options().append(true).open(&path) {
+            let _ = file.set_modified(std::time::SystemTime::now());
+        }
+    } else {
         std::fs::write(&path, content).ok()?;
         crate::store::restrict_to_owner(&path);
-        prune_blobs(&dir);
+        prune_blobs(dir);
     }
     Some(key)
 }
@@ -408,6 +417,43 @@ mod tests {
         assert_eq!(digest("hello"), digest("hello"));
         assert_ne!(digest("hello"), digest("hellp"));
         assert_eq!(digest("hello").len(), 16);
+    }
+
+    #[test]
+    fn restashing_a_blob_keeps_it_out_of_the_next_prune() {
+        let dir = std::env::temp_dir().join(format!(
+            "tokenix-recall-prune-{}-{}",
+            std::process::id(),
+            digest("restash")
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let base = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let hot = stash_in(&dir, "hot output").unwrap();
+        for i in 0..BLOB_CAP - 1 {
+            stash_in(&dir, &format!("filler {i}")).unwrap();
+        }
+        // Make `hot` the oldest blob on disk, then advertise it again.
+        for (i, entry) in std::fs::read_dir(&dir).unwrap().flatten().enumerate() {
+            let age = if entry.path().ends_with(format!("{hot}.txt")) {
+                base
+            } else {
+                base + std::time::Duration::from_secs(60 + i as u64)
+            };
+            let f = std::fs::File::options()
+                .append(true)
+                .open(entry.path())
+                .unwrap();
+            f.set_modified(age).unwrap();
+        }
+        assert_eq!(stash_in(&dir, "hot output").unwrap(), hot);
+        stash_in(&dir, "one more").unwrap();
+        let hot_path = dir.join(format!("{hot}.txt"));
+        let exists = hot_path.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            exists,
+            "a blob re-advertised just now must survive the next prune"
+        );
     }
 
     #[test]
