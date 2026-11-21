@@ -1082,17 +1082,39 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// `worktree:branch:head`, from ONE `git rev-parse` spawn. The hook calls this
+/// on every Grep/Glob/search through `index_staleness`, and each `git` spawn
+/// costs ~2-3 ms — three spawns were most of the hook's latency. The output is
+/// byte-identical to the old `rev-parse --show-toplevel` + `branch
+/// --show-current` + `rev-parse HEAD` triple, so stored fingerprints stay valid:
+/// `--symbolic-full-name HEAD` prints `refs/heads/<branch>`, or `HEAD` when
+/// detached, where `--show-current` printed nothing.
 fn git_fingerprint(repo_root: &Path) -> Option<String> {
-    let head = git_output(repo_root, &["rev-parse", "HEAD"])?;
-    let branch = git_output(repo_root, &["branch", "--show-current"]).unwrap_or_default();
-    let worktree = git_output(repo_root, &["rev-parse", "--show-toplevel"])
-        .unwrap_or_else(|| repo_root.to_string_lossy().to_string());
-    Some(format!(
-        "{}:{}:{}",
-        worktree.trim(),
-        branch.trim(),
-        head.trim()
-    ))
+    let out = git_output(
+        repo_root,
+        &[
+            "rev-parse",
+            "--show-toplevel",
+            "HEAD",
+            "--symbolic-full-name",
+            "HEAD",
+        ],
+    )?;
+    parse_fingerprint(&out)
+}
+
+fn parse_fingerprint(out: &str) -> Option<String> {
+    let mut lines = out.lines().map(str::trim);
+    let worktree = lines.next()?;
+    let head = lines.next()?;
+    let branch = lines
+        .next()
+        .and_then(|r| r.strip_prefix("refs/heads/"))
+        .unwrap_or_default();
+    if head.is_empty() {
+        return None;
+    }
+    Some(format!("{worktree}:{branch}:{head}"))
 }
 
 fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
@@ -1774,5 +1796,64 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    /// The one-spawn fingerprint must match the legacy three-spawn format byte
+    /// for byte, or every existing index reads as "git HEAD changed" once.
+    #[test]
+    fn git_fingerprint_matches_legacy_three_spawn_format() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("tokenix-fp-{now}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+        };
+        let legacy = || {
+            let head = git_output(&dir, &["rev-parse", "HEAD"]).unwrap();
+            let branch = git_output(&dir, &["branch", "--show-current"]).unwrap_or_default();
+            let top = git_output(&dir, &["rev-parse", "--show-toplevel"]).unwrap();
+            format!("{top}:{branch}:{head}")
+        };
+        git(&["init", "-q", "-b", "feat/x"]);
+        assert_eq!(
+            git_fingerprint(&dir),
+            None,
+            "unborn HEAD has no fingerprint"
+        );
+        git(&[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "a",
+        ]);
+        assert_eq!(git_fingerprint(&dir).unwrap(), legacy());
+        git(&["checkout", "-q", "--detach"]);
+        assert_eq!(git_fingerprint(&dir).unwrap(), legacy());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parse_fingerprint_shapes() {
+        assert_eq!(
+            parse_fingerprint("/r\nabc\nrefs/heads/a/b\n").as_deref(),
+            Some("/r:a/b:abc")
+        );
+        assert_eq!(
+            parse_fingerprint("/r\nabc\nHEAD").as_deref(),
+            Some("/r::abc")
+        );
+        assert_eq!(parse_fingerprint("/r"), None);
     }
 }
