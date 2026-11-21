@@ -295,9 +295,28 @@ fn extract_line_meta(line: &str) -> (Option<String>, Option<String>) {
 fn scan_content(content: &str, rules: &[Rule]) -> Vec<RawMatch> {
     let mut out = Vec::new();
     let mut seen: HashSet<(usize, String)> = HashSet::new();
+    // One RegexSet pass per line answers "which rules match here at all", so
+    // the per-rule capture search (which allocates capture slots even on a
+    // miss) only runs for the rare line that holds a candidate. Same haystack,
+    // same patterns: the set can only skip rules that would have found nothing.
+    // If the set cannot be built (size limit), every rule runs as before.
+    let set = regex::RegexSet::new(rules.iter().map(|r| r.re.as_str())).ok();
     for (idx, line) in content.lines().enumerate() {
+        let hits = match &set {
+            Some(set) => {
+                let m = set.matches(line);
+                if !m.matched_any() {
+                    continue;
+                }
+                Some(m)
+            }
+            None => None,
+        };
         let mut line_hits: Vec<RawMatch> = Vec::new();
-        for rule in rules {
+        for (ri, rule) in rules.iter().enumerate() {
+            if hits.as_ref().is_some_and(|m| !m.matched(ri)) {
+                continue;
+            }
             for caps in rule.re.captures_iter(line) {
                 let Some(m) = caps.get(rule.capture) else {
                     continue;
