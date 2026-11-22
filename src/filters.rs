@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use regex::Regex;
 use rust_embed::Embed;
@@ -840,15 +841,17 @@ fn invalid_regex_warning(pattern: &str, err: &regex::Error) -> String {
 /// evaluates hundreds of `match_command` patterns against a handful of
 /// candidate strings — each pattern must compile at most once per process,
 /// not once per (pattern × candidate) pair.
-fn cached_regex(pattern: &str) -> Option<Regex> {
+fn cached_regex(pattern: &str) -> Option<Arc<Regex>> {
     use std::sync::{OnceLock, RwLock};
-    static CACHE: OnceLock<RwLock<HashMap<String, Option<Regex>>>> = OnceLock::new();
+    // Arc, not a Regex clone: a cloned Regex gets an empty match-cache pool, so every
+    // lookup would rebuild its lazy DFA from scratch.
+    static CACHE: OnceLock<RwLock<HashMap<String, Option<Arc<Regex>>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
     if let Some(hit) = cache.read().ok().and_then(|c| c.get(pattern).cloned()) {
         return hit;
     }
     let compiled = match Regex::new(pattern) {
-        Ok(re) => Some(re),
+        Ok(re) => Some(Arc::new(re)),
         Err(e) => {
             // Warn once per pattern (the cache makes this idempotent). A typo'd
             // regex used to make the filter silently no-op with no diagnostic
@@ -1971,7 +1974,7 @@ pub fn derive_command_candidates(cmd: &str) -> Vec<String> {
 /// dissenting line is enough — and the normal pipeline must handle it.
 fn uniform_summary(output: &str, cfg: &UniformSuccess) -> Option<String> {
     let pass = cached_regex(&cfg.pattern)?;
-    let ignore: Vec<Regex> = cfg
+    let ignore: Vec<Arc<Regex>> = cfg
         .ignore_lines
         .iter()
         .filter_map(|p| cached_regex(p))
@@ -2085,7 +2088,7 @@ fn apply_filter_with_exit_inner(output: &str, f: &FilterDef, exit_ok: Option<boo
     }
 
     if !f.strip_lines_matching.is_empty() {
-        let patterns: Vec<Regex> = f
+        let patterns: Vec<Arc<Regex>> = f
             .strip_lines_matching
             .iter()
             .filter_map(|p| cached_regex(p))
@@ -2094,7 +2097,7 @@ fn apply_filter_with_exit_inner(output: &str, f: &FilterDef, exit_ok: Option<boo
     }
 
     if !f.keep_lines_matching.is_empty() {
-        let patterns: Vec<Regex> = f
+        let patterns: Vec<Arc<Regex>> = f
             .keep_lines_matching
             .iter()
             .filter_map(|p| cached_regex(p))
@@ -2343,7 +2346,7 @@ fn apply_extract_sections(lines: Vec<String>, sections: &[ExtractSection]) -> Ve
 
 fn apply_replace_patterns(lines: Vec<String>, patterns: &[[String; 2]]) -> Vec<String> {
     // Compile once per pattern, not once per (pattern × line).
-    let compiled: Vec<(Regex, &str)> = patterns
+    let compiled: Vec<(Arc<Regex>, &str)> = patterns
         .iter()
         .filter_map(|[pattern, replacement]| {
             cached_regex(pattern).map(|re| (re, replacement.as_str()))
@@ -2438,7 +2441,7 @@ fn blocks_similar(a: &[String], b: &[String], threshold: f32) -> bool {
 
 fn apply_semantic_filter(lines: Vec<String>, semantic: &SemanticFilterDef) -> Vec<String> {
     let query_terms: Vec<&str> = semantic.query.split_whitespace().collect();
-    let always_keep_patterns: Vec<Regex> = semantic
+    let always_keep_patterns: Vec<Arc<Regex>> = semantic
         .always_keep
         .iter()
         .filter_map(|p| cached_regex(p))
@@ -2634,7 +2637,7 @@ fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
 /// count marker placed right after the category's last kept line. The first
 /// matching cap owns a line, so overlapping patterns don't double-count.
 fn apply_category_caps(lines: Vec<String>, caps: &[CategoryCap]) -> Vec<String> {
-    let compiled: Vec<(Regex, usize)> = caps
+    let compiled: Vec<(Arc<Regex>, usize)> = caps
         .iter()
         .filter_map(|c| cached_regex(&c.pattern).map(|re| (re, c.max)))
         .collect();
@@ -2761,7 +2764,7 @@ fn apply_sizing(lines: Vec<String>, f: &FilterDef, signals_failure: bool) -> (Ve
 
     // Priority rescue: lines matching any priority regex survive the cut.
     if !f.priority_lines.is_empty() {
-        let priority: Vec<Regex> = f
+        let priority: Vec<Arc<Regex>> = f
             .priority_lines
             .iter()
             .filter_map(|p| cached_regex(p))
