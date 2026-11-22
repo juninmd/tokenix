@@ -6,6 +6,7 @@
 
 use regex::Regex;
 use serde::Deserialize;
+use std::sync::Arc;
 
 use super::cached_regex;
 
@@ -25,7 +26,7 @@ const DEFAULT_END: &str = r"^\s*$";
 
 /// Runs before blank lines are stripped, since a blank line is the default terminator.
 pub fn apply_block_caps(lines: Vec<String>, caps: &[BlockCap]) -> Vec<String> {
-    let compiled: Vec<(Regex, Regex, usize)> = caps
+    let compiled: Vec<(Arc<Regex>, Arc<Regex>, usize)> = caps
         .iter()
         .filter_map(|c| {
             let start = cached_regex(&c.start)?;
