@@ -1,4 +1,6 @@
 use anyhow::Result;
+use once_cell::sync::Lazy;
+use rayon::prelude::*;
 use regex::Regex;
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
@@ -32,6 +34,15 @@ struct SymbolTarget {
 
 pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
     let chunks = load_symbol_chunks(conn)?;
+    // Parse every chunk before touching the tables: extraction is the bulk of
+    // the rebuild and needs no connection, so it runs across cores. Order is
+    // kept, so edge insertion (and its dedup) matches the serial path.
+    let refs: Vec<Vec<(String, String)>> = chunks.par_iter().map(chunk_references).collect();
+
+    // One transaction: thousands of autocommit INSERTs each paid a commit, and
+    // a reader in between (a hook, `tokenix callers`) saw a half-empty graph.
+    let tx = conn.unchecked_transaction()?;
+    let conn: &Connection = &tx;
     store::clear_symbol_graph(conn)?;
 
     for chunk in &chunks {
@@ -59,8 +70,8 @@ pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
     }
 
     let mut inserted = HashSet::new();
-    for chunk in &chunks {
-        insert_reference_edges(conn, chunk, &by_name, &mut inserted, None)?;
+    for (chunk, chunk_refs) in chunks.iter().zip(&refs) {
+        insert_extracted_edges(conn, chunk, chunk_refs, &by_name, &mut inserted, None)?;
     }
 
     let node_ids: Vec<i64> = chunks.iter().map(|c| c.chunk_id).collect();
@@ -68,6 +79,7 @@ pub fn rebuild_symbol_graph(conn: &Connection) -> Result<()> {
     let ranks = pagerank(&node_ids, &edges);
     store::set_node_ranks(conn, &ranks)?;
 
+    tx.commit()?;
     Ok(())
 }
 
@@ -82,13 +94,37 @@ fn insert_reference_edges(
     inserted: &mut HashSet<(i64, i64)>,
     only_targets_in: Option<&HashSet<&str>>,
 ) -> Result<()> {
+    let refs = chunk_references(chunk);
+    insert_extracted_edges(conn, chunk, &refs, by_name, inserted, only_targets_in)
+}
+
+/// `(reference, alias-resolved reference)` pairs for one chunk. Pure over the
+/// chunk's text (a tree-sitter parse plus regexes), so a full rebuild runs it
+/// on every core and keeps only the SQLite writes serial.
+fn chunk_references(chunk: &ChunkSymbol) -> Vec<(String, String)> {
     let aliases = extract_import_aliases(&chunk.content);
-    for reference in extract_references(&chunk.content, &chunk.path) {
-        let resolved_reference = aliases
-            .get(&reference)
-            .or_else(|| aliases.get(&short_reference_name(&reference)))
-            .map(String::as_str)
-            .unwrap_or(&reference);
+    extract_references(&chunk.content, &chunk.path)
+        .into_iter()
+        .map(|reference| {
+            let resolved = aliases
+                .get(&reference)
+                .or_else(|| aliases.get(&short_reference_name(&reference)))
+                .cloned()
+                .unwrap_or_else(|| reference.clone());
+            (reference, resolved)
+        })
+        .collect()
+}
+
+fn insert_extracted_edges(
+    conn: &Connection,
+    chunk: &ChunkSymbol,
+    refs: &[(String, String)],
+    by_name: &HashMap<String, Vec<SymbolTarget>>,
+    inserted: &mut HashSet<(i64, i64)>,
+    only_targets_in: Option<&HashSet<&str>>,
+) -> Result<()> {
+    for (reference, resolved_reference) in refs {
         let targets = resolve_reference_targets(by_name, resolved_reference);
         for target in targets {
             if target.chunk_id == chunk.chunk_id {
@@ -104,7 +140,7 @@ fn insert_reference_edges(
                     conn,
                     chunk.chunk_id,
                     target.chunk_id,
-                    &reference,
+                    reference,
                     "references",
                 )?;
             }
@@ -124,6 +160,9 @@ pub fn update_symbol_graph_incremental(conn: &Connection, changed_paths: &[Strin
         return Ok(());
     }
     let chunks = load_symbol_chunks_for_paths(conn, changed_paths)?;
+    // Same reason as the full rebuild: one commit, no half-repaired graph seen.
+    let tx = conn.unchecked_transaction()?;
+    let conn: &Connection = &tx;
     for chunk in &chunks {
         store::insert_graph_node(
             conn,
@@ -192,6 +231,8 @@ pub fn update_symbol_graph_incremental(conn: &Connection, changed_paths: &[Strin
     let edges = store::all_graph_edge_pairs(conn)?;
     let ranks = pagerank(&node_ids, &edges);
     store::set_node_ranks(conn, &ranks)?;
+    drop(mention);
+    tx.commit()?;
     Ok(())
 }
 
@@ -1084,10 +1125,16 @@ fn extract_references_tree_sitter(content: &str, path: &str) -> Option<Vec<Strin
 }
 
 fn extract_references_regex(content: &str) -> Vec<String> {
-    let call_re = Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(").unwrap();
-    let path_call_re =
-        Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+)\s*\(").unwrap();
-    let method_call_re = Regex::new(r"\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(").unwrap();
+    // Compiled once per process: these ran per chunk, and compiling a regex
+    // costs far more than matching it against one chunk.
+    static CALL_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(").unwrap());
+    static PATH_CALL_RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+)\s*\(").unwrap()
+    });
+    static METHOD_CALL_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(").unwrap());
+    let (call_re, path_call_re, method_call_re) = (&*CALL_RE, &*PATH_CALL_RE, &*METHOD_CALL_RE);
 
     let mut refs = HashSet::new();
     for cap in path_call_re.captures_iter(content) {
@@ -1131,7 +1178,9 @@ fn extract_import_aliases(content: &str) -> HashMap<String, String> {
 }
 
 fn extract_rust_use_aliases(content: &str, aliases: &mut HashMap<String, String>) {
-    let group_re = Regex::new(r"\buse\s+([^;{]+)::\{([^}]+)\}\s*;").unwrap();
+    static GROUP_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\buse\s+([^;{]+)::\{([^}]+)\}\s*;").unwrap());
+    let group_re = &*GROUP_RE;
     for cap in group_re.captures_iter(content) {
         let Some(prefix) = cap.get(1).map(|m| m.as_str().trim()) else {
             continue;
@@ -1153,9 +1202,11 @@ fn extract_rust_use_aliases(content: &str, aliases: &mut HashMap<String, String>
         }
     }
 
-    let direct_re =
+    static DIRECT_RE: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"\buse\s+([A-Za-z_][A-Za-z0-9_:]*(?:::[A-Za-z_][A-Za-z0-9_]*)+)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;")
-            .unwrap();
+            .unwrap()
+    });
+    let direct_re = &*DIRECT_RE;
     for cap in direct_re.captures_iter(content) {
         let Some(path) = cap.get(1).map(|m| m.as_str()) else {
             continue;
@@ -1167,7 +1218,9 @@ fn extract_rust_use_aliases(content: &str, aliases: &mut HashMap<String, String>
 }
 
 fn extract_ts_import_aliases(content: &str, aliases: &mut HashMap<String, String>) {
-    let named_re = Regex::new(r#"\bimport\s+\{([^}]+)\}\s+from\s+['"][^'"]+['"]"#).unwrap();
+    static NAMED_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"\bimport\s+\{([^}]+)\}\s+from\s+['"][^'"]+['"]"#).unwrap());
+    let named_re = &*NAMED_RE;
     for cap in named_re.captures_iter(content) {
         let Some(items) = cap.get(1).map(|m| m.as_str()) else {
             continue;

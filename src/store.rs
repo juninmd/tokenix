@@ -547,19 +547,21 @@ pub fn insert_graph_node(
     start_line: usize,
     end_line: usize,
 ) -> Result<()> {
-    conn.execute(
+    // Cached: a rebuild runs this once per node/edge, and re-parsing the SQL
+    // each time was a measurable share of it.
+    conn.prepare_cached(
         "INSERT OR REPLACE INTO graph_nodes(chunk_id,file_id,path,name,kind,start_line,end_line)
          VALUES(?1,?2,?3,?4,?5,?6,?7)",
-        params![
-            chunk_id,
-            file_id,
-            path,
-            name,
-            kind,
-            start_line as i64,
-            end_line as i64
-        ],
-    )?;
+    )?
+    .execute(params![
+        chunk_id,
+        file_id,
+        path,
+        name,
+        kind,
+        start_line as i64,
+        end_line as i64
+    ])?;
     Ok(())
 }
 
@@ -570,11 +572,18 @@ pub fn insert_graph_edge(
     reference: &str,
     edge_kind: &str,
 ) -> Result<()> {
-    conn.execute(
+    // Cached: a rebuild runs this once per node/edge, and re-parsing the SQL
+    // each time was a measurable share of it.
+    conn.prepare_cached(
         "INSERT INTO graph_edges(caller_chunk_id,callee_chunk_id,reference,edge_kind)
          VALUES(?1,?2,?3,?4)",
-        params![caller_chunk_id, callee_chunk_id, reference, edge_kind],
-    )?;
+    )?
+    .execute(params![
+        caller_chunk_id,
+        callee_chunk_id,
+        reference,
+        edge_kind
+    ])?;
     Ok(())
 }
 
