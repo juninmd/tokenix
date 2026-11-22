@@ -905,8 +905,21 @@ fn has_top_level_alternation(pattern: &str) -> bool {
 /// the anchored regex, so its compilation is skipped entirely.
 fn literal_anchor(pattern: &str) -> Option<&str> {
     let rest = pattern.strip_prefix('^')?;
-    let end = literal_run(rest);
-    (end >= 2).then(|| &rest[..end])
+    let lit = mandatory_literal(rest);
+    (lit.len() >= 2).then_some(lit)
+}
+
+/// Leading literal run of `s` that every match must contain. A quantifier
+/// right after the run (`cargos?`, `x*`, `y{0,1}`) makes its last character
+/// optional, so that character is dropped.
+fn mandatory_literal(s: &str) -> &str {
+    let end = literal_run(s);
+    let lit = &s[..end];
+    if matches!(s[end..].chars().next(), Some('?' | '*' | '{')) {
+        &lit[..lit.len().saturating_sub(1)]
+    } else {
+        lit
+    }
 }
 
 /// A cheap necessary condition for a pattern to match a candidate. Evaluating
@@ -969,12 +982,7 @@ fn prefilter_for(pattern: &str) -> Option<Prefilter> {
             break;
         }
     }
-    let end = literal_run(s);
-    let mut lit = &s[..end];
-    // A quantifier right after the run makes its last character optional.
-    if matches!(s[end..].chars().next(), Some('?') | Some('*') | Some('{')) {
-        lit = &lit[..lit.len().saturating_sub(1)];
-    }
+    let lit = mandatory_literal(s);
     (lit.len() >= 3).then(|| {
         Prefilter::Contains(
             if ci {
@@ -4431,6 +4439,13 @@ keep_lines_matchin = ["oops"]
         assert_eq!(literal_anchor("^\\.?/gradlew"), None);
         // Single-char anchors are too weak to be worth the skip.
         assert_eq!(literal_anchor("^x\\b"), None);
+        // A quantifier after the run makes its last char optional: "cargo test"
+        // matches `^cargos?\b`, so the anchor must not demand "cargos".
+        assert_eq!(literal_anchor("^cargos?\\b"), Some("cargo"));
+        assert_eq!(literal_anchor("^gits*\\s"), Some("git"));
+        assert_eq!(literal_anchor("^ab{0,1}\\b"), None);
+        let pf = prefilter_for("^cargos?\\s+test").unwrap();
+        assert!(pf.allows("cargo test"));
     }
 
     #[test]
