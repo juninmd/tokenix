@@ -1,6 +1,6 @@
 [package]
 name = "tokenix"
-version = "1.3.7"
+version = "1.3.8"
 edition = "2021"
 # Floor, not a preference. Two things break silently below it: `Command` only
 # quotes arguments safely for Windows `.cmd`/`.bat` shims since 1.77.2
